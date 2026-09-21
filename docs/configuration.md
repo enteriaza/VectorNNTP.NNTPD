@@ -18,6 +18,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables) |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
 | `CloudFlareZoneId` | string | _(none)_ | **yes** | Cloudflare zone identifier |
+| `CloudFlareOperationTimeout` | duration | `00:02:00` | no | Wall-clock budget for one reconcile or cleanup operation (shared by HTTP 429 retries and reconciler attempt backoffs) |
 | `DnsSuffix` | string | `usenet.ninja` | no | DNS suffix used to generate the FQDN |
 | `ServerId` | int | _(none)_ | **yes** | Server identity `1–99`; no silent default |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
@@ -110,12 +111,16 @@ After options validation, `CloudflareDnsReconciliationService` (an `IApplication
 2. Reconcile Cloudflare DNS for the generated `{Fqdn}` in `CloudFlareZoneId`:
    - **A** records = exactly the resolved IPv4 set (remove all A records when that set is empty).
    - **AAAA** records = exactly the resolved IPv6 set (remove all AAAA records when that set is empty).
-3. **Staged mutations (cross-family):** list A and AAAA, then **create all missing desired records for both families**, then unproxy kept desired records (`proxied: false`), then **delete stale/duplicate records for both families**, then re-list and verify. Create-all-before-delete prefers a temporary address **superset** over a temporary gap when replacing addresses. Create-before-delete does **not** eliminate intermediate visibility.
-4. Skip mutations when records already match (exact normalized IP set and DNS-only).
-5. **Verify** by listing again; success requires exact A and AAAA content sets **and** `proxied=false` on every remaining record for `{Fqdn}`. Mismatch, API failure, cancellation, or uncertain mutation → attempt failure (never treated as success).
+3. **Staged mutations (cross-family):** list A and AAAA, then **create all missing desired records for both families**, then update kept desired records that are not yet managed (`ttl=300`, `proxied=false`) in place, then **delete stale/duplicate records for both families**, then re-list and verify. Create-all-before-delete prefers a temporary address **superset** over a temporary gap when replacing addresses. Create-before-delete does **not** eliminate intermediate visibility. Address changes are **not** performed as broad update-in-place of stale content.
+4. Skip mutations when records already match (exact normalized IP set, TTL **300**, and DNS-only).
+5. **Verify** by listing again; success requires exact A and AAAA content sets, **TTL 300**, and **`proxied=false`** on every remaining record for `{Fqdn}`. Mismatch, API failure, cancellation, or uncertain mutation → attempt failure (never treated as success).
 6. During startup reconcile, only A/AAAA for the exact `{Fqdn}` are mutated. Other names and non-A/AAAA types are untouched until shutdown cleanup.
 
-If reconcile fails after work has begun, the service attempts an authoritative cleanup of the exact FQDN before failing startup (best-effort; failure to clean up is logged and does not replace the original exception). Partial startup that successfully completed DNS reconcile then fails a later service triggers manager rollback, which calls `StopAsync` and removes the FQDN.
+**Managed record policy:** every published A/AAAA record must have content equal to a desired address, `ttl=300`, and `proxied=false`. Creates use these attributes; retained desired records with wrong TTL and/or proxy state are corrected with a single update.
+
+List responses fail closed when pagination metadata is missing/inconsistent (including missing `result_info` / `total_pages`, unstable `total_pages`, page mismatches, or more than 20 pages). A returned `zone_id` that is empty or does not match the requested zone is a permanent failure; omitted `zone_id` is accepted (path zone is authoritative). Malformed required A/AAAA fields (`id`, `type`, `content`, `ttl`, `proxied`) fail closed and must not drive mutations.
+
+If reconcile fails after work has begun, the service attempts an authoritative cleanup of the exact FQDN before failing startup. That cleanup is **best-effort** with a dedicated **15-second** budget (not unbounded and not `CancellationToken.None`). Cleanup timeout/failure is logged without claiming success and **does not replace** the original startup exception. Partial startup that successfully completed DNS reconcile then fails a later service triggers manager rollback, which calls `StopAsync` and removes the FQDN.
 
 #### Shutdown cleanup steps
 
@@ -142,13 +147,18 @@ Cloudflare’s DNS Records API does **not** provide an atomic transaction spanni
 - External DNS consumers may observe an **intermediate** state while A/AAAA creates and deletes are in flight (for example desired A present while AAAA is still missing, or briefly both desired and stale addresses), and while shutdown deletes multiple record types.
 - The application **fails closed**: any failed create/update/delete/verify, cancellation, or uncertain mutation outcome prevents `Running` (startup) or is reported as cleanup failure (shutdown). Partial success is never reported as reconcile or cleanup success.
 - Recovery is **re-read and converge** (startup) or **re-read and continue deleting** (shutdown). There is no unsafe compensating “rollback” that invents a prior DNS state. Up to **3** attempts with backoff (**200 ms**, then **400 ms**) run within a single call; process crash mid-operation is recovered on the next successful startup (reconcile) or leaves records until an operator/process cleans them (if shutdown cleanup did not finish).
-- **Permanent** failures (HTTP 4xx except 429; missing API key; known Cloudflare auth codes on HTTP 200 + `success: false`) fail immediately without reconciler retries.
-- Transport timeouts / connection errors during mutations are marked **uncertain** (`CloudflareDnsException.IsOutcomeUncertain`): Cloudflare may already have applied the change. The client does not assume “no change”; the next attempt re-reads.
+- Each reconcile/cleanup call shares one **`CloudFlareOperationTimeout`** wall-clock budget (default **2 minutes**) with the caller’s cancellation token; the earlier deadline wins. That budget is created **once** for the call and is **not** reset on individual HTTP attempts or reconciler retries.
+- Each HTTP attempt is further bounded by **`min(30 seconds, remaining operation budget)`** via a per-request cancellation token (`CloudflareDnsClient.PerRequestTimeout`). The registered `HttpClient.Timeout` is infinite so it cannot outlive a short remaining budget; stall protection comes from the per-request token.
+- Nested HTTP 429 retries (up to 3 retries per request, `Retry-After` honored but capped at 2 minutes and **never slept** when it exceeds the **remaining** budget) and reconciler attempt backoffs observe the shared deadline. Budget exhaustion and caller cancellation are failures — never success.
+- **Distinguish timeouts:** caller/operation-budget cancellation propagates as `OperationCanceledException` (mutations are logged as outcome-uncertain; the next re-read recovers). A per-request/transport timeout **without** operation cancellation becomes `CloudflareDnsException` with `IsOutcomeUncertain` only for mutations (reads are not marked uncertain).
+- Normal shutdown cleanup remains governed by **`GracefulShutdownTimeout`** (linked cancellation). Failed-start cleanup is separately capped at **15 seconds** and never uses an unbounded token.
+- **Permanent** failures (HTTP 4xx except 429; missing API key; known Cloudflare auth codes on HTTP 200 + `success: false`; malformed list payloads / pagination / zone mismatch) fail immediately without reconciler retries.
 - Concurrent reconcile and cleanup calls on the **same reconciler instance** are serialized (shared gate). `ApplicationServiceManager` rejects concurrent start/stop. Multiple processes or external DNS managers targeting the same zone/FQDN are **not** coordinated; the host re-reads and fails closed on verification mismatch rather than claiming success.
+- Exception messages use HTTP status and sanitized Cloudflare error codes/messages. They **do not** embed raw response bodies, API tokens, or authorization headers.
 
 **API permissions:** a Cloudflare API token with **Zone → DNS → Edit** (DNS Write) on the target zone. List operations need DNS Read (included in Edit).
 
-**HTTP 429:** retried a limited number of times **per HTTP request** using `Retry-After` when present, otherwise short exponential backoff. Exhausted rate limits fail the current attempt (reconciler may still retry the full attempt if the failure is not marked permanent).
+**HTTP 429:** retried a limited number of times **per HTTP request** using `Retry-After` when present (capped), otherwise short exponential backoff, always within the remaining operation budget. Exhausted rate limits fail the current attempt (reconciler may still retry the full attempt if the failure is not marked permanent and budget remains).
 
 **Propagation:** verification is against the Cloudflare API view of authoritative records. It does **not** guarantee immediate global recursive-resolver propagation or instant cache expiry after cleanup.
 

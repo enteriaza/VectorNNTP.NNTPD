@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Networking;
 
@@ -40,8 +41,8 @@ public sealed class CloudflareDnsReconcilerTests
 
         Assert.Equal(2, client.CreateCallCount);
         var snapshot = client.Snapshot();
-        Assert.Contains(snapshot, r => r.Type == "A" && r.Content == "198.18.0.10" && !r.Proxied);
-        Assert.Contains(snapshot, r => r.Type == "AAAA" && r.Content == "2001:db8::10" && !r.Proxied);
+        Assert.Contains(snapshot, r => r.Type == "A" && r.Content == "198.18.0.10" && r.Proxied == false);
+        Assert.Contains(snapshot, r => r.Type == "AAAA" && r.Content == "2001:db8::10" && r.Proxied == false);
     }
 
     [Fact]
@@ -294,11 +295,59 @@ public sealed class CloudflareDnsReconcilerTests
         await reconciler.ReconcileAsync(ZoneId, Fqdn, Desired("198.18.0.10"), CancellationToken.None);
 
         Assert.Equal(1, client.UpdateCallCount);
-        Assert.False(Assert.Single(client.Snapshot()).Proxied);
+        var updated = Assert.Single(client.Snapshot());
+        Assert.Equal(false, updated.Proxied);
+        Assert.Equal(CloudflareManagedDnsPolicy.ManagedTtl, updated.Ttl);
+    }
+
+    [Fact]
+    public async Task Reconcile_IncorrectTtl_IsUpdatedInPlace()
+    {
+        var client = new FakeCloudflareDnsClient();
+        client.Seed(new CloudflareDnsRecord
+        {
+            Id = "a1",
+            Type = "A",
+            Name = Fqdn,
+            Content = "198.18.0.10",
+            Proxied = false,
+            Ttl = 120,
+        });
+
+        await CreateReconciler(client).ReconcileAsync(ZoneId, Fqdn, Desired("198.18.0.10"), CancellationToken.None);
+
+        Assert.Equal(1, client.UpdateCallCount);
+        Assert.Equal(0, client.CreateCallCount);
+        Assert.Equal(0, client.DeleteCallCount);
+        var updated = Assert.Single(client.Snapshot());
+        Assert.Equal(CloudflareManagedDnsPolicy.ManagedTtl, updated.Ttl);
+        Assert.Equal(false, updated.Proxied);
+    }
+
+    [Fact]
+    public async Task Reconcile_IncorrectTtlAndProxied_UpdatesOnce()
+    {
+        var client = new FakeCloudflareDnsClient();
+        client.Seed(new CloudflareDnsRecord
+        {
+            Id = "a1",
+            Type = "A",
+            Name = Fqdn,
+            Content = "198.18.0.10",
+            Proxied = true,
+            Ttl = 60,
+        });
+
+        await CreateReconciler(client).ReconcileAsync(ZoneId, Fqdn, Desired("198.18.0.10"), CancellationToken.None);
+
+        Assert.Equal(1, client.UpdateCallCount);
+        var updated = Assert.Single(client.Snapshot());
+        Assert.Equal(CloudflareManagedDnsPolicy.ManagedTtl, updated.Ttl);
+        Assert.Equal(false, updated.Proxied);
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));
@@ -311,7 +360,7 @@ public sealed class CloudflareDnsReconcilerTests
             Name = name ?? Fqdn,
             Content = content,
             Proxied = false,
-            Ttl = 1,
+            Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
         };
 
     private static async Task WaitUntilAsync(Func<bool> condition)

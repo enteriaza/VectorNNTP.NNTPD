@@ -31,13 +31,35 @@ public sealed class CloudflareDnsRecord
     [JsonPropertyName("content")]
     public string Content { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the TTL (1 = automatic).</summary>
+    /// <summary>
+    /// Gets or sets the TTL when Cloudflare includes it (seconds; <c>1</c> means automatic).
+    /// </summary>
+    /// <remarks>
+    /// Null means the field was absent. Managed A/AAAA reconciliation requires
+    /// <see cref="CloudflareManagedDnsPolicy.ManagedTtl"/>.
+    /// </remarks>
     [JsonPropertyName("ttl")]
-    public int Ttl { get; set; } = 1;
+    public int? Ttl { get; set; }
 
-    /// <summary>Gets or sets whether the record is Cloudflare-proxied.</summary>
+    /// <summary>
+    /// Gets or sets whether the record is Cloudflare-proxied when the field is present.
+    /// </summary>
+    /// <remarks>
+    /// Null means the field was absent. Managed A/AAAA reconciliation requires
+    /// <see cref="CloudflareManagedDnsPolicy.ManagedProxied"/>.
+    /// </remarks>
     [JsonPropertyName("proxied")]
-    public bool Proxied { get; set; }
+    public bool? Proxied { get; set; }
+
+    /// <summary>
+    /// Gets or sets the zone identifier when Cloudflare includes it on the record object.
+    /// </summary>
+    /// <remarks>
+    /// Current Cloudflare list/create/update schemas often omit this field; the request path zone
+    /// is then authoritative. When present, it must match the requested zone.
+    /// </remarks>
+    [JsonPropertyName("zone_id")]
+    public string? ZoneId { get; set; }
 }
 
 /// <summary>Request body for creating or updating an A/AAAA record.</summary>
@@ -55,13 +77,13 @@ public sealed class CloudflareDnsRecordWriteRequest
     [JsonPropertyName("content")]
     public required string Content { get; set; }
 
-    /// <summary>Gets or sets the TTL (1 = automatic).</summary>
+    /// <summary>Gets or sets the TTL (seconds). Managed A/AAAA use <see cref="CloudflareManagedDnsPolicy.ManagedTtl"/>.</summary>
     [JsonPropertyName("ttl")]
-    public int Ttl { get; set; } = 1;
+    public int Ttl { get; set; } = CloudflareManagedDnsPolicy.ManagedTtl;
 
     /// <summary>Gets or sets whether the record is Cloudflare-proxied (must be false for NNTP).</summary>
     [JsonPropertyName("proxied")]
-    public bool Proxied { get; set; }
+    public bool Proxied { get; set; } = CloudflareManagedDnsPolicy.ManagedProxied;
 }
 
 internal sealed class CloudflareApiResponse<T>
@@ -102,18 +124,22 @@ internal sealed class CloudflareApiMessage
 
 internal sealed class CloudflareResultInfo
 {
+    /// <summary>Gets or sets the current page number when Cloudflare includes it.</summary>
     [JsonPropertyName("page")]
-    public int Page { get; set; }
+    public int? Page { get; set; }
 
     [JsonPropertyName("per_page")]
-    public int PerPage { get; set; }
+    public int? PerPage { get; set; }
 
+    /// <summary>
+    /// Gets or sets total pages. Null means the field was absent or not an integer — listing is incomplete.
+    /// </summary>
     [JsonPropertyName("total_pages")]
-    public int TotalPages { get; set; }
+    public int? TotalPages { get; set; }
 
     [JsonPropertyName("count")]
-    public int Count { get; set; }
+    public int? Count { get; set; }
 
     [JsonPropertyName("total_count")]
-    public int TotalCount { get; set; }
+    public int? TotalCount { get; set; }
 }

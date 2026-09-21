@@ -239,7 +239,7 @@ public sealed class CloudflareDnsAdversarialTests
         var resolver = new BindAddressResolver(
             new FakeLocalIpAddressAssignee(IPAddress.Parse("10.0.0.9"), IPAddress.Parse("fd00::9")),
             NullLogger<BindAddressResolver>.Instance);
-        var reconciler = new CloudflareDnsReconciler(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         var dns = new CloudflareDnsReconciliationService(
             Options.Create(options),
             resolver,
@@ -309,7 +309,7 @@ public sealed class CloudflareDnsAdversarialTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));
@@ -322,7 +322,7 @@ public sealed class CloudflareDnsAdversarialTests
             Name = Fqdn,
             Content = content,
             Proxied = false,
-            Ttl = 1,
+            Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
         };
 
     /// <summary>

@@ -40,7 +40,10 @@ public static class NntpdServiceCollectionExtensions
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {
             client.BaseAddress = new Uri("https://api.cloudflare.com/client/v4/");
-            client.Timeout = TimeSpan.FromSeconds(30);
+            // Stall protection is per-request via CloudflareDnsClient (CancelAfter of
+            // min(PerRequestTimeout, remaining operation budget)). Disabling HttpClient.Timeout
+            // avoids a second, uncoordinated timer that can outlive a short remaining budget.
+            client.Timeout = Timeout.InfiniteTimeSpan;
             client.DefaultRequestHeaders.ExpectContinue = false;
         });
 

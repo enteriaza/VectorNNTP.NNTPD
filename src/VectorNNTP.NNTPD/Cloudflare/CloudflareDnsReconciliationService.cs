@@ -24,6 +24,9 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// </remarks>
 public sealed class CloudflareDnsReconciliationService : IApplicationService
 {
+    /// <summary>Maximum wall-clock budget for best-effort cleanup after a failed or canceled startup reconcile.</summary>
+    public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
+
     private readonly IOptions<NntpdOptions> _options;
     private readonly IBindAddressResolver _bindAddressResolver;
     private readonly ICloudflareDnsReconciler _reconciler;
@@ -168,16 +171,31 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
                 fqdn,
                 cancellationException);
 
-            // Use an uncanceled token so cleanup can still run after startup cancellation,
-            // bounded by reconciler retries (same pattern as manager rollback).
+            // Best-effort cleanup after failed/canceled reconcile: dedicated 15s budget (not unbounded).
+            using var cleanupCts = new CancellationTokenSource(FailedStartCleanupTimeout);
             await _reconciler
-                .RemoveAllRecordsForFqdnAsync(zoneId, fqdn, CancellationToken.None)
+                .RemoveAllRecordsForFqdnAsync(
+                    zoneId,
+                    fqdn,
+                    cleanupCts.Token,
+                    operationTimeout: FailedStartCleanupTimeout)
                 .ConfigureAwait(false);
 
             Volatile.Write(ref _fqdnOwnershipActive, 0);
             _logger.LogInformation(
                 "Post-failure Cloudflare DNS cleanup verified for {Fqdn}: no exact-name records remain.",
                 fqdn);
+        }
+        catch (OperationCanceledException cleanupEx)
+        {
+            _logger.LogError(
+                cleanupEx,
+                "Post-failure Cloudflare DNS cleanup for {Fqdn} timed out or was canceled " +
+                "(budget={CleanupBudget}). Records may remain; cleanup is not claimed successful. " +
+                "The next successful startup will re-read and reconcile.",
+                fqdn,
+                FailedStartCleanupTimeout);
+            // Preserve the original startup failure; do not replace it with cleanup failure.
         }
         catch (Exception cleanupEx)
         {

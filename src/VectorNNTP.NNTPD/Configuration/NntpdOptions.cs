@@ -75,6 +75,16 @@ public sealed class NntpdOptions
     public TimeSpan? StartupTimeout { get; set; }
 
     /// <summary>
+    /// Gets or sets the maximum wall-clock duration for a single Cloudflare reconcile or cleanup operation.
+    /// </summary>
+    /// <remarks>
+    /// Default is two minutes. Nested HTTP 429 retries and reconciler attempt backoffs share this budget
+    /// together with the caller's cancellation token; the earlier deadline wins. Failed-start cleanup uses
+    /// a shorter dedicated budget (15 seconds).
+    /// </remarks>
+    public TimeSpan CloudFlareOperationTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
     /// Gets or sets a value indicating whether the process should exit if an application service
     /// terminates unexpectedly while running.
     /// </summary>

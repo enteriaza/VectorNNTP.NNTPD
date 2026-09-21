@@ -41,6 +41,10 @@ public interface ICloudflareDnsReconciler
     /// <param name="zoneId">Cloudflare zone id.</param>
     /// <param name="fqdn">Generated server FQDN (exact ownership boundary).</param>
     /// <param name="cancellationToken">Cancellation token (cooperates with graceful shutdown).</param>
+    /// <param name="operationTimeout">
+    /// Optional wall-clock budget for this cleanup. When null, <c>CloudFlareOperationTimeout</c> is used.
+    /// Failed-start cleanup passes a shorter dedicated budget.
+    /// </param>
     /// <returns>A task that completes only after verification that no records remain for the FQDN.</returns>
     /// <exception cref="CloudflareDnsException">
     /// Thrown when listing, deletion, or verification fails. Partial deletion is never reported as success.
@@ -52,5 +56,6 @@ public interface ICloudflareDnsReconciler
     Task RemoveAllRecordsForFqdnAsync(
         string zoneId,
         string fqdn,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        TimeSpan? operationTimeout = null);
 }

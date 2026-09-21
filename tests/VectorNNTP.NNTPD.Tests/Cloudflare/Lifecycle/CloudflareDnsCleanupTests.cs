@@ -541,7 +541,7 @@ public sealed class CloudflareDnsCleanupTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static CloudflareDnsReconciliationService CreateService(NntpdOptions options, ICloudflareDnsClient client)
     {
@@ -573,7 +573,7 @@ public sealed class CloudflareDnsCleanupTests
             Name = Fqdn,
             Content = content,
             Proxied = false,
-            Ttl = 1,
+            Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
         };
 
     private static bool NamesEqual(string left, string right) =>

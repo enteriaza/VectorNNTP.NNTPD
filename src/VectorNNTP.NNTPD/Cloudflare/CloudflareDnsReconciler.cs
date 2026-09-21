@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking;
 
 namespace VectorNNTP.NNTPD.Cloudflare;
@@ -19,11 +21,14 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// <para>
 /// Cloudflare does not provide an atomic multi-record transaction. Each reconcile attempt:
 /// reads both families, creates all missing desired records across A and AAAA before deleting any stale
-/// records, then deletes stale/duplicates, then verifies exact sets (including <c>proxied=false</c>).
+/// records, then deletes stale/duplicates, then verifies exact sets (including TTL
+/// <see cref="CloudflareManagedDnsPolicy.ManagedTtl"/> and <c>proxied=false</c>).
 /// Cleanup lists all types for the exact name, deletes by record id, then verifies none remain.
 /// Concurrent reconcile/cleanup calls on the same instance are serialized. Intermediate states remain
 /// externally visible. Permanent auth/config failures fail immediately; transient/uncertain/verification
-/// failures retry with bounded backoff after re-reading remote state.
+/// failures retry with bounded backoff after re-reading remote state. HTTP 429 retries and reconciler
+/// attempt backoffs share a single operation deadline (<c>CloudFlareOperationTimeout</c>, default 2 minutes)
+/// linked with the caller token.
 /// </para>
 /// </remarks>
 public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
@@ -32,19 +37,29 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     internal const int MaxAttempts = 3;
 
     private readonly ICloudflareDnsClient _client;
+    private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<CloudflareDnsReconciler> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// Gets or sets the delay function used for reconciler attempt backoff (tests may replace this).
+    /// </summary>
+    internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } =
+        static (delay, cancellationToken) => Task.Delay(delay, cancellationToken);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CloudflareDnsReconciler"/> class.
     /// </summary>
     public CloudflareDnsReconciler(
         ICloudflareDnsClient client,
+        IOptions<NntpdOptions> options,
         ILogger<CloudflareDnsReconciler> logger)
     {
         ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         _client = client;
+        _options = options;
         _logger = logger;
     }
 
@@ -69,25 +84,32 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var budget = CloudflareOperationBudget.Begin(
+                _options.Value.CloudFlareOperationTimeout,
+                cancellationToken,
+                out var operationToken);
+
             var desiredV4 = ToContentSet(desired.IPv4);
             var desiredV6 = ToContentSet(desired.IPv6);
 
             _logger.LogInformation(
                 "Reconciling Cloudflare DNS for {Fqdn}: desired A={ACount}, AAAA={AaaaCount} " +
-                "(staged create-all-then-delete; non-atomic; success requires verified exact match).",
+                "(staged create-all-then-delete; managed TTL={ManagedTtl}, proxied=false; " +
+                "non-atomic; success requires verified exact match).",
                 fqdn,
                 desiredV4.Count,
-                desiredV6.Count);
+                desiredV6.Count,
+                CloudflareManagedDnsPolicy.ManagedTtl);
 
             Exception? lastFailure = null;
 
             for (var attempt = 1; attempt <= MaxAttempts; attempt++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                operationToken.ThrowIfCancellationRequested();
 
                 try
                 {
-                    await ReconcileAttemptAsync(zoneId, fqdn, desiredV4, desiredV6, attempt, cancellationToken)
+                    await ReconcileAttemptAsync(zoneId, fqdn, desiredV4, desiredV6, attempt, operationToken)
                         .ConfigureAwait(false);
 
                     _logger.LogInformation(
@@ -100,7 +122,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         desiredV6.Count);
                     return;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
                 {
                     _logger.LogWarning(
                         "Cloudflare DNS reconciliation for {Fqdn} was canceled on attempt {Attempt}. " +
@@ -150,7 +172,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         attempt + 1,
                         MaxAttempts,
                         fqdn);
-                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    await DelayRespectingBudgetAsync(delay, operationToken).ConfigureAwait(false);
                 }
             }
 
@@ -178,7 +200,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     public async Task RemoveAllRecordsForFqdnAsync(
         string zoneId,
         string fqdn,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? operationTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
         ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
@@ -186,6 +209,9 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var timeout = operationTimeout ?? _options.Value.CloudFlareOperationTimeout;
+            using var budget = CloudflareOperationBudget.Begin(timeout, cancellationToken, out var operationToken);
+
             _logger.LogInformation(
                 "Removing all Cloudflare DNS records for exact FQDN {Fqdn} (all record types; " +
                 "parent/child hostnames are out of scope).",
@@ -195,11 +221,11 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
 
             for (var attempt = 1; attempt <= MaxAttempts; attempt++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                operationToken.ThrowIfCancellationRequested();
 
                 try
                 {
-                    await RemoveAllAttemptAsync(zoneId, fqdn, attempt, cancellationToken).ConfigureAwait(false);
+                    await RemoveAllAttemptAsync(zoneId, fqdn, attempt, operationToken).ConfigureAwait(false);
 
                     _logger.LogInformation(
                         "Cloudflare DNS cleanup verified for {Fqdn} on attempt {Attempt}/{MaxAttempts}: " +
@@ -210,7 +236,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         MaxAttempts);
                     return;
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
                 {
                     _logger.LogWarning(
                         "Cloudflare DNS cleanup for {Fqdn} was canceled on attempt {Attempt}. " +
@@ -260,7 +286,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         attempt + 1,
                         MaxAttempts,
                         fqdn);
-                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    await DelayRespectingBudgetAsync(delay, operationToken).ConfigureAwait(false);
                 }
             }
 
@@ -449,10 +475,10 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         await CreateMissingAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.Missing, cancellationToken)
             .ConfigureAwait(false);
 
-        // Stage 3: ensure desired kept records are DNS-only (proxied=false).
-        await EnsureDnsOnlyAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.KeptDesired, cancellationToken)
+        // Stage 3: ensure kept desired records match managed TTL and DNS-only proxy state.
+        await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.KeptDesired, cancellationToken)
             .ConfigureAwait(false);
-        await EnsureDnsOnlyAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.KeptDesired, cancellationToken)
+        await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.KeptDesired, cancellationToken)
             .ConfigureAwait(false);
 
         // Stage 4: delete stale, duplicates, and unparseable — only after desired creates completed.
@@ -487,15 +513,15 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         Type = type,
                         Name = fqdn,
                         Content = content,
-                        Ttl = 1,
-                        Proxied = false,
+                        Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
+                        Proxied = CloudflareManagedDnsPolicy.ManagedProxied,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
         }
     }
 
-    private async Task EnsureDnsOnlyAsync(
+    private async Task EnsureManagedAttributesAsync(
         string zoneId,
         string fqdn,
         string type,
@@ -504,7 +530,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     {
         foreach (var record in keptDesired)
         {
-            if (!record.Proxied)
+            if (CloudflareManagedDnsPolicy.MatchesManagedAttributes(record))
             {
                 continue;
             }
@@ -512,17 +538,19 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
             cancellationToken.ThrowIfCancellationRequested();
             var content = NormalizeContent(record.Content, type)
                 ?? throw new CloudflareDnsException(
-                    $"Cannot update proxied {type} record {record.Id}: content is not a valid IP.")
+                    $"Cannot update {type} record {record.Id}: content is not a valid IP.")
                 {
                     FailedOperation = "Update",
                     IsPermanentFailure = true,
                 };
 
             _logger.LogInformation(
-                "Updating {Type} record {RecordId} for {Fqdn} to disable Cloudflare proxy.",
+                "Updating {Type} record {RecordId} for {Fqdn} to managed TTL={ManagedTtl} and proxied={Proxied}.",
                 type,
                 record.Id,
-                fqdn);
+                fqdn,
+                CloudflareManagedDnsPolicy.ManagedTtl,
+                CloudflareManagedDnsPolicy.ManagedProxied);
             await _client.UpdateRecordAsync(
                     zoneId,
                     record.Id,
@@ -531,8 +559,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                         Type = type,
                         Name = fqdn,
                         Content = content,
-                        Ttl = 1,
-                        Proxied = false,
+                        Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
+                        Proxied = CloudflareManagedDnsPolicy.ManagedProxied,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -611,11 +639,22 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
 
         foreach (var record in actual)
         {
-            if (record.Proxied)
+            if (record.Proxied != CloudflareManagedDnsPolicy.ManagedProxied)
             {
                 throw new CloudflareDnsException(
                     $"Cloudflare DNS verification failed for '{fqdn}' ({type}): " +
-                    $"record {record.Id} is still proxied; NNTP requires DNS-only (proxied=false). " +
+                    $"record {record.Id} proxy state is not DNS-only (proxied=false). " +
+                    "Reconciliation must not be treated as successful.")
+                {
+                    FailedOperation = "Verify",
+                };
+            }
+
+            if (record.Ttl != CloudflareManagedDnsPolicy.ManagedTtl)
+            {
+                throw new CloudflareDnsException(
+                    $"Cloudflare DNS verification failed for '{fqdn}' ({type}): " +
+                    $"record {record.Id} TTL is not {CloudflareManagedDnsPolicy.ManagedTtl}. " +
                     "Reconciliation must not be treated as successful.")
                 {
                     FailedOperation = "Verify",
@@ -697,6 +736,26 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         toDelete.AddRange(unparseable);
 
         return new FamilyPlan(missing, keptDesired, stale, duplicateExtras, toDelete);
+    }
+
+    private async Task DelayRespectingBudgetAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CloudflareOperationBudget.Current?.ThrowIfExpired(cancellationToken);
+
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        if (CloudflareOperationBudget.Current is { } budget && delay > budget.Remaining)
+        {
+            throw new OperationCanceledException(
+                "Cloudflare DNS reconciler backoff exceeds the remaining operation budget.",
+                cancellationToken);
+        }
+
+        await DelayAsync(delay, cancellationToken).ConfigureAwait(false);
     }
 
     private static TimeSpan GetAttemptBackoff(int failedAttempt)

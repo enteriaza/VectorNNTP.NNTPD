@@ -499,7 +499,7 @@ public sealed class CloudflareDnsFinalRegressionTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));
@@ -512,7 +512,7 @@ public sealed class CloudflareDnsFinalRegressionTests
             Name = Fqdn,
             Content = content,
             Proxied = false,
-            Ttl = 1,
+            Ttl = CloudflareManagedDnsPolicy.ManagedTtl,
         };
 
     private static async Task WaitUntilAsync(Func<bool> condition)

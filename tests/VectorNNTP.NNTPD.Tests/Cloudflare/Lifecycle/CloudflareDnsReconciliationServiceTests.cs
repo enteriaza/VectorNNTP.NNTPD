@@ -152,7 +152,7 @@ public sealed class CloudflareDnsReconciliationServiceTests
         ICloudflareDnsClient client)
     {
         var resolver = new BindAddressResolver(assignee, NullLogger<BindAddressResolver>.Instance);
-        var reconciler = new CloudflareDnsReconciler(client, NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         return new CloudflareDnsReconciliationService(
             Options.Create(options),
             resolver,
