@@ -1,0 +1,27 @@
+## .NET
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+*.DotSettings.user
+
+## Test / publish
+TestResults/
+publish/
+artifacts/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Local smoke outputs
+smoke-out.txt
+smoke-err.txt

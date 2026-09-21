@@ -1,0 +1,50 @@
+﻿[Unit]
+Description=VectorNNTP NNTPD
+Documentation=file:///opt/vectornntp/nntpd/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+# Dedicated non-root service account (create before enabling the unit).
+User=vectornntp
+Group=vectornntp
+
+WorkingDirectory=/opt/vectornntp/nntpd
+ExecStart=/opt/vectornntp/nntpd/VectorNNTP.NNTPD
+
+# Align with Nntpd:GracefulShutdownTimeout (default 30s) plus host overhead.
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# Optional environment file for DOTNET_* / Nntpd__* overrides.
+# EnvironmentFile=-/etc/vectornntp/nntpd.env
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=
+
+# Watchdog is supported by the application when EnableWatchdog=true (default)
+# AND systemd configures WatchdogSec. Leave disabled here until operators
+# intentionally enable it after verifying readiness on the target host.
+# Example (enable only after validation):
+# WatchdogSec=30
+# Restart=on-watchdog
+
+# Hardening (adjust if later NNTP listener phases require additional capabilities).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vectornntp/nntpd
+# CapabilityBoundingSet=
+# AmbientCapabilities=
+
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+[Install]
+WantedBy=multi-user.target
