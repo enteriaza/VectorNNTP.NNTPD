@@ -45,6 +45,24 @@ public sealed class ApplicationLifecycleDisposalTests
     }
 
     [Fact]
+    public async Task StartStopDispose_CompletesWithoutObjectDisposedException()
+    {
+        var service = new FakeApplicationService("svc");
+        var lifecycle = TestHostFactory.CreateLifecycle([service]);
+
+        await lifecycle.StartAsync(CancellationToken.None);
+        Assert.Equal(ApplicationState.Running, lifecycle.State);
+
+        await lifecycle.StopAsync(CancellationToken.None);
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+
+        var dispose = await Record.ExceptionAsync(async () => await lifecycle.DisposeAsync());
+        Assert.Null(dispose);
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+        Assert.Equal(1, service.StopCount);
+    }
+
+    [Fact]
     public async Task DisposeAsync_AfterNormalStop_IsIdempotent()
     {
         var service = new FakeApplicationService("svc");
@@ -58,6 +76,81 @@ public sealed class ApplicationLifecycleDisposalTests
         await lifecycle.DisposeAsync();
 
         Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+        Assert.Equal(1, service.StopCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhileRunning_StopsServicesOnce()
+    {
+        var service = new FakeApplicationService("svc");
+        var lifecycle = TestHostFactory.CreateLifecycle([service]);
+
+        await lifecycle.StartAsync(CancellationToken.None);
+        Assert.Equal(ApplicationState.Running, lifecycle.State);
+
+        await lifecycle.DisposeAsync();
+
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+        Assert.Equal(1, service.StopCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_SurfacesShutdownFailure_WhenDisposeTriggersStop()
+    {
+        var stopAttempts = 0;
+        var service = new FakeApplicationService(
+            "bad",
+            onStop: _ =>
+            {
+                Interlocked.Increment(ref stopAttempts);
+                throw new InvalidOperationException("dispose-stop-fail");
+            });
+        var lifecycle = TestHostFactory.CreateLifecycle([service]);
+
+        await lifecycle.StartAsync(CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<AggregateException>(
+            async () => await lifecycle.DisposeAsync());
+        Assert.Contains(ex.InnerExceptions, e => e.Message == "dispose-stop-fail");
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+        Assert.Equal(1, stopAttempts);
+
+        // Subsequent dispose is idempotent and does not rethrow or re-stop.
+        await lifecycle.DisposeAsync();
+        Assert.Equal(1, stopAttempts);
+    }
+
+    [Fact]
+    public async Task ConcurrentStopRequests_ShareSingleShutdown()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeApplicationService(
+            "svc",
+            onStop: async ct =>
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(ct);
+            });
+
+        var lifecycle = TestHostFactory.CreateLifecycle(
+            [service],
+            TestHostFactory.CreateOptions(gracefulShutdownTimeout: TimeSpan.FromMinutes(1)));
+
+        await lifecycle.StartAsync(CancellationToken.None);
+
+        var stop1 = lifecycle.StopAsync(CancellationToken.None);
+        await entered.Task;
+        var stop2 = lifecycle.StopAsync(CancellationToken.None);
+        var stop3 = lifecycle.StopAsync(CancellationToken.None);
+
+        release.TrySetResult();
+        await Task.WhenAll(stop1, stop2, stop3);
+
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+        Assert.Equal(1, service.StopCount);
+
+        await lifecycle.DisposeAsync();
         Assert.Equal(1, service.StopCount);
     }
 
