@@ -50,8 +50,14 @@ public sealed class ApplicationServiceManager
     }
 
     /// <summary>
-    /// Gets the services that completed <see cref="StartAsync"/> successfully and have not yet been stopped.
+    /// Gets the services that completed <see cref="StartAsync"/> successfully and have not yet finished a
+    /// stop attempt (success, cooperative cancel/timeout, or exception).
     /// </summary>
+    /// <remarks>
+    /// Removal from this list means the manager has finished awaiting that service's
+    /// <see cref="IApplicationService.StopAsync"/> call for the current shutdown. It does not imply
+    /// that a non-cooperative service released all resources if the process is later killed by the host.
+    /// </remarks>
     public IReadOnlyList<IApplicationService> StartedServices
     {
         get
@@ -169,6 +175,23 @@ public sealed class ApplicationServiceManager
     /// <exception cref="InvalidOperationException">Thrown when a lifecycle operation is already in progress.</exception>
     /// <exception cref="TimeoutException">Thrown when shutdown exceeds the configured graceful timeout.</exception>
     /// <exception cref="AggregateException">Thrown when one or more services fail during shutdown.</exception>
+    /// <remarks>
+    /// <para>
+    /// <see cref="NntpdOptions.GracefulShutdownTimeout"/> is a single overall wall-clock budget for the
+    /// entire stop sequence (not a fresh full timeout per service). The manager always awaits each
+    /// <see cref="IApplicationService.StopAsync"/> — it does not abandon in-flight stops. Cooperative
+    /// services observe the linked timeout/cancel token; after the budget is exhausted or the caller
+    /// cancels, remaining services are offered an already-canceled token and are removed from
+    /// <see cref="StartedServices"/> when their awaited stop attempt finishes.
+    /// </para>
+    /// <para>
+    /// A service that ignores cancellation keeps the manager awaiting until that call returns. The
+    /// Generic Host <c>ShutdownTimeout</c> (aligned with <see cref="NntpdOptions.GracefulShutdownTimeout"/>)
+    /// and process supervisors (for example systemd <c>TimeoutStopSec</c>) remain the backstop that can
+    /// terminate the process. Concurrent <see cref="StartAsync"/> / <see cref="StopAsync"/> calls on this
+    /// manager are rejected; <see cref="ApplicationLifecycle"/> provides single-flight stop for host paths.
+    /// </para>
+    /// </remarks>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.CompareExchange(ref _lifecycleBusy, 1, 0) != 0)
@@ -198,14 +221,14 @@ public sealed class ApplicationServiceManager
 
             var timeout = _options.Value.GracefulShutdownTimeout;
             _logger.LogInformation(
-                "Stopping {ServiceCount} application service(s) in reverse startup order with timeout {Timeout}.",
+                "Stopping {ServiceCount} application service(s) in reverse startup order with overall timeout {Timeout}.",
                 toStop.Length,
                 timeout);
 
-            using var timeoutCts = new CancellationTokenSource(timeout);
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
+            var budgetSw = Stopwatch.StartNew();
             var failures = new List<Exception>();
+            var budgetExhausted = false;
+            var externallyCanceled = false;
 
             for (var i = toStop.Length - 1; i >= 0; i--)
             {
@@ -217,56 +240,143 @@ public sealed class ApplicationServiceManager
                     service.Name,
                     i + 1);
 
+                CancellationTokenSource? timeoutCts = null;
+                CancellationTokenSource? linkedCts = null;
                 try
                 {
-                    await service.StopAsync(linkedCts.Token).ConfigureAwait(false);
-
-                    lock (_startedSync)
+                    CancellationToken stopToken;
+                    if (externallyCanceled || budgetExhausted || budgetSw.Elapsed >= timeout)
                     {
-                        _started.Remove(service);
+                        // Overall budget spent or caller canceled: cooperative abort only — do not extend the wall clock.
+                        if (budgetSw.Elapsed >= timeout)
+                        {
+                            budgetExhausted = true;
+                        }
+
+                        timeoutCts = new CancellationTokenSource();
+                        timeoutCts.Cancel();
+                        stopToken = timeoutCts.Token;
+                    }
+                    else
+                    {
+                        var remaining = timeout - budgetSw.Elapsed;
+                        timeoutCts = new CancellationTokenSource(remaining);
+                        linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken,
+                            timeoutCts.Token);
+                        stopToken = linkedCts.Token;
                     }
 
-                    _logger.LogInformation(
-                        "Application service {ServiceName} stopped in {ElapsedMs} ms.",
-                        service.Name,
-                        sw.ElapsedMilliseconds);
-                }
-                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogError(
-                        "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName} (elapsed {ElapsedMs} ms).",
-                        timeout,
-                        service.Name,
-                        sw.ElapsedMilliseconds);
-
-                    // Continue attempting remaining stops with a canceled token so implementations can observe timeout,
-                    // then surface TimeoutException.
-                    failures.Add(new TimeoutException(
-                        $"Graceful shutdown timed out after {timeout} while stopping '{service.Name}'."));
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogWarning(
-                        "Shutdown of application service {ServiceName} was canceled after {ElapsedMs} ms.",
-                        service.Name,
-                        sw.ElapsedMilliseconds);
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "Application service {ServiceName} failed during shutdown after {ElapsedMs} ms.",
-                        service.Name,
-                        sw.ElapsedMilliseconds);
-                    failures.Add(ex);
-
-                    // Best-effort: remove from tracking so repeated stop does not retry indefinitely.
-                    lock (_startedSync)
+                    try
                     {
-                        _started.Remove(service);
+                        await service.StopAsync(stopToken).ConfigureAwait(false);
+
+                        // Tracking drops only after the awaited stop attempt returns — never while still executing.
+                        lock (_startedSync)
+                        {
+                            _started.Remove(service);
+                        }
+
+                        // Non-cooperative stops may return after the budget without throwing OCE.
+                        if (budgetSw.Elapsed >= timeout)
+                        {
+                            if (!budgetExhausted)
+                            {
+                                budgetExhausted = true;
+                                _logger.LogError(
+                                    "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName} (elapsed {ElapsedMs} ms; stop returned after budget).",
+                                    timeout,
+                                    service.Name,
+                                    sw.ElapsedMilliseconds);
+
+                                failures.Add(new TimeoutException(
+                                    $"Graceful shutdown timed out after {timeout} while stopping '{service.Name}'."));
+                            }
+                            else
+                            {
+                                _logger.LogWarning(
+                                    "Application service {ServiceName} stop completed after graceful shutdown budget was already exhausted ({ElapsedMs} ms).",
+                                    service.Name,
+                                    sw.ElapsedMilliseconds);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "Application service {ServiceName} stopped in {ElapsedMs} ms.",
+                                service.Name,
+                                sw.ElapsedMilliseconds);
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        externallyCanceled = true;
+                        _logger.LogWarning(
+                            "Shutdown of application service {ServiceName} was canceled after {ElapsedMs} ms. Continuing best-effort abort of remaining services.",
+                            service.Name,
+                            sw.ElapsedMilliseconds);
+
+                        // Drop tracking and continue so ApplicationLifecycle Stopped/DisposeAsync cannot
+                        // strand services that were never offered a stop after external cancellation.
+                        lock (_startedSync)
+                        {
+                            _started.Remove(service);
+                        }
+                    }
+                    catch (OperationCanceledException) when (budgetExhausted
+                                                             || timeoutCts.IsCancellationRequested)
+                    {
+                        if (!budgetExhausted)
+                        {
+                            budgetExhausted = true;
+                            _logger.LogError(
+                                "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName} (elapsed {ElapsedMs} ms).",
+                                timeout,
+                                service.Name,
+                                sw.ElapsedMilliseconds);
+
+                            failures.Add(new TimeoutException(
+                                $"Graceful shutdown timed out after {timeout} while stopping '{service.Name}'."));
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Application service {ServiceName} stop aborted after graceful shutdown budget was already exhausted.",
+                                service.Name);
+                        }
+
+                        // Drop tracking even when StopAsync did not complete cleanly so lifecycle
+                        // Stopped does not strand services in StartedServices.
+                        lock (_startedSync)
+                        {
+                            _started.Remove(service);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "Application service {ServiceName} failed during shutdown after {ElapsedMs} ms.",
+                            service.Name,
+                            sw.ElapsedMilliseconds);
+                        failures.Add(ex);
+
+                        lock (_startedSync)
+                        {
+                            _started.Remove(service);
+                        }
                     }
                 }
+                finally
+                {
+                    linkedCts?.Dispose();
+                    timeoutCts?.Dispose();
+                }
+            }
+
+            if (externallyCanceled)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
             }
 
             if (failures.Count == 1 && failures[0] is TimeoutException timeoutEx)

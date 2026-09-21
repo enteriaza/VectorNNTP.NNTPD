@@ -4,9 +4,11 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting.Systemd;
+using VectorNNTP.NNTPD.Networking;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -31,12 +33,37 @@ public static class NntpdServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
+        services.TryAddSingleton<IBindAddressResolver, BindAddressResolver>();
+        services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
+
+        services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
+        {
+            client.BaseAddress = new Uri("https://api.cloudflare.com/client/v4/");
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.ExpectContinue = false;
+        });
+
+        services.TryAddSingleton<ICloudflareDnsClient>(static sp =>
+        {
+            var httpClient = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(CloudflareDnsClient.HttpClientName);
+            return new CloudflareDnsClient(
+                httpClient,
+                sp.GetRequiredService<IOptions<NntpdOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CloudflareDnsClient>>());
+        });
+
         var optionsBuilder = services
             .AddOptions<NntpdOptions>()
             .BindConfiguration(NntpdOptions.SectionName)
             .ValidateDataAnnotations()
             .ValidateOnStart()
-            .PostConfigure(static options => options.Systemd ??= new SystemdOptions());
+            .PostConfigure(static options =>
+            {
+                options.Systemd ??= new SystemdOptions();
+                NormalizeBindAddresses(options);
+            });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
 
@@ -44,6 +71,11 @@ public static class NntpdServiceCollectionExtensions
         {
             optionsBuilder.Configure(configure);
         }
+
+        // DNS reconciliation runs before other application services so startup fails closed
+        // when bind addresses cannot be resolved or Cloudflare DNS cannot be made correct.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
 
         if (includePlaceholderService)
         {
@@ -164,6 +196,21 @@ public static class NntpdServiceCollectionExtensions
         }
 
         return serviceType.GenericTypeArguments[0] == typeof(ConsoleLoggerOptions);
+    }
+
+    private static void NormalizeBindAddresses(NntpdOptions options)
+    {
+        if (options.BindAddress is null || options.BindAddress.Length == 0)
+        {
+            // Code default when configuration omits BindAddress: listen on all interfaces.
+            options.BindAddress = ["*"];
+            return;
+        }
+
+        for (var i = 0; i < options.BindAddress.Length; i++)
+        {
+            options.BindAddress[i] = options.BindAddress[i]?.Trim() ?? string.Empty;
+        }
     }
 }
 

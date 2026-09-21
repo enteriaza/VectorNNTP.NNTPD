@@ -19,6 +19,8 @@ src/
   VectorNNTP.NNTPD/
     Program.cs                 # Composition root
     Configuration/             # NntpdOptions + SystemdOptions + validation
+    Cloudflare/                # DNS API client + reconciliation
+    Networking/                # Bind-address resolution / IP eligibility
     Core/                      # Lifecycle, service manager, abstractions
     Hosting/                   # Generic Host / Windows Service / systemd
       Systemd/                 # Notify bridge, readiness, watchdog, health
@@ -29,9 +31,11 @@ deploy/
   systemd/vectornntpd.service  # Example unit file
 docs/
   architecture.md
+  configuration.md
   logging.md
   systemd.md
   systemd-integration-verification.md
+  standards/rfcs/               # RFC reference library
 ```
 
 ## Build and test
@@ -104,22 +108,22 @@ Created → Starting → Running → Stopping → Stopped
 
 | Scenario | Behavior |
 |----------|----------|
-| Successful startup | Services start in registration order; state becomes `Running`; systemd `READY=1` (when notify enabled). |
-| Startup failure | Started services stop in reverse order; state becomes `Stopped`; exception is rethrown (host start fails); no readiness. |
+| Successful startup | Options validated; DNS reconciliation verifies A/AAAA for `{Fqdn}`; services start in registration order; state becomes `Running`; systemd `READY=1` (when notify enabled). |
+| Startup failure | Started services stop in reverse order (including exact-FQDN DNS cleanup when DNS ownership was active); state becomes `Stopped`; exception is rethrown (host start fails); no readiness. |
 | Startup cancellation | Same rollback path; `OperationCanceledException` propagates. |
-| Graceful shutdown | `STOPPING=1` (when enabled); services stop in reverse order within `GracefulShutdownTimeout`. |
-| Shutdown timeout | Timeout is logged and surfaced as `TimeoutException`; state still ends in `Stopped`. |
+| Graceful shutdown | `STOPPING=1` (when enabled); reverse-order stop under one overall `GracefulShutdownTimeout` budget; DNS service removes **all** records for the exact `{Fqdn}` after other app services stop (API-verified; recursive caches not waited out). |
+| Shutdown timeout | Timeout is logged and surfaced as `TimeoutException`; DNS cleanup may be incomplete and is not claimed successful; state still ends in `Stopped`. |
 | Unexpected service termination | Logged as critical; watchdog keep-alives stop; host stop is requested when configured. |
 | Ctrl+C / SIGTERM | Host lifetime initiates a single shutdown request (no custom competing signal handlers). |
 
 ## Configuration options
 
-Section: `Nntpd` (`appsettings.json` / environment variables / command line).
+Section: `Nntpd` (`appsettings.json` / environment variables / command line). See **[docs/configuration.md](docs/configuration.md)** for bind addresses, Cloudflare secrets, and FQDN generation.
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `ApplicationName` | `VectorNNTP.NNTPD` | Display name for logs and Windows Service metadata |
-| `GracefulShutdownTimeout` | `00:00:30` | Bound for application-service shutdown (also applied to host shutdown when configured) |
+| `GracefulShutdownTimeout` | `00:00:30` | Overall wall-clock bound for application-service shutdown (also applied to host shutdown when configured) |
 | `StartupTimeout` | `null` | Optional bound for startup; `null` means host cancellation only |
 | `StopHostOnUnexpectedServiceTermination` | `true` | Request host stop when a service execution faults/completes while `Running` |
 | `Systemd:EnableWatchdog` | `true` | Allow watchdog keep-alives when systemd configured a deadline |
@@ -127,8 +131,16 @@ Section: `Nntpd` (`appsettings.json` / environment variables / command line).
 | `Systemd:NotifyReadyOnApplicationRunning` | `true` | Send `READY=1` at lifecycle `Running` |
 | `Systemd:NotifyStoppingOnApplicationShutdown` | `true` | Send `STOPPING=1` when shutdown begins |
 | `Systemd:WatchdogIntervalFraction` | `0.5` | Heartbeat interval as a fraction of systemd’s deadline |
+| `BindAddress` | `["*"]` when omitted | Listen addresses / wildcards; explicit IPs must be local NIC addresses |
+| `BindPort` | `119` | Cleartext TCP port (`1–65535`) |
+| `BindPortTls` | `0` | TLS TCP port; `0`/unset disables TLS; `1–65535` enables |
+| `CloudFlareApiKey` | _(env only)_ | **Required** secret; set `nntpd__cloudflareapikey` — missing/blank fails startup; never commit |
+| `CloudFlareZoneId` | _(configured)_ | **Required**; `nntpd__CloudFlareZoneId` may supply it — missing/blank fails startup |
+| `DnsSuffix` | `usenet.ninja` | DNS suffix for generated FQDN |
+| `ServerId` | _(required; no default)_ | **Required** integer `1–99` (`nntpd__ServerId`); no silent default |
+| `Fqdn` | generated | `nntpd{ServerId:00}.{DnsSuffix}` — not independently configurable |
 
-Options are validated at startup via `IValidateOptions<NntpdOptions>` and data annotations.
+Options are validated at startup via `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`) before the application enters `Running`.
 
 ## Logging
 
@@ -153,7 +165,7 @@ sudo journalctl -u vectornntpd -f
 - Windows Service hosting
 - systemd detect / notify / readiness / optional watchdog
 - Example unit file + deployment docs
-- Automated offline tests for lifecycle, systemd, and logging
+- Automated offline tests for lifecycle, systemd, logging, bind-address resolution, and Cloudflare DNS reconciliation/cleanup (mocked API; no live DNS)
 
 **Explicitly deferred**
 

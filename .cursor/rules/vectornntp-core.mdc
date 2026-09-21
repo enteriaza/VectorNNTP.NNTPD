@@ -1,0 +1,35 @@
+---
+description: Core VectorNNTP engineering discipline for every Cursor task in this repository
+alwaysApply: true
+---
+
+# VectorNNTP core instructions
+
+## Before changing anything
+
+1. Identify the **actual target project** (today: primarily `VectorNNTP.NNTPD`). Do not assume every component shares architecture or invariants.
+2. Inspect existing implementation, callers, consumers, ownership, lifecycle, and tests before editing.
+3. Prefer the **smallest correct change**. Avoid speculative abstractions and unnecessary dependencies.
+4. Preserve unrelated user changes and out-of-scope files.
+
+## Project facts (inspect rather than invent)
+
+- Solution: `VectorNNTP.NNTPD.sln`
+- TFM: `net10.0`; nullable + implicit usings; `TreatWarningsAsErrors`; docs XML enabled (`Directory.Build.props`)
+- Host: .NET Generic Host; options + `ValidateOnStart`; Serilog-exclusive logging
+- Lifecycle: `ApplicationLifecycle` + `ApplicationServiceManager` + `IApplicationService` (see `docs/architecture.md`)
+- Config contract: `docs/configuration.md` (authoritative over memory)
+- NNTP standards library: `docs/standards/rfcs/` — read applicable RFC text before protocol work
+
+## Evidence and honesty
+
+- Never claim builds, tests, format checks, benchmarks, or runtime verification succeeded unless they ran and succeeded here.
+- Report limitations and unverified assumptions explicitly.
+- Do not invent project conventions; inspect the repository.
+
+## Skill selection
+
+1. Read `AGENTS.md` and `.cursor/skills/README.md` before substantive work.
+2. Explicitly read the relevant `.cursor/skills/<skill-name>/SKILL.md` file(s); combine skills when appropriate.
+3. Project skills may be absent from Rider ACP’s injected list — file presence is not automatic invocation.
+4. Never claim a rule or skill was automatically loaded unless verified in this session.

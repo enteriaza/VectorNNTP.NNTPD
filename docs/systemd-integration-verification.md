@@ -1,6 +1,6 @@
 ﻿# systemd integration verification procedure
 
-Automated unit tests in `VectorNNTP.NNTPD.Tests` cover detection, readiness, watchdog, and shutdown **offline** with fakes. They do **not** prove real systemd behavior.
+Automated unit tests in `VectorNNTP.NNTPD.Tests` (under `Hosting/Systemd/`) cover detection, readiness, watchdog, and shutdown **offline** with fakes. They do **not** prove real systemd behavior.
 
 ## Environment used for this Phase 0.1 delivery
 
