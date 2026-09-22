@@ -78,6 +78,27 @@ performance.
 - Wire throughput reflects bytes actually transmitted on the TCP stream after framing,
   compression, and encryption as applicable.
 
+### Client/server CPU contention
+
+The benchmark client and VectorNNTP.NNTPD server execute on the same physical host and therefore
+compete for the same CPU, scheduler, memory, cache, and other host resources. The reported
+throughput is consequently an end-to-end measurement of the complete benchmark system rather than
+an isolated measurement of server-only capacity.
+
+This makes the benchmark conservative as a measurement of isolated server capacity: the NNTP server
+does not have exclusive access to the test host's compute resources. However, the benchmark does not
+establish a linear relationship between available CPU resources and achievable throughput, so the
+measured results must not be multiplied by an assumed factor such as 2×.
+
+The observed CPU utilization across the scenarios demonstrates that the host was not fully
+CPU-saturated during the benchmark. However, the benchmark did not independently attribute CPU
+consumption between the benchmark client and the NNTP server. Accordingly, this report records the
+measured end-to-end throughput and does not extrapolate an unmeasured server-only throughput.
+
+The same-host arrangement means that some portion of the measured host CPU capacity was necessarily
+consumed by the benchmark client, so the benchmark does not represent an isolated server-capacity
+ceiling. The available headroom is real, but its effect on server-only throughput was not measured.
+
 **Logical vs wire throughput:** logical Gbit/s counts the uncompressed article payload volume.
 Wire Gbit/s counts socket-level bytes (read + write) during the measurement window. Under DEFLATE,
 wire throughput can be far lower than logical throughput.
@@ -124,12 +145,12 @@ Complete benchmark table (both runs preserved):
 - 50 connections remain above 115 Gbit/s.
 - No orders-of-magnitude collapse was observed.
 - The 10→50 connection result plateaus rather than scaling linearly.
-- Server CPU remains below approximately 40–43% in the measured plain scenarios.
+- Observed host CPU utilization remains below approximately 40–43% in the measured plain scenarios.
 
 ### DEFLATE
 
 - Approximately 90 Gbit/s logical throughput at 10 and 50 connections.
-- CPU rises into the ~49–51% range.
+- Observed host CPU rises into the ~49–51% range.
 - Wire throughput falls to approximately 0.67–0.68 Gbit/s because the synthetic payload is extremely compressible.
 - Compression ratio of approximately 133:1 is **not representative of real Usenet articles**.
 - It is useful for measuring the CPU/wire behavior of the DEFLATE transport but must not be interpreted as a real-world expected compression ratio.
@@ -147,7 +168,7 @@ Complete benchmark table (both runs preserved):
 
 - Approximately 84.5 Gbit/s at 10 connections.
 - Approximately 85.1 Gbit/s at 50 connections.
-- CPU approximately 48–53%.
+- Observed host CPU approximately 48–53%.
 - Wire throughput approximately 0.67 Gbit/s.
 - On this highly compressible synthetic workload, DEFLATE substantially reduces the amount of data passed through TLS/network transmission and therefore the logical throughput of TLS+DEFLATE can exceed TLS-only throughput.
 - This does NOT mean DEFLATE is intrinsically faster than TLS.
@@ -161,6 +182,10 @@ NNTP plain, 10 clients: 124.9 Gbit/s
 ```
 
 Approximately **48%** of the iperf3 aggregate throughput at the same concurrency level.
+
+This ratio is a workload comparison, not a transport-efficiency percentage or a required
+performance target. iperf3 measures raw TCP bulk throughput, whereas BENCHIT performs complete
+NNTP request/response transactions through the production application and transport stack.
 
 This compares:
 
@@ -189,8 +214,8 @@ specific bottleneck unless established by direct measurement.
 - Plain TCP reaches approximately half of the raw 10-stream iperf3 ceiling while performing actual NNTP work.
 - No orders-of-magnitude socket/pipe failure was observed.
 - TLS and DEFLATE remain performant under concurrency.
-- CPU does not saturate during the benchmark.
-- The transport layer is therefore sufficiently validated to proceed with implementation of the remaining NNTP server functionality.
+- Observed host CPU does not saturate during the benchmark.
+- The transport layer has demonstrated sufficient throughput and concurrency characteristics under this benchmark to proceed with implementation of the remaining NNTP server functionality without further transport optimization work being required by this baseline.
 
 > **No transport optimization work is planned from this benchmark alone.**
 
@@ -209,6 +234,7 @@ Future optimization should be driven by realistic workloads and measured evidenc
 - BENCHIT is not intended to represent production application throughput.
 - Logical Gbit/s should not be interpreted as network wire throughput when compression is active.
 - Results are specific to the test host, network path, runtime, OS, and benchmark implementation.
+- Benchmark client and server share the same physical host, so isolated server-only capacity was not measured.
 
 ## Future Performance Work
 
@@ -240,7 +266,7 @@ establish that the socket/transport architecture is fundamentally sound.
 - Release build: passed
 - `dotnet format --verify-no-changes`: passed
 - BENCHIT tests: 4/4 passed
-- Full test suite: 575/576 initially, with the known flaky `Compress_Deflate_SessionRoundTrip_Repeated_AuthinfoRejected` passing on rerun
+- Full test suite: 576/576 passed on rerun; the initial run had one transient failure in `Compress_Deflate_SessionRoundTrip_Repeated_AuthinfoRejected`, which passed on rerun
 - `git diff --check`: clean
 - Complete live BENCHIT benchmark suite completed
 - Benchmark results retained at: `tools/VectorNNTP.NNTPD.Bench/results-full.txt`
