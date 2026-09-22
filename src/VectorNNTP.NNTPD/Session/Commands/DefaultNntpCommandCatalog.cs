@@ -23,7 +23,7 @@ public static class DefaultNntpCommandCatalog
         "BODY",
         "CAPABILITIES",
         "CHECK",
-        "COMPRESS DEFLATE",
+        "COMPRESS",
         "DATE",
         "GROUP",
         "HDR",
@@ -98,12 +98,12 @@ public static class DefaultNntpCommandCatalog
             NntpCommandAccess.Public,
             (ctx, ct) => StartTls.HandleAsync(ctx, certificateProvider, ct),
             logger: startTlsLog));
+        // Verb-only so algorithm case/syntax is validated in Compress (RFC 8054 §5.3 case-sensitive).
         registry.Register(new NntpCommandDescriptor(
             "COMPRESS",
             NntpCommandAccess.Public,
-            Compress.HandleDeflateAsync,
-            "DEFLATE",
-            compressLog));
+            Compress.HandleAsync,
+            logger: compressLog));
 
         // Authentication
         registry.Register(new NntpCommandDescriptor(

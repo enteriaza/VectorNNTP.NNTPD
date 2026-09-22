@@ -165,7 +165,7 @@ public sealed class NntpSessionFoundationTests
         Assert.Contains("VERSION 2", caps);
         Assert.Contains("READER", caps);
         Assert.Contains("AUTHINFO USER", caps);
-        Assert.DoesNotContain(caps, static c => c.StartsWith("COMPRESS", StringComparison.Ordinal));
+        Assert.Contains("COMPRESS DEFLATE", caps);
 
         await duplex.WriteClientLineAsync("QUIT");
         Assert.StartsWith("205 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
@@ -260,7 +260,7 @@ public sealed class NntpSessionFoundationTests
             return false;
         }
 
-        public bool IsCompressed => false;
+        public bool IsCompressed => Volatile.Read(ref _compressed) == 1;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;
         public long OutboundIdleVersion => 0;
@@ -289,13 +289,18 @@ public sealed class NntpSessionFoundationTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _compressed, 1);
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {
             _cts.Dispose();
             return ValueTask.CompletedTask;
         }
+
+        private int _compressed;
     }
 }

@@ -18,6 +18,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] DATE
 [x] QUIT
 [x] STARTTLS
+[x] COMPRESS DEFLATE
 ```
 
 ## Placeholder (registered, not implemented)
@@ -25,7 +26,6 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 ```text
 [ ] MODE STREAM
 [ ] AUTHINFO SASL
-[ ] COMPRESS DEFLATE
 [ ] LIST
 [ ] GROUP
 [ ] LISTGROUP

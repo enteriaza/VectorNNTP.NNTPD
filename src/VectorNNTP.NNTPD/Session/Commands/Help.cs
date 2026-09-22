@@ -25,7 +25,7 @@ internal static class Help
             .ConfigureAwait(false);
         await context.Response
             .WriteMultilineDataAsync(
-                "Public: CAPABILITIES MODE READER HELP DATE QUIT STARTTLS AUTHINFO USER PASS",
+                "Public: CAPABILITIES MODE READER HELP DATE QUIT STARTTLS COMPRESS AUTHINFO USER PASS",
                 cancellationToken)
             .ConfigureAwait(false);
         await context.Response.WriteMultilineEndAsync(cancellationToken).ConfigureAwait(false);

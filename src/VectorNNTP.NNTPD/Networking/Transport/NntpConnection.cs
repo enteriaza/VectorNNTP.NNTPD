@@ -24,7 +24,7 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// Plain or TLS connections may call <see cref="UpgradeToDeflateAsync"/> to activate bidirectional raw
 /// DEFLATE above the current byte stream (RFC 8054 layering: NNTP → DEFLATE → TLS → TCP).
 /// Pumps keep running across upgrades; exclusive stream ownership is enforced by transport quiescence.
-/// The NNTP STARTTLS and COMPRESS commands are not implemented here.
+/// The NNTP STARTTLS and COMPRESS commands live in the session layer and invoke these upgrades.
 /// </para>
 /// <para>
 /// NNTPD performs server-side TLS authentication only. Client certificates are never requested or validated.

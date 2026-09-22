@@ -605,7 +605,7 @@ public sealed class NntpAuthinfoTests
             return false;
         }
 
-        public bool IsCompressed => false;
+        public bool IsCompressed => Volatile.Read(ref _compressed) == 1;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;
         public long OutboundIdleVersion => 0;
@@ -634,13 +634,18 @@ public sealed class NntpAuthinfoTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _compressed, 1);
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {
             _cts.Dispose();
             return ValueTask.CompletedTask;
         }
+
+        private int _compressed;
     }
 }

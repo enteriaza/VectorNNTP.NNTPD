@@ -21,6 +21,9 @@ public static class NntpReplyCodes
     /// <summary>Connection closing (QUIT).</summary>
     public const int ConnectionClosing = 205;
 
+    /// <summary>Compression layer activated (COMPRESS; RFC 8054).</summary>
+    public const int CompressionActive = 206;
+
     /// <summary>Authentication accepted (AUTHINFO).</summary>
     public const int AuthenticationAccepted = 281;
 
@@ -32,6 +35,9 @@ public static class NntpReplyCodes
 
     /// <summary>Command failed due to temporary/internal fault.</summary>
     public const int CommandFailed = 403;
+
+    /// <summary>Feature exists but is unavailable or not supported in this form (e.g. unsupported COMPRESS algorithm).</summary>
+    public const int FeatureUnavailable = 503;
 
     /// <summary>Authentication required before the facility can be used.</summary>
     public const int AuthenticationRequired = 480;

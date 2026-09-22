@@ -8,6 +8,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 
 namespace VectorNNTP.NNTPD.Tests.Networking.Transport;
 
+[Collection(nameof(TransportTestHostCollection))]
 public sealed class DeflateUpgradeTransportTests
 {
     [Fact]

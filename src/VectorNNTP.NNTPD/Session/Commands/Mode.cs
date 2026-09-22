@@ -45,6 +45,18 @@ internal static class Mode
             return;
         }
 
+        // RFC 8054 §2.2.2: client MUST NOT issue MODE READER after a compression layer is active.
+        if (context.Connection.IsCompressed)
+        {
+            await context.Response
+                .WriteLineAsync(
+                    NntpReplyCodes.CommandUnavailable,
+                    "Command unavailable after compression",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         context.Session.SetMode(NntpSessionMode.Reader);
         if (context.Session.Authorization.PostingPermitted)
         {

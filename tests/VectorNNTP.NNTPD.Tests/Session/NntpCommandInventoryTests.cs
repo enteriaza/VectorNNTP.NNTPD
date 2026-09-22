@@ -108,7 +108,7 @@ public sealed class NntpCommandInventoryTests
     }
 
     [Fact]
-    public async Task Placeholder_CompressDeflate_IsRegisteredPublic()
+    public async Task CompressDeflate_IsRegisteredPublic_Returns206()
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
@@ -118,7 +118,8 @@ public sealed class NntpCommandInventoryTests
 
         Assert.True(NntpCommandParser.TryParse("COMPRESS DEFLATE", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
-        Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.Contains("206 Compression active", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.True(session.Connection.IsCompressed);
     }
 
     private sealed class InventoryDuplex : IAsyncDisposable
@@ -181,7 +182,7 @@ public sealed class NntpCommandInventoryTests
             return false;
         }
 
-        public bool IsCompressed => false;
+        public bool IsCompressed => Volatile.Read(ref _compressed) == 1;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;
         public long OutboundIdleVersion => 0;
@@ -210,13 +211,18 @@ public sealed class NntpCommandInventoryTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default)
+        {
+            Volatile.Write(ref _compressed, 1);
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {
             _cts.Dispose();
             return ValueTask.CompletedTask;
         }
+
+        private int _compressed;
     }
 }

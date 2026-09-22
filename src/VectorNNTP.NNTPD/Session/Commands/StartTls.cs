@@ -42,6 +42,18 @@ internal static class StartTls
             return;
         }
 
+        // RFC 8054 §2.2.2: MUST reply 502 to STARTTLS while a compression layer is already active.
+        if (context.Connection.IsCompressed)
+        {
+            await context.Response
+                .WriteLineAsync(
+                    NntpReplyCodes.CommandUnavailable,
+                    "DEFLATE compression already active",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (certificateProvider is null)
         {
             await context.Response

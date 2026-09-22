@@ -75,19 +75,14 @@ internal static class NntpCommandLogFormat
             return "MODE STREAM";
         }
 
-        if (StartsWithCommand(rawLine, "COMPRESS DEFLATE"))
+        if (StartsWithCommand(rawLine, "COMPRESS"))
         {
-            return "COMPRESS DEFLATE";
+            return "COMPRESS";
         }
 
         var span = rawLine.AsSpan().Trim();
         var space = span.IndexOf(' ');
-        if (space <= 0)
-        {
-            return span.ToString().ToUpperInvariant();
-        }
-
-        return span[..space].ToString().ToUpperInvariant();
+        return space <= 0 ? span.ToString().ToUpperInvariant() : span[..space].ToString().ToUpperInvariant();
     }
 
     private static bool StartsWithCommand(string line, string command)

@@ -7,8 +7,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// CAPABILITIES command as defined by RFC 3977, Section 5.2.
 /// </summary>
 /// <remarks>
-/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, and related labels).
+/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, and related labels).
 /// Advertisement of AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
+/// COMPRESS / STARTTLS / MODE-READER / AUTHINFO arguments follow RFC 8054 once a compression layer is active.
 /// </remarks>
 internal static class Capabilities
 {
@@ -28,12 +29,14 @@ internal static class Capabilities
             .ConfigureAwait(false);
 
         var authenticated = context.Session.Authentication.IsAuthenticated;
+        var compressed = context.Connection.IsCompressed;
 
         if (context.Session.Mode is NntpSessionMode.Unspecified or NntpSessionMode.Reader)
         {
             await context.Response.WriteMultilineDataAsync("READER", cancellationToken).ConfigureAwait(false);
             // RFC 4643: MUST NOT advertise MODE-READER after authentication.
-            if (!authenticated)
+            // RFC 8054 §2.2.2: MUST NOT advertise MODE-READER once a compression layer is active.
+            if (!authenticated && !compressed)
             {
                 await context.Response.WriteMultilineDataAsync("MODE-READER", cancellationToken).ConfigureAwait(false);
             }
@@ -46,9 +49,15 @@ internal static class Capabilities
         }
 
         // RFC 4643: MUST NOT return AUTHINFO after successful authentication.
+        // RFC 8054 §2.2.2 / §7: after COMPRESS, advertise AUTHINFO with no arguments (or omit).
         if (!authenticated)
         {
-            if (context.Session.IsAuthinfoPassPermitted)
+            if (compressed)
+            {
+                await context.Response.WriteMultilineDataAsync("AUTHINFO", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else if (context.Session.IsAuthinfoPassPermitted)
             {
                 await context.Response.WriteMultilineDataAsync("AUTHINFO USER", cancellationToken)
                     .ConfigureAwait(false);
@@ -61,12 +70,19 @@ internal static class Capabilities
             }
         }
 
-        if (!context.Connection.IsTls)
+        // RFC 8054 §2.2.2: MUST NOT advertise STARTTLS once a compression layer is active.
+        if (!context.Connection.IsTls && !compressed)
         {
             await context.Response.WriteMultilineDataAsync("STARTTLS", cancellationToken).ConfigureAwait(false);
         }
 
-        // COMPRESS is not advertised until COMPRESS DEFLATE is implemented (transport DEFLATE exists).
+        // RFC 8054 §2.1: advertise COMPRESS DEFLATE when available; MUST NOT once compression is active.
+        if (!compressed)
+        {
+            await context.Response.WriteMultilineDataAsync("COMPRESS DEFLATE", cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await context.Response.WriteMultilineEndAsync(cancellationToken).ConfigureAwait(false);
     }
 }

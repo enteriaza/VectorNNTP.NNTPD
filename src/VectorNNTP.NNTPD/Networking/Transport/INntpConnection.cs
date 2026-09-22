@@ -20,8 +20,8 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// <para>
 /// <see cref="UpgradeToTlsAsync"/> upgrades an established plaintext connection to TLS on the same
 /// TCP socket. <see cref="UpgradeToDeflateAsync"/> activates bidirectional raw DEFLATE (RFC 8054)
-/// above the current byte stream (plain or TLS). The NNTP STARTTLS and COMPRESS commands are not
-/// implemented by the transport; a future session layer decides when to invoke these upgrades.
+/// above the current byte stream (plain or TLS). The NNTP STARTTLS and COMPRESS commands live in the
+/// session layer and invoke these transport upgrades when appropriate.
 /// </para>
 /// </remarks>
 public interface INntpConnection : IAsyncDisposable
@@ -167,7 +167,7 @@ public interface INntpConnection : IAsyncDisposable
     /// <para>
     /// On success, subsequent pipe traffic is compressed in both directions on the same socket and
     /// pipes. <see cref="ClientIdentity"/> is unchanged. Post-quiescence failure completes the
-    /// connection with no uncompressed fallback. The NNTP <c>COMPRESS</c> command is not implemented.
+    /// connection with no uncompressed fallback.
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">

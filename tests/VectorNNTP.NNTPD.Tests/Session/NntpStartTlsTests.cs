@@ -9,11 +9,8 @@ using VectorNNTP.NNTPD.Tests.Networking.Transport;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
-[CollectionDefinition(nameof(NntpStartTlsTests), DisableParallelization = true)]
-public sealed class NntpStartTlsTestsCollection;
-
 /// <summary>Session-level STARTTLS lifecycle regressions (plain → 382 → TLS).</summary>
-[Collection(nameof(NntpStartTlsTests))]
+[Collection(nameof(TransportTestHostCollection))]
 public sealed class NntpStartTlsTests
 {
     [Fact]

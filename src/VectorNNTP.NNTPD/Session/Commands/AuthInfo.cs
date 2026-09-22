@@ -10,7 +10,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <remarks>
 /// USER caches a username; PASS authenticates via <see cref="INntpAuthenticationProvider"/>.
 /// SASL is registered but deliberately not implemented yet. Passwords and SASL material must never
-/// appear in command logs (RX redaction is applied at the session boundary).
+/// appear in command logs (RX redaction is applied at the session boundary). After a successful
+/// COMPRESS (RFC 8054 §2.2.2 / §7), AUTHINFO commands are rejected with <c>502</c>.
 /// </remarks>
 internal static class AuthInfo
 {
@@ -64,6 +65,18 @@ internal static class AuthInfo
             return;
         }
 
+        // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
+        if (context.Connection.IsCompressed)
+        {
+            await context.Response
+                .WriteLineAsync(
+                    NntpReplyCodes.CommandUnavailable,
+                    "DEFLATE compression already active",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         if (!context.Session.IsAuthinfoPassPermitted)
         {
             await context.Response
@@ -99,6 +112,18 @@ internal static class AuthInfo
         {
             await context.Response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Already authenticated", cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
+        if (context.Connection.IsCompressed)
+        {
+            await context.Response
+                .WriteLineAsync(
+                    NntpReplyCodes.CommandUnavailable,
+                    "DEFLATE compression already active",
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -168,6 +193,18 @@ internal static class AuthInfo
         {
             await context.Response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Already authenticated", cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
+        if (context.Connection.IsCompressed)
+        {
+            await context.Response
+                .WriteLineAsync(
+                    NntpReplyCodes.CommandUnavailable,
+                    "DEFLATE compression already active",
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }

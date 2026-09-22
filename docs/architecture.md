@@ -74,7 +74,7 @@ Session concepts (distinct):
 - **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`). Defaults: unauthenticated; streaming and posting denied. `MODE STREAM` additionally requires `StreamingPermitted` (distinct from transit authorization). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
 - **Dispatch:** `NntpCommandRegistry` + `NntpCommandDispatcher` apply a fixed gate order: resolve → authentication → authorization → mode → handler.
 
-Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`. **AUTHINFO USER/PASS** are implemented (RFC 4643). Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md` for the full inventory checklist). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, `COMPRESS DEFLATE`, reader/article/posting/streaming verbs are registered placeholders (`500` / `501` after authz gates). `COMPRESS` is **not** advertised until implemented.
+Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md` for the full inventory checklist). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/streaming verbs are registered placeholders (`500` / `501` after authz gates). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
 
 AUTHINFO flow:
 
@@ -120,12 +120,12 @@ The transport exposes TCP→TLS upgrade capability. The NNTP `STARTTLS` command 
 
 ### Transport DEFLATE compression
 
-The transport supports bidirectional **raw DEFLATE** (RFC 8054 §4 / RFC 1951) as a connection-layer capability via `INntpConnection.UpgradeToDeflateAsync`. The NNTP `COMPRESS` command that negotiates/activates this capability is **not** implemented yet.
+The transport supports bidirectional **raw DEFLATE** (RFC 8054 §4 / RFC 1951) as a connection-layer capability via `INntpConnection.UpgradeToDeflateAsync`. The NNTP `COMPRESS` command (`Session/Commands/Compress.cs`) negotiates activation: pause reads → write `206 Compression active` → wait for outbound delivery → `UpgradeToDeflateAsync`.
 
 Stack when both TLS and DEFLATE are active (RFC 8054 layering; TLS negotiated first):
 
 ```text
-Application (future NNTP session)
+Application (NNTP session)
     ↓
 PipeReader / PipeWriter
     ↓
@@ -151,7 +151,7 @@ Wire format notes:
 - Independent compressor and decompressor state per connection; state is not shared across connections.
 - Send-pump `FlushAsync` after each outbound pipe batch forwards to `DeflateStream.FlushAsync`. On .NET 10 this implementation uses DEFLATE sync-flush semantics (compressed bytes become visible to the peer; sliding dictionary retained). Finalization occurs on stream dispose.
 
-Activation reuses the same quiescence model as TLS upgrade (atomic admission + outstanding counts). Preconditions mirror TLS: drain application `Input`; flush any bytes that must remain uncompressed (for example a future `206` response) before calling `UpgradeToDeflateAsync`. Post-quiescence failure is terminal with no uncompressed fallback. DEFLATE after TLS is supported; TLS after DEFLATE is rejected. TLS-level compression is not used.
+Activation reuses the same quiescence model as TLS upgrade (atomic admission + outstanding counts). Preconditions mirror TLS: drain application `Input`; flush any bytes that must remain uncompressed (the COMPRESS `206` response) before calling `UpgradeToDeflateAsync`. Post-quiescence failure is terminal with no uncompressed fallback. DEFLATE after TLS is supported; TLS after DEFLATE is rejected. TLS-level compression is not used.
 
 ## Cloudflare DNS reconciliation
 
@@ -242,4 +242,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP storage, article/group data plane, posting, streaming feed handlers (`MODE STREAM` / `IHAVE` / `CHECK` / `TAKETHIS`), AUTHINFO SASL, account backends beyond `INntpAuthenticationProvider`, and `COMPRESS` command/capability advertisement remain deferred. AUTHINFO USER/PASS and the session authorization gates are in place.
+NNTP storage, article/group data plane, posting, streaming feed handlers (`MODE STREAM` / `IHAVE` / `CHECK` / `TAKETHIS`), AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), and the session authorization gates are in place.
