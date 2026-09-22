@@ -62,6 +62,33 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 
 Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer + effective client endpoint). When `ProxyHosts` is non-empty and the TCP peer is trusted, HAProxy PROXY v1/v2 is required on the cleartext socket before TLS/NNTP. Untrusted peers keep TCP identity; PROXY-looking bytes are left as application input and never rewrite client identity (intentional mixed-mode policy; exclusive PROXY ports remain a deployment/firewall choice). `NntpSession` exposes the effective client IP/port without re-parsing the transport.
 
+### Transport I/O ownership
+
+`NntpConnection` keeps stable application `Input`/`Output` pipes for the connection lifetime. Receive/send pumps talk only to an internal `ConnectionByteTransport`, which owns the current byte stream:
+
+- **Plain:** `Socket` → `NetworkStream(ownsSocket: false)` → transport → pumps → pipes
+- **TLS:** `Socket` → `NetworkStream` → `SslStream` → transport → pumps → pipes
+
+Pumps never call `Socket`/`SslStream` APIs directly. Exactly one stream implementation owns socket I/O at a time.
+
+### Transport TLS modes
+
+Connections become TLS-protected in one of two ways, sharing the same server authentication options (`ClientCertificateRequired = false`) and certificate-lease lifetime:
+
+1. **Implicit TLS** (`NntpTlsListenerService`): accept → PROXY (when trusted) → `SslStream` authenticate-as-server → TLS transport → pumps.
+2. **In-place upgrade** (`INntpConnection.UpgradeToTlsAsync`): accept → PROXY (when trusted) → plain transport + pumps → later upgrade on the **same** TCP socket.
+
+Upgrade sequence: verify application `Input` has no unconsumed plaintext (session must drain first) → **quiesce** transport (close admission atomically with outstanding-op accounting; cancel in-flight reads; wait for in-flight writes under the caller token) → acquire certificate lease → `AuthenticateAsServerAsync` on `SslStream` wrapping the existing `NetworkStream` → publish TLS stream and resume pumps on the **same** pipes. `ClientIdentity` is unchanged. Concurrent upgrade / already-TLS / closed-connection calls fail deterministically.
+
+Upgrade failure semantics are split:
+
+- **Precondition refusal** (for example unconsumed plaintext still in application `Input`): upgrade is rejected, the connection remains valid plaintext, no TLS transport is published, and no socket bytes are consumed by TLS.
+- **Post-quiescence / TLS failure** (authentication failure, cancellation after quiescence begins, or teardown during handshake): the connection becomes terminal with no plaintext fallback; certificate lease and `SslStream` are disposed.
+
+NNTPD performs **server-side TLS authentication only**. Client certificates are not requested, required, or validated.
+
+The transport exposes TCP→TLS upgrade capability only. The NNTP `STARTTLS` command is **not** implemented yet; a future session layer will decide when to invoke `UpgradeToTlsAsync`.
+
 ## Cloudflare DNS reconciliation
 
 Startup order places `CloudflareDnsReconciliationService` first among application services. It resolves eligible bind addresses (including intentional private IPs), reconciles A/AAAA for the generated FQDN via the Cloudflare DNS API, verifies the remote set, and fails startup on any hard error (empty address set, API failure, verification mismatch, cancellation). Configuration validation still never calls Cloudflare.
@@ -151,4 +178,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP command/session parsing, storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes only.
+NNTP command/session parsing (including STARTTLS), storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes and an in-place TCP→TLS upgrade API only.

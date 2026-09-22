@@ -7,6 +7,7 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
@@ -1003,6 +1004,11 @@ public sealed class ProxyPreambleLiveTests
         public CancellationToken ConnectionClosed => CancellationToken.None;
 
         public Task CompleteAsync(Exception? exception = null) => Task.CompletedTask;
+
+        public Task UpgradeToTlsAsync(
+            ITlsCertificateContextProvider certificateProvider,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

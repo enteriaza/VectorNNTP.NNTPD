@@ -11,15 +11,29 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
 /// <summary>
-/// Duplex pipe transport over a plain TCP <see cref="Socket"/> or an authenticated <see cref="SslStream"/>.
+/// Duplex pipe transport over a replaceable byte-stream I/O owner (<see cref="ConnectionByteTransport"/>).
 /// </summary>
 /// <remarks>
-/// Ownership: this type owns the accepted socket (and TLS stream when used). The application owns
-/// consumption of <see cref="Input"/> / production to <see cref="Output"/>. Pumps stop when the
-/// connection is completed, cancelled, or the peer closes.
+/// <para>
+/// Ownership: this type owns the accepted socket and the <see cref="ConnectionByteTransport"/> (plain
+/// <see cref="NetworkStream"/> or authenticated <see cref="SslStream"/>). The application owns
+/// consumption of <see cref="Input"/> / production to <see cref="Output"/>.
+/// </para>
+/// <para>
+/// Plain connections may call <see cref="UpgradeToTlsAsync"/> to authenticate TLS on the same socket.
+/// Pumps keep running across the upgrade; exclusive stream ownership is enforced by transport quiescence.
+/// The NNTP STARTTLS command is not implemented here.
+/// </para>
+/// <para>
+/// NNTPD performs server-side TLS authentication only. Client certificates are never requested or validated.
+/// </para>
 /// </remarks>
 public sealed class NntpConnection : INntpConnection
 {
+    private const int ModePlain = 0;
+    private const int ModeUpgrading = 1;
+    private const int ModeTls = 2;
+
     private readonly ILogger _logger;
     private readonly Pipe _inputPipe;
     private readonly Pipe _outputPipe;
@@ -27,20 +41,18 @@ public sealed class NntpConnection : INntpConnection
     private readonly object _completeGate = new();
     private readonly ConnectionClientIdentity _clientIdentity;
     private Socket? _socket;
-    private SslStream? _sslStream;
-    /// <summary>
-    /// Lease retained for the TLS connection lifetime so rotation cannot dispose the context used by
-    /// this connection's <see cref="SslStream"/> while the connection is still alive.
-    /// </summary>
+    private ConnectionByteTransport? _transport;
     private TlsCertificateLease? _certificateLease;
     private byte[]? _receivePrefix;
     private Task? _receiveTask;
     private Task? _sendTask;
+    private int _mode;
     private int _completed;
     private int _disposed;
 
     private NntpConnection(
         Socket socket,
+        ConnectionByteTransport transport,
         EndPoint? remoteEndPoint,
         EndPoint? localEndPoint,
         bool isTls,
@@ -48,9 +60,10 @@ public sealed class NntpConnection : INntpConnection
         ILogger logger)
     {
         _socket = socket;
+        _transport = transport;
         RemoteEndPoint = remoteEndPoint;
         LocalEndPoint = localEndPoint;
-        IsTls = isTls;
+        _mode = isTls ? ModeTls : ModePlain;
         _clientIdentity = clientIdentity;
         _logger = logger;
         var options = NntpPipeOptions.Create();
@@ -74,7 +87,7 @@ public sealed class NntpConnection : INntpConnection
     public ConnectionClientIdentity ClientIdentity => _clientIdentity;
 
     /// <inheritdoc />
-    public bool IsTls { get; }
+    public bool IsTls => Volatile.Read(ref _mode) == ModeTls;
 
     /// <inheritdoc />
     public CancellationToken ConnectionClosed => _connectionCts.Token;
@@ -91,8 +104,11 @@ public sealed class NntpConnection : INntpConnection
         ArgumentNullException.ThrowIfNull(logger);
 
         ConfigureAcceptedSocket(socket);
+        var network = new NetworkStream(socket, ownsSocket: false);
+        var transport = new ConnectionByteTransport(network, isTls: false);
         var connection = new NntpConnection(
             socket,
+            transport,
             TryGetRemote(socket),
             TryGetLocal(socket),
             isTls: false,
@@ -110,13 +126,6 @@ public sealed class NntpConnection : INntpConnection
     /// <summary>
     /// Performs a server TLS handshake then starts the duplex pipe pumps over the encrypted stream.
     /// </summary>
-    /// <remarks>
-    /// Acquires a certificate context lease before the handshake and holds it until
-    /// <see cref="DisposeAsync"/> so the leased context object outlives handshake-only use and remains
-    /// valid across later certificate publication/rotation. Any PROXY leftover octets must already
-    /// have been consumed from the socket and supplied as <paramref name="tlsPrefix"/> so they are
-    /// presented to <see cref="SslStream"/> before subsequent socket reads.
-    /// </remarks>
     public static async Task<NntpConnection> StartTlsAsync(
         Socket socket,
         ITlsCertificateContextProvider certificateProvider,
@@ -133,41 +142,140 @@ public sealed class NntpConnection : INntpConnection
         ConfigureAcceptedSocket(socket);
         var remote = TryGetRemote(socket);
         var local = TryGetLocal(socket);
-        var connection = new NntpConnection(socket, remote, local, isTls: true, clientIdentity, logger);
-        // Connection-lifetime lease (not handshake-only); released in DisposeAsync.
         var lease = certificateProvider.Acquire();
-        connection._certificateLease = lease;
 
-        // NetworkStream does not own the socket; NntpConnection disposes the socket after SslStream.
         var networkStream = new NetworkStream(socket, ownsSocket: false);
         Stream sslInner = tlsPrefix.IsEmpty
             ? networkStream
             : new PrefixedStream(networkStream, tlsPrefix, leaveInnerOpen: false);
         var sslStream = new SslStream(sslInner, leaveInnerStreamOpen: false);
-        connection._sslStream = sslStream;
 
         try
         {
-            var sslOptions = new SslServerAuthenticationOptions
-            {
-                ServerCertificateContext = lease.Context,
-                ClientCertificateRequired = false,
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-            };
-
-            await sslStream.AuthenticateAsServerAsync(sslOptions, cancellationToken).ConfigureAwait(false);
+            await sslStream
+                .AuthenticateAsServerAsync(CreateServerAuthenticationOptions(lease.Context), cancellationToken)
+                .ConfigureAwait(false);
         }
         catch
         {
-            await connection.CompleteAsync().ConfigureAwait(false);
-            await connection.DisposeAsync().ConfigureAwait(false);
+            await sslStream.DisposeAsync().ConfigureAwait(false);
+            lease.Dispose();
+            socket.Dispose();
             throw;
         }
+
+        var transport = new ConnectionByteTransport(sslStream, isTls: true);
+        var connection = new NntpConnection(socket, transport, remote, local, isTls: true, clientIdentity, logger)
+        {
+            _certificateLease = lease,
+        };
 
         connection.StartPumps();
         logger.LogDebug("TLS handshake completed for {Remote}.", remote);
         return connection;
+    }
+
+    /// <inheritdoc />
+    public async Task UpgradeToTlsAsync(
+        ITlsCertificateContextProvider certificateProvider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(certificateProvider);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+
+        if (Volatile.Read(ref _completed) == 1)
+        {
+            throw new ObjectDisposedException(nameof(NntpConnection), "Connection is closed.");
+        }
+
+        if (Volatile.Read(ref _mode) == ModeTls)
+        {
+            throw new InvalidOperationException("Connection is already TLS-protected.");
+        }
+
+        // Precondition before taking the upgrade lock: session must have drained plaintext Input.
+        EnsureApplicationInputDrainedForUpgrade();
+
+        var prior = Interlocked.CompareExchange(ref _mode, ModeUpgrading, ModePlain);
+        if (prior != ModePlain)
+        {
+            if (prior == ModeUpgrading)
+            {
+                throw new InvalidOperationException("A TLS upgrade is already in progress.");
+            }
+
+            if (prior == ModeTls)
+            {
+                throw new InvalidOperationException("Connection is already TLS-protected.");
+            }
+
+            throw new InvalidOperationException("Connection cannot be upgraded in its current state.");
+        }
+
+        var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
+        Exception? failure = null;
+        var quiesced = false;
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _connectionCts.Token);
+
+            await transport.QuiesceAsync(linked.Token).ConfigureAwait(false);
+            quiesced = true;
+
+            var lease = certificateProvider.Acquire();
+            var plainStream = transport.TakeQuiescedStreamForTlsWrap();
+            var sslStream = new SslStream(plainStream, leaveInnerStreamOpen: false);
+
+            try
+            {
+                await sslStream
+                    .AuthenticateAsServerAsync(CreateServerAuthenticationOptions(lease.Context), linked.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await sslStream.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort; disposes plain NetworkStream as well.
+                }
+
+                lease.Dispose();
+                failure = ex;
+                throw;
+            }
+
+            _certificateLease = lease;
+            transport.PublishTlsAndResume(sslStream);
+            Volatile.Write(ref _mode, ModeTls);
+            _logger.LogDebug("In-place TLS upgrade completed for {Remote}.", RemoteEndPoint);
+        }
+        catch (Exception ex) when (failure is null)
+        {
+            failure = ex;
+            throw;
+        }
+        finally
+        {
+            if (failure is not null)
+            {
+                if (quiesced)
+                {
+                    transport.AbortQuiesceForConnectionTeardown();
+                }
+
+                if (Volatile.Read(ref _completed) == 0)
+                {
+                    await CompleteAsync(failure).ConfigureAwait(false);
+                }
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -233,7 +341,7 @@ public sealed class NntpConnection : INntpConnection
             }
             catch
             {
-                // Observed below via pump logging; swallow for complete.
+                // Observed via pump logging.
             }
         }
 
@@ -245,11 +353,11 @@ public sealed class NntpConnection : INntpConnection
             }
             catch
             {
-                // Observed below via pump logging; swallow for complete.
+                // Observed via pump logging.
             }
         }
 
-        CloseSocketAndTls();
+        await CloseTransportSocketAsync().ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -266,12 +374,46 @@ public sealed class NntpConnection : INntpConnection
         _certificateLease = null;
     }
 
+    /// <summary>Shared server TLS options (server auth only; no client certificates).</summary>
+    internal static SslServerAuthenticationOptions CreateServerAuthenticationOptions(
+        SslStreamCertificateContext certificateContext) =>
+        new()
+        {
+            ServerCertificateContext = certificateContext,
+            ClientCertificateRequired = false,
+            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+        };
+
     private void StartPumps()
     {
-        _receiveTask = IsTls ? ReceiveTlsAsync() : ReceiveSocketAsync();
-        _sendTask = IsTls ? SendTlsAsync() : SendSocketAsync();
+        _receiveTask = ReceiveAsync();
+        _sendTask = SendAsync();
         _ = ObservePumpAsync(_receiveTask, "receive");
         _ = ObservePumpAsync(_sendTask, "send");
+    }
+
+    private void EnsureApplicationInputDrainedForUpgrade()
+    {
+        if (!_inputPipe.Reader.TryRead(out var result))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!result.Buffer.IsEmpty)
+            {
+                throw new InvalidOperationException(
+                    "Cannot upgrade to TLS while unconsumed plaintext remains in Input. " +
+                    "Drain application data before calling UpgradeToTlsAsync.");
+            }
+        }
+        finally
+        {
+            // Leave unconsumed bytes in place for the caller (do not examine past start on failure).
+            _inputPipe.Reader.AdvanceTo(result.Buffer.Start, result.Buffer.Start);
+        }
     }
 
     private async Task ObservePumpAsync(Task pump, string name)
@@ -292,13 +434,16 @@ public sealed class NntpConnection : INntpConnection
         }
         finally
         {
-            _ = CompleteAsync(error);
+            if (Volatile.Read(ref _completed) == 0)
+            {
+                _ = CompleteAsync(error);
+            }
         }
     }
 
-    private async Task ReceiveSocketAsync()
+    private async Task ReceiveAsync()
     {
-        var socket = _socket ?? throw new InvalidOperationException("Socket missing.");
+        var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
         var writer = _inputPipe.Writer;
         var token = _connectionCts.Token;
 
@@ -319,9 +464,7 @@ public sealed class NntpConnection : INntpConnection
         while (!token.IsCancellationRequested)
         {
             var memory = writer.GetMemory(NntpPipeOptions.MinimumSegmentSize);
-            var bytes = await socket
-                .ReceiveAsync(memory, SocketFlags.None, token)
-                .ConfigureAwait(false);
+            var bytes = await transport.ReadAsync(memory, token).ConfigureAwait(false);
             if (bytes == 0)
             {
                 break;
@@ -338,17 +481,17 @@ public sealed class NntpConnection : INntpConnection
         await writer.CompleteAsync().ConfigureAwait(false);
     }
 
-    private async Task SendSocketAsync()
+    private async Task SendAsync()
     {
-        var socket = _socket ?? throw new InvalidOperationException("Socket missing.");
+        var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
         var reader = _outputPipe.Reader;
         var token = _connectionCts.Token;
+        var socket = _socket;
 
         while (!token.IsCancellationRequested)
         {
             var result = await reader.ReadAsync(token).ConfigureAwait(false);
             var buffer = result.Buffer;
-            // Advance only what was fully transmitted; on failure leave bytes unconsumed.
             var consumed = buffer.Start;
             try
             {
@@ -364,7 +507,7 @@ public sealed class NntpConnection : INntpConnection
                         continue;
                     }
 
-                    await SocketPayloadSender.SendAllAsync(socket, segment, token).ConfigureAwait(false);
+                    await transport.WriteAsync(segment, token).ConfigureAwait(false);
                 }
 
                 consumed = buffer.End;
@@ -381,120 +524,56 @@ public sealed class NntpConnection : INntpConnection
         }
 
         await reader.CompleteAsync().ConfigureAwait(false);
-        try
+
+        // Half-close TCP send only for plaintext end-of-stream; TLS shutdown is via SslStream dispose.
+        if (socket is not null && !IsTls)
         {
-            socket.Shutdown(SocketShutdown.Send);
-        }
-        catch (SocketException)
-        {
-            // Peer may already be gone.
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already closed.
-        }
-    }
-
-    private async Task ReceiveTlsAsync()
-    {
-        var ssl = _sslStream ?? throw new InvalidOperationException("SslStream missing.");
-        var writer = _inputPipe.Writer;
-        var token = _connectionCts.Token;
-
-        while (!token.IsCancellationRequested)
-        {
-            var memory = writer.GetMemory(NntpPipeOptions.MinimumSegmentSize);
-            var bytes = await ssl.ReadAsync(memory, token).ConfigureAwait(false);
-            if (bytes == 0)
-            {
-                break;
-            }
-
-            writer.Advance(bytes);
-            var flush = await writer.FlushAsync(token).ConfigureAwait(false);
-            if (flush.IsCompleted || flush.IsCanceled)
-            {
-                break;
-            }
-        }
-
-        await writer.CompleteAsync().ConfigureAwait(false);
-    }
-
-    private async Task SendTlsAsync()
-    {
-        var ssl = _sslStream ?? throw new InvalidOperationException("SslStream missing.");
-        var reader = _outputPipe.Reader;
-        var token = _connectionCts.Token;
-
-        while (!token.IsCancellationRequested)
-        {
-            var result = await reader.ReadAsync(token).ConfigureAwait(false);
-            var buffer = result.Buffer;
             try
             {
-                if (buffer.IsEmpty && result.IsCompleted)
-                {
-                    break;
-                }
-
-                foreach (var segment in buffer)
-                {
-                    if (segment.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    // WriteAsync encrypts and writes ciphertext to the inner NetworkStream.
-                    // NetworkStream does not buffer (Flush/FlushAsync are no-ops), so an explicit
-                    // SslStream.FlushAsync after each pipe batch is redundant for this stack.
-                    await ssl.WriteAsync(segment, token).ConfigureAwait(false);
-                }
+                socket.Shutdown(SocketShutdown.Send);
             }
-            finally
+            catch (SocketException)
             {
-                reader.AdvanceTo(buffer.End);
             }
-
-            if (result.IsCompleted)
+            catch (ObjectDisposedException)
             {
-                break;
+            }
+        }
+    }
+
+    private async Task CloseTransportSocketAsync()
+    {
+        ConnectionByteTransport? transport;
+        Socket? socket;
+        lock (_completeGate)
+        {
+            transport = _transport;
+            _transport = null;
+            socket = _socket;
+            _socket = null;
+        }
+
+        if (transport is not null)
+        {
+            try
+            {
+                await transport.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort.
             }
         }
 
-        await reader.CompleteAsync().ConfigureAwait(false);
-    }
-
-    private void CloseSocketAndTls()
-    {
-        lock (_completeGate)
+        if (socket is not null)
         {
-            var ssl = _sslStream;
-            _sslStream = null;
-            if (ssl is not null)
+            try
             {
-                try
-                {
-                    ssl.Dispose();
-                }
-                catch
-                {
-                    // Best-effort.
-                }
+                socket.Dispose();
             }
-
-            var socket = _socket;
-            _socket = null;
-            if (socket is not null)
+            catch
             {
-                try
-                {
-                    socket.Dispose();
-                }
-                catch
-                {
-                    // Best-effort.
-                }
+                // Best-effort.
             }
         }
     }
@@ -507,7 +586,6 @@ public sealed class NntpConnection : INntpConnection
         }
         catch (SocketException)
         {
-            // Some platforms may reject; proceed.
         }
     }
 

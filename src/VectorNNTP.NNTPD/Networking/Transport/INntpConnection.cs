@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Net;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
@@ -16,10 +17,15 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// No NNTP greeting or command semantics are implemented. The transport does not keep an unused
 /// connection alive beyond normal TCP/TLS lifetime and pipeline backpressure.
 /// </para>
+/// <para>
+/// <see cref="UpgradeToTlsAsync"/> upgrades an established plaintext connection to TLS on the same
+/// TCP socket. The NNTP STARTTLS command is not implemented by the transport; a future session layer
+/// decides when to invoke the upgrade.
+/// </para>
 /// </remarks>
 public interface INntpConnection : IAsyncDisposable
 {
-    /// <summary>Gets octets received from the network for the application to consume.</summary>
+    /// <summary>Gets octets received from the peer (after TLS decryption when applicable).</summary>
     PipeReader Input { get; }
 
     /// <summary>Gets the writer used by the application to send octets to the network.</summary>
@@ -47,4 +53,32 @@ public interface INntpConnection : IAsyncDisposable
     /// </summary>
     /// <param name="exception">Optional exception indicating abortive completion.</param>
     Task CompleteAsync(Exception? exception = null);
+
+    /// <summary>
+    /// Performs an in-place server TLS handshake on the existing TCP socket.
+    /// </summary>
+    /// <param name="certificateProvider">Provider used to acquire a connection-lifetime certificate lease.</param>
+    /// <param name="cancellationToken">Token that cancels the handshake (and aborts the connection on failure).</param>
+    /// <remarks>
+    /// <para>
+    /// Preconditions: the connection must be plaintext; the caller must not hold outstanding
+    /// <see cref="Input"/> reads or <see cref="Output"/> writes; all plaintext application data that
+    /// belongs before TLS must already be consumed from <see cref="Input"/>; any plaintext that must
+    /// be visible to the peer before TLS (for example a future STARTTLS response) must already be
+    /// flushed to <see cref="Output"/>.
+    /// </para>
+    /// <para>
+    /// On success, subsequent <see cref="Input"/>/<see cref="Output"/> traffic is TLS application data
+    /// on the same socket. <see cref="ClientIdentity"/> is unchanged. On failure, the connection is
+    /// completed and does not fall back to plaintext.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// Already TLS, upgrade in progress, or unconsumed plaintext remains in <see cref="Input"/>
+    /// (precondition failure does not complete the connection).
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The connection is closed or disposed.</exception>
+    Task UpgradeToTlsAsync(
+        ITlsCertificateContextProvider certificateProvider,
+        CancellationToken cancellationToken = default);
 }

@@ -541,7 +541,13 @@ internal sealed class TransportTestHost : IAsyncDisposable
 
     public IPEndPoint EndPoint => _listener.LocalEndPoint;
 
+    public TlsCertificateContextProvider? CertificateProvider => _certs;
+
     public static Task<TransportTestHost> StartPlainAsync() => StartAsync(tls: false, pfx: null);
+
+    /// <summary>Plain accept path with a certificate provider available for <see cref="INntpConnection.UpgradeToTlsAsync"/>.</summary>
+    public static Task<TransportTestHost> StartPlainWithCertificateAsync(byte[] pfx) =>
+        StartAsync(tls: false, pfx);
 
     public static Task<TransportTestHost> StartTlsAsync(byte[] pfx) => StartAsync(tls: true, pfx);
 
@@ -552,17 +558,27 @@ internal sealed class TransportTestHost : IAsyncDisposable
     public static Task<TransportTestHost> StartTlsWithProxyAsync(byte[] pfx, ITrustedProxyHosts trustedProxyHosts) =>
         StartAsync(tls: true, pfx, trustedProxyHosts);
 
+    /// <summary>Plain accept with PROXY trust evaluation and optional upgrade certificate provider.</summary>
+    public static Task<TransportTestHost> StartPlainWithProxyAsync(
+        ITrustedProxyHosts trustedProxyHosts,
+        byte[]? upgradePfx = null) =>
+        StartAsync(tls: false, upgradePfx, trustedProxyHosts);
+
     private static Task<TransportTestHost> StartAsync(
         bool tls,
         byte[]? pfx,
         ITrustedProxyHosts? trustedProxyHosts = null)
     {
         TlsCertificateContextProvider? certs = null;
-        if (tls)
+        if (pfx is not null)
         {
-            ArgumentNullException.ThrowIfNull(pfx);
             certs = new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance);
             certs.PublishFromPfx(pfx, AcmeConfigurationTests.TestPfxPassword);
+        }
+
+        if (tls)
+        {
+            ArgumentNullException.ThrowIfNull(certs);
         }
 
         trustedProxyHosts ??= new TrustedProxyHosts(Options.Create(new NntpdOptions { ProxyHosts = [] }));
