@@ -1011,6 +1011,9 @@ public sealed class ProxyPreambleLiveTests
         public bool IsCompleted => false;
         public long OutboundIdleVersion => 0;
 
+        public Task PauseReadsAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
         public Task WaitForOutboundDeliveryAsync(
             long outboundIdleVersionBeforeFlush,
             CancellationToken cancellationToken = default) =>

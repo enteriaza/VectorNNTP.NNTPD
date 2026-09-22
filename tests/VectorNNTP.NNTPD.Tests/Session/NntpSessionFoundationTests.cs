@@ -263,6 +263,9 @@ public sealed class NntpSessionFoundationTests
         public bool IsCompleted => _cts.IsCancellationRequested;
         public long OutboundIdleVersion => 0;
 
+        public Task PauseReadsAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
         public Task WaitForOutboundDeliveryAsync(
             long outboundIdleVersionBeforeFlush,
             CancellationToken cancellationToken = default) =>

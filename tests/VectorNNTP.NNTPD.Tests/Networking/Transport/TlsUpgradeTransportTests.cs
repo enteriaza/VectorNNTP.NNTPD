@@ -135,9 +135,8 @@ public sealed class TlsUpgradeTransportTests
     [Fact]
     public async Task After382_WithReadsStillActive_ClientHelloEntersApplicationInput()
     {
-        // Forensic documentation of the STARTTLS drain failure: if the receive pump remains
-        // active after 382 is on the wire, the peer's TLS ClientHello (content-type 0x16) is
-        // written into application Input and looks like "unconsumed plaintext".
+        // Documents the historical failure mode: writing 382 while reads remain Active lets
+        // ClientHello commit into application Input and fail EnsureApplicationInputDrainedForUpgrade.
         var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
         await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
         using var clientSocket = await host.ConnectPlainClientAsync();
@@ -182,27 +181,29 @@ public sealed class TlsUpgradeTransportTests
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             server.UpgradeToTlsAsync(host.CertificateProvider!));
-        Assert.Contains("likely-TLS-ClientHello", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("hex=16", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("unconsumed plaintext", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(server.IsTls);
         Assert.False(server.IsCompleted);
     }
 
     [Fact]
-    public async Task PauseReadsBeforeClientHello_KeepsInputEmpty_UpgradeSucceeds()
+    public async Task PauseReads_Before382_ClientHelloDoesNotEnterApplicationInput()
     {
+        // Required STARTTLS order: PauseReads → write 382 → ClientHello must not hit Input.
+        // With reads paused, the receive pump does not commit socket octets to Input; SslStream
+        // reads ClientHello from the network stream (or PrefixedStream if an in-flight read raced).
         var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
         await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
         using var clientSocket = await host.ConnectPlainClientAsync();
         await using var server = await host.AcceptAsync();
 
+        await server.PauseReadsAsync();
+
         var idleBefore = server.OutboundIdleVersion;
         var notice = "382 Continue with TLS negotiation\r\n"u8.ToArray();
         await server.Output.WriteAsync(notice);
         await server.Output.FlushAsync();
-
-        // Correct STARTTLS handoff: pause reads, then ensure 382 left the send pump.
-        await server.WaitForOutboundDeliveryAndPauseReadsAsync(idleBefore);
+        await server.WaitForOutboundDeliveryAsync(idleBefore);
 
         var received = new byte[notice.Length];
         var total = 0;
@@ -216,7 +217,66 @@ public sealed class TlsUpgradeTransportTests
             }
         }
 
-        // ClientHello while reads are paused must not appear in application Input.
+        // Start the client handshake immediately after 382 — the historical race window.
+        var upgradeTask = server.UpgradeToTlsAsync(host.CertificateProvider!);
+        await using var network = new NetworkStream(clientSocket, ownsSocket: true);
+        await using var ssl = new SslStream(network, leaveInnerStreamOpen: false);
+        var clientAuth = ssl.AuthenticateAsClientAsync(CreateClientSslOptions(clientCertificate: null));
+
+        // While handshake is in flight, application Input must not observe ClientHello.
+        for (var i = 0; i < 20; i++)
+        {
+            if (server.Input.TryRead(out var peek))
+            {
+                Assert.True(
+                    peek.Buffer.IsEmpty,
+                    "ClientHello must not enter application Input after PauseReads.");
+                server.Input.AdvanceTo(peek.Buffer.Start, peek.Buffer.Start);
+            }
+
+            if (upgradeTask.IsCompleted && clientAuth.IsCompleted)
+            {
+                break;
+            }
+
+            await Task.Yield();
+        }
+
+        await clientAuth;
+        await upgradeTask;
+
+        Assert.True(server.IsTls);
+        Assert.False(server.Input.TryRead(out var leftover) && !leftover.Buffer.IsEmpty);
+    }
+
+    [Fact]
+    public async Task PauseReadsBefore382_ThenClientHello_UpgradeSucceeds()
+    {
+        var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
+        await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
+        using var clientSocket = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        // Correct STARTTLS handoff: pause reads BEFORE 382 can reach the peer.
+        await server.PauseReadsAsync();
+        var idleBefore = server.OutboundIdleVersion;
+        var notice = "382 Continue with TLS negotiation\r\n"u8.ToArray();
+        await server.Output.WriteAsync(notice);
+        await server.Output.FlushAsync();
+        await server.WaitForOutboundDeliveryAsync(idleBefore);
+
+        var received = new byte[notice.Length];
+        var total = 0;
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            while (total < received.Length)
+            {
+                var n = await clientSocket.ReceiveAsync(received.AsMemory(total), cts.Token);
+                Assert.True(n > 0);
+                total += n;
+            }
+        }
+
         var upgradeTask = server.UpgradeToTlsAsync(host.CertificateProvider!);
         await using var network = new NetworkStream(clientSocket, ownsSocket: true);
         await using var ssl = new SslStream(network, leaveInnerStreamOpen: false);

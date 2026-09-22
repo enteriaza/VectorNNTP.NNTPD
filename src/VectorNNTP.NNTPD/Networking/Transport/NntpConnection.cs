@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Security;
@@ -111,6 +110,13 @@ public sealed class NntpConnection : INntpConnection
     public bool IsCompleted => Volatile.Read(ref _completed) == 1;
 
     /// <inheritdoc />
+    public Task PauseReadsAsync(CancellationToken cancellationToken = default)
+    {
+        var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
+        return transport.PauseReadsAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task WaitForOutboundDeliveryAsync(
         long outboundIdleVersionBeforeFlush,
         CancellationToken cancellationToken = default) =>
@@ -121,14 +127,7 @@ public sealed class NntpConnection : INntpConnection
         long outboundIdleVersionBeforeFlush,
         CancellationToken cancellationToken = default)
     {
-        var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
-
-        // CRITICAL ordering: pause reads BEFORE waiting for 382 to finish on the wire.
-        // Waiting first (previous bug) leaves the receive pump active while the client responds
-        // to 382 with ClientHello — those TLS octets are then written into application Input
-        // and EnsureApplicationInputDrainedForUpgrade incorrectly treats them as NNTP plaintext.
-        // Writes remain admitted during ReadsPaused so the 382 response can still flush.
-        await transport.PauseReadsAsync(cancellationToken).ConfigureAwait(false);
+        await PauseReadsAsync(cancellationToken).ConfigureAwait(false);
         await WaitForOutboundIdleAfterAsync(outboundIdleVersionBeforeFlush, cancellationToken)
             .ConfigureAwait(false);
     }
@@ -282,7 +281,7 @@ public sealed class NntpConnection : INntpConnection
                 cancellationToken,
                 _connectionCts.Token);
 
-            // Reads may already be paused by WaitForOutboundDeliveryAndPauseReadsAsync (STARTTLS).
+            // STARTTLS pauses reads before writing 382; other callers may still need a pause here.
             if (!transport.IsReadsPaused)
             {
                 await transport.PauseReadsAsync(linked.Token).ConfigureAwait(false);
@@ -610,7 +609,9 @@ public sealed class NntpConnection : INntpConnection
         {
             if (!result.Buffer.IsEmpty)
             {
-                throw new InvalidOperationException(FormatUnconsumedInputMessage(result.Buffer));
+                throw new InvalidOperationException(
+                    "Cannot upgrade to TLS while unconsumed plaintext remains in Input. " +
+                    "Drain application data before calling UpgradeToTlsAsync.");
             }
         }
         finally
@@ -618,36 +619,6 @@ public sealed class NntpConnection : INntpConnection
             // Leave unconsumed bytes in place for the caller (do not examine past start on failure).
             _inputPipe.Reader.AdvanceTo(result.Buffer.Start, result.Buffer.Start);
         }
-    }
-
-    /// <summary>
-    /// Builds a diagnostic drain-failure message including length and a short hex/ASCII preview
-    /// so operators can distinguish ClientHello (TLS content-type 0x16) from leftover NNTP.
-    /// </summary>
-    private static string FormatUnconsumedInputMessage(ReadOnlySequence<byte> buffer)
-    {
-        const int previewMax = 64;
-        var length = buffer.Length;
-        var take = (int)Math.Min(length, previewMax);
-        Span<byte> preview = stackalloc byte[take];
-        buffer.Slice(0, take).CopyTo(preview);
-
-        var hex = Convert.ToHexString(preview);
-        var ascii = new char[take];
-        for (var i = 0; i < take; i++)
-        {
-            var b = preview[i];
-            ascii[i] = b is >= 0x20 and <= 0x7E ? (char)b : '.';
-        }
-
-        var kind = preview.Length > 0 && preview[0] == 0x16
-            ? "likely-TLS-ClientHello(content-type=0x16)"
-            : "likely-NNTP-or-other";
-
-        return
-            "Cannot upgrade to TLS while unconsumed plaintext remains in Input. " +
-            "Drain application data before calling UpgradeToTlsAsync. " +
-            $"bufferedBytes={length}; kind={kind}; hex={hex}; ascii={new string(ascii)}";
     }
 
     private async Task ObservePumpAsync(Task pump, string name)

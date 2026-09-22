@@ -31,16 +31,17 @@ internal static class StartTls
         // RFC 8143 §4: discard any NNTP command pipelined between STARTTLS and TLS negotiation.
         DiscardBufferedApplicationInput(context.Connection.Input);
 
+        // Claim read ownership BEFORE 382 can reach the peer. Writes remain allowed while reads
+        // are paused, so ClientHello completions stash for PrefixedStream instead of Input.
+        await context.Connection.PauseReadsAsync(cancellationToken).ConfigureAwait(false);
+
         var idleVersionBefore382 = context.Connection.OutboundIdleVersion;
         await context.Response
             .WriteLineAsync(NntpReplyCodes.ContinueWithTls, "Continue with TLS negotiation", cancellationToken)
             .ConfigureAwait(false);
 
-        // Deliver 382 then pause reads so ClientHello cannot race into Input.
-        // Ordering inside WaitForOutboundDeliveryAndPauseReadsAsync: PauseReads first, then
-        // wait for outbound idle (writes still allowed while reads are paused).
         await context.Connection
-            .WaitForOutboundDeliveryAndPauseReadsAsync(idleVersionBefore382, cancellationToken)
+            .WaitForOutboundDeliveryAsync(idleVersionBefore382, cancellationToken)
             .ConfigureAwait(false);
 
         try

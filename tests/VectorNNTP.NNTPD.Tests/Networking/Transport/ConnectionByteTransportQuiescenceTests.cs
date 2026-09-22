@@ -6,6 +6,23 @@ namespace VectorNNTP.NNTPD.Tests.Networking.Transport;
 public sealed class ConnectionByteTransportQuiescenceTests
 {
     [Fact]
+    public async Task AfterPauseReads_TryCommitReadToApplication_StashesClientHello()
+    {
+        await using var stream = new ControllableStream();
+        await using var transport = new VectorNNTP.NNTPD.Networking.Transport.ConnectionByteTransport(
+            stream,
+            isTls: false);
+
+        await transport.PauseReadsAsync(CancellationToken.None);
+
+        var clientHello = new byte[] { 0x16, 0x03, 0x03, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00 };
+        Assert.False(transport.TryCommitReadToApplication(clientHello));
+
+        var prefix = transport.TakePendingUpgradePrefix();
+        Assert.Equal(clientHello, prefix.ToArray());
+    }
+
+    [Fact]
     public async Task Quiesce_DuringHistoricalAdmitWindow_DoesNotStartStreamIoAfterIdle()
     {
         // Reproduces the pre-fix window: WaitUntilActive observed Active, then Quiesce ran and

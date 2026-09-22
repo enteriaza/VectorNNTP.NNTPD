@@ -107,7 +107,7 @@ Connections become TLS-protected in one of two ways, sharing the same server aut
 1. **Implicit TLS** (`NntpTlsListenerService`): accept → PROXY (when trusted) → `SslStream` authenticate-as-server → TLS transport → pumps.
 2. **In-place upgrade** (`INntpConnection.UpgradeToTlsAsync`): accept → PROXY (when trusted) → plain transport + pumps → later upgrade on the **same** TCP socket.
 
-Upgrade sequence (STARTTLS): flush the `382` response to `Output` → **pause application reads** (writes still admitted) so ClientHello cannot enter application `Input` → wait until the send pump is idle (`382` on the wire) → **quiesce writes** → verify application `Input` is empty (true NNTP leftovers only; TLS octets must not be here) → acquire certificate lease → `AuthenticateAsServerAsync` on `SslStream` (optional `PrefixedStream` for octets retained if a socket read completed during pause) → publish TLS and resume pumps. `ClientIdentity` is unchanged. Concurrent upgrade / already-TLS / closed-connection calls fail deterministically.
+Upgrade sequence (STARTTLS): **pause application reads** (writes still admitted) so ClientHello cannot enter application `Input` → write and flush the `382` response → wait until the send pump is idle (`382` on the wire) → **quiesce writes** → verify application `Input` is empty (true NNTP leftovers only) → acquire certificate lease → `AuthenticateAsServerAsync` on `SslStream` (optional `PrefixedStream` for octets retained if a socket read completed during pause) → publish TLS and resume pumps. `ClientIdentity` is unchanged. Concurrent upgrade / already-TLS / closed-connection calls fail deterministically.
 
 Upgrade failure semantics are split:
 

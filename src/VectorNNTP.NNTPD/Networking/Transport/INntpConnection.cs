@@ -67,10 +67,21 @@ public interface INntpConnection : IAsyncDisposable
     /// Gets a monotonic generation bumped each time the send pump becomes idle (awaiting more Output).
     /// </summary>
     /// <remarks>
-    /// Capture before writing a pre-upgrade response (e.g. STARTTLS <c>382</c>), then
-    /// <see cref="WaitForOutboundDeliveryAndPauseReadsAsync"/> until the generation advances and reads pause.
+    /// For STARTTLS: <see cref="PauseReadsAsync"/> first, capture this version, write <c>382</c>, then
+    /// <see cref="WaitForOutboundDeliveryAsync"/> until the generation advances.
     /// </remarks>
     long OutboundIdleVersion { get; }
+
+    /// <summary>
+    /// Pauses application socket reads while still allowing writes (STARTTLS handoff ownership).
+    /// </summary>
+    /// <remarks>
+    /// After this returns, successful receive completions are retained for the TLS upgrade prefix
+    /// instead of being committed to <see cref="Input"/>. Writes remain admitted so a <c>382</c>
+    /// response can still reach the peer. Must be called <em>before</em> writing <c>382</c>.
+    /// </remarks>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task PauseReadsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Waits until the send pump has become idle after <paramref name="outboundIdleVersionBeforeFlush"/>.
@@ -84,12 +95,14 @@ public interface INntpConnection : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Waits until the send pump has become idle after <paramref name="outboundIdleVersionBeforeFlush"/>,
-    /// after first pausing application reads so post-<c>382</c> TLS octets cannot enter <see cref="Input"/>.
+    /// Pauses application reads, then waits until the send pump has become idle after
+    /// <paramref name="outboundIdleVersionBeforeFlush"/>.
     /// </summary>
     /// <remarks>
-    /// Reads are paused <em>before</em> waiting for outbound delivery. Waiting first leaves the receive
-    /// pump active while the peer responds to <c>382</c> with ClientHello.
+    /// Prefer <see cref="PauseReadsAsync"/> before writing <c>382</c>, then
+    /// <see cref="WaitForOutboundDeliveryAsync"/>. This combined helper is for callers that already
+    /// wrote the pre-upgrade response under an existing pause, or that pause immediately after write
+    /// when no peer ClientHello can race (test helpers). STARTTLS must pause <em>before</em> <c>382</c>.
     /// </remarks>
     Task WaitForOutboundDeliveryAndPauseReadsAsync(
         long outboundIdleVersionBeforeFlush,
@@ -105,11 +118,11 @@ public interface INntpConnection : IAsyncDisposable
     /// Preconditions: the connection must be plaintext and not DEFLATE-compressed; the caller must not
     /// hold outstanding <see cref="Input"/> reads or <see cref="Output"/> writes; any plaintext that must
     /// be visible to the peer before TLS (for example a STARTTLS <c>382</c> response) must already be
-    /// flushed to <see cref="Output"/>. The upgrade quiesces the byte transport before inspecting
-    /// <see cref="Input"/> so post-response TLS octets cannot race into the application pipe; any
-    /// application plaintext that still remains in <see cref="Input"/> is a precondition failure
-    /// (connection stays plaintext). Pipelined NNTP after STARTTLS must be discarded by the session
-    /// (RFC 8143) before calling this method.
+    /// flushed to <see cref="Output"/> (STARTTLS pauses reads <em>before</em> writing <c>382</c>).
+    /// The upgrade quiesces writes before inspecting <see cref="Input"/>; any application plaintext
+    /// that still remains in <see cref="Input"/> is a precondition failure (connection stays plaintext).
+    /// Pipelined NNTP after STARTTLS must be discarded by the session (RFC 8143) before calling this
+    /// method. Reads may already be paused by <see cref="PauseReadsAsync"/>.
     /// </para>
     /// <para>
     /// On success, subsequent <see cref="Input"/>/<see cref="Output"/> traffic is TLS application data
