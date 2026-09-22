@@ -53,10 +53,43 @@ public interface INntpConnection : IAsyncDisposable
     CancellationToken ConnectionClosed { get; }
 
     /// <summary>
+    /// Gets a value indicating whether <see cref="CompleteAsync"/> has been entered (transport is terminal).
+    /// </summary>
+    bool IsCompleted { get; }
+
+    /// <summary>
     /// Completes the transport (stops pumps, closes the socket). Safe to call multiple times.
     /// </summary>
     /// <param name="exception">Optional exception indicating abortive completion.</param>
     Task CompleteAsync(Exception? exception = null);
+
+    /// <summary>
+    /// Gets a monotonic generation bumped each time the send pump becomes idle (awaiting more Output).
+    /// </summary>
+    /// <remarks>
+    /// Capture before writing a pre-upgrade response (e.g. STARTTLS <c>382</c>), then
+    /// <see cref="WaitForOutboundDeliveryAndPauseReadsAsync"/> until the generation advances and reads pause.
+    /// </remarks>
+    long OutboundIdleVersion { get; }
+
+    /// <summary>
+    /// Waits until the send pump has become idle after <paramref name="outboundIdleVersionBeforeFlush"/>.
+    /// </summary>
+    /// <param name="outboundIdleVersionBeforeFlush">
+    /// <see cref="OutboundIdleVersion"/> captured before flushing pre-upgrade plaintext to <see cref="Output"/>.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task WaitForOutboundDeliveryAsync(
+        long outboundIdleVersionBeforeFlush,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Waits until the send pump has become idle after <paramref name="outboundIdleVersionBeforeFlush"/>,
+    /// then immediately pauses application reads so post-response TLS octets cannot enter <see cref="Input"/>.
+    /// </summary>
+    Task WaitForOutboundDeliveryAndPauseReadsAsync(
+        long outboundIdleVersionBeforeFlush,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Performs an in-place server TLS handshake on the existing TCP socket.
@@ -66,10 +99,13 @@ public interface INntpConnection : IAsyncDisposable
     /// <remarks>
     /// <para>
     /// Preconditions: the connection must be plaintext and not DEFLATE-compressed; the caller must not
-    /// hold outstanding <see cref="Input"/> reads or <see cref="Output"/> writes; all plaintext
-    /// application data that belongs before TLS must already be consumed from <see cref="Input"/>;
-    /// any plaintext that must be visible to the peer before TLS (for example a future STARTTLS
-    /// response) must already be flushed to <see cref="Output"/>.
+    /// hold outstanding <see cref="Input"/> reads or <see cref="Output"/> writes; any plaintext that must
+    /// be visible to the peer before TLS (for example a STARTTLS <c>382</c> response) must already be
+    /// flushed to <see cref="Output"/>. The upgrade quiesces the byte transport before inspecting
+    /// <see cref="Input"/> so post-response TLS octets cannot race into the application pipe; any
+    /// application plaintext that still remains in <see cref="Input"/> is a precondition failure
+    /// (connection stays plaintext). Pipelined NNTP after STARTTLS must be discarded by the session
+    /// (RFC 8143) before calling this method.
     /// </para>
     /// <para>
     /// On success, subsequent <see cref="Input"/>/<see cref="Output"/> traffic is TLS application data

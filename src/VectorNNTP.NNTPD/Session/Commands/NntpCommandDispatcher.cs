@@ -122,9 +122,24 @@ public sealed class NntpCommandDispatcher
         {
             // Log registry key only — never the raw command line (may contain AUTHINFO PASS secrets).
             _logger.LogError(ex, "NNTP command {Command} failed for {Client}.", descriptor.RegistryKey, session.ClientAddress);
-            await response
-                .WriteLineAsync(NntpReplyCodes.CommandFailed, "Command failed", cancellationToken)
-                .ConfigureAwait(false);
+
+            // Transport-terminal failures (e.g. STARTTLS handshake) complete the connection before
+            // the exception reaches this catch. Do not emit a secondary NNTP status line.
+            if (session.Connection.IsCompleted || session.Connection.ConnectionClosed.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await response
+                    .WriteLineAsync(NntpReplyCodes.CommandFailed, "Command failed", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                // Output writer completed between the check and the write.
+            }
         }
     }
 }

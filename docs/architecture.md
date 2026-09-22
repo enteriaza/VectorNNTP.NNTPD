@@ -107,7 +107,7 @@ Connections become TLS-protected in one of two ways, sharing the same server aut
 1. **Implicit TLS** (`NntpTlsListenerService`): accept → PROXY (when trusted) → `SslStream` authenticate-as-server → TLS transport → pumps.
 2. **In-place upgrade** (`INntpConnection.UpgradeToTlsAsync`): accept → PROXY (when trusted) → plain transport + pumps → later upgrade on the **same** TCP socket.
 
-Upgrade sequence: verify application `Input` has no unconsumed plaintext (session must drain first) → **quiesce** transport (close admission atomically with outstanding-op accounting; cancel in-flight reads; wait for in-flight writes under the caller token) → acquire certificate lease → `AuthenticateAsServerAsync` on `SslStream` wrapping the existing `NetworkStream` → publish TLS stream and resume pumps on the **same** pipes. `ClientIdentity` is unchanged. Concurrent upgrade / already-TLS / closed-connection calls fail deterministically.
+Upgrade sequence: wait until application <c>Output</c> has been delivered to the socket (send pump idle) → **quiesce** transport (close admission atomically with outstanding-op accounting; cancel in-flight reads; wait for in-flight writes under the caller token) so the receive pump cannot ingest post-response octets (e.g. TLS ClientHello after STARTTLS `382`) into application `Input` → verify application `Input` has no unconsumed plaintext (session must drain / discard pipelined commands first; post-quiescence precondition failure resumes plaintext without completing the connection) → acquire certificate lease → `AuthenticateAsServerAsync` on `SslStream` wrapping the existing `NetworkStream` (with optional `PrefixedStream` for octets retained during the quiesce race) → publish TLS stream and resume pumps on the **same** pipes. `ClientIdentity` is unchanged. Concurrent upgrade / already-TLS / closed-connection calls fail deterministically.
 
 Upgrade failure semantics are split:
 
@@ -116,7 +116,7 @@ Upgrade failure semantics are split:
 
 NNTPD performs **server-side TLS authentication only**. Client certificates are not requested, required, or validated.
 
-The transport exposes TCP→TLS upgrade capability only. The NNTP `STARTTLS` command is **not** implemented yet; a future session layer will decide when to invoke `UpgradeToTlsAsync`.
+The transport exposes TCP→TLS upgrade capability. The NNTP `STARTTLS` command (session layer) writes `382`, discards pipelined plaintext per RFC 8143, then invokes `UpgradeToTlsAsync`.
 
 ### Transport DEFLATE compression
 

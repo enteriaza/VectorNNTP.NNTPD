@@ -1008,6 +1008,18 @@ public sealed class ProxyPreambleLiveTests
         public bool IsCompressed => false;
 
         public CancellationToken ConnectionClosed => CancellationToken.None;
+        public bool IsCompleted => false;
+        public long OutboundIdleVersion => 0;
+
+        public Task WaitForOutboundDeliveryAsync(
+            long outboundIdleVersionBeforeFlush,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task WaitForOutboundDeliveryAndPauseReadsAsync(
+            long outboundIdleVersionBeforeFlush,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
 
         public Task CompleteAsync(Exception? exception = null) => Task.CompletedTask;
 

@@ -178,6 +178,18 @@ public sealed class NntpCommandInventoryTests
         public bool IsTls => false;
         public bool IsCompressed => false;
         public CancellationToken ConnectionClosed => _cts.Token;
+        public bool IsCompleted => _cts.IsCancellationRequested;
+        public long OutboundIdleVersion => 0;
+
+        public Task WaitForOutboundDeliveryAsync(
+            long outboundIdleVersionBeforeFlush,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task WaitForOutboundDeliveryAndPauseReadsAsync(
+            long outboundIdleVersionBeforeFlush,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
 
         public Task CompleteAsync(Exception? exception = null)
         {

@@ -57,6 +57,9 @@ public sealed class NntpConnection : INntpConnection
     private int _inplaceUpgradeBusy;
     private int _completed;
     private int _disposed;
+    private int _sendPumpAwaitingOutput;
+    private long _outboundIdleVersion;
+    private TaskCompletionSource? _outboundIdleWaiter;
 
     private NntpConnection(
         Socket socket,
@@ -99,6 +102,29 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     public bool IsCompressed => Volatile.Read(ref _compression) == CompressionOn;
+
+    /// <inheritdoc />
+    public long OutboundIdleVersion => Volatile.Read(ref _outboundIdleVersion);
+
+    /// <inheritdoc />
+    public bool IsCompleted => Volatile.Read(ref _completed) == 1;
+
+    /// <inheritdoc />
+    public Task WaitForOutboundDeliveryAsync(
+        long outboundIdleVersionBeforeFlush,
+        CancellationToken cancellationToken = default) =>
+        WaitForOutboundIdleAfterAsync(outboundIdleVersionBeforeFlush, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task WaitForOutboundDeliveryAndPauseReadsAsync(
+        long outboundIdleVersionBeforeFlush,
+        CancellationToken cancellationToken = default)
+    {
+        var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
+        await WaitForOutboundIdleAfterAsync(outboundIdleVersionBeforeFlush, cancellationToken)
+            .ConfigureAwait(false);
+        await transport.PauseReadsAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public CancellationToken ConnectionClosed => _connectionCts.Token;
@@ -209,9 +235,6 @@ public sealed class NntpConnection : INntpConnection
             throw new InvalidOperationException("Cannot negotiate TLS after DEFLATE is active.");
         }
 
-        // Precondition before taking the upgrade lock: session must have drained plaintext Input.
-        EnsureApplicationInputDrainedForUpgrade();
-
         if (Interlocked.CompareExchange(ref _inplaceUpgradeBusy, 1, 0) != 0)
         {
             throw new InvalidOperationException("A transport layer upgrade is already in progress.");
@@ -244,6 +267,7 @@ public sealed class NntpConnection : INntpConnection
         var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
         Exception? failure = null;
         var quiesced = false;
+        var preconditionFailed = false;
 
         try
         {
@@ -251,12 +275,36 @@ public sealed class NntpConnection : INntpConnection
                 cancellationToken,
                 _connectionCts.Token);
 
-            await transport.QuiesceAsync(linked.Token).ConfigureAwait(false);
+            // Reads may already be paused by WaitForOutboundDeliveryAndPauseReadsAsync (STARTTLS).
+            if (!transport.IsReadsPaused)
+            {
+                await transport.PauseReadsAsync(linked.Token).ConfigureAwait(false);
+            }
+
+            await WaitForOutboundIdleAsync(linked.Token).ConfigureAwait(false);
+            await transport.QuiesceWritesAsync(linked.Token).ConfigureAwait(false);
             quiesced = true;
+
+            try
+            {
+                EnsureApplicationInputDrainedForUpgrade();
+            }
+            catch (InvalidOperationException)
+            {
+                preconditionFailed = true;
+                transport.ResumeFromQuiesceWithoutUpgrade();
+                quiesced = false;
+                Volatile.Write(ref _mode, ModePlain);
+                throw;
+            }
 
             var lease = certificateProvider.Acquire();
             var plainStream = transport.TakeQuiescedStreamForTlsWrap();
-            var sslStream = new SslStream(plainStream, leaveInnerStreamOpen: false);
+            var upgradePrefix = transport.TakePendingUpgradePrefix();
+            Stream sslInner = upgradePrefix.IsEmpty
+                ? plainStream
+                : new PrefixedStream(plainStream, upgradePrefix, leaveInnerOpen: false);
+            var sslStream = new SslStream(sslInner, leaveInnerStreamOpen: false);
 
             try
             {
@@ -285,7 +333,7 @@ public sealed class NntpConnection : INntpConnection
             Volatile.Write(ref _mode, ModeTls);
             _logger.LogDebug("In-place TLS upgrade completed for {Remote}.", RemoteEndPoint);
         }
-        catch (Exception ex) when (failure is null)
+        catch (Exception ex) when (failure is null && !preconditionFailed)
         {
             failure = ex;
             throw;
@@ -294,6 +342,13 @@ public sealed class NntpConnection : INntpConnection
         {
             if (failure is not null)
             {
+                // Mark terminal and cancel ConnectionClosed before waking pumps so the session
+                // dispatcher cannot write a secondary NNTP status onto a dying transport.
+                if (Volatile.Read(ref _completed) == 0)
+                {
+                    await CompleteAsync(failure).ConfigureAwait(false);
+                }
+
                 if (quiesced)
                 {
                     transport.AbortQuiesceForConnectionTeardown();
@@ -303,13 +358,12 @@ public sealed class NntpConnection : INntpConnection
                     Volatile.Write(ref _mode, ModePlain);
                 }
 
-                if (Volatile.Read(ref _completed) == 0)
-                {
-                    await CompleteAsync(failure).ConfigureAwait(false);
-                }
+                Volatile.Write(ref _inplaceUpgradeBusy, 0);
             }
-
-            Volatile.Write(ref _inplaceUpgradeBusy, 0);
+            else
+            {
+                Volatile.Write(ref _inplaceUpgradeBusy, 0);
+            }
         }
     }
 
@@ -327,8 +381,6 @@ public sealed class NntpConnection : INntpConnection
         {
             throw new InvalidOperationException("Connection is already DEFLATE-compressed.");
         }
-
-        EnsureApplicationInputDrainedForUpgrade();
 
         if (Interlocked.CompareExchange(ref _inplaceUpgradeBusy, 1, 0) != 0)
         {
@@ -357,6 +409,7 @@ public sealed class NntpConnection : INntpConnection
         var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
         Exception? failure = null;
         var quiesced = false;
+        var preconditionFailed = false;
 
         try
         {
@@ -364,16 +417,39 @@ public sealed class NntpConnection : INntpConnection
                 cancellationToken,
                 _connectionCts.Token);
 
-            await transport.QuiesceAsync(linked.Token).ConfigureAwait(false);
+            if (!transport.IsReadsPaused)
+            {
+                await transport.PauseReadsAsync(linked.Token).ConfigureAwait(false);
+            }
+
+            await WaitForOutboundIdleAsync(linked.Token).ConfigureAwait(false);
+            await transport.QuiesceWritesAsync(linked.Token).ConfigureAwait(false);
             quiesced = true;
 
+            try
+            {
+                EnsureApplicationInputDrainedForUpgrade();
+            }
+            catch (InvalidOperationException)
+            {
+                preconditionFailed = true;
+                transport.ResumeFromQuiesceWithoutUpgrade();
+                quiesced = false;
+                Volatile.Write(ref _compression, CompressionOff);
+                throw;
+            }
+
             var inner = transport.TakeQuiescedStreamForDeflateWrap();
-            var deflate = new NntpDeflateStream(inner);
+            var upgradePrefix = transport.TakePendingUpgradePrefix();
+            Stream deflateInner = upgradePrefix.IsEmpty
+                ? inner
+                : new PrefixedStream(inner, upgradePrefix, leaveInnerOpen: false);
+            var deflate = new NntpDeflateStream(deflateInner);
             transport.PublishDeflateAndResume(deflate);
             Volatile.Write(ref _compression, CompressionOn);
             _logger.LogDebug("In-place DEFLATE compression activated for {Remote}.", RemoteEndPoint);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!preconditionFailed)
         {
             failure = ex;
             throw;
@@ -382,6 +458,11 @@ public sealed class NntpConnection : INntpConnection
         {
             if (failure is not null)
             {
+                if (Volatile.Read(ref _completed) == 0)
+                {
+                    await CompleteAsync(failure).ConfigureAwait(false);
+                }
+
                 if (quiesced)
                 {
                     transport.AbortQuiesceForConnectionTeardown();
@@ -389,11 +470,6 @@ public sealed class NntpConnection : INntpConnection
                 else if (Volatile.Read(ref _compression) == CompressionUpgrading)
                 {
                     Volatile.Write(ref _compression, CompressionOff);
-                }
-
-                if (Volatile.Read(ref _completed) == 0)
-                {
-                    await CompleteAsync(failure).ConfigureAwait(false);
                 }
             }
 
@@ -564,6 +640,49 @@ public sealed class NntpConnection : INntpConnection
         }
     }
 
+    private async Task WaitForOutboundIdleAsync(CancellationToken cancellationToken) =>
+        await WaitForOutboundIdleAfterAsync(Volatile.Read(ref _outboundIdleVersion) - 1, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task WaitForOutboundIdleAfterAsync(
+        long outboundIdleVersionBeforeFlush,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (Volatile.Read(ref _sendPumpAwaitingOutput) == 1
+                && Volatile.Read(ref _outboundIdleVersion) > outboundIdleVersionBeforeFlush)
+            {
+                return;
+            }
+
+            var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _outboundIdleWaiter, waiter);
+
+            if (Volatile.Read(ref _sendPumpAwaitingOutput) == 1
+                && Volatile.Read(ref _outboundIdleVersion) > outboundIdleVersionBeforeFlush)
+            {
+                Volatile.Write(ref _outboundIdleWaiter, null);
+                waiter.TrySetResult();
+                return;
+            }
+
+            await waiter.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void SignalOutboundIdle()
+    {
+        Interlocked.Increment(ref _outboundIdleVersion);
+        Volatile.Write(ref _sendPumpAwaitingOutput, 1);
+        var waiter = Interlocked.Exchange(ref _outboundIdleWaiter, null);
+        waiter?.TrySetResult();
+    }
+
+    private void SignalOutboundBusy() => Volatile.Write(ref _sendPumpAwaitingOutput, 0);
+
     private async Task ReceiveAsync()
     {
         var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
@@ -593,6 +712,13 @@ public sealed class NntpConnection : INntpConnection
                 break;
             }
 
+            // If Quiesce completed while this read returned, octets belong to the upgrade wrap
+            // (e.g. TLS ClientHello), not the application Input pipe.
+            if (!transport.TryCommitReadToApplication(memory.Span[..bytes]))
+            {
+                continue;
+            }
+
             writer.Advance(bytes);
             var flush = await writer.FlushAsync(token).ConfigureAwait(false);
             if (flush.IsCompleted || flush.IsCanceled)
@@ -613,7 +739,9 @@ public sealed class NntpConnection : INntpConnection
 
         while (!token.IsCancellationRequested)
         {
+            SignalOutboundIdle();
             var result = await reader.ReadAsync(token).ConfigureAwait(false);
+            SignalOutboundBusy();
             var buffer = result.Buffer;
             var consumed = buffer.Start;
             try

@@ -22,9 +22,10 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 internal sealed class ConnectionByteTransport : IAsyncDisposable
 {
     private const int StateActive = 0;
-    private const int StateQuiesced = 1;
-    private const int StateAbandoned = 2;
-    private const int StateDisposed = 3;
+    private const int StateReadsPaused = 1;
+    private const int StateQuiesced = 2;
+    private const int StateAbandoned = 3;
+    private const int StateDisposed = 4;
 
     private readonly object _gate = new();
     private Stream _stream;
@@ -32,11 +33,13 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     private TaskCompletionSource _resumeTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _idleTcs;
+    private TaskCompletionSource? _readIdleTcs;
     private int _activeReads;
     private int _activeWrites;
     private int _state;
     private bool _isTls;
     private bool _isCompressed;
+    private byte[]? _pendingUpgradePrefix;
 
     public ConnectionByteTransport(Stream stream, bool isTls)
     {
@@ -69,7 +72,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     }
 
     /// <summary>
-    /// Test-only: awaited after <see cref="WaitUntilActiveAsync"/> returns and before admission under
+    /// Test-only: awaited after <see cref="WaitUntilReadableAsync"/> / writable gate returns and before admission under
     /// <c>_gate</c>. Used to reproduce the historical Active-observed / not-yet-counted window.
     /// </summary>
     internal Func<ValueTask>? AfterActiveBeforeAdmitProbe { get; set; }
@@ -79,7 +82,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await WaitUntilActiveAsync(cancellationToken).ConfigureAwait(false);
+            await WaitUntilReadableAsync(cancellationToken).ConfigureAwait(false);
 
             if (AfterActiveBeforeAdmitProbe is { } probe)
             {
@@ -122,7 +125,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await WaitUntilActiveAsync(cancellationToken).ConfigureAwait(false);
+            await WaitUntilWritableAsync(cancellationToken).ConfigureAwait(false);
 
             if (AfterActiveBeforeAdmitProbe is { } probe)
             {
@@ -133,7 +136,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             lock (_gate)
             {
                 ThrowIfUnavailable();
-                if (_state != StateActive)
+                if (_state is not (StateActive or StateReadsPaused))
                 {
                     continue;
                 }
@@ -162,7 +165,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await WaitUntilActiveAsync(cancellationToken).ConfigureAwait(false);
+            await WaitUntilWritableAsync(cancellationToken).ConfigureAwait(false);
 
             if (AfterActiveBeforeAdmitProbe is { } probe)
             {
@@ -173,7 +176,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             lock (_gate)
             {
                 ThrowIfUnavailable();
-                if (_state != StateActive)
+                if (_state is not (StateActive or StateReadsPaused))
                 {
                     continue;
                 }
@@ -195,12 +198,140 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stops application stream I/O and waits until the underlying stream has no outstanding operations.
+    /// Gets a value indicating whether the transport is in the reads-paused upgrade drain state.
     /// </summary>
-    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    public bool IsReadsPaused
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _state is StateReadsPaused or StateQuiesced;
+            }
+        }
+    }
+
+    /// <summary>
+    /// After a successful <see cref="ReadAsync"/>, decides whether bytes may enter the application input pipe.
+    /// </summary>
+    /// <remarks>
+    /// When quiesced for TLS/DEFLATE upgrade, socket octets already read must not be injected into
+    /// <see cref="NntpConnection.Input"/> — they are retained as a prefix for the upgraded stream
+    /// (ClientHello race after a STARTTLS <c>382</c> response).
+    /// </remarks>
+    /// <returns>
+    /// <see langword="true"/> if the caller should write <paramref name="data"/> to the application pipe;
+    /// <see langword="false"/> if the bytes were claimed for the pending upgrade prefix.
+    /// </returns>
+    public bool TryCommitReadToApplication(ReadOnlySpan<byte> data)
+    {
+        lock (_gate)
+        {
+            if (_state is not (StateReadsPaused or StateQuiesced or StateAbandoned))
+            {
+                return true;
+            }
+
+            if (data.IsEmpty)
+            {
+                return false;
+            }
+
+            if (_pendingUpgradePrefix is null)
+            {
+                _pendingUpgradePrefix = data.ToArray();
+            }
+            else
+            {
+                var combined = new byte[_pendingUpgradePrefix.Length + data.Length];
+                _pendingUpgradePrefix.CopyTo(combined, 0);
+                data.CopyTo(combined.AsSpan(_pendingUpgradePrefix.Length));
+                _pendingUpgradePrefix = combined;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>Takes any socket octets retained during quiescence for the upgraded stream wrap.</summary>
+    public ReadOnlyMemory<byte> TakePendingUpgradePrefix()
+    {
+        lock (_gate)
+        {
+            var prefix = _pendingUpgradePrefix;
+            _pendingUpgradePrefix = null;
+            return prefix ?? ReadOnlyMemory<byte>.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Restores Active I/O after a post-quiescence precondition failure (no stream replacement).
+    /// </summary>
+    public void ResumeFromQuiesceWithoutUpgrade()
+    {
+        TaskCompletionSource resume;
+        lock (_gate)
+        {
+            ThrowIfUnavailable();
+            if (_state is not (StateQuiesced or StateReadsPaused))
+            {
+                throw new InvalidOperationException("Transport is not quiesced.");
+            }
+
+            _state = StateActive;
+            _idleTcs = null;
+            resume = _resumeTcs;
+            _pendingUpgradePrefix = null;
+        }
+
+        resume.TrySetResult();
+    }
+
+    /// <summary>
+    /// Cancels in-flight reads and blocks new reads while still allowing writes (outbound drain).
+    /// </summary>
+    public async Task PauseReadsAsync(CancellationToken cancellationToken)
+    {
+        CancellationTokenSource oldReadCts;
+        TaskCompletionSource? readIdle;
+        lock (_gate)
+        {
+            ThrowIfUnavailable();
+            if (_state is StateReadsPaused or StateQuiesced)
+            {
+                throw new InvalidOperationException("Transport reads are already paused.");
+            }
+
+            _state = StateReadsPaused;
+            _resumeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            oldReadCts = _readCts;
+            _readCts = new CancellationTokenSource();
+            if (_activeReads == 0)
+            {
+                readIdle = null;
+            }
+            else
+            {
+                readIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _readIdleTcs = readIdle;
+            }
+        }
+
+        await oldReadCts.CancelAsync().ConfigureAwait(false);
+        oldReadCts.Dispose();
+
+        if (readIdle is not null)
+        {
+            await readIdle.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// After <see cref="PauseReadsAsync"/>, blocks writes and waits until no stream I/O is outstanding.
+    /// </summary>
+    public async Task QuiesceWritesAsync(CancellationToken cancellationToken)
     {
         TaskCompletionSource idle;
-        CancellationTokenSource oldReadCts;
         bool alreadyIdle;
         lock (_gate)
         {
@@ -210,19 +341,16 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                 throw new InvalidOperationException("Transport is already quiesced.");
             }
 
-            // Close admission before inspecting outstanding counts so no new I/O can be admitted
-            // without being represented in those counts.
+            if (_state != StateReadsPaused)
+            {
+                throw new InvalidOperationException("Pause reads before quiescing writes.");
+            }
+
             _state = StateQuiesced;
-            _resumeTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _idleTcs = idle;
-            oldReadCts = _readCts;
-            _readCts = new CancellationTokenSource();
             alreadyIdle = _activeReads == 0 && _activeWrites == 0;
         }
-
-        await oldReadCts.CancelAsync().ConfigureAwait(false);
-        oldReadCts.Dispose();
 
         if (alreadyIdle)
         {
@@ -230,6 +358,15 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
         }
 
         await idle.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stops application stream I/O and waits until the underlying stream has no outstanding operations.
+    /// </summary>
+    public async Task QuiesceAsync(CancellationToken cancellationToken)
+    {
+        await PauseReadsAsync(cancellationToken).ConfigureAwait(false);
+        await QuiesceWritesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -407,6 +544,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     private void CompleteOperation(bool isRead)
     {
         TaskCompletionSource? idle = null;
+        TaskCompletionSource? readIdle = null;
         lock (_gate)
         {
             if (isRead)
@@ -418,6 +556,15 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                 _activeWrites--;
             }
 
+            if (isRead
+                && _state == StateReadsPaused
+                && _readIdleTcs is not null
+                && _activeReads == 0)
+            {
+                readIdle = _readIdleTcs;
+                _readIdleTcs = null;
+            }
+
             if (_state == StateQuiesced
                 && _idleTcs is not null
                 && _activeReads == 0
@@ -427,10 +574,11 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             }
         }
 
+        readIdle?.TrySetResult();
         idle?.TrySetResult();
     }
 
-    private async Task WaitUntilActiveAsync(CancellationToken cancellationToken)
+    private async Task WaitUntilReadableAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
@@ -439,6 +587,26 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             {
                 ThrowIfUnavailable();
                 if (_state == StateActive)
+                {
+                    return;
+                }
+
+                wait = _resumeTcs.Task;
+            }
+
+            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task WaitUntilWritableAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            Task wait;
+            lock (_gate)
+            {
+                ThrowIfUnavailable();
+                if (_state is StateActive or StateReadsPaused)
                 {
                     return;
                 }
