@@ -85,8 +85,12 @@ public interface INntpConnection : IAsyncDisposable
 
     /// <summary>
     /// Waits until the send pump has become idle after <paramref name="outboundIdleVersionBeforeFlush"/>,
-    /// then immediately pauses application reads so post-response TLS octets cannot enter <see cref="Input"/>.
+    /// after first pausing application reads so post-<c>382</c> TLS octets cannot enter <see cref="Input"/>.
     /// </summary>
+    /// <remarks>
+    /// Reads are paused <em>before</em> waiting for outbound delivery. Waiting first leaves the receive
+    /// pump active while the peer responds to <c>382</c> with ClientHello.
+    /// </remarks>
     Task WaitForOutboundDeliveryAndPauseReadsAsync(
         long outboundIdleVersionBeforeFlush,
         CancellationToken cancellationToken = default);

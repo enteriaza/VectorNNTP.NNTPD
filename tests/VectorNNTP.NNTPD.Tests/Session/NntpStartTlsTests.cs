@@ -17,6 +17,40 @@ public sealed class NntpStartTlsTestsCollection;
 public sealed class NntpStartTlsTests
 {
     [Fact]
+    public async Task StartTls_Success_Stress_NoUnconsumedPlaintextFalsePositive()
+    {
+        // Expose the historical ClientHello→Input race under normal AuthenticateAsClient timing.
+        for (var i = 0; i < 30; i++)
+        {
+            var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
+            await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
+            using var clientSocket = await host.ConnectPlainClientAsync();
+            await using var server = await host.AcceptAsync();
+
+            var sessionTask = new NntpSession(
+                    server,
+                    NullLogger<NntpSession>.Instance,
+                    certificateProvider: host.CertificateProvider)
+                .RunAsync();
+
+            _ = await ReadPlainLineAsync(clientSocket);
+            await clientSocket.SendAsync("STARTTLS\r\n"u8.ToArray());
+            Assert.StartsWith("382 ", await ReadPlainLineAsync(clientSocket), StringComparison.Ordinal);
+
+            await using var network = new NetworkStream(clientSocket, ownsSocket: true);
+            await using var ssl = new SslStream(network, leaveInnerStreamOpen: false);
+            await ssl.AuthenticateAsClientAsync(CreateClientSslOptions());
+            await WaitForServerTlsAsync(server);
+
+            await WriteSslLineAsync(ssl, "DATE");
+            Assert.StartsWith("111 ", await ReadSslLineAsync(ssl), StringComparison.Ordinal);
+
+            await server.CompleteAsync();
+            await sessionTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
     public async Task StartTls_Success_ThenDateOverTls()
     {
         var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");

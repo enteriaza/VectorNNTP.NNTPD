@@ -36,7 +36,9 @@ internal static class StartTls
             .WriteLineAsync(NntpReplyCodes.ContinueWithTls, "Continue with TLS negotiation", cancellationToken)
             .ConfigureAwait(false);
 
-        // Deliver 382 then pause reads in one step so ClientHello cannot race into Input.
+        // Deliver 382 then pause reads so ClientHello cannot race into Input.
+        // Ordering inside WaitForOutboundDeliveryAndPauseReadsAsync: PauseReads first, then
+        // wait for outbound idle (writes still allowed while reads are paused).
         await context.Connection
             .WaitForOutboundDeliveryAndPauseReadsAsync(idleVersionBefore382, cancellationToken)
             .ConfigureAwait(false);

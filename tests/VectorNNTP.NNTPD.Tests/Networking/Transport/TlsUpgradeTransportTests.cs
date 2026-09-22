@@ -133,6 +133,105 @@ public sealed class TlsUpgradeTransportTests
     }
 
     [Fact]
+    public async Task After382_WithReadsStillActive_ClientHelloEntersApplicationInput()
+    {
+        // Forensic documentation of the STARTTLS drain failure: if the receive pump remains
+        // active after 382 is on the wire, the peer's TLS ClientHello (content-type 0x16) is
+        // written into application Input and looks like "unconsumed plaintext".
+        var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
+        await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
+        using var clientSocket = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        var notice = "382 Continue with TLS negotiation\r\n"u8.ToArray();
+        await server.Output.WriteAsync(notice);
+        await server.Output.FlushAsync();
+
+        var received = new byte[notice.Length];
+        var total = 0;
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            while (total < received.Length)
+            {
+                var n = await clientSocket.ReceiveAsync(received.AsMemory(total), cts.Token);
+                Assert.True(n > 0);
+                total += n;
+            }
+        }
+
+        // Minimal TLS record header (Handshake / TLS 1.2) — enough to prove content-type 0x16.
+        var clientHelloPrefix = new byte[] { 0x16, 0x03, 0x03, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00 };
+        await clientSocket.SendAsync(clientHelloPrefix);
+
+        using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        byte first = 0;
+        while (true)
+        {
+            waitCts.Token.ThrowIfCancellationRequested();
+            if (server.Input.TryRead(out var peek) && !peek.Buffer.IsEmpty)
+            {
+                first = peek.Buffer.FirstSpan[0];
+                server.Input.AdvanceTo(peek.Buffer.Start, peek.Buffer.Start);
+                break;
+            }
+
+            await Task.Yield();
+        }
+
+        Assert.Equal(0x16, first);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            server.UpgradeToTlsAsync(host.CertificateProvider!));
+        Assert.Contains("likely-TLS-ClientHello", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("hex=16", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(server.IsTls);
+        Assert.False(server.IsCompleted);
+    }
+
+    [Fact]
+    public async Task PauseReadsBeforeClientHello_KeepsInputEmpty_UpgradeSucceeds()
+    {
+        var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
+        await using var host = await TransportTestHost.StartPlainWithCertificateAsync(pfx);
+        using var clientSocket = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        var idleBefore = server.OutboundIdleVersion;
+        var notice = "382 Continue with TLS negotiation\r\n"u8.ToArray();
+        await server.Output.WriteAsync(notice);
+        await server.Output.FlushAsync();
+
+        // Correct STARTTLS handoff: pause reads, then ensure 382 left the send pump.
+        await server.WaitForOutboundDeliveryAndPauseReadsAsync(idleBefore);
+
+        var received = new byte[notice.Length];
+        var total = 0;
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            while (total < received.Length)
+            {
+                var n = await clientSocket.ReceiveAsync(received.AsMemory(total), cts.Token);
+                Assert.True(n > 0);
+                total += n;
+            }
+        }
+
+        // ClientHello while reads are paused must not appear in application Input.
+        var upgradeTask = server.UpgradeToTlsAsync(host.CertificateProvider!);
+        await using var network = new NetworkStream(clientSocket, ownsSocket: true);
+        await using var ssl = new SslStream(network, leaveInnerStreamOpen: false);
+        await ssl.AuthenticateAsClientAsync(CreateClientSslOptions(clientCertificate: null));
+        await upgradeTask;
+
+        Assert.True(server.IsTls);
+        Assert.False(server.Input.TryRead(out var leftover) && !leftover.Buffer.IsEmpty);
+
+        var payload = new byte[] { 0x0A, 0x0B };
+        await ssl.WriteAsync(payload);
+        Assert.Equal(payload, await TransportTestShared.ReadExactAsync(server.Input, payload.Length));
+    }
+
+    [Fact]
     public async Task UpgradeToTls_UnconsumedInput_RefusesUpgradeAndKeepsPlaintext()
     {
         var pfx = TransportTestShared.CreatePfx("nntpd01.usenet.ninja");
