@@ -18,6 +18,7 @@ using VectorNNTP.NNTPD.Tests.Networking.Transport;
 namespace VectorNNTP.NNTPD.Tests.Session;
 
 /// <summary>Command RX/TX logging contract (ownership, redaction, timing shape).</summary>
+[Collection(nameof(NntpCommandLoggerCollection))]
 public sealed class NntpCommandLoggingTests
 {
     private static readonly Regex TxPattern = new(
@@ -54,6 +55,37 @@ public sealed class NntpCommandLoggingTests
         Assert.DoesNotContain(
             recording.Messages,
             m => m.Contains("NNTP command CAPABILITIES failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Help_ProducesExactlyOneRxAndOneTx_UnderHelpLogger()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(recording);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("HELP");
+        Assert.Equal("100 Help text follows", await duplex.ReadClientLineAsync());
+        var body = await duplex.ReadMultilineBodyAsync();
+        Assert.Equal(Help.SyntaxLines, body);
+        Assert.DoesNotContain(body, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var rx = recording.Messages.Where(m => m.Contains("RX:", StringComparison.Ordinal)).ToArray();
+        var tx = recording.Messages.Where(m => m.Contains("TX:", StringComparison.Ordinal)).ToArray();
+
+        Assert.Contains(rx, m => m.Contains("RX: HELP", StringComparison.Ordinal));
+        Assert.Equal(1, tx.Count(m => m.Contains("TX: HELP executed in", StringComparison.Ordinal)));
+        Assert.Contains(recording.Categories, c => c == typeof(Help).FullName);
+        Assert.DoesNotContain(
+            recording.Messages,
+            m => m.Contains("NNTP command HELP failed", StringComparison.Ordinal));
     }
 
     [Fact]
