@@ -36,13 +36,14 @@ internal static class NntpCommandExecution
         try
         {
             await execute(context, cancellationToken).ConfigureAwait(false);
-            if (!completedBefore && context.Connection.IsCompleted)
+            if (context.CompletionDetail is not null)
+            {
+                // Handler-owned detail (e.g. QUIT peer disconnect, STARTTLS cipher, COMPRESS).
+                detail = context.CompletionDetail;
+            }
+            else if (!completedBefore && context.Connection.IsCompleted)
             {
                 detail = "failed";
-            }
-            else if (context.CompletionDetail is not null)
-            {
-                detail = context.CompletionDetail;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
