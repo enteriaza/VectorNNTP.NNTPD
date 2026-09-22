@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Tests.Acme;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 
@@ -309,6 +310,8 @@ public sealed class NntpPlainTransportTests
         await using var service = new NntpPlainListenerService(
             Options.Create(options),
             new TrustedProxyHosts(Options.Create(options)),
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            DenyAllNntpAuthenticationProvider.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpPlainListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -340,6 +343,7 @@ public sealed class NntpTlsTransportTests
             Options.Create(options),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             new TrustedProxyHosts(Options.Create(options)),
+            DenyAllNntpAuthenticationProvider.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -356,6 +360,7 @@ public sealed class NntpTlsTransportTests
             Options.Create(options),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             new TrustedProxyHosts(Options.Create(options)),
+            DenyAllNntpAuthenticationProvider.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));

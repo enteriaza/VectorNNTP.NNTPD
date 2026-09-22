@@ -1,0 +1,56 @@
+namespace VectorNNTP.NNTPD.Session;
+
+/// <summary>Common NNTP reply codes used by the session and command layer (RFC 3977 / 4643).</summary>
+public static class NntpReplyCodes
+{
+    /// <summary>Help text follows (multiline).</summary>
+    public const int HelpTextFollows = 100;
+
+    /// <summary>Capability list follows (multiline).</summary>
+    public const int CapabilityListFollows = 101;
+
+    /// <summary>Server date stamp.</summary>
+    public const int ServerDate = 111;
+
+    /// <summary>Posting allowed (greeting / MODE READER).</summary>
+    public const int PostingAllowed = 200;
+
+    /// <summary>Posting prohibited (greeting / MODE READER).</summary>
+    public const int PostingProhibited = 201;
+
+    /// <summary>Connection closing (QUIT).</summary>
+    public const int ConnectionClosing = 205;
+
+    /// <summary>Authentication accepted (AUTHINFO).</summary>
+    public const int AuthenticationAccepted = 281;
+
+    /// <summary>Continue with TLS negotiation (STARTTLS).</summary>
+    public const int ContinueWithTls = 382;
+
+    /// <summary>Password required to complete AUTHINFO USER/PASS.</summary>
+    public const int PasswordRequired = 381;
+
+    /// <summary>Command failed due to temporary/internal fault.</summary>
+    public const int CommandFailed = 403;
+
+    /// <summary>Authentication required before the facility can be used.</summary>
+    public const int AuthenticationRequired = 480;
+
+    /// <summary>Authentication failed or rejected.</summary>
+    public const int AuthenticationRejected = 481;
+
+    /// <summary>Authentication commands issued out of sequence.</summary>
+    public const int AuthenticationOutOfSequence = 482;
+
+    /// <summary>Privacy/encryption required for the command.</summary>
+    public const int PrivacyRequired = 483;
+
+    /// <summary>Unknown or unimplemented command.</summary>
+    public const int UnknownCommand = 500;
+
+    /// <summary>Syntax error or unknown command variant.</summary>
+    public const int SyntaxError = 501;
+
+    /// <summary>Command not permitted in the current state / permanently unavailable.</summary>
+    public const int CommandUnavailable = 502;
+}

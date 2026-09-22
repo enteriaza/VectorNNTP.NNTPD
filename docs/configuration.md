@@ -16,6 +16,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `BindAddress` | string array | omitted → `["*"]` after normalize | no | Local listen addresses (see below) |
 | `BindPort` | int | `119` | no | Cleartext NNTP TCP port (`1–65535`) |
 | `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. |
+| `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` when the connection is not TLS-protected (see below) |
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `AcmeEmail` | string | _(none)_ | **yes when TLS enabled** | ACME account contact email; ignored when `BindPortTls` is `0` |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state |
@@ -119,8 +120,23 @@ Example:
 |---------|---------|--------------|----------|
 | `BindPort` | `119` | `1–65535` | Missing → default; invalid → hard startup failure |
 | `BindPortTls` | `0` | `0` or `1–65535` | `0` / unset → TLS disabled (`IsTlsListenerEnabled == false`); `1–65535` → TLS enabled |
+| `AllowCleartextAuth` | `true` | bool | Missing → default `true` (cleartext AUTHINFO USER/PASS permitted) |
 
 Negative values and values above `65535` fail validation. Dependents use `BindPortTls` / `IsTlsListenerEnabled` to distinguish disabled vs enabled TLS listener configuration.
+
+## Cleartext AUTHINFO (`AllowCleartextAuth`)
+
+`AUTHINFO USER/PASS` presents clear-text credentials at the NNTP protocol layer. RFC 4643 requires implementations that offer AUTHINFO PASS to also support TLS, and deprecates using the password command without a strong encryption layer. It does **not** prohibit cleartext use; servers SHOULD offer configuration to disable weak authentication without TLS.
+
+VectorNNTP policy:
+
+| Connection | `AllowCleartextAuth` | AUTHINFO USER/PASS |
+|------------|----------------------|--------------------|
+| TLS active | any | permitted |
+| TLS inactive | `true` (default) | permitted |
+| TLS inactive | `false` | rejected with `483`; CAPABILITIES does not advertise `AUTHINFO USER` |
+
+Prefer TLS when transmitting passwords. Setting `AllowCleartextAuth` to `true` does not make cleartext authentication “secure”; it only allows the mechanism on the cleartext port when operators need it.
 
 ## TLS and ACME (Let's Encrypt)
 

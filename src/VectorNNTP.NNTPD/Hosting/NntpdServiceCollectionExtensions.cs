@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.Session.Authentication;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -43,6 +44,8 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITrustedProxyHosts, TrustedProxyHosts>();
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
+        // Real account backends replace this registration; default rejects all credentials.
+        services.TryAddSingleton<INntpAuthenticationProvider>(DenyAllNntpAuthenticationProvider.Instance);
 
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {

@@ -911,14 +911,18 @@ public sealed class ProxyPreambleLiveTests
             new IPEndPoint(IPAddress.Parse("203.0.113.9"), 51515),
             proxyProtocolVersion: 1);
 
-        var sessionFromIdentity = new NntpSession(new IdentityOnlyConnection(identity));
+        var sessionFromIdentity = new NntpSession(
+            new IdentityOnlyConnection(identity),
+            NullLogger<NntpSession>.Instance);
         Assert.Equal(IPAddress.Parse("203.0.113.9"), sessionFromIdentity.ClientAddress);
         Assert.Equal(51515, sessionFromIdentity.ClientPort);
         Assert.Equal(IPAddress.Loopback, sessionFromIdentity.TcpPeer.Address);
         Assert.Same(identity, sessionFromIdentity.ClientIdentity);
 
         var direct = ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Parse("198.51.100.8"), 3333));
-        var directSession = new NntpSession(new IdentityOnlyConnection(direct));
+        var directSession = new NntpSession(
+            new IdentityOnlyConnection(direct),
+            NullLogger<NntpSession>.Instance);
         Assert.Equal(IPAddress.Parse("198.51.100.8"), directSession.ClientAddress);
         Assert.Equal(3333, directSession.ClientPort);
         Assert.Equal(direct.TcpPeer.Address, directSession.TcpPeer.Address);

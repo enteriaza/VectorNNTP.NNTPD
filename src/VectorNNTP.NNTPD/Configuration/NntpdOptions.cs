@@ -161,6 +161,22 @@ public sealed class NntpdOptions
     public int BindPortTls { get; set; }
 
     /// <summary>
+    /// Gets or sets whether <c>AUTHINFO USER/PASS</c> is permitted when the connection is not TLS-protected.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Default is <see langword="true"/> so cleartext NNTP can authenticate. <c>AUTHINFO PASS</c>
+    /// transmits the password in clear text at the NNTP protocol layer; prefer TLS in production.
+    /// </para>
+    /// <para>
+    /// When <see langword="false"/> and the connection is not TLS-protected, AUTHINFO USER/PASS
+    /// return <c>483</c> and <c>AUTHINFO USER</c> is not advertised in CAPABILITIES.
+    /// TLS connections always permit AUTHINFO USER/PASS regardless of this setting.
+    /// </para>
+    /// </remarks>
+    public bool AllowCleartextAuth { get; set; } = true;
+
+    /// <summary>
     /// Gets a value indicating whether TLS listener configuration is enabled.
     /// </summary>
     /// <remarks>

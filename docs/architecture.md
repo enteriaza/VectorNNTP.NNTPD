@@ -56,11 +56,39 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - AcmeCertificateService (TLS/ACME when BindPortTls > 0)   │
 │  - NntpTlsListenerService (implicit TLS accept/transport)   │
 │  - Optional: PlaceholderApplicationService (tests only)     │
-│  - Later: NNTP command dispatcher on NntpSession            │
+│  - NNTP session: greeting, command dispatch, authz gates    │
+│  - Later: full command handlers / storage / feeds             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer + effective client endpoint). When `ProxyHosts` is non-empty and the TCP peer is trusted, HAProxy PROXY v1/v2 is required on the cleartext socket before TLS/NNTP. Untrusted peers keep TCP identity; PROXY-looking bytes are left as application input and never rewrite client identity (intentional mixed-mode policy; exclusive PROXY ports remain a deployment/firewall choice). `NntpSession` exposes the effective client IP/port without re-parsing the transport.
+
+### NNTP session foundation
+
+`NntpSession` owns the NNTP greeting and command loop over `INntpConnection` pipes. Transport remains responsible for sockets, PROXY, TLS, DEFLATE, and connection lifecycle.
+
+Session concepts (distinct):
+
+- **Mode:** `Unspecified` | `Reader` | `Stream` (`MODE READER` / future `MODE STREAM`)
+- **Authentication:** `NntpAuthenticationState` (identity after successful AUTHINFO); pending `AUTHINFO USER` username is separate and does not authenticate
+- **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`). Defaults: unauthenticated; streaming and posting denied. `MODE STREAM` additionally requires `StreamingPermitted` (distinct from transit authorization). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
+- **Dispatch:** `NntpCommandRegistry` + `NntpCommandDispatcher` apply a fixed gate order: resolve → authentication → authorization → mode → handler.
+
+Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`. **AUTHINFO USER/PASS** are implemented (RFC 4643): USER caches identity and returns `381`; PASS verifies via `INntpAuthenticationProvider` (`281` / `481` / `482` / `483` / `502`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL` remains a `501` placeholder. Representative reader/transit verbs are registered for authorization gating only. `COMPRESS` is **not** advertised or dispatched.
+
+AUTHINFO flow:
+
+```text
+AUTHINFO USER username
+    → pending username (not authenticated)
+AUTHINFO PASS password
+    → INntpAuthenticationProvider.AuthenticateAsync
+    → on success: NntpAuthenticationState + NntpAuthorization (provider-granted flags only)
+```
+
+After successful authentication: AUTHINFO commands return `502`; CAPABILITIES omits `AUTHINFO` and `MODE-READER`. Passwords are never logged (dispatcher logs registry keys only).
+
+Invalid lines: empty/malformed → `501`; unknown verb → `500`; known verb/unknown variant → `501`.
 
 ### Transport I/O ownership
 
@@ -214,4 +242,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP command/session parsing (including STARTTLS and COMPRESS), storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes, in-place TCP→TLS upgrade, and in-place raw DEFLATE activation APIs only.
+NNTP storage, article/group data plane, posting, streaming feed handlers (`MODE STREAM` / `IHAVE` / `CHECK` / `TAKETHIS`), AUTHINFO SASL, account backends beyond `INntpAuthenticationProvider`, and `COMPRESS` command/capability advertisement remain deferred. AUTHINFO USER/PASS and the session authorization gates are in place.

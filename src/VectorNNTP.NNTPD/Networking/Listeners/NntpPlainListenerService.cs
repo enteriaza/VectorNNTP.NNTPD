@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Authentication;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -21,6 +23,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
 {
     private readonly IOptions<NntpdOptions> _options;
     private readonly ITrustedProxyHosts _trustedProxyHosts;
+    private readonly ITlsCertificateContextProvider _certificateProvider;
+    private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -34,15 +38,21 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     public NntpPlainListenerService(
         IOptions<NntpdOptions> options,
         ITrustedProxyHosts trustedProxyHosts,
+        ITlsCertificateContextProvider certificateProvider,
+        INntpAuthenticationProvider authenticationProvider,
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
+        ArgumentNullException.ThrowIfNull(certificateProvider);
+        ArgumentNullException.ThrowIfNull(authenticationProvider);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _trustedProxyHosts = trustedProxyHosts;
+        _certificateProvider = certificateProvider;
+        _authenticationProvider = authenticationProvider;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -202,8 +212,14 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 preamble.Leftover);
             _connections[connection] = 0;
 
-            // Session boundary: identity is available without inspecting the transport stream.
-            _ = new NntpSession(connection);
+            // Session owns NNTP greeting/command loop; transport owns the socket lifecycle.
+            var session = new NntpSession(
+                connection,
+                _loggerFactory.CreateLogger<NntpSession>(),
+                certificateProvider: _certificateProvider,
+                authenticationProvider: _authenticationProvider,
+                allowCleartextAuth: _options.Value.AllowCleartextAuth,
+                loggerFactory: _loggerFactory);
             _logger.LogDebug(
                 "Plain connection accepted from {Remote}; client {Client}.",
                 connection.RemoteEndPoint,
@@ -211,12 +227,11 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
 
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, connection.ConnectionClosed)
-                    .ConfigureAwait(false);
+                await session.RunAsync(_runCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (_runCts.IsCancellationRequested)
             {
-                // Shutdown or connection completed.
+                // Listener stopping.
             }
         }
         finally

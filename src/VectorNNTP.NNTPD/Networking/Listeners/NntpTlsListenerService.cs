@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Authentication;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -25,6 +26,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IOptions<NntpdOptions> _options;
     private readonly ITlsCertificateContextProvider _certificateProvider;
     private readonly ITrustedProxyHosts _trustedProxyHosts;
+    private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -39,15 +41,18 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IOptions<NntpdOptions> options,
         ITlsCertificateContextProvider certificateProvider,
         ITrustedProxyHosts trustedProxyHosts,
+        INntpAuthenticationProvider authenticationProvider,
         ILoggerFactory loggerFactory,
         ILogger<NntpTlsListenerService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
+        ArgumentNullException.ThrowIfNull(authenticationProvider);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
+        _authenticationProvider = authenticationProvider;
         _certificateProvider = certificateProvider;
         _trustedProxyHosts = trustedProxyHosts;
         _loggerFactory = loggerFactory;
@@ -227,7 +232,13 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 .ConfigureAwait(false);
             _connections[connection] = 0;
 
-            _ = new NntpSession(connection);
+            var session = new NntpSession(
+                connection,
+                _loggerFactory.CreateLogger<NntpSession>(),
+                certificateProvider: _certificateProvider,
+                authenticationProvider: _authenticationProvider,
+                allowCleartextAuth: _options.Value.AllowCleartextAuth,
+                loggerFactory: _loggerFactory);
             _logger.LogDebug(
                 "TLS connection accepted from {Remote}; client {Client}.",
                 connection.RemoteEndPoint,
@@ -235,12 +246,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
 
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, connection.ConnectionClosed)
-                    .ConfigureAwait(false);
+                await session.RunAsync(_runCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (_runCts.IsCancellationRequested)
             {
-                // Shutdown or connection completed.
+                // Listener stopping.
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
