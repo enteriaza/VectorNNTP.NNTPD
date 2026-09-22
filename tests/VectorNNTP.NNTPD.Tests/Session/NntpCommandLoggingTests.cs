@@ -70,7 +70,7 @@ public sealed class NntpCommandLoggingTests
         await duplex.WriteClientLineAsync("HELP");
         Assert.Equal("100 Help text follows", await duplex.ReadClientLineAsync());
         var body = await duplex.ReadMultilineBodyAsync();
-        Assert.Equal(Help.SyntaxLines, body);
+        Assert.Equal(Help.BodyLines, body);
         Assert.DoesNotContain(body, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
 
         await duplex.WriteClientLineAsync("QUIT");

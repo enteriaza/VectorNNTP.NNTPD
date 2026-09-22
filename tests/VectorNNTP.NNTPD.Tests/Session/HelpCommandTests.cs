@@ -9,7 +9,7 @@ using VectorNNTP.NNTPD.Session.Commands;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
-/// <summary>HELP command — static syntax listing (RFC 3977 §7.2), matching pyNNTPD.</summary>
+/// <summary>HELP command — static syntax listing (RFC 3977 §7.2) with ABNF-consistent notation.</summary>
 [Collection(nameof(NntpCommandLoggerCollection))]
 public sealed class HelpCommandTests
 {
@@ -27,11 +27,12 @@ public sealed class HelpCommandTests
         var (status, body) = await readTask;
 
         Assert.Equal("100 Help text follows", status);
-        Assert.Equal(Help.SyntaxLines, body);
+        Assert.Equal(Help.BodyLines, body);
         Assert.DoesNotContain(body, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("NEWGROUPS", body);
         Assert.DoesNotContain("NEWNEWS", body);
         AssertUnsupportedListVariantsAbsent(body);
+        AssertHelpBodyStructure(body);
     }
 
     [Fact]
@@ -55,7 +56,7 @@ public sealed class HelpCommandTests
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
         var (_, body) = await readTask;
 
-        Assert.Equal(Help.SyntaxLines, body);
+        Assert.Equal(Help.BodyLines, body);
     }
 
     [Fact]
@@ -82,7 +83,7 @@ public sealed class HelpCommandTests
         await duplex.WriteClientLineAsync("HELP");
         Assert.Equal("100 Help text follows", await duplex.ReadClientLineAsync());
         var body = await duplex.ReadMultilineBodyAsync();
-        Assert.Equal(Help.SyntaxLines, body);
+        Assert.Equal(Help.BodyLines, body);
 
         await duplex.WriteClientLineAsync("DATE");
         var date = await duplex.ReadClientLineAsync();
@@ -95,20 +96,66 @@ public sealed class HelpCommandTests
     }
 
     [Fact]
-    public void SyntaxLines_AreDeterministicAndExcludeBenchIt()
+    public void SyntaxLines_AreDeterministicAndUseAbnfConsistentNotation()
     {
         Assert.Equal(Help.SyntaxLines, Help.SyntaxLines.ToArray());
+        Assert.Equal(Help.BodyLines, Help.BodyLines.ToArray());
         Assert.Contains("HELP", Help.SyntaxLines);
         Assert.Contains("COMPRESS DEFLATE", Help.SyntaxLines);
         Assert.DoesNotContain(Help.SyntaxLines, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
         AssertUnsupportedListVariantsAbsent(Help.SyntaxLines);
         Assert.Contains("LIST", Help.SyntaxLines);
-        Assert.Contains("LIST ACTIVE {wildmat}", Help.SyntaxLines);
-        Assert.Contains("LIST NEWSGROUPS {wildmat}", Help.SyntaxLines);
+        Assert.Contains("LIST ACTIVE [wildmat]", Help.SyntaxLines);
+        Assert.Contains("LIST HEADERS [MSGID / RANGE]", Help.SyntaxLines);
+        Assert.Contains("LIST NEWSGROUPS [wildmat]", Help.SyntaxLines);
         Assert.Contains("LIST OVERVIEW.FMT", Help.SyntaxLines);
-        // Ordered as in pyNNTPD help_model (stable readable grouping), minus unsupported LIST keywords.
-        Assert.Equal("ARTICLE {message-id | article-number}", Help.SyntaxLines[0]);
-        Assert.Equal("XOVER {range | message-id}", Help.SyntaxLines[^1]);
+        Assert.Contains("LIST MOTD", Help.SyntaxLines);
+
+        // ABNF-consistent: optional args use [], alternatives use /; no {…} or |.
+        Assert.DoesNotContain(Help.SyntaxLines, l => l.Contains('{', StringComparison.Ordinal));
+        Assert.DoesNotContain(Help.SyntaxLines, l => l.Contains('}', StringComparison.Ordinal));
+        Assert.DoesNotContain(Help.SyntaxLines, l => l.Contains('|', StringComparison.Ordinal));
+        Assert.Contains("ARTICLE [message-id / article-number]", Help.SyntaxLines);
+        Assert.Contains("AUTHINFO USER username", Help.SyntaxLines);
+        Assert.Contains("AUTHINFO PASS password", Help.SyntaxLines);
+        Assert.Contains("AUTHINFO SASL mechanism [initial-response]", Help.SyntaxLines);
+        Assert.Contains("GROUP newsgroup", Help.SyntaxLines);
+        Assert.DoesNotContain(Help.SyntaxLines, l => l.Equals("GROUP [newsgroup]", StringComparison.Ordinal));
+        Assert.DoesNotContain(Help.SyntaxLines, l => l.StartsWith("GROUP [", StringComparison.Ordinal));
+        Assert.Contains("HDR header [range / message-id]", Help.SyntaxLines);
+        Assert.Contains("CHECK message-id", Help.SyntaxLines);
+        Assert.Contains("IHAVE message-id", Help.SyntaxLines);
+        Assert.Contains("TAKETHIS message-id", Help.SyntaxLines);
+        Assert.Contains("LISTGROUP [newsgroup [range]]", Help.SyntaxLines);
+        Assert.Contains("XOVER [range]", Help.SyntaxLines);
+
+        Assert.Equal("ARTICLE [message-id / article-number]", Help.SyntaxLines[0]);
+        Assert.Equal("XOVER [range]", Help.SyntaxLines[^1]);
+        AssertHelpBodyStructure(Help.BodyLines);
+    }
+
+    private static void AssertHelpBodyStructure(IReadOnlyList<string> body)
+    {
+        Assert.Equal(Help.BodyLines, body);
+
+        var syntaxEnd = Help.SyntaxLines.Count;
+        Assert.Equal(string.Empty, body[syntaxEnd]);
+        Assert.Equal("Range formats:", body[syntaxEnd + 1]);
+        Assert.Equal(Help.RangeHelpLines, body.Skip(syntaxEnd + 1).Take(Help.RangeHelpLines.Count).ToArray());
+
+        var afterRangeBlank = syntaxEnd + 1 + Help.RangeHelpLines.Count;
+        Assert.Equal(string.Empty, body[afterRangeBlank]);
+        Assert.Equal("Wildmat formats:", body[afterRangeBlank + 1]);
+        Assert.Equal(Help.WildmatHelpLines, body.Skip(afterRangeBlank + 1).Take(Help.WildmatHelpLines.Count).ToArray());
+
+        Assert.Contains("123       a single article number", body);
+        Assert.Contains("123-456   articles from 123 through 456 inclusive", body);
+        Assert.Contains("123-      article 123 and all following article numbers", body);
+        Assert.Contains("*         matches zero or more characters", body);
+        Assert.Contains("?         matches exactly one character", body);
+        Assert.Contains("Examples: a* ; a*,!*b ; *.recovery", body);
+        Assert.DoesNotContain(body, l => l.Contains("regex", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(body, l => l.Contains("[^", StringComparison.Ordinal));
     }
 
     private static void AssertUnsupportedListVariantsAbsent(IReadOnlyList<string> lines)
