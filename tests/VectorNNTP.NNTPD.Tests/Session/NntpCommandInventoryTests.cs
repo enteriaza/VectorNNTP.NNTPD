@@ -85,8 +85,7 @@ public sealed class NntpCommandInventoryTests
             streamingPermitted: false));
 
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
         Assert.True(NntpCommandParser.TryParse("LIST", out var parsed));
@@ -100,8 +99,7 @@ public sealed class NntpCommandInventoryTests
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
         Assert.True(NntpCommandParser.TryParse("LIST", out var parsed));
@@ -115,8 +113,7 @@ public sealed class NntpCommandInventoryTests
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
         Assert.True(NntpCommandParser.TryParse("COMPRESS DEFLATE", out var parsed));
@@ -176,6 +173,14 @@ public sealed class NntpCommandInventoryTests
         public System.Net.EndPoint? LocalEndPoint => null;
         public ConnectionClientIdentity ClientIdentity { get; }
         public bool IsTls => false;
+
+        public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)
+        {
+            tlsVersion = string.Empty;
+            cipher = string.Empty;
+            return false;
+        }
+
         public bool IsCompressed => false;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;

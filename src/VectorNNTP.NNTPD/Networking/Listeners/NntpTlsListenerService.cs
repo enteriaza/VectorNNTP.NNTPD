@@ -214,14 +214,6 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 return;
             }
 
-            if (preamble.Identity.IsTrustedProxy)
-            {
-                _logger.LogInformation(
-                    "Accepted trusted HAProxy TLS connection from {TcpPeer}; effective client {Client}.",
-                    preamble.Identity.TcpPeer,
-                    preamble.Identity.Client);
-            }
-
             connection = await NntpConnection.StartTlsAsync(
                     socket,
                     _certificateProvider,
@@ -239,10 +231,17 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory);
-            _logger.LogDebug(
-                "TLS connection accepted from {Remote}; client {Client}.",
-                connection.RemoteEndPoint,
-                connection.ClientIdentity.Client);
+
+            if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
+            {
+                throw new InvalidOperationException("TLS connection missing negotiated parameters after handshake.");
+            }
+
+            ConnectionAcceptanceLogging.LogTlsAccepted(
+                _logger,
+                connection.ClientIdentity,
+                tlsVersion,
+                cipher);
 
             try
             {

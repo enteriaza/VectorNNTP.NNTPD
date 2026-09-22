@@ -197,14 +197,6 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 return;
             }
 
-            if (preamble.Identity.IsTrustedProxy)
-            {
-                _logger.LogInformation(
-                    "Accepted trusted HAProxy connection from {TcpPeer}; effective client {Client}.",
-                    preamble.Identity.TcpPeer,
-                    preamble.Identity.Client);
-            }
-
             connection = NntpConnection.StartPlain(
                 socket,
                 preamble.Identity,
@@ -220,10 +212,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory);
-            _logger.LogDebug(
-                "Plain connection accepted from {Remote}; client {Client}.",
-                connection.RemoteEndPoint,
-                connection.ClientIdentity.Client);
+            ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             try
             {

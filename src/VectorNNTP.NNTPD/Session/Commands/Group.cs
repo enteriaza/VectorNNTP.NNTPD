@@ -1,13 +1,24 @@
+using Microsoft.Extensions.Logging;
+
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>GROUP command (RFC 3977).</summary>
-/// <remarks>TODO: Implement RFC-compliant GROUP behavior.</remarks>
+/// <summary>
+/// GROUP command as defined by RFC 3977, Section 6.1.1.
+/// </summary>
+/// <remarks>
+/// Selects a newsgroup as the currently selected group. Deliberate placeholder until group storage is implemented.
+/// </remarks>
 internal static class Group
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(Group));
+
     /// <summary>Handles <c>GROUP</c>.</summary>
-    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
-    {
-        // TODO: Implement RFC-compliant GROUP behavior.
-        return NntpCommandNotImplemented.HandleAsync(context, cancellationToken);
-    }
+    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "GROUP",
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            cancellationToken,
+            successDetail: "not implemented");
 }

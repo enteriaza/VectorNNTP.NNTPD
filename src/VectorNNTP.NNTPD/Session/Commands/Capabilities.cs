@@ -1,12 +1,24 @@
+using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>CAPABILITIES command (RFC 3977 / extension RFCs).</summary>
+/// <summary>
+/// CAPABILITIES command as defined by RFC 3977, Section 5.2.
+/// </summary>
+/// <remarks>
+/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, and related labels).
+/// Advertisement of AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
+/// </remarks>
 internal static class Capabilities
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(Capabilities));
+
     /// <summary>Handles <c>CAPABILITIES</c>.</summary>
-    public static async ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(Logger, context, "CAPABILITIES", ExecuteAsync, cancellationToken);
+
+    private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
         await context.Response
             .WriteMultilineStartAsync(NntpReplyCodes.CapabilityListFollows, "Capability list:", cancellationToken)

@@ -341,23 +341,29 @@ public sealed class NntpAuthinfoTests
     [Fact]
     public async Task AuthinfoPass_DoesNotLogPassword_OnHandlerFailure()
     {
-        var logger = new RecordingLogger<NntpCommandDispatcher>();
+        var recording = new RecordingLoggerFactory();
         var provider = new ThrowingAuthenticationProvider();
-        var registry = DefaultNntpCommandCatalog.Create(authenticationProvider: provider);
-        var dispatcher = new NntpCommandDispatcher(registry, logger);
-
         await using var duplex = await AuthinfoDuplex.CreateAsync(provider);
-        var session = duplex.CreateSession(provider, registry, allowCleartextAuth: true);
-        session.SetPendingAuthUsername("fred");
+        var session = duplex.CreateSession(provider, registry: null, allowCleartextAuth: true, loggerFactory: recording);
 
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO PASS super-secret-password-xyz", out var parsed));
-        var response = new NntpResponseWriter(duplex.ServerOutput);
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("AUTHINFO USER fred");
+        _ = await duplex.ReadClientLineAsync();
+        await duplex.WriteClientLineAsync("AUTHINFO PASS super-secret-password-xyz");
         Assert.StartsWith("403 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
 
-        var joined = string.Join('\n', logger.Messages);
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var joined = string.Join('\n', recording.Messages);
         Assert.DoesNotContain("super-secret-password-xyz", joined, StringComparison.Ordinal);
-        Assert.Contains("AUTHINFO PASS", joined, StringComparison.Ordinal);
+        Assert.Contains(recording.Messages, m => m.Contains("AUTHINFO PASS", StringComparison.Ordinal));
+        Assert.Contains(
+            recording.Categories,
+            c => c == "VectorNNTP.NNTPD.Session.Commands.AuthInfo");
     }
 
     private static ScriptedAuthenticationProvider CreateAcceptingProvider() =>
@@ -412,6 +418,52 @@ public sealed class NntpAuthinfoTests
             throw new InvalidOperationException("provider boom");
     }
 
+    private sealed class RecordingLoggerFactory : ILoggerFactory
+    {
+        public ConcurrentBag<string> Messages { get; } = [];
+        public ConcurrentBag<string> Categories { get; } = [];
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            Categories.Add(categoryName);
+            return new RecordingLogger(Messages);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly ConcurrentBag<string> _messages;
+
+        public RecordingLogger(ConcurrentBag<string> messages) => _messages = messages;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _messages.Add(formatter(state, exception));
+            if (exception is not null)
+            {
+                _messages.Add(exception.ToString());
+            }
+        }
+    }
+
     private sealed class RecordingLogger<T> : ILogger<T>
     {
         public ConcurrentBag<string> Messages { get; } = [];
@@ -459,7 +511,8 @@ public sealed class NntpAuthinfoTests
         public NntpSession CreateSession(
             INntpAuthenticationProvider? provider = null,
             NntpCommandRegistry? registry = null,
-            bool allowCleartextAuth = true)
+            bool allowCleartextAuth = true,
+            ILoggerFactory? loggerFactory = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -468,10 +521,11 @@ public sealed class NntpAuthinfoTests
                 isTls: _isTls);
             return new NntpSession(
                 connection,
-                NullLogger<NntpSession>.Instance,
+                loggerFactory?.CreateLogger<NntpSession>() ?? NullLogger<NntpSession>.Instance,
                 registry: registry,
                 authenticationProvider: provider ?? _provider,
-                allowCleartextAuth: allowCleartextAuth);
+                allowCleartextAuth: allowCleartextAuth,
+                loggerFactory: loggerFactory);
         }
 
         public async Task ReadGreetingAsync()
@@ -543,6 +597,14 @@ public sealed class NntpAuthinfoTests
         public System.Net.EndPoint? LocalEndPoint => null;
         public ConnectionClientIdentity ClientIdentity { get; }
         public bool IsTls { get; }
+
+        public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)
+        {
+            tlsVersion = string.Empty;
+            cipher = string.Empty;
+            return false;
+        }
+
         public bool IsCompressed => false;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;

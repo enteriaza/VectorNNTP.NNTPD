@@ -1,13 +1,24 @@
+using Microsoft.Extensions.Logging;
+
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>OVER command (RFC 3977).</summary>
-/// <remarks>TODO: Implement RFC-compliant OVER behavior.</remarks>
+/// <summary>
+/// OVER command as defined by RFC 3977, Section 8.3.
+/// </summary>
+/// <remarks>
+/// Returns overview information for articles. Deliberate placeholder until overview database is implemented.
+/// </remarks>
 internal static class Over
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(Over));
+
     /// <summary>Handles <c>OVER</c>.</summary>
-    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
-    {
-        // TODO: Implement RFC-compliant OVER behavior.
-        return NntpCommandNotImplemented.HandleAsync(context, cancellationToken);
-    }
+    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "OVER",
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            cancellationToken,
+            successDetail: "not implemented");
 }

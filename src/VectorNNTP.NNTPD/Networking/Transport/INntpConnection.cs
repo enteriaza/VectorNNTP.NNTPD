@@ -46,6 +46,14 @@ public interface INntpConnection : IAsyncDisposable
     /// <summary>Gets a value indicating whether the connection is TLS-protected.</summary>
     bool IsTls { get; }
 
+    /// <summary>
+    /// When TLS is active, returns the negotiated protocol and cipher suite labels for logging.
+    /// </summary>
+    /// <param name="tlsVersion">Operational TLS version label (for example <c>TLSv1.3</c>).</param>
+    /// <param name="cipher">Negotiated cipher suite name from <see cref="System.Net.Security.SslStream"/>.</param>
+    /// <returns><see langword="true"/> when TLS parameters are available.</returns>
+    bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher);
+
     /// <summary>Gets a value indicating whether bidirectional raw DEFLATE is active.</summary>
     bool IsCompressed { get; }
 

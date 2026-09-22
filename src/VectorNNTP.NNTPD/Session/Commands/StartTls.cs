@@ -1,13 +1,35 @@
 using System.IO.Pipelines;
+using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Transport;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>STARTTLS command (RFC 4642 / RFC 8143); TLS handshake is transport-owned.</summary>
+/// <summary>
+/// STARTTLS command as defined by RFC 4642, Section 2.2 (updated by RFC 8143).
+/// </summary>
+/// <remarks>
+/// Negotiates TLS on an existing plaintext NNTP connection. Transport owns the handshake and
+/// quiescence; this module owns command sequencing (discard pipelined input, pause reads before
+/// <c>382</c>, wait for outbound delivery, upgrade) and the TX completion record.
+/// </remarks>
 internal static class StartTls
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(StartTls));
+
     /// <summary>Handles <c>STARTTLS</c>.</summary>
-    public static async ValueTask HandleAsync(
+    public static ValueTask HandleAsync(
+        NntpCommandContext context,
+        ITlsCertificateContextProvider? certificateProvider,
+        CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "STARTTLS",
+            (ctx, ct) => ExecuteAsync(ctx, certificateProvider, ct),
+            cancellationToken);
+
+    private static async ValueTask ExecuteAsync(
         NntpCommandContext context,
         ITlsCertificateContextProvider? certificateProvider,
         CancellationToken cancellationToken)
@@ -47,9 +69,17 @@ internal static class StartTls
         try
         {
             await context.Connection.UpgradeToTlsAsync(certificateProvider, cancellationToken).ConfigureAwait(false);
+            if (context.Connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
+            {
+                context.CompletionDetail = TlsNegotiationLogging.FormatDetail(tlsVersion, cipher);
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Logger.LogError(
+                ex,
+                "[{Client}] STARTTLS handshake failed.",
+                NntpCommandLogFormat.Client(context.Session));
             context.Session.RequestClose();
             // Handshake failures complete the connection; do not rethrow into the dispatcher error path.
             // Precondition failures leave the connection usable — rethrow so the dispatcher can respond.

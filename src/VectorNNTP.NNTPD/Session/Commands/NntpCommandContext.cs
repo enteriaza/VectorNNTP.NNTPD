@@ -43,6 +43,12 @@ public sealed class NntpCommandContext
     /// <summary>Gets the response writer for this command.</summary>
     public NntpResponseWriter Response { get; }
 
+    /// <summary>
+    /// Optional TX completion detail set by the handler after successful work
+    /// (for example negotiated TLS parameters after STARTTLS).
+    /// </summary>
+    public string? CompletionDetail { get; set; }
+
     /// <summary>Gets the underlying transport connection.</summary>
     public INntpConnection Connection => Session.Connection;
 }

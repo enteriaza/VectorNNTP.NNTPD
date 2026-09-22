@@ -60,6 +60,8 @@ public sealed class NntpConnection : INntpConnection
     private int _sendPumpAwaitingOutput;
     private long _outboundIdleVersion;
     private TaskCompletionSource? _outboundIdleWaiter;
+    private string? _negotiatedTlsVersion;
+    private string? _negotiatedCipher;
 
     private NntpConnection(
         Socket socket,
@@ -99,6 +101,23 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     public bool IsTls => Volatile.Read(ref _mode) == ModeTls;
+
+    /// <inheritdoc />
+    public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)
+    {
+        var version = Volatile.Read(ref _negotiatedTlsVersion);
+        var suite = Volatile.Read(ref _negotiatedCipher);
+        if (version is null || suite is null)
+        {
+            tlsVersion = string.Empty;
+            cipher = string.Empty;
+            return false;
+        }
+
+        tlsVersion = version;
+        cipher = suite;
+        return true;
+    }
 
     /// <inheritdoc />
     public bool IsCompressed => Volatile.Read(ref _compression) == CompressionOn;
@@ -207,10 +226,13 @@ public sealed class NntpConnection : INntpConnection
             throw;
         }
 
+        TlsNegotiationLogging.Capture(sslStream, out var tlsVersion, out var cipher);
         var transport = new ConnectionByteTransport(sslStream, isTls: true);
         var connection = new NntpConnection(socket, transport, remote, local, isTls: true, clientIdentity, logger)
         {
             _certificateLease = lease,
+            _negotiatedTlsVersion = tlsVersion,
+            _negotiatedCipher = cipher,
         };
 
         connection.StartPumps();
@@ -335,6 +357,9 @@ public sealed class NntpConnection : INntpConnection
             }
 
             _certificateLease = lease;
+            TlsNegotiationLogging.Capture(sslStream, out var tlsVersion, out var cipher);
+            Volatile.Write(ref _negotiatedTlsVersion, tlsVersion);
+            Volatile.Write(ref _negotiatedCipher, cipher);
             transport.PublishTlsAndResume(sslStream);
             Volatile.Write(ref _mode, ModeTls);
             _logger.LogDebug("In-place TLS upgrade completed for {Remote}.", RemoteEndPoint);

@@ -1,13 +1,24 @@
+using Microsoft.Extensions.Logging;
+
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>NEXT command (RFC 3977).</summary>
-/// <remarks>TODO: Implement RFC-compliant NEXT behavior.</remarks>
+/// <summary>
+/// NEXT command as defined by RFC 3977, Section 6.1.4.
+/// </summary>
+/// <remarks>
+/// Moves the current article pointer forward. Deliberate placeholder until article selection state is implemented.
+/// </remarks>
 internal static class Next
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(Next));
+
     /// <summary>Handles <c>NEXT</c>.</summary>
-    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
-    {
-        // TODO: Implement RFC-compliant NEXT behavior.
-        return NntpCommandNotImplemented.HandleAsync(context, cancellationToken);
-    }
+    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "NEXT",
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            cancellationToken,
+            successDetail: "not implemented");
 }

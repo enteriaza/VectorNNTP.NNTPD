@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Session;
 
@@ -8,19 +9,21 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// Validation order: parse (caller) → resolve → authentication → authorization → mode → handler.
+/// Command RX/TX completion records are owned by the session (RX) and command modules (TX), not this type.
 /// </remarks>
 public sealed class NntpCommandDispatcher
 {
     private readonly NntpCommandRegistry _registry;
-    private readonly ILogger<NntpCommandDispatcher> _logger;
+    private readonly ILogger _unknownCommandLogger;
 
     /// <summary>Initializes a new instance of the <see cref="NntpCommandDispatcher"/> class.</summary>
-    public NntpCommandDispatcher(NntpCommandRegistry registry, ILogger<NntpCommandDispatcher> logger)
+    public NntpCommandDispatcher(NntpCommandRegistry registry, ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(logger);
         _registry = registry;
-        _logger = logger;
+        NntpCommandLoggers.Configure(loggerFactory);
+        // Unknown/unresolved commands have no module; use the shared execution helper category.
+        _unknownCommandLogger = NntpCommandLoggers.For(typeof(NntpCommandExecution));
     }
 
     /// <summary>Dispatches one already-parsed command line.</summary>
@@ -35,29 +38,52 @@ public sealed class NntpCommandDispatcher
 
         if (!_registry.TryResolve(parsed, out var descriptor, out var arguments, out var status))
         {
+            var started = Stopwatch.GetTimestamp();
+            var display = status == NntpCommandResolveStatus.UnknownSubcommand && parsed.Tokens.Count > 0
+                ? $"{parsed.Verb} {parsed.Tokens[0]}"
+                : parsed.Verb;
             switch (status)
             {
                 case NntpCommandResolveStatus.UnknownSubcommand:
                     await response
                         .WriteLineAsync(NntpReplyCodes.SyntaxError, "Unknown command variant", cancellationToken)
                         .ConfigureAwait(false);
+                    NntpCommandExecution.WriteCompletion(
+                        _unknownCommandLogger,
+                        session,
+                        display.ToUpperInvariant(),
+                        Stopwatch.GetElapsedTime(started),
+                        "unknown variant");
                     return;
                 default:
                     await response
                         .WriteLineAsync(NntpReplyCodes.UnknownCommand, "Unknown command", cancellationToken)
                         .ConfigureAwait(false);
+                    NntpCommandExecution.WriteCompletion(
+                        _unknownCommandLogger,
+                        session,
+                        display.ToUpperInvariant(),
+                        Stopwatch.GetElapsedTime(started),
+                        "unknown command");
                     return;
             }
         }
 
         var access = descriptor.Access;
         var authz = session.Authorization;
+        var gateStarted = Stopwatch.GetTimestamp();
 
         if (access.HasFlag(NntpCommandAccess.RequiresAuthentication) && !authz.IsAuthenticated)
         {
             await response
                 .WriteLineAsync(NntpReplyCodes.AuthenticationRequired, "Authentication required", cancellationToken)
                 .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                "authentication required");
             return;
         }
 
@@ -66,6 +92,12 @@ public sealed class NntpCommandDispatcher
             var code = authz.IsAuthenticated ? NntpReplyCodes.CommandUnavailable : NntpReplyCodes.AuthenticationRequired;
             var text = authz.IsAuthenticated ? "Permission denied" : "Authentication required";
             await response.WriteLineAsync(code, text, cancellationToken).ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                authz.IsAuthenticated ? "permission denied" : "authentication required");
             return;
         }
 
@@ -74,6 +106,12 @@ public sealed class NntpCommandDispatcher
             var code = authz.IsAuthenticated ? NntpReplyCodes.CommandUnavailable : NntpReplyCodes.AuthenticationRequired;
             var text = authz.IsAuthenticated ? "Permission denied" : "Authentication required";
             await response.WriteLineAsync(code, text, cancellationToken).ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                authz.IsAuthenticated ? "permission denied" : "authentication required");
             return;
         }
 
@@ -82,6 +120,12 @@ public sealed class NntpCommandDispatcher
             await response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Posting not permitted", cancellationToken)
                 .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                "posting not permitted");
             return;
         }
 
@@ -90,6 +134,12 @@ public sealed class NntpCommandDispatcher
             await response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Streaming not permitted", cancellationToken)
                 .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                "streaming not permitted");
             return;
         }
 
@@ -98,6 +148,12 @@ public sealed class NntpCommandDispatcher
             await response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Not in reader mode", cancellationToken)
                 .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                "not in reader mode");
             return;
         }
 
@@ -106,6 +162,12 @@ public sealed class NntpCommandDispatcher
             await response
                 .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Not in stream mode", cancellationToken)
                 .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                descriptor.Logger,
+                session,
+                descriptor.RegistryKey,
+                Stopwatch.GetElapsedTime(gateStarted),
+                "not in stream mode");
             return;
         }
 
@@ -118,13 +180,10 @@ public sealed class NntpCommandDispatcher
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            // Log registry key only — never the raw command line (may contain AUTHINFO PASS secrets).
-            _logger.LogError(ex, "NNTP command {Command} failed for {Client}.", descriptor.RegistryKey, session.ClientAddress);
-
-            // Transport-terminal failures (e.g. STARTTLS handshake) complete the connection before
-            // the exception reaches this catch. Do not emit a secondary NNTP status line.
+            // Command modules own failure TX/exception logs. Transport-terminal failures (e.g. STARTTLS)
+            // complete the connection before reaching here — do not emit a secondary NNTP status line.
             if (session.Connection.IsCompleted || session.Connection.ConnectionClosed.IsCancellationRequested)
             {
                 return;

@@ -1005,6 +1005,13 @@ public sealed class ProxyPreambleLiveTests
 
         public bool IsTls => false;
 
+        public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)
+        {
+            tlsVersion = string.Empty;
+            cipher = string.Empty;
+            return false;
+        }
+
         public bool IsCompressed => false;
 
         public CancellationToken ConnectionClosed => CancellationToken.None;

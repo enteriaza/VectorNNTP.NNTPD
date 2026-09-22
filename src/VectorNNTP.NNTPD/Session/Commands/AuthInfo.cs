@@ -1,16 +1,56 @@
+using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>AUTHINFO USER / PASS / SASL (RFC 4643).</summary>
+/// <summary>
+/// AUTHINFO USER / PASS (RFC 4643, Section 2.3) and AUTHINFO SASL (RFC 4643, Section 2.4).
+/// </summary>
 /// <remarks>
-/// USER and PASS are implemented. SASL is registered but not implemented.
+/// USER caches a username; PASS authenticates via <see cref="INntpAuthenticationProvider"/>.
+/// SASL is registered but deliberately not implemented yet. Passwords and SASL material must never
+/// appear in command logs (RX redaction is applied at the session boundary).
 /// </remarks>
 internal static class AuthInfo
 {
+    private static ILogger Logger => NntpCommandLoggers.For(typeof(AuthInfo));
+
     /// <summary>Handles <c>AUTHINFO USER</c>.</summary>
-    public static async ValueTask HandleUserAsync(
+    public static ValueTask HandleUserAsync(
+        NntpCommandContext context,
+        INntpAuthenticationProvider authenticationProvider,
+        CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "AUTHINFO USER",
+            (ctx, ct) => ExecuteUserAsync(ctx, authenticationProvider, ct),
+            cancellationToken);
+
+    /// <summary>Handles <c>AUTHINFO PASS</c>.</summary>
+    public static ValueTask HandlePassAsync(
+        NntpCommandContext context,
+        INntpAuthenticationProvider authenticationProvider,
+        CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "AUTHINFO PASS",
+            (ctx, ct) => ExecutePassAsync(ctx, authenticationProvider, ct),
+            cancellationToken);
+
+    /// <summary>Handles <c>AUTHINFO SASL</c>.</summary>
+    public static ValueTask HandleSaslAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        NntpCommandExecution.RunAsync(
+            Logger,
+            context,
+            "AUTHINFO SASL",
+            ExecuteSaslAsync,
+            cancellationToken,
+            successDetail: "not implemented");
+
+    private static async ValueTask ExecuteUserAsync(
         NntpCommandContext context,
         INntpAuthenticationProvider authenticationProvider,
         CancellationToken cancellationToken)
@@ -50,8 +90,7 @@ internal static class AuthInfo
             .ConfigureAwait(false);
     }
 
-    /// <summary>Handles <c>AUTHINFO PASS</c>.</summary>
-    public static async ValueTask HandlePassAsync(
+    private static async ValueTask ExecutePassAsync(
         NntpCommandContext context,
         INntpAuthenticationProvider authenticationProvider,
         CancellationToken cancellationToken)
@@ -123,13 +162,8 @@ internal static class AuthInfo
             .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Handles <c>AUTHINFO SASL</c>.
-    /// </summary>
-    /// <remarks>TODO: Implement RFC-compliant AUTHINFO SASL behavior.</remarks>
-    public static async ValueTask HandleSaslAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static async ValueTask ExecuteSaslAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        // TODO: Implement RFC-compliant AUTHINFO SASL behavior.
         if (context.Session.Authentication.IsAuthenticated)
         {
             await context.Response

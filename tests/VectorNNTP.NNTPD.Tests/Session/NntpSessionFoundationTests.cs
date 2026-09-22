@@ -43,8 +43,7 @@ public sealed class NntpSessionFoundationTests
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("NOSUCHCMD", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -58,8 +57,7 @@ public sealed class NntpSessionFoundationTests
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("AUTHINFO GENERIC x", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -73,8 +71,7 @@ public sealed class NntpSessionFoundationTests
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("ARTICLE", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -88,8 +85,7 @@ public sealed class NntpSessionFoundationTests
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("CHECK <msg@example.com>", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -109,8 +105,7 @@ public sealed class NntpSessionFoundationTests
             streamingPermitted: false));
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("IHAVE <msg@example.com>", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -130,8 +125,7 @@ public sealed class NntpSessionFoundationTests
             streamingPermitted: false));
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create(),
-            NullLogger<NntpCommandDispatcher>.Instance);
+            DefaultNntpCommandCatalog.Create());
 
         Assert.True(NntpCommandParser.TryParse("MODE STREAM", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
@@ -258,6 +252,14 @@ public sealed class NntpSessionFoundationTests
         public System.Net.EndPoint? LocalEndPoint => null;
         public ConnectionClientIdentity ClientIdentity { get; }
         public bool IsTls => false;
+
+        public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)
+        {
+            tlsVersion = string.Empty;
+            cipher = string.Empty;
+            return false;
+        }
+
         public bool IsCompressed => false;
         public CancellationToken ConnectionClosed => _cts.Token;
         public bool IsCompleted => _cts.IsCancellationRequested;

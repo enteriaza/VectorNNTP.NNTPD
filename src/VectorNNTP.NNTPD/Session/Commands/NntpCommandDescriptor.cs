@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>Metadata and handler for one NNTP command (and optional subcommand).</summary>
@@ -8,7 +11,8 @@ public sealed class NntpCommandDescriptor
         string name,
         NntpCommandAccess access,
         Func<NntpCommandContext, CancellationToken, ValueTask> handler,
-        string? subcommand = null)
+        string? subcommand = null,
+        ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(handler);
@@ -16,6 +20,7 @@ public sealed class NntpCommandDescriptor
         Subcommand = subcommand?.ToUpperInvariant();
         Access = access;
         Handler = handler;
+        Logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>Gets the primary command verb (ASCII uppercase).</summary>
@@ -29,6 +34,12 @@ public sealed class NntpCommandDescriptor
 
     /// <summary>Gets the handler invoked after validation succeeds.</summary>
     public Func<NntpCommandContext, CancellationToken, ValueTask> Handler { get; }
+
+    /// <summary>
+    /// Gets the command-module logger used for gate/reject TX completion records
+    /// (same category as the command implementation).
+    /// </summary>
+    public ILogger Logger { get; }
 
     /// <summary>Gets a stable registry key for this descriptor.</summary>
     public string RegistryKey => Subcommand is null ? Name : $"{Name} {Subcommand}";

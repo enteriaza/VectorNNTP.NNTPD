@@ -52,9 +52,7 @@ public sealed class NntpSession
             certificateProvider,
             AuthenticationProvider,
             loggerFactory);
-        var dispatcherLogger = loggerFactory?.CreateLogger<NntpCommandDispatcher>()
-            ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<NntpCommandDispatcher>.Instance;
-        _dispatcher = new NntpCommandDispatcher(registry, dispatcherLogger);
+        _dispatcher = new NntpCommandDispatcher(registry, loggerFactory);
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -177,11 +175,24 @@ public sealed class NntpSession
                     break;
                 }
 
+                var client = NntpCommandLogFormat.Client(this);
+                _logger.LogInformation(
+                    "[{Client}] RX: {Command}",
+                    client,
+                    NntpCommandLogFormat.RedactRxLine(line));
+
                 if (!NntpCommandParser.TryParse(line, out var parsed))
                 {
+                    var syntaxStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     await response
                         .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", token)
                         .ConfigureAwait(false);
+                    NntpCommandExecution.WriteCompletion(
+                        NntpCommandLoggers.For(typeof(NntpCommandExecution)),
+                        this,
+                        NntpCommandLogFormat.DisplayNameFromRawLine(line),
+                        System.Diagnostics.Stopwatch.GetElapsedTime(syntaxStarted),
+                        "syntax error");
                     continue;
                 }
 
