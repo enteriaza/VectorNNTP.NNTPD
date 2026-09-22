@@ -21,8 +21,10 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// </para>
 /// <para>
 /// Plain connections may call <see cref="UpgradeToTlsAsync"/> to authenticate TLS on the same socket.
-/// Pumps keep running across the upgrade; exclusive stream ownership is enforced by transport quiescence.
-/// The NNTP STARTTLS command is not implemented here.
+/// Plain or TLS connections may call <see cref="UpgradeToDeflateAsync"/> to activate bidirectional raw
+/// DEFLATE above the current byte stream (RFC 8054 layering: NNTP → DEFLATE → TLS → TCP).
+/// Pumps keep running across upgrades; exclusive stream ownership is enforced by transport quiescence.
+/// The NNTP STARTTLS and COMPRESS commands are not implemented here.
 /// </para>
 /// <para>
 /// NNTPD performs server-side TLS authentication only. Client certificates are never requested or validated.
@@ -33,6 +35,10 @@ public sealed class NntpConnection : INntpConnection
     private const int ModePlain = 0;
     private const int ModeUpgrading = 1;
     private const int ModeTls = 2;
+
+    private const int CompressionOff = 0;
+    private const int CompressionUpgrading = 1;
+    private const int CompressionOn = 2;
 
     private readonly ILogger _logger;
     private readonly Pipe _inputPipe;
@@ -47,6 +53,8 @@ public sealed class NntpConnection : INntpConnection
     private Task? _receiveTask;
     private Task? _sendTask;
     private int _mode;
+    private int _compression;
+    private int _inplaceUpgradeBusy;
     private int _completed;
     private int _disposed;
 
@@ -88,6 +96,9 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     public bool IsTls => Volatile.Read(ref _mode) == ModeTls;
+
+    /// <inheritdoc />
+    public bool IsCompressed => Volatile.Read(ref _compression) == CompressionOn;
 
     /// <inheritdoc />
     public CancellationToken ConnectionClosed => _connectionCts.Token;
@@ -193,12 +204,23 @@ public sealed class NntpConnection : INntpConnection
             throw new InvalidOperationException("Connection is already TLS-protected.");
         }
 
+        if (Volatile.Read(ref _compression) != CompressionOff)
+        {
+            throw new InvalidOperationException("Cannot negotiate TLS after DEFLATE is active.");
+        }
+
         // Precondition before taking the upgrade lock: session must have drained plaintext Input.
         EnsureApplicationInputDrainedForUpgrade();
+
+        if (Interlocked.CompareExchange(ref _inplaceUpgradeBusy, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("A transport layer upgrade is already in progress.");
+        }
 
         var prior = Interlocked.CompareExchange(ref _mode, ModeUpgrading, ModePlain);
         if (prior != ModePlain)
         {
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
             if (prior == ModeUpgrading)
             {
                 throw new InvalidOperationException("A TLS upgrade is already in progress.");
@@ -210,6 +232,13 @@ public sealed class NntpConnection : INntpConnection
             }
 
             throw new InvalidOperationException("Connection cannot be upgraded in its current state.");
+        }
+
+        if (Volatile.Read(ref _compression) != CompressionOff)
+        {
+            Volatile.Write(ref _mode, ModePlain);
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
+            throw new InvalidOperationException("Cannot negotiate TLS after DEFLATE is active.");
         }
 
         var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
@@ -269,12 +298,106 @@ public sealed class NntpConnection : INntpConnection
                 {
                     transport.AbortQuiesceForConnectionTeardown();
                 }
+                else if (Volatile.Read(ref _mode) == ModeUpgrading)
+                {
+                    Volatile.Write(ref _mode, ModePlain);
+                }
 
                 if (Volatile.Read(ref _completed) == 0)
                 {
                     await CompleteAsync(failure).ConfigureAwait(false);
                 }
             }
+
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+
+        if (Volatile.Read(ref _completed) == 1)
+        {
+            throw new ObjectDisposedException(nameof(NntpConnection), "Connection is closed.");
+        }
+
+        if (Volatile.Read(ref _compression) == CompressionOn)
+        {
+            throw new InvalidOperationException("Connection is already DEFLATE-compressed.");
+        }
+
+        EnsureApplicationInputDrainedForUpgrade();
+
+        if (Interlocked.CompareExchange(ref _inplaceUpgradeBusy, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("A transport layer upgrade is already in progress.");
+        }
+
+        var prior = Interlocked.CompareExchange(ref _compression, CompressionUpgrading, CompressionOff);
+        if (prior != CompressionOff)
+        {
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
+            if (prior == CompressionUpgrading)
+            {
+                throw new InvalidOperationException("A DEFLATE upgrade is already in progress.");
+            }
+
+            throw new InvalidOperationException("Connection is already DEFLATE-compressed.");
+        }
+
+        if (Volatile.Read(ref _mode) == ModeUpgrading)
+        {
+            Volatile.Write(ref _compression, CompressionOff);
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
+            throw new InvalidOperationException("A TLS upgrade is already in progress.");
+        }
+
+        var transport = _transport ?? throw new ObjectDisposedException(nameof(NntpConnection));
+        Exception? failure = null;
+        var quiesced = false;
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _connectionCts.Token);
+
+            await transport.QuiesceAsync(linked.Token).ConfigureAwait(false);
+            quiesced = true;
+
+            var inner = transport.TakeQuiescedStreamForDeflateWrap();
+            var deflate = new NntpDeflateStream(inner);
+            transport.PublishDeflateAndResume(deflate);
+            Volatile.Write(ref _compression, CompressionOn);
+            _logger.LogDebug("In-place DEFLATE compression activated for {Remote}.", RemoteEndPoint);
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+            throw;
+        }
+        finally
+        {
+            if (failure is not null)
+            {
+                if (quiesced)
+                {
+                    transport.AbortQuiesceForConnectionTeardown();
+                }
+                else if (Volatile.Read(ref _compression) == CompressionUpgrading)
+                {
+                    Volatile.Write(ref _compression, CompressionOff);
+                }
+
+                if (Volatile.Read(ref _completed) == 0)
+                {
+                    await CompleteAsync(failure).ConfigureAwait(false);
+                }
+            }
+
+            Volatile.Write(ref _inplaceUpgradeBusy, 0);
         }
     }
 
@@ -509,6 +632,10 @@ public sealed class NntpConnection : INntpConnection
 
                     await transport.WriteAsync(segment, token).ConfigureAwait(false);
                 }
+
+                // Required for DEFLATE: sync-flush compressed bytes to the peer without ending the stream.
+                // No-op / cheap for NetworkStream and SslStream over NetworkStream.
+                await transport.FlushAsync(token).ConfigureAwait(false);
 
                 consumed = buffer.End;
             }

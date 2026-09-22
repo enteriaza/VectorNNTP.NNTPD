@@ -68,8 +68,9 @@ Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer
 
 - **Plain:** `Socket` → `NetworkStream(ownsSocket: false)` → transport → pumps → pipes
 - **TLS:** `Socket` → `NetworkStream` → `SslStream` → transport → pumps → pipes
+- **DEFLATE:** `Socket` → (`SslStream`?) → `NntpDeflateStream` → transport → pumps → pipes
 
-Pumps never call `Socket`/`SslStream` APIs directly. Exactly one stream implementation owns socket I/O at a time.
+Pumps never call `Socket`/`SslStream` APIs directly. Exactly one stream implementation owns socket I/O at a time. When DEFLATE is active, that owner is a duplex raw-DEFLATE transform over the plain or TLS stream.
 
 ### Transport TLS modes
 
@@ -88,6 +89,41 @@ Upgrade failure semantics are split:
 NNTPD performs **server-side TLS authentication only**. Client certificates are not requested, required, or validated.
 
 The transport exposes TCP→TLS upgrade capability only. The NNTP `STARTTLS` command is **not** implemented yet; a future session layer will decide when to invoke `UpgradeToTlsAsync`.
+
+### Transport DEFLATE compression
+
+The transport supports bidirectional **raw DEFLATE** (RFC 8054 §4 / RFC 1951) as a connection-layer capability via `INntpConnection.UpgradeToDeflateAsync`. The NNTP `COMPRESS` command that negotiates/activates this capability is **not** implemented yet.
+
+Stack when both TLS and DEFLATE are active (RFC 8054 layering; TLS negotiated first):
+
+```text
+Application (future NNTP session)
+    ↓
+PipeReader / PipeWriter
+    ↓
+Transport pumps
+    ↓
+ConnectionByteTransport
+    ↓
+NntpDeflateStream (raw DEFLATE; when active)
+    ↓
+SslStream (when TLS active)
+    ↓
+NetworkStream(ownsSocket: false)
+    ↓
+Socket
+```
+
+PROXY processing remains outside this stack and runs once at accept time. `ConnectionClientIdentity` is unchanged by DEFLATE activation.
+
+Wire format notes:
+
+- Uses `System.IO.Compression.DeflateStream` (raw DEFLATE; negative zlib `windowBits` equivalent).
+- Does **not** use zlib wrappers (RFC 1950 / `ZLibStream`) or gzip (`GZipStream`).
+- Independent compressor and decompressor state per connection; state is not shared across connections.
+- Send-pump `FlushAsync` after each outbound pipe batch forwards to `DeflateStream.FlushAsync`. On .NET 10 this implementation uses DEFLATE sync-flush semantics (compressed bytes become visible to the peer; sliding dictionary retained). Finalization occurs on stream dispose.
+
+Activation reuses the same quiescence model as TLS upgrade (atomic admission + outstanding counts). Preconditions mirror TLS: drain application `Input`; flush any bytes that must remain uncompressed (for example a future `206` response) before calling `UpgradeToDeflateAsync`. Post-quiescence failure is terminal with no uncompressed fallback. DEFLATE after TLS is supported; TLS after DEFLATE is rejected. TLS-level compression is not used.
 
 ## Cloudflare DNS reconciliation
 
@@ -178,4 +214,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP command/session parsing (including STARTTLS), storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes and an in-place TCP→TLS upgrade API only.
+NNTP command/session parsing (including STARTTLS and COMPRESS), storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes, in-place TCP→TLS upgrade, and in-place raw DEFLATE activation APIs only.

@@ -19,13 +19,14 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// </para>
 /// <para>
 /// <see cref="UpgradeToTlsAsync"/> upgrades an established plaintext connection to TLS on the same
-/// TCP socket. The NNTP STARTTLS command is not implemented by the transport; a future session layer
-/// decides when to invoke the upgrade.
+/// TCP socket. <see cref="UpgradeToDeflateAsync"/> activates bidirectional raw DEFLATE (RFC 8054)
+/// above the current byte stream (plain or TLS). The NNTP STARTTLS and COMPRESS commands are not
+/// implemented by the transport; a future session layer decides when to invoke these upgrades.
 /// </para>
 /// </remarks>
 public interface INntpConnection : IAsyncDisposable
 {
-    /// <summary>Gets octets received from the peer (after TLS decryption when applicable).</summary>
+    /// <summary>Gets octets received from the peer (after TLS decryption / DEFLATE inflate when applicable).</summary>
     PipeReader Input { get; }
 
     /// <summary>Gets the writer used by the application to send octets to the network.</summary>
@@ -45,6 +46,9 @@ public interface INntpConnection : IAsyncDisposable
     /// <summary>Gets a value indicating whether the connection is TLS-protected.</summary>
     bool IsTls { get; }
 
+    /// <summary>Gets a value indicating whether bidirectional raw DEFLATE is active.</summary>
+    bool IsCompressed { get; }
+
     /// <summary>Gets a token that is cancelled when the connection transport is shutting down.</summary>
     CancellationToken ConnectionClosed { get; }
 
@@ -61,11 +65,11 @@ public interface INntpConnection : IAsyncDisposable
     /// <param name="cancellationToken">Token that cancels the handshake (and aborts the connection on failure).</param>
     /// <remarks>
     /// <para>
-    /// Preconditions: the connection must be plaintext; the caller must not hold outstanding
-    /// <see cref="Input"/> reads or <see cref="Output"/> writes; all plaintext application data that
-    /// belongs before TLS must already be consumed from <see cref="Input"/>; any plaintext that must
-    /// be visible to the peer before TLS (for example a future STARTTLS response) must already be
-    /// flushed to <see cref="Output"/>.
+    /// Preconditions: the connection must be plaintext and not DEFLATE-compressed; the caller must not
+    /// hold outstanding <see cref="Input"/> reads or <see cref="Output"/> writes; all plaintext
+    /// application data that belongs before TLS must already be consumed from <see cref="Input"/>;
+    /// any plaintext that must be visible to the peer before TLS (for example a future STARTTLS
+    /// response) must already be flushed to <see cref="Output"/>.
     /// </para>
     /// <para>
     /// On success, subsequent <see cref="Input"/>/<see cref="Output"/> traffic is TLS application data
@@ -74,11 +78,41 @@ public interface INntpConnection : IAsyncDisposable
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// Already TLS, upgrade in progress, or unconsumed plaintext remains in <see cref="Input"/>
-    /// (precondition failure does not complete the connection).
+    /// Already TLS, already compressed, upgrade in progress, or unconsumed plaintext remains in
+    /// <see cref="Input"/> (precondition failure does not complete the connection).
     /// </exception>
     /// <exception cref="ObjectDisposedException">The connection is closed or disposed.</exception>
     Task UpgradeToTlsAsync(
         ITlsCertificateContextProvider certificateProvider,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Activates bidirectional raw DEFLATE on the existing connection byte stream.
+    /// </summary>
+    /// <param name="cancellationToken">Token that cancels activation (and aborts the connection on failure).</param>
+    /// <remarks>
+    /// <para>
+    /// Layering (RFC 8054): DEFLATE sits above TLS when both are active —
+    /// <c>NNTP → DEFLATE → TLS → TCP</c>. TLS must be negotiated first when both are used; this method
+    /// rejects activation when DEFLATE is already active, and <see cref="UpgradeToTlsAsync"/> rejects
+    /// TLS after DEFLATE.
+    /// </para>
+    /// <para>
+    /// Preconditions: DEFLATE not already active; no outstanding <see cref="Input"/> reads /
+    /// <see cref="Output"/> writes; application data that belongs before compression must already be
+    /// consumed from <see cref="Input"/>; any bytes that must reach the peer uncompressed (for example
+    /// a future <c>206</c> COMPRESS response) must already be flushed to <see cref="Output"/>.
+    /// </para>
+    /// <para>
+    /// On success, subsequent pipe traffic is compressed in both directions on the same socket and
+    /// pipes. <see cref="ClientIdentity"/> is unchanged. Post-quiescence failure completes the
+    /// connection with no uncompressed fallback. The NNTP <c>COMPRESS</c> command is not implemented.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// Already compressed, upgrade in progress, or unconsumed application data remains in
+    /// <see cref="Input"/> (precondition failure does not complete the connection).
+    /// </exception>
+    /// <exception cref="ObjectDisposedException">The connection is closed or disposed.</exception>
+    Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default);
 }

@@ -1001,6 +1001,8 @@ public sealed class ProxyPreambleLiveTests
 
         public bool IsTls => false;
 
+        public bool IsCompressed => false;
+
         public CancellationToken ConnectionClosed => CancellationToken.None;
 
         public Task CompleteAsync(Exception? exception = null) => Task.CompletedTask;
@@ -1008,6 +1010,9 @@ public sealed class ProxyPreambleLiveTests
         public Task UpgradeToTlsAsync(
             ITlsCertificateContextProvider certificateProvider,
             CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

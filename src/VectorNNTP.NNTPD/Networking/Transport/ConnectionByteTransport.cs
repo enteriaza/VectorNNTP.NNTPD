@@ -13,9 +13,10 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// </para>
 /// <para>
 /// Quiescence blocks new application reads/writes at a gate, cancels in-flight <em>reads</em>
-/// (freeing the socket for the TLS handshake), and waits for in-flight <em>writes</em> to finish
-/// under the caller token. Admission of an I/O operation and registration of that operation as
-/// outstanding are atomic with respect to the quiescence state transition under <c>_gate</c>.
+/// (freeing the socket for TLS handshake or DEFLATE wrap), and waits for in-flight <em>writes</em>
+/// to finish under the caller token. Admission of an I/O operation and registration of that
+/// operation as outstanding are atomic with respect to the quiescence state transition under
+/// <c>_gate</c>.
 /// </para>
 /// </remarks>
 internal sealed class ConnectionByteTransport : IAsyncDisposable
@@ -35,6 +36,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     private int _activeWrites;
     private int _state;
     private bool _isTls;
+    private bool _isCompressed;
 
     public ConnectionByteTransport(Stream stream, bool isTls)
     {
@@ -51,6 +53,17 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             lock (_gate)
             {
                 return _isTls;
+            }
+        }
+    }
+
+    public bool IsCompressed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _isCompressed;
             }
         }
     }
@@ -142,6 +155,46 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     }
 
     /// <summary>
+    /// Flushes the active stream (required for DEFLATE sync-flush so compressed bytes reach the peer).
+    /// </summary>
+    public async ValueTask FlushAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await WaitUntilActiveAsync(cancellationToken).ConfigureAwait(false);
+
+            if (AfterActiveBeforeAdmitProbe is { } probe)
+            {
+                await probe().ConfigureAwait(false);
+            }
+
+            Stream stream;
+            lock (_gate)
+            {
+                ThrowIfUnavailable();
+                if (_state != StateActive)
+                {
+                    continue;
+                }
+
+                _activeWrites++;
+                stream = _stream;
+            }
+
+            try
+            {
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            finally
+            {
+                CompleteOperation(isRead: false);
+            }
+        }
+    }
+
+    /// <summary>
     /// Stops application stream I/O and waits until the underlying stream has no outstanding operations.
     /// </summary>
     public async Task QuiesceAsync(CancellationToken cancellationToken)
@@ -197,6 +250,33 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                 throw new InvalidOperationException("Transport is already TLS-protected.");
             }
 
+            if (_isCompressed)
+            {
+                throw new InvalidOperationException("Cannot negotiate TLS after DEFLATE is active.");
+            }
+
+            return _stream;
+        }
+    }
+
+    /// <summary>
+    /// Returns the quiesced stream (plain or TLS) so the caller can wrap it in <see cref="NntpDeflateStream"/>.
+    /// </summary>
+    public Stream TakeQuiescedStreamForDeflateWrap()
+    {
+        lock (_gate)
+        {
+            ThrowIfUnavailable();
+            if (_state != StateQuiesced)
+            {
+                throw new InvalidOperationException("Transport must be quiesced before DEFLATE wrap.");
+            }
+
+            if (_isCompressed)
+            {
+                throw new InvalidOperationException("Transport is already DEFLATE-compressed.");
+            }
+
             return _stream;
         }
     }
@@ -216,8 +296,43 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                 throw new InvalidOperationException("Transport must be quiesced before publishing TLS.");
             }
 
+            if (_isCompressed)
+            {
+                throw new InvalidOperationException("Cannot publish TLS after DEFLATE is active.");
+            }
+
             _stream = sslStream;
             _isTls = true;
+            _state = StateActive;
+            _idleTcs = null;
+            resume = _resumeTcs;
+        }
+
+        resume.TrySetResult();
+    }
+
+    /// <summary>
+    /// Publishes a bidirectional raw-DEFLATE stream and resumes pump I/O.
+    /// </summary>
+    public void PublishDeflateAndResume(NntpDeflateStream deflateStream)
+    {
+        ArgumentNullException.ThrowIfNull(deflateStream);
+        TaskCompletionSource resume;
+        lock (_gate)
+        {
+            ThrowIfUnavailable();
+            if (_state != StateQuiesced)
+            {
+                throw new InvalidOperationException("Transport must be quiesced before publishing DEFLATE.");
+            }
+
+            if (_isCompressed)
+            {
+                throw new InvalidOperationException("Transport is already DEFLATE-compressed.");
+            }
+
+            _stream = deflateStream;
+            _isCompressed = true;
             _state = StateActive;
             _idleTcs = null;
             resume = _resumeTcs;
