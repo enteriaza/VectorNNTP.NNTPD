@@ -144,7 +144,7 @@ Both names must fall under `DnsSuffix` (label-boundary zone coverage) because DN
 
 ### Challenge mechanism
 
-ACME uses **DNS-01** only (Cloudflare TXT records named `_acme-challenge.{domain}`). HTTP-01 and TLS-ALPN-01 are not used. Challenge TXT records use TTL `120` and `proxied=false`. A durable journal under `{AcmeStateDir}/dns01/journal/` supports crash recovery cleanup. Authoritative TXT visibility is checked before challenge completion. ACME challenge TXT must not be confused with A/AAAA FQDN reconciliation — reconcile mutates only A/AAAA for `{Fqdn}`; challenge records use distinct `_acme-challenge.*` names.
+ACME uses **DNS-01** only (Cloudflare TXT records named `_acme-challenge.{domain}`). HTTP-01 and TLS-ALPN-01 are not used. Challenge TXT records use TTL `120` and `proxied=false`. A durable journal under `{AcmeStateDir}/dns01/journal/` supports crash recovery cleanup. Authoritative TXT visibility is checked before challenges are triggered. After triggers, the issuer polls ACME authorization/order state until the order is `ready` (or fails/times out) before finalization — DNS visibility is not treated as ACME validation success. ACME challenge TXT must not be confused with A/AAAA FQDN reconciliation — reconcile mutates only A/AAAA for `{Fqdn}`; challenge records use distinct `_acme-challenge.*` names.
 
 ### Persistence
 

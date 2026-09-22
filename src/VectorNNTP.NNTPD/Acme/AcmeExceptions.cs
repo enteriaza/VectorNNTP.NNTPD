@@ -74,16 +74,33 @@ public sealed class AcmeStorageException : AcmeException
     }
 }
 
-/// <summary>Helpers that sanitize exception text for logs (type names only; no payloads).</summary>
+/// <summary>
+/// Helpers that sanitize exception text for logs (categories + safe diagnostics; no key material).
+/// </summary>
 public static class AcmeFailureSanitizer
 {
+    private const int MaxSanitizedLength = 512;
+
     /// <summary>Returns a short sanitized description of <paramref name="exception"/>.</summary>
     public static string Sanitize(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (exception is AcmeException acme)
         {
-            return $"{acme.Category}:{acme.GetType().Name}";
+            // AcmeException messages are constructed from sanitized fragments only.
+            var message = acme.Message;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return $"{acme.Category}:{acme.GetType().Name}";
+            }
+
+            var cleaned = message.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (cleaned.Length > MaxSanitizedLength)
+            {
+                cleaned = cleaned[..MaxSanitizedLength] + "...";
+            }
+
+            return cleaned;
         }
 
         return exception.GetType().Name;

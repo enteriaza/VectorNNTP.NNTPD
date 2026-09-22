@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Certes;
 using Certes.Acme;
+using Certes.Acme.Resource;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
@@ -16,6 +17,8 @@ namespace VectorNNTP.NNTPD.Acme;
 /// import/export (including DER), order finalization, and .NET Standard 2.0 compatibility
 /// suitable for <c>net10.0</c>. Protocol PEM may appear transiently inside Certes; the
 /// persisted TLS credential is PKCS#12/PFX. The ACME account key remains PKCS#8 DER.
+/// After DNS-01 challenges are triggered, the issuer polls until the ACME order is
+/// <c>ready</c> (or fails) before calling <c>Generate</c>/finalize.
 /// </remarks>
 public sealed class CertesAcmeIssuer : ICertificateIssuer
 {
@@ -29,6 +32,8 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     private readonly Dns01Solver _dnsSolver;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<CertesAcmeIssuer> _logger;
+    private readonly TimeSpan _readinessTimeout;
+    private readonly TimeSpan _readinessInterval;
 
     /// <summary>Initializes a new instance of the <see cref="CertesAcmeIssuer"/> class.</summary>
     public CertesAcmeIssuer(
@@ -37,6 +42,26 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
         ILogger<CertesAcmeIssuer> logger)
+        : this(
+            options,
+            accountStore,
+            dnsSolver,
+            httpClientFactory,
+            logger,
+            readinessTimeout: null,
+            readinessInterval: null)
+    {
+    }
+
+    /// <summary>Test constructor with injectable readiness poll timing.</summary>
+    internal CertesAcmeIssuer(
+        IOptions<NntpdOptions> options,
+        AccountStore accountStore,
+        Dns01Solver dnsSolver,
+        IHttpClientFactory httpClientFactory,
+        ILogger<CertesAcmeIssuer> logger,
+        TimeSpan? readinessTimeout,
+        TimeSpan? readinessInterval)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(accountStore);
@@ -48,6 +73,8 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         _dnsSolver = dnsSolver;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _readinessTimeout = readinessTimeout ?? AcmeOrderReadiness.DefaultTimeout;
+        _readinessInterval = readinessInterval ?? AcmeOrderReadiness.DefaultInterval;
     }
 
     /// <inheritdoc />
@@ -81,10 +108,10 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new AcmeOrderException("new_order_failed", ex.GetType().Name);
+            throw new AcmeOrderException("new_order_failed", AcmeProblemDiagnostics.FormatException(ex));
         }
 
-        var authzs = await order.Authorizations().ConfigureAwait(false);
+        var authzs = (await order.Authorizations().ConfigureAwait(false)).ToList();
         var specs = new List<Dns01ChallengeSpec>();
         var challenges = new List<IChallengeContext>();
 
@@ -104,7 +131,10 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         try
         {
             await _dnsSolver.PlaceAsync(specs, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("ACME DNS-01 TXT records placed for {DomainCount} identifier(s).", specs.Count);
+
             await _dnsSolver.WaitPropagatedAsync(specs, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("ACME DNS-01 authoritative visibility confirmed.");
 
             foreach (var challenge in challenges)
             {
@@ -112,11 +142,44 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                 _ = await challenge.Validate().ConfigureAwait(false);
             }
 
+            _logger.LogInformation(
+                "ACME DNS-01 challenges triggered; waiting for authorization (timeout={TimeoutSeconds}s).",
+                (int)_readinessTimeout.TotalSeconds);
+
+            await WaitForOrderReadyAsync(order, authzs, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("ACME order ready for finalization.");
+
             cancellationToken.ThrowIfCancellationRequested();
-            var certChain = await order.Generate(
-                    new CsrInfo { CommonName = domains[0] },
-                    certKey)
-                .ConfigureAwait(false);
+            CertificateChain certChain;
+            try
+            {
+                // Certes only retries while status == processing; LE staging often needs more than the default (1).
+                certChain = await order.Generate(
+                        new CsrInfo { CommonName = domains[0] },
+                        certKey,
+                        preferredChain: null,
+                        retryCount: 30)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is Certes.AcmeException or AcmeRequestException)
+            {
+                var orderStatus = "unknown";
+                try
+                {
+                    var resource = await order.Resource().ConfigureAwait(false);
+                    orderStatus = resource.Status?.ToString() ?? "unknown";
+                }
+                catch (Exception statusEx) when (statusEx is not OperationCanceledException)
+                {
+                    // Best-effort status for diagnostics.
+                }
+
+                throw new AcmeOrderException(
+                    "finalize_failed",
+                    $"{AcmeProblemDiagnostics.FormatException(ex)} order_status={orderStatus}");
+            }
+
+            _logger.LogInformation("ACME certificate finalized.");
 
             await CleanupDnsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -140,8 +203,58 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await BestEffortDnsCleanupAsync(cancellationToken).ConfigureAwait(false);
-            throw new AcmeOrderException("challenge_failed", ex.GetType().Name);
+            throw new AcmeOrderException("challenge_failed", AcmeProblemDiagnostics.FormatException(ex));
         }
+    }
+
+    private async Task WaitForOrderReadyAsync(
+        IOrderContext order,
+        IReadOnlyList<IAuthorizationContext> authorizations,
+        CancellationToken cancellationToken)
+    {
+        await AcmeOrderReadiness.WaitUntilReadyAsync(
+                async ct => await CaptureOrderViewAsync(order, authorizations, ct).ConfigureAwait(false),
+                _readinessTimeout,
+                _readinessInterval,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<AcmeOrderReadiness.OrderView> CaptureOrderViewAsync(
+        IOrderContext order,
+        IReadOnlyList<IAuthorizationContext> authorizations,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var orderResource = await order.Resource().ConfigureAwait(false);
+        var authzViews = new List<AcmeOrderReadiness.AuthorizationView>(authorizations.Count);
+        foreach (var authz in authorizations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var resource = await authz.Resource().ConfigureAwait(false);
+            var dnsChallenge = resource.Challenges?
+                .FirstOrDefault(static c =>
+                    string.Equals(c.Type, ChallengeTypes.Dns01, StringComparison.OrdinalIgnoreCase));
+            var error = dnsChallenge?.Error
+                ?? resource.Challenges?.Select(static c => c.Error).FirstOrDefault(static e => e is not null);
+            int? errorStatus = null;
+            if (error is not null && error.Status != default)
+            {
+                errorStatus = (int)error.Status;
+            }
+
+            authzViews.Add(
+                new AcmeOrderReadiness.AuthorizationView(
+                    resource.Identifier?.Value,
+                    resource.Status?.ToString() ?? string.Empty,
+                    error?.Type,
+                    error?.Detail,
+                    errorStatus));
+        }
+
+        return new AcmeOrderReadiness.OrderView(
+            orderResource.Status?.ToString() ?? string.Empty,
+            authzViews);
     }
 
     private AcmeAccountState EnsureAccount(NntpdOptions options, CancellationToken cancellationToken)
@@ -181,7 +294,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new AcmeAccountException("registration_failed", ex.GetType().Name);
+            throw new AcmeAccountException("registration_failed", AcmeProblemDiagnostics.FormatException(ex));
         }
     }
 
@@ -235,7 +348,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new AcmeOrderException("txt_cleanup_failed", ex.GetType().Name);
+            throw new AcmeOrderException("txt_cleanup_failed", AcmeProblemDiagnostics.FormatException(ex));
         }
     }
 
