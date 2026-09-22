@@ -8,6 +8,8 @@ using System.Security.Authentication;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
@@ -246,7 +248,7 @@ public sealed class NntpCommandLoggingTests
             ("POST", "RX: POST"),
             ("IHAVE", "RX: IHAVE"),
             ("CHECK", "RX: CHECK"),
-            ("TAKETHIS", "RX: TAKETHIS"),
+            // TAKETHIS RX is temporarily suppressed for feed benchmarks (see dedicated tests).
             ("MODE STREAM", "RX: MODE STREAM"),
             ("COMPRESS DEFLATE", "RX: COMPRESS DEFLATE"),
             ("AUTHINFO SASL", "RX: AUTHINFO SASL"),
@@ -266,6 +268,69 @@ public sealed class NntpCommandLoggingTests
         {
             Assert.Contains(recording.Messages, m => m.Contains(needle, StringComparison.Ordinal));
         }
+    }
+
+    [Fact]
+    public async Task TakeThis_SuppressesRxAndTxCompletion_Logs()
+    {
+        var recording = new RecordingLoggerFactory();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: new NntpAuthorization(
+                isAuthenticated: true,
+                authorizedReader: false,
+                authorizedTransit: true,
+                postingPermitted: false,
+                streamingPermitted: true),
+            articleIngestion: queue);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("TAKETHIS <bench@ex.com>");
+        await duplex.WriteClientBytesAsync("Subject: t\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        Assert.Equal("239 <bench@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, queue.Count);
+
+        await duplex.WriteClientLineAsync("DATE");
+        Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        Assert.DoesNotContain(
+            recording.Messages,
+            m => m.Contains("RX: TAKETHIS", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            recording.Messages,
+            m => m.Contains("TX: TAKETHIS", StringComparison.Ordinal));
+
+        Assert.Contains(recording.Messages, m => m.Contains("RX: DATE", StringComparison.Ordinal));
+        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: DATE executed in", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Date_StillProducesRxAndTx_WhenTakeThisSuppressed()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(recording);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("DATE");
+        Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        Assert.Contains(recording.Messages, m => m.Contains("RX: DATE", StringComparison.Ordinal));
+        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: DATE executed in", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -464,7 +529,8 @@ public sealed class NntpCommandLoggingTests
             ILoggerFactory loggerFactory,
             INntpAuthenticationProvider? authenticationProvider = null,
             bool allowCleartextAuth = true,
-            NntpAuthorization? authorization = null)
+            NntpAuthorization? authorization = null,
+            IArticleIngestionQueue? articleIngestion = null)
         {
             var connection = new PipeConnection(_clientToServer.Reader, _serverToClient.Writer);
             var session = new NntpSession(
@@ -472,7 +538,8 @@ public sealed class NntpCommandLoggingTests
                 loggerFactory.CreateLogger<NntpSession>(),
                 authenticationProvider: authenticationProvider,
                 allowCleartextAuth: allowCleartextAuth,
-                loggerFactory: loggerFactory);
+                loggerFactory: loggerFactory,
+                articleIngestion: articleIngestion);
             if (authorization is not null)
             {
                 session.SetAuthorization(authorization);
@@ -484,6 +551,12 @@ public sealed class NntpCommandLoggingTests
         public async Task WriteClientLineAsync(string line)
         {
             var bytes = Encoding.ASCII.GetBytes(line + "\r\n");
+            await _clientToServer.Writer.WriteAsync(bytes);
+            await _clientToServer.Writer.FlushAsync();
+        }
+
+        public async Task WriteClientBytesAsync(ReadOnlyMemory<byte> bytes)
+        {
             await _clientToServer.Writer.WriteAsync(bytes);
             await _clientToServer.Writer.FlushAsync();
         }

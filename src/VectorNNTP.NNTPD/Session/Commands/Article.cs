@@ -6,8 +6,17 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// ARTICLE, HEAD, BODY, and STAT as defined by RFC 3977, Sections 6.2.1–6.2.4.
 /// </summary>
 /// <remarks>
-/// These commands retrieve an article or article section and optionally set the current article.
-/// Deliberate placeholders until article storage and selection state are implemented.
+/// <para>
+/// Deliberate placeholders until article <strong>retrieval</strong> / selection state exist.
+/// Ingestion (TAKETHIS → spool) is not a substitute for a customer article catalog.
+/// </para>
+/// <para>
+/// Phase 2 TX readiness: when a lookup API exists, handlers must transmit via the shared
+/// article TX data plane — <see cref="NntpResponseWriter.WriteCustomerArticleAsync"/> /
+/// <see cref="NntpResponseWriter.WriteCustomerBodyAsync"/> (or WriteArticleAsync with
+/// <see cref="NntpArticleTxFraming"/>) — not per-line
+/// <see cref="NntpResponseWriter.WriteMultilineDataAsync"/>.
+/// </para>
 /// </remarks>
 internal static class Article
 {

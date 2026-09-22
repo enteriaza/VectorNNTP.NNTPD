@@ -189,9 +189,9 @@ public sealed class NntpSession
                     break;
                 }
 
-                // BENCHIT is internal transport-benchmark infrastructure; suppress per-request RX INFO
-                // so Serilog does not become the measured bottleneck during sustained runs.
-                if (!IsBenchItCommand(line))
+                // BENCHIT / TAKETHIS: suppress per-request RX INFO so Serilog is not the measured
+                // bottleneck during sustained transport/feed benchmarks.
+                if (!IsBenchItCommand(line) && !NntpCommandLogFormat.SuppressHotPathCommandLog(line))
                 {
                     _logger.LogInformation(
                         "[{Client}] RX: {Command}",

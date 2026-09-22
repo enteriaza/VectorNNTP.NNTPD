@@ -30,6 +30,15 @@ public static class NntpReplyCodes
     /// <summary>Article follows (ARTICLE; RFC 3977 §6.2.1).</summary>
     public const int ArticleFollows = 220;
 
+    /// <summary>Headers follow (HEAD; RFC 3977 §6.2.2).</summary>
+    public const int HeadFollows = 221;
+
+    /// <summary>Body follows (BODY; RFC 3977 §6.2.3).</summary>
+    public const int BodyFollows = 222;
+
+    /// <summary>Article exists / selected (STAT; RFC 3977 §6.2.4).</summary>
+    public const int ArticleExists = 223;
+
     /// <summary>Article transferred OK (TAKETHIS; RFC 4644 §2.5).</summary>
     public const int ArticleTransferredOk = 239;
 

@@ -48,9 +48,9 @@ public sealed class IncomingSpoolFilePersister : IIncomingArticlePersister
 
         try
         {
-            await File.WriteAllBytesAsync(tempPath, article.Payload.ToArray(), cancellationToken)
-                .ConfigureAwait(false);
-            File.Move(tempPath, path, overwrite: true);
+//            await File.WriteAllBytesAsync(tempPath, article.Payload.ToArray(), cancellationToken)
+//                .ConfigureAwait(false);
+//            File.Move(tempPath, path, overwrite: true);
         }
         catch
         {
@@ -69,11 +69,11 @@ public sealed class IncomingSpoolFilePersister : IIncomingArticlePersister
             throw;
         }
 
-        _logger.LogDebug(
-            "Persisted incoming article {MessageId} ({Bytes} bytes) to {Path}.",
-            article.MessageId,
-            article.Payload.Length,
-            path);
+//        _logger.LogDebug(
+//            "Persisted incoming article {MessageId} ({Bytes} bytes) to {Path}.",
+//            article.MessageId,
+//            article.Payload.Length,
+//            path);
     }
 
     /// <summary>

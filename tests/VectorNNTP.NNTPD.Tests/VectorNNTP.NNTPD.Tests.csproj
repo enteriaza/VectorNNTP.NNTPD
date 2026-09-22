@@ -28,6 +28,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VectorNNTP.NNTPD\VectorNNTP.NNTPD.csproj" />
+    <ProjectReference Include="..\..\tools\VectorNNTP.NNTPD.MultilineFramerBench\VectorNNTP.NNTPD.MultilineFramerBench.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Data\InnArticles\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

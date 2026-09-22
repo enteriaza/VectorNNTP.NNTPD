@@ -85,6 +85,20 @@ internal static class NntpCommandLogFormat
         return space <= 0 ? span.ToString().ToUpperInvariant() : span[..space].ToString().ToUpperInvariant();
     }
 
+    /// <summary>
+    /// Returns whether per-command RX/TX INFO traffic logging should be suppressed for this
+    /// command name or raw command line.
+    /// </summary>
+    /// <remarks>
+    /// Temporary benchmark exception: <c>TAKETHIS</c> is suppressed so feed benchmarks are not
+    /// dominated by Serilog. Other commands are unaffected. Stopwatches still run.
+    /// </remarks>
+    public static bool SuppressHotPathCommandLog(string commandOrRawLine)
+    {
+        ArgumentNullException.ThrowIfNull(commandOrRawLine);
+        return StartsWithCommand(commandOrRawLine, "TAKETHIS");
+    }
+
     private static bool StartsWithCommand(string line, string command)
     {
         if (line.Length < command.Length)
