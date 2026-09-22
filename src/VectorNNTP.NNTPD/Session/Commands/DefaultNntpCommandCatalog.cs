@@ -32,6 +32,11 @@ public static class DefaultNntpCommandCatalog
         "IHAVE",
         "LAST",
         "LIST",
+        "LIST ACTIVE",
+        "LIST HEADERS",
+        "LIST MOTD",
+        "LIST NEWSGROUPS",
+        "LIST OVERVIEW.FMT",
         "LISTGROUP",
         "MODE READER",
         "MODE STREAM",
@@ -130,7 +135,20 @@ public static class DefaultNntpCommandCatalog
 
         // Reader / group
         var readerAccess = NntpCommandAccess.RequiresAuthentication | NntpCommandAccess.RequiresReader;
+        // Bare LIST (RFC 3977 §7.6.1) plus supported LIST keywords only.
+        // Unsupported RFC 3977/6048 keywords (ACTIVE.TIMES, COUNTS, DISTRIB.PATS, DISTRIBUTIONS,
+        // MODERATORS, SUBSCRIPTIONS) are intentionally not registered.
         registry.Register(new NntpCommandDescriptor("LIST", readerAccess, List.HandleAsync, logger: listLog));
+        registry.Register(new NntpCommandDescriptor(
+            "LIST", readerAccess, List.HandleAsync, "ACTIVE", listLog));
+        registry.Register(new NntpCommandDescriptor(
+            "LIST", readerAccess, List.HandleAsync, "HEADERS", listLog));
+        registry.Register(new NntpCommandDescriptor(
+            "LIST", readerAccess, List.HandleAsync, "MOTD", listLog));
+        registry.Register(new NntpCommandDescriptor(
+            "LIST", readerAccess, List.HandleAsync, "NEWSGROUPS", listLog));
+        registry.Register(new NntpCommandDescriptor(
+            "LIST", readerAccess, List.HandleAsync, "OVERVIEW.FMT", listLog));
         registry.Register(new NntpCommandDescriptor("GROUP", readerAccess, Group.HandleAsync, logger: groupLog));
         registry.Register(new NntpCommandDescriptor("LISTGROUP", readerAccess, ListGroup.HandleAsync, logger: listGroupLog));
         registry.Register(new NntpCommandDescriptor("NEWGROUPS", readerAccess, NewGroups.HandleAsync, logger: newGroupsLog));

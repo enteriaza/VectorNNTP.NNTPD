@@ -24,8 +24,12 @@ internal static class Help
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Help));
 
     /// <summary>
-    /// Static HELP syntax lines (ordered for stable output). Matches pyNNTPD <c>help_model.HELP_SYNTAX_LINES</c>.
+    /// Static HELP syntax lines for the supported public command surface.
     /// </summary>
+    /// <remarks>
+    /// LIST keywords ACTIVE.TIMES, COUNTS, DISTRIB.PATS, DISTRIBUTIONS, MODERATORS, and
+    /// SUBSCRIPTIONS are intentionally omitted — VectorNNTP.NNTPD does not support them.
+    /// </remarks>
     internal static readonly IReadOnlyList<string> SyntaxLines =
     [
         "ARTICLE {message-id | article-number}",
@@ -39,34 +43,28 @@ internal static class Help
         "DATE",
         "GROUP [newsgroup]",
         "HDR [header] {range | message-id}",
-        "XHDR [header] {range | message-id}",
         "HEAD {message-id | article-number}",
         "HELP",
         "IHAVE [message-id]",
         "LAST",
         "LIST",
         "LIST ACTIVE {wildmat}",
-        "LIST ACTIVE.TIMES {wildmat}",
-        "LIST COUNTS {wildmat}",
-        "LIST DISTRIB.PATS",
-        "LIST DISTRIBUTIONS",
         "LIST HEADERS {MSGID | RANGE}",
-        "LIST MODERATORS",
         "LIST MOTD",
         "LIST NEWSGROUPS {wildmat}",
         "LIST OVERVIEW.FMT",
-        "LIST SUBSCRIPTIONS {wildmat}",
         "LISTGROUP {newsgroup} {range}",
         "MODE READER",
         "MODE STREAM",
         "NEXT",
         "OVER {range | message-id}",
-        "XOVER {range | message-id}",
         "POST",
         "QUIT",
         "STARTTLS",
         "STAT {message-id | article-number}",
         "TAKETHIS [message-id]",
+        "XHDR [header] {range | message-id}",
+        "XOVER {range | message-id}",
     ];
 
     /// <summary>Handles <c>HELP</c> (RFC 3977 §7.2).</summary>

@@ -31,6 +31,7 @@ public sealed class HelpCommandTests
         Assert.DoesNotContain(body, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("NEWGROUPS", body);
         Assert.DoesNotContain("NEWNEWS", body);
+        AssertUnsupportedListVariantsAbsent(body);
     }
 
     [Fact]
@@ -100,9 +101,24 @@ public sealed class HelpCommandTests
         Assert.Contains("HELP", Help.SyntaxLines);
         Assert.Contains("COMPRESS DEFLATE", Help.SyntaxLines);
         Assert.DoesNotContain(Help.SyntaxLines, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
-        // Ordered as in pyNNTPD help_model (stable readable grouping).
+        AssertUnsupportedListVariantsAbsent(Help.SyntaxLines);
+        Assert.Contains("LIST", Help.SyntaxLines);
+        Assert.Contains("LIST ACTIVE {wildmat}", Help.SyntaxLines);
+        Assert.Contains("LIST NEWSGROUPS {wildmat}", Help.SyntaxLines);
+        Assert.Contains("LIST OVERVIEW.FMT", Help.SyntaxLines);
+        // Ordered as in pyNNTPD help_model (stable readable grouping), minus unsupported LIST keywords.
         Assert.Equal("ARTICLE {message-id | article-number}", Help.SyntaxLines[0]);
-        Assert.Equal("TAKETHIS [message-id]", Help.SyntaxLines[^1]);
+        Assert.Equal("XOVER {range | message-id}", Help.SyntaxLines[^1]);
+    }
+
+    private static void AssertUnsupportedListVariantsAbsent(IReadOnlyList<string> lines)
+    {
+        Assert.DoesNotContain(lines, l => l.Contains("ACTIVE.TIMES", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("COUNTS", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("DISTRIB.PATS", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("DISTRIBUTIONS", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("MODERATORS", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("SUBSCRIPTIONS", StringComparison.Ordinal));
     }
 
     private sealed class HelpDuplex : IAsyncDisposable

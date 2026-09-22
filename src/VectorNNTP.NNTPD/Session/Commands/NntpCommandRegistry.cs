@@ -21,6 +21,7 @@ public sealed class NntpCommandRegistry
     private readonly Dictionary<string, NntpCommandDescriptor> _exact = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NntpCommandDescriptor> _verbOnly = new(StringComparer.Ordinal);
     private readonly HashSet<string> _knownVerbs = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _verbsWithSubcommands = new(StringComparer.Ordinal);
 
     /// <summary>Registers a command descriptor.</summary>
     public NntpCommandRegistry Register(NntpCommandDescriptor descriptor)
@@ -39,6 +40,8 @@ public sealed class NntpCommandRegistry
             {
                 throw new InvalidOperationException($"Command '{descriptor.RegistryKey}' is already registered.");
             }
+
+            _verbsWithSubcommands.Add(descriptor.Name);
         }
 
         _knownVerbs.Add(descriptor.Name);
@@ -81,6 +84,16 @@ public sealed class NntpCommandRegistry
                     : parsed.Tokens.Skip(1).ToArray();
                 status = NntpCommandResolveStatus.Found;
                 return true;
+            }
+
+            // Verb has registered subcommand variants, but this token is not one of them.
+            // Do not fall through to a verb-only handler (e.g. bare LIST) for unknown variants.
+            if (_verbsWithSubcommands.Contains(parsed.Verb))
+            {
+                descriptor = null;
+                handlerArguments = Array.Empty<string>();
+                status = NntpCommandResolveStatus.UnknownSubcommand;
+                return false;
             }
         }
 

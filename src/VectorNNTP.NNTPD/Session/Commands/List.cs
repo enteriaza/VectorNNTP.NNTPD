@@ -6,7 +6,10 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// LIST command as defined by RFC 3977, Section 7.6.1 (see also RFC 6048).
 /// </summary>
 /// <remarks>
-/// Returns information lists (ACTIVE, NEWSGROUPS, and related keywords). Deliberate placeholder until list backends are implemented.
+/// Returns information lists for supported keywords (ACTIVE, NEWSGROUPS, HEADERS, MOTD,
+/// OVERVIEW.FMT). Deliberate placeholder until list backends are implemented.
+/// Unsupported LIST keywords (ACTIVE.TIMES, COUNTS, DISTRIB.PATS, DISTRIBUTIONS, MODERATORS,
+/// SUBSCRIPTIONS) are not registered and resolve as unknown command variants.
 /// </remarks>
 internal static class List
 {

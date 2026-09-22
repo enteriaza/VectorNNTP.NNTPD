@@ -34,6 +34,11 @@ public sealed class NntpCommandInventoryTests
     [InlineData("QUIT")]
     [InlineData("STARTTLS")]
     [InlineData("LIST")]
+    [InlineData("LIST ACTIVE")]
+    [InlineData("LIST HEADERS")]
+    [InlineData("LIST MOTD")]
+    [InlineData("LIST NEWSGROUPS")]
+    [InlineData("LIST OVERVIEW.FMT")]
     [InlineData("GROUP")]
     [InlineData("ARTICLE")]
     [InlineData("NEWGROUPS")]
@@ -54,6 +59,44 @@ public sealed class NntpCommandInventoryTests
         Assert.True(registry.TryResolve(parsed, out var descriptor, out _, out var status));
         Assert.Equal(NntpCommandResolveStatus.Found, status);
         Assert.NotNull(descriptor);
+    }
+
+    [Theory]
+    [InlineData("LIST ACTIVE.TIMES")]
+    [InlineData("LIST COUNTS")]
+    [InlineData("LIST DISTRIB.PATS")]
+    [InlineData("LIST DISTRIBUTIONS")]
+    [InlineData("LIST MODERATORS")]
+    [InlineData("LIST SUBSCRIPTIONS")]
+    [InlineData("LIST SUBSCRIPTIONS *")]
+    public void Registry_DoesNotResolveUnsupportedListVariants(string commandLine)
+    {
+        var registry = DefaultNntpCommandCatalog.Create();
+        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
+        Assert.False(registry.TryResolve(parsed, out _, out _, out var status));
+        Assert.Equal(NntpCommandResolveStatus.UnknownSubcommand, status);
+    }
+
+    [Fact]
+    public void Inventory_ExcludesUnsupportedListVariants()
+    {
+        var keys = DefaultNntpCommandCatalog.InventoryKeys;
+        Assert.Contains("LIST", keys);
+        Assert.Contains("LIST ACTIVE", keys);
+        Assert.DoesNotContain("LIST ACTIVE.TIMES", keys);
+        Assert.DoesNotContain("LIST COUNTS", keys);
+        Assert.DoesNotContain("LIST DISTRIB.PATS", keys);
+        Assert.DoesNotContain("LIST DISTRIBUTIONS", keys);
+        Assert.DoesNotContain("LIST MODERATORS", keys);
+        Assert.DoesNotContain("LIST SUBSCRIPTIONS", keys);
+
+        var registered = DefaultNntpCommandCatalog.Create().GetRegisteredKeys();
+        Assert.DoesNotContain("LIST ACTIVE.TIMES", registered);
+        Assert.DoesNotContain("LIST COUNTS", registered);
+        Assert.DoesNotContain("LIST DISTRIB.PATS", registered);
+        Assert.DoesNotContain("LIST DISTRIBUTIONS", registered);
+        Assert.DoesNotContain("LIST MODERATORS", registered);
+        Assert.DoesNotContain("LIST SUBSCRIPTIONS", registered);
     }
 
     [Fact]
@@ -115,6 +158,49 @@ public sealed class NntpCommandInventoryTests
         Assert.True(NntpCommandParser.TryParse("LIST", out var parsed));
         await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
         Assert.Contains("480 Authentication required", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("LIST ACTIVE.TIMES")]
+    [InlineData("LIST COUNTS")]
+    [InlineData("LIST DISTRIB.PATS")]
+    [InlineData("LIST DISTRIBUTIONS")]
+    [InlineData("LIST MODERATORS")]
+    [InlineData("LIST SUBSCRIPTIONS")]
+    [InlineData("LIST SUBSCRIPTIONS *")]
+    public async Task UnsupportedListVariants_Return501UnknownCommandVariant(string commandLine)
+    {
+        await using var duplex = await InventoryDuplex.CreateAsync();
+        var session = duplex.CreateSession();
+        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var response = new NntpResponseWriter(duplex.ServerOutput);
+
+        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
+        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        Assert.Equal("501 Unknown command variant", await duplex.ReadClientLineAsync());
+    }
+
+    [Theory]
+    [InlineData("LIST ACTIVE")]
+    [InlineData("LIST NEWSGROUPS")]
+    [InlineData("LIST OVERVIEW.FMT")]
+    public async Task SupportedListVariants_RemainRecognized_Return500AfterAuthz(string commandLine)
+    {
+        await using var duplex = await InventoryDuplex.CreateAsync();
+        var session = duplex.CreateSession();
+        session.SetAuthorization(new NntpAuthorization(
+            isAuthenticated: true,
+            authorizedReader: true,
+            authorizedTransit: false,
+            postingPermitted: false,
+            streamingPermitted: false));
+
+        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var response = new NntpResponseWriter(duplex.ServerOutput);
+
+        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
+        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
     [Fact]
