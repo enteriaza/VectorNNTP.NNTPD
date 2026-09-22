@@ -1,0 +1,470 @@
+using System.Buffers;
+using System.Collections.Concurrent;
+using System.IO.Pipelines;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Tests.Acme;
+using VectorNNTP.NNTPD.Tests.Fixtures;
+
+namespace VectorNNTP.NNTPD.Tests.Networking.Transport;
+
+public sealed class ListenEndpointPlannerTests
+{
+    [Fact]
+    public void Star_ProducesSingleDualStackIpv6Any()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["*"], 1199);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.IPv6Any, bindings[0].Address);
+        Assert.True(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void ExplicitAddresses_Deduplicate()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["127.0.0.1", "127.0.0.1", "::1"], 1200);
+        Assert.Equal(2, bindings.Count);
+    }
+
+    [Fact]
+    public void Ipv4AnyAndIpv6Any_AreSeparate()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["0.0.0.0", "::"], 1201);
+        Assert.Equal(2, bindings.Count);
+        Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.Any) && !b.DualMode);
+        Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.IPv6Any) && !b.DualMode);
+    }
+}
+
+public sealed class NntpPlainTransportTests
+{
+    [Fact]
+    public async Task Accept_ExchangeArbitraryBytes_Bidirectional()
+    {
+        await using var host = await TransportTestHost.StartPlainAsync();
+        using var client = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        var payload = new byte[] { 0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF, 0x0D, 0x0A, 0x2E, 0x2E };
+        await client.SendAsync(payload);
+        Assert.Equal(payload, await TransportTestShared.ReadExactAsync(server.Input, payload.Length));
+
+        var reply = new byte[] { 0xAA, 0x55, 0x00, 0xFF };
+        await server.Output.WriteAsync(reply);
+        await server.Output.FlushAsync();
+        var buffer = new byte[reply.Length];
+        Assert.Equal(reply.Length, await client.ReceiveAsync(buffer));
+        Assert.Equal(reply, buffer);
+    }
+
+    [Fact]
+    public async Task FragmentedReceives_PreserveOrder()
+    {
+        await using var host = await TransportTestHost.StartPlainAsync();
+        using var client = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        await client.SendAsync(new byte[] { 0x01, 0x02 });
+        await client.SendAsync(new byte[] { 0x03, 0x04, 0x05 });
+        Assert.Equal(
+            new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05 },
+            await TransportTestShared.ReadExactAsync(server.Input, 5));
+    }
+
+    [Fact]
+    public async Task MultipleConnections_AreIndependent()
+    {
+        await using var host = await TransportTestHost.StartPlainAsync();
+        using var c1 = await host.ConnectPlainClientAsync();
+        using var c2 = await host.ConnectPlainClientAsync();
+        await using var s1 = await host.AcceptAsync();
+        await using var s2 = await host.AcceptAsync();
+
+        await c1.SendAsync(new byte[] { 0x11 });
+        await c2.SendAsync(new byte[] { 0x22 });
+        Assert.Equal(new byte[] { 0x11 }, await TransportTestShared.ReadExactAsync(s1.Input, 1));
+        Assert.Equal(new byte[] { 0x22 }, await TransportTestShared.ReadExactAsync(s2.Input, 1));
+    }
+
+    [Fact]
+    public async Task RemoteGracefulClose_CompletesInput()
+    {
+        await using var host = await TransportTestHost.StartPlainAsync();
+        var client = await host.ConnectPlainClientAsync();
+        await using var server = await host.AcceptAsync();
+        client.Shutdown(SocketShutdown.Send);
+        client.Dispose();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var result = await server.Input.ReadAsync(cts.Token);
+        Assert.True(result.IsCompleted);
+        try
+        {
+            // Transport ObservePump may CompleteAsync (completing the reader) concurrently
+            // after ReadAsync returns; AdvanceTo is best-effort in that window.
+            server.Input.AdvanceTo(result.Buffer.End);
+        }
+        catch (InvalidOperationException)
+        {
+            // Reader already completed by connection teardown.
+        }
+    }
+
+    [Fact]
+    public async Task ListenerContinues_AfterPriorConnectionCloses()
+    {
+        await using var host = await TransportTestHost.StartPlainAsync();
+        using var c1 = await host.ConnectPlainClientAsync();
+        await using var s1 = await host.AcceptAsync();
+        await s1.CompleteAsync();
+        await s1.DisposeAsync();
+        c1.Dispose();
+
+        using var c2 = await host.ConnectPlainClientAsync();
+        await using var s2 = await host.AcceptAsync();
+        await c2.SendAsync(new byte[] { 0x42 });
+        Assert.Equal(new byte[] { 0x42 }, await TransportTestShared.ReadExactAsync(s2.Input, 1));
+    }
+
+    [Fact]
+    public async Task PlainListenerService_BindsAndAccepts()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindAddress = ["127.0.0.1"];
+        options.BindPort = TestHostFactory.GetFreeTcpPort();
+        await using var service = new NntpPlainListenerService(
+            Options.Create(options),
+            NullLoggerFactory.Instance,
+            NullLogger<NntpPlainListenerService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        Assert.NotEmpty(service.LocalEndPoints);
+
+        using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        await client.ConnectAsync(service.LocalEndPoints[0]);
+        await client.SendAsync(new byte[] { 0x01 });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (service.ActiveConnectionCount < 1 && !cts.IsCancellationRequested)
+        {
+            await Task.Delay(10, cts.Token);
+        }
+
+        Assert.True(service.ActiveConnectionCount >= 1);
+        await service.StopAsync(CancellationToken.None);
+    }
+}
+
+public sealed class NntpTlsTransportTests
+{
+    [Fact]
+    public async Task TlsDisabled_DoesNotBind()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindPortTls = 0;
+        await using var service = new NntpTlsListenerService(
+            Options.Create(options),
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            NullLoggerFactory.Instance,
+            NullLogger<NntpTlsListenerService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        Assert.False(service.ListenersBound);
+    }
+
+    [Fact]
+    public async Task TlsEnabledWithoutCertificate_FailsStart()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindAddress = ["127.0.0.1"];
+        options.BindPortTls = TestHostFactory.GetFreeTcpPort();
+        await using var service = new NntpTlsListenerService(
+            Options.Create(options),
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            NullLoggerFactory.Instance,
+            NullLogger<NntpTlsListenerService>.Instance);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SuccessfulHandshake_ExchangesBinary_AndPresentsIdentity()
+    {
+        await using var host = await TransportTestHost.StartTlsAsync(
+            TransportTestShared.CreatePfx("nntpd01.usenet.ninja"));
+        await using var client = await host.ConnectTlsClientAsync();
+        Assert.NotNull(client.RemoteCertificate);
+        Assert.Contains(
+            "nntpd01.usenet.ninja",
+            client.RemoteCertificate!.Subject,
+            StringComparison.OrdinalIgnoreCase);
+
+        await using var server = await host.AcceptAsync();
+        Assert.True(server.IsTls);
+        var payload = new byte[] { 0x00, 0x80, 0xFF, 0x0D, 0x0A, 0x2E };
+        await client.Stream.WriteAsync(payload);
+        await client.Stream.FlushAsync();
+        Assert.Equal(payload, await TransportTestShared.ReadExactAsync(server.Input, payload.Length));
+    }
+
+    [Fact]
+    public async Task FailedHandshake_DoesNotKillListener()
+    {
+        await using var host = await TransportTestHost.StartTlsAsync(
+            TransportTestShared.CreatePfx("nntpd01.usenet.ninja"));
+        using (var raw = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        {
+            await raw.ConnectAsync(host.EndPoint);
+            await raw.SendAsync(new byte[] { 0x15, 0x00, 0x00, 0x00 });
+        }
+
+        await using var client = await host.ConnectTlsClientAsync();
+        await using var server = await host.AcceptAsync();
+        await client.Stream.WriteAsync(new byte[] { 0x01 });
+        await client.Stream.FlushAsync();
+        Assert.Equal(new byte[] { 0x01 }, await TransportTestShared.ReadExactAsync(server.Input, 1));
+    }
+
+    [Fact]
+    public async Task CertificateRotation_KeepsOldSession_NewHandshakeUsesNewCert()
+    {
+        var pfxA = TransportTestShared.CreatePfx("cert-a.usenet.ninja");
+        var pfxB = TransportTestShared.CreatePfx("cert-b.usenet.ninja");
+        await using var host = await TransportTestHost.StartTlsAsync(pfxA);
+
+        await using var client1 = await host.ConnectTlsClientAsync();
+        Assert.Contains(
+            "cert-a.usenet.ninja",
+            client1.RemoteCertificate!.Subject,
+            StringComparison.OrdinalIgnoreCase);
+        await using var server1 = await host.AcceptAsync();
+
+        host.PublishCertificate(pfxB);
+
+        await using var client2 = await host.ConnectTlsClientAsync();
+        Assert.Contains(
+            "cert-b.usenet.ninja",
+            client2.RemoteCertificate!.Subject,
+            StringComparison.OrdinalIgnoreCase);
+        await using var server2 = await host.AcceptAsync();
+
+        await client1.Stream.WriteAsync(new byte[] { 0xA1 });
+        await client1.Stream.FlushAsync();
+        Assert.Equal(new byte[] { 0xA1 }, await TransportTestShared.ReadExactAsync(server1.Input, 1));
+
+        await client2.Stream.WriteAsync(new byte[] { 0xB2 });
+        await client2.Stream.FlushAsync();
+        Assert.Equal(new byte[] { 0xB2 }, await TransportTestShared.ReadExactAsync(server2.Input, 1));
+    }
+}
+
+public sealed class TlsCertificateContextProviderTests
+{
+    [Fact]
+    public void Publish_AtomicSwap_HeldLeaseRemainsUsable()
+    {
+        var provider = new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance);
+        provider.PublishFromPfx(
+            TransportTestShared.CreatePfx("a.usenet.ninja"),
+            AcmeConfigurationTests.TestPfxPassword);
+        using var leaseA = provider.Acquire();
+        provider.PublishFromPfx(
+            TransportTestShared.CreatePfx("b.usenet.ninja"),
+            AcmeConfigurationTests.TestPfxPassword);
+        using var leaseB = provider.Acquire();
+        Assert.Contains(
+            "a.usenet.ninja",
+            leaseA.Context.TargetCertificate.Subject,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "b.usenet.ninja",
+            leaseB.Context.TargetCertificate.Subject,
+            StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+internal static class TransportTestShared
+{
+    public static byte[] CreatePfx(string cn) =>
+        TestCertificateFactory.CreateMaterial(
+                [cn, "news.usenet.ninja"],
+                AcmeConfigurationTests.TestPfxPassword,
+                DateTimeOffset.UtcNow.AddDays(30))
+            .PfxBytes;
+
+    public static async Task<byte[]> ReadExactAsync(PipeReader reader, int count)
+    {
+        while (true)
+        {
+            var result = await reader.ReadAsync();
+            if (result.Buffer.Length >= count)
+            {
+                var slice = result.Buffer.Slice(0, count);
+                var copy = new byte[count];
+                slice.CopyTo(copy.AsSpan());
+                reader.AdvanceTo(slice.End);
+                return copy;
+            }
+
+            if (result.IsCompleted)
+            {
+                throw new InvalidOperationException($"Completed before {count} bytes arrived.");
+            }
+
+            reader.AdvanceTo(result.Buffer.Start, result.Buffer.End);
+        }
+    }
+}
+
+internal sealed class TransportTestHost : IAsyncDisposable
+{
+    private readonly SocketAcceptListener _listener;
+    private readonly TlsCertificateContextProvider? _certs;
+    private readonly ConcurrentQueue<TaskCompletionSource<INntpConnection>> _waiters = new();
+    private readonly ConcurrentQueue<INntpConnection> _ready = new();
+    private readonly object _gate = new();
+
+    private TransportTestHost(SocketAcceptListener listener, TlsCertificateContextProvider? certs)
+    {
+        _listener = listener;
+        _certs = certs;
+    }
+
+    public IPEndPoint EndPoint => _listener.LocalEndPoint;
+
+    public static Task<TransportTestHost> StartPlainAsync() => StartAsync(tls: false, pfx: null);
+
+    public static Task<TransportTestHost> StartTlsAsync(byte[] pfx) => StartAsync(tls: true, pfx);
+
+    private static Task<TransportTestHost> StartAsync(bool tls, byte[]? pfx)
+    {
+        TlsCertificateContextProvider? certs = null;
+        if (tls)
+        {
+            ArgumentNullException.ThrowIfNull(pfx);
+            certs = new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance);
+            certs.PublishFromPfx(pfx, AcmeConfigurationTests.TestPfxPassword);
+        }
+
+        TransportTestHost? host = null;
+        var binding = new ListenBinding(IPAddress.Loopback, 0, DualMode: false);
+        var listener = new SocketAcceptListener(
+            binding,
+            async (socket, ct) =>
+            {
+                INntpConnection connection = tls
+                    ? await NntpConnection.StartTlsAsync(
+                            socket,
+                            certs!,
+                            NullLogger<NntpConnection>.Instance,
+                            ct)
+                        .ConfigureAwait(false)
+                    : NntpConnection.StartPlain(socket, NullLogger<NntpConnection>.Instance);
+
+                lock (host!._gate)
+                {
+                    if (host._waiters.TryDequeue(out var waiter))
+                    {
+                        waiter.TrySetResult(connection);
+                    }
+                    else
+                    {
+                        host._ready.Enqueue(connection);
+                    }
+                }
+            },
+            NullLogger<SocketAcceptListener>.Instance);
+
+        host = new TransportTestHost(listener, certs);
+        listener.Start();
+        return Task.FromResult(host);
+    }
+
+    public void PublishCertificate(byte[] pfx)
+    {
+        ArgumentNullException.ThrowIfNull(_certs);
+        _certs.PublishFromPfx(pfx, AcmeConfigurationTests.TestPfxPassword);
+    }
+
+    public async Task<Socket> ConnectPlainClientAsync()
+    {
+        var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        await client.ConnectAsync(EndPoint);
+        return client;
+    }
+
+    public async Task<TlsClient> ConnectTlsClientAsync()
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        await socket.ConnectAsync(EndPoint);
+        var network = new NetworkStream(socket, ownsSocket: true);
+        var ssl = new SslStream(network, leaveInnerStreamOpen: false);
+        await ssl.AuthenticateAsClientAsync(
+            new SslClientAuthenticationOptions
+            {
+                TargetHost = "nntpd01.usenet.ninja",
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                RemoteCertificateValidationCallback = static (_, _, _, _) => true,
+            });
+        var remoteCertificate = ssl.RemoteCertificate is null
+            ? null
+            : new X509Certificate2(ssl.RemoteCertificate);
+        return new TlsClient(ssl, remoteCertificate);
+    }
+
+    public async Task<INntpConnection> AcceptAsync()
+    {
+        TaskCompletionSource<INntpConnection> tcs;
+        lock (_gate)
+        {
+            if (_ready.TryDequeue(out var ready))
+            {
+                return ready;
+            }
+
+            tcs = new TaskCompletionSource<INntpConnection>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _waiters.Enqueue(tcs);
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var reg = cts.Token.Register(
+            static s => ((TaskCompletionSource<INntpConnection>)s!).TrySetCanceled(),
+            tcs);
+        return await tcs.Task;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _listener.DisposeAsync();
+        if (_certs is not null)
+        {
+            await _certs.DisposeAsync();
+        }
+    }
+
+    internal sealed class TlsClient : IAsyncDisposable
+    {
+        public TlsClient(SslStream stream, X509Certificate2? remoteCertificate)
+        {
+            Stream = stream;
+            RemoteCertificate = remoteCertificate;
+        }
+
+        public SslStream Stream { get; }
+
+        public X509Certificate2? RemoteCertificate { get; }
+
+        public ValueTask DisposeAsync()
+        {
+            Stream.Dispose();
+            RemoteCertificate?.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+}

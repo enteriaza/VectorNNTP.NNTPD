@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.NNTPD.Acme;
 
@@ -12,6 +13,8 @@ namespace VectorNNTP.NNTPD.Acme;
 /// <remarks>
 /// When <see cref="NntpdOptions.IsTlsListenerEnabled"/> is <see langword="false"/>, start is a no-op
 /// and no ACME network calls are made. Shutdown does not contact Let's Encrypt.
+/// After a usable PFX is ensured or renewed, an immutable TLS certificate context is published
+/// for the TLS listener (atomic swap; existing connections are unaffected).
 /// </remarks>
 public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposable
 {
@@ -20,6 +23,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
 
     private readonly IOptions<NntpdOptions> _options;
     private readonly AcmeComponentFactory _factory;
+    private readonly ITlsCertificateContextProvider _tlsCertificateContextProvider;
     private readonly ILogger<AcmeCertificateService> _logger;
     private readonly CancellationTokenSource _runCts = new();
     private CertificateManager? _manager;
@@ -31,13 +35,16 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
     public AcmeCertificateService(
         IOptions<NntpdOptions> options,
         AcmeComponentFactory factory,
+        ITlsCertificateContextProvider tlsCertificateContextProvider,
         ILogger<AcmeCertificateService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(tlsCertificateContextProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _factory = factory;
+        _tlsCertificateContextProvider = tlsCertificateContextProvider;
         _logger = logger;
     }
 
@@ -76,7 +83,8 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
 
         try
         {
-            _ = await _manager.EnsureCertificateAsync(cancellationToken).ConfigureAwait(false);
+            var material = await _manager.EnsureCertificateAsync(cancellationToken).ConfigureAwait(false);
+            _tlsCertificateContextProvider.PublishFromPfx(material.PfxBytes, options.AcmeCertificatePassword);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -143,6 +151,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
             return;
         }
 
+        var password = _options.Value.AcmeCertificatePassword;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -151,6 +160,9 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
                 var renewed = await _manager.RenewIfDueAsync(cancellationToken).ConfigureAwait(false);
                 if (renewed)
                 {
+                    var material = _manager.CurrentMaterial
+                        ?? throw new AcmeCertificateException("no_certificate", "renewed without material");
+                    _tlsCertificateContextProvider.PublishFromPfx(material.PfxBytes, password);
                     _logger.LogInformation("ACME renewal completed successfully.");
                 }
             }

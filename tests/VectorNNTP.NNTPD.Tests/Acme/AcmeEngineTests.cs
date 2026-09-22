@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -597,6 +598,7 @@ public sealed class AcmeLifecycleServiceTests
         var service = new AcmeCertificateService(
             Options.Create(options),
             factory,
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             NullLogger<AcmeCertificateService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -640,6 +642,7 @@ public sealed class AcmeLifecycleServiceTests
         var service = new AcmeCertificateService(
             Options.Create(options),
             factory,
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             NullLogger<AcmeCertificateService>.Instance);
         await service.StartAsync(CancellationToken.None);
         Assert.True(service.AcmeInitialized);
@@ -675,6 +678,7 @@ public sealed class AcmeLifecycleServiceTests
         var service = new AcmeCertificateService(
             Options.Create(options),
             factory,
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             NullLogger<AcmeCertificateService>.Instance);
         await Assert.ThrowsAsync<AcmeOrderException>(() => service.StartAsync(CancellationToken.None));
         await service.DisposeAsync();

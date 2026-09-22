@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -36,13 +37,21 @@ internal static class TestHostFactory
             StartupTimeout = startupTimeout,
             StopHostOnUnexpectedServiceTermination = true,
             BindAddress = ["*"],
-            BindPort = 119,
+            BindPort = GetFreeTcpPort(),
             BindPortTls = 0,
             CloudFlareApiKey = TestCloudFlareApiKey,
             CloudFlareZoneId = "5811a29d39a0732afb5f160c9b137c3d",
             DnsSuffix = "usenet.ninja",
             ServerId = 1,
         };
+    }
+
+    /// <summary>Reserves an ephemeral TCP port on loopback for offline listener tests.</summary>
+    public static int GetFreeTcpPort()
+    {
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        return ((IPEndPoint)socket.LocalEndPoint!).Port;
     }
 
     public static ApplicationServiceManager CreateServiceManager(
@@ -90,9 +99,11 @@ internal static class TestHostFactory
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.
         // Force TLS off so ACME never contacts Let's Encrypt during offline host tests
         // (committed appsettings may set BindPortTls > 0 for local operator use).
+        // Use an ephemeral plain port so NntpPlainListenerService can bind without conflicts.
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindAddress = ["*"];
+            options.BindPort = GetFreeTcpPort();
             options.BindPortTls = 0;
             options.AcmeEmail = string.Empty;
         });

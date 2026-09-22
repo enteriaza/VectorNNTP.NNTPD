@@ -52,9 +52,11 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 ┌─────────────────────────────────────────────────────────────┐
 │ IApplicationService implementations                         │
 │  - CloudflareDnsReconciliationService (bind resolve + DNS)  │
+│  - NntpPlainListenerService (cleartext TCP accept/transport)│
 │  - AcmeCertificateService (TLS/ACME when BindPortTls > 0)   │
-│  - Phase 0: PlaceholderApplicationService (no-op)           │
-│  - Later: listeners, session managers, storage, etc.        │
+│  - NntpTlsListenerService (implicit TLS accept/transport)   │
+│  - Optional: PlaceholderApplicationService (tests only)     │
+│  - Later: NNTP session/command layer on INntpConnection     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,15 +64,17 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 
 Startup order places `CloudflareDnsReconciliationService` first among application services. It resolves eligible bind addresses (including intentional private IPs), reconciles A/AAAA for the generated FQDN via the Cloudflare DNS API, verifies the remote set, and fails startup on any hard error (empty address set, API failure, verification mismatch, cancellation). Configuration validation still never calls Cloudflare.
 
-When `BindPortTls > 0`, `AcmeCertificateService` runs next: it ensures the ACME account and a usable TLS certificate (DNS-01 via Cloudflare) before later services start. When `BindPortTls` is `0`, that service is idle and performs no ACME work. Certificate material is exposed through `IServerCertificateProvider` for a future TLS listener.
+Next, `NntpPlainListenerService` binds cleartext NNTP listeners (`BindAddress`/`BindPort`) and accepts connections into duplex `PipeReader`/`PipeWriter` transports. It does **not** wait for ACME.
 
-On shutdown (reverse service order), after other application services stop, the same service removes **every** DNS record for the exact FQDN (all types), verifies none remain in the Cloudflare API view, and reports failure if cleanup cannot be verified before the graceful-shutdown budget expires. Parent/child/other hostnames are never deleted. The host is authoritative for that exact name only. ACME does not contact Let's Encrypt during shutdown.
+When `BindPortTls > 0`, `AcmeCertificateService` runs next: it ensures the ACME account and a usable TLS certificate (DNS-01 via Cloudflare), then publishes an immutable `SslStreamCertificateContext` for new handshakes. When `BindPortTls` is `0`, that service is idle and performs no ACME work. `NntpTlsListenerService` then binds the implicit-TLS port only if a certificate context is available. Certificate rotation atomically replaces the published context without rebinding listeners or dropping existing TLS sessions.
+
+On shutdown (reverse service order), TLS then plain listeners stop accepting and complete active transports before ACME/DNS cleanup. After other application services stop, Cloudflare DNS cleanup removes **every** DNS record for the exact FQDN (all types), verifies none remain in the Cloudflare API view, and reports failure if cleanup cannot be verified before the graceful-shutdown budget expires. Parent/child/other hostnames are never deleted. The host is authoritative for that exact name only. ACME does not contact Let's Encrypt during shutdown.
 
 Cloudflare multi-record updates are **not atomic**. Each reconcile attempt lists both families, creates all missing A/AAAA records before any deletes, updates kept desired records to managed attributes (`ttl=300`, `proxied=false`), deletes stale/duplicates, then verifies exact content sets plus managed TTL and DNS-only proxy state. Address changes keep create-before-delete staging. Cleanup lists all types for the exact name, deletes by id, then verifies emptiness. The application fails closed on partial/uncertain outcomes and recovers by re-reading remote state on the next attempt (up to 3 attempts with backoff) inside a shared `CloudFlareOperationTimeout` (default 2 minutes) linked with the caller token; HTTP attempts are additionally capped by `min(30s, remaining budget)`. Failed-start cleanup is best-effort and capped at 15 seconds. Same-instance concurrent reconcile/cleanup calls are serialized; cross-process and external DNS managers are not coordinated. Intermediate supersets or missing families may be briefly visible externally. Forced termination may prevent cleanup.
 
 API client and reconciler types live under `Cloudflare/`; bind expansion under `Networking/`. Credentials and raw Cloudflare response bodies are never logged in exception messages.
 
-**Limitation:** A/AAAA publication runs at startup; exact-FQDN removal runs at shutdown. This phase does not bind NNTP sockets; DNS reflects the resolved bind-address model, not live socket bindings. Recursive caches are not waited out. See [configuration.md](configuration.md).
+**Limitation:** A/AAAA publication runs at startup; exact-FQDN removal runs at shutdown. NNTP listeners bind the configured `BindAddress`/`BindPort` (and TLS port when enabled). Recursive caches are not waited out. See [configuration.md](configuration.md).
 
 ## systemd integration
 
@@ -145,4 +149,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-Protocol, sockets, storage, peering, metrics exporters, NNTP health probes, and data-plane performance work are deferred so the host foundation remains stable.
+NNTP command/session parsing, storage, peering, metrics exporters, and data-plane performance claims are deferred. The transport layer exposes byte-oriented `INntpConnection` pipes only.

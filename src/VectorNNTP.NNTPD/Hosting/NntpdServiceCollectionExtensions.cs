@@ -10,6 +10,8 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting.Systemd;
 using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -24,19 +26,21 @@ public static class NntpdServiceCollectionExtensions
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Optional additional options configuration.</param>
     /// <param name="includePlaceholderService">
-    /// When <see langword="true"/>, registers a no-op placeholder <see cref="IApplicationService"/> for Phase 0.
+    /// When <see langword="true"/>, registers a no-op placeholder <see cref="IApplicationService"/>.
+    /// Defaults to <see langword="false"/> now that NNTP listeners are registered.
     /// </param>
     /// <returns>The same <paramref name="services"/> instance.</returns>
     public static IServiceCollection AddNntpdHosting(
         this IServiceCollection services,
         Action<NntpdOptions>? configure = null,
-        bool includePlaceholderService = true)
+        bool includePlaceholderService = false)
     {
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
         services.TryAddSingleton<IBindAddressResolver, BindAddressResolver>();
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
+        services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
 
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {
@@ -88,16 +92,25 @@ public static class NntpdServiceCollectionExtensions
             optionsBuilder.Configure(configure);
         }
 
-        // DNS reconciliation runs before other application services so startup fails closed
-        // when bind addresses cannot be resolved or Cloudflare DNS cannot be made correct.
+        // Startup order (sequential ApplicationServiceManager):
+        // Cloudflare DNS → plain NNTP listener → ACME (publish TLS context) → TLS NNTP listener.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
 
-        // ACME certificate ensure runs after DNS reconciliation and before placeholder / future TLS listeners.
+        services.TryAddSingleton<NntpPlainListenerService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpPlainListenerService>(static sp =>
+                sp.GetRequiredService<NntpPlainListenerService>()));
+
         services.TryAddSingleton<AcmeCertificateService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateService>(static sp =>
                 sp.GetRequiredService<AcmeCertificateService>()));
+
+        services.TryAddSingleton<NntpTlsListenerService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpTlsListenerService>(static sp =>
+                sp.GetRequiredService<NntpTlsListenerService>()));
 
         if (includePlaceholderService)
         {

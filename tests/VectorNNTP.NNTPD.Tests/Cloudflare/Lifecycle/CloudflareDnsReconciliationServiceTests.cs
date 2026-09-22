@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.NNTPD.Tests.Cloudflare.Lifecycle;
 
@@ -124,7 +125,9 @@ public sealed class CloudflareDnsReconciliationServiceTests
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(CloudflareDnsReconciliationService), services[0].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[1].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[1].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[2].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[3].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

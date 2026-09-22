@@ -86,7 +86,7 @@ Multiple addresses:
 | `BindPort` | `119` | `1–65535` | Missing → default; invalid → hard startup failure |
 | `BindPortTls` | `0` | `0` or `1–65535` | `0` / unset → TLS disabled (`IsTlsListenerEnabled == false`); `1–65535` → TLS enabled |
 
-Negative values and values above `65535` fail validation. This phase does not bind sockets or implement TLS listeners; dependents use `BindPortTls` / `IsTlsListenerEnabled` to distinguish disabled vs enabled configuration.
+Negative values and values above `65535` fail validation. Dependents use `BindPortTls` / `IsTlsListenerEnabled` to distinguish disabled vs enabled TLS listener configuration.
 
 ## TLS and ACME (Let's Encrypt)
 
@@ -158,7 +158,7 @@ The Windows Certificate Store is **not** used (`X509Store` is not employed).
 | `{AcmeStateDir}/live/gens/{id}/certificate.pfx` | PKCS#12/PFX: leaf certificate + private key + issuing chain |
 | `{AcmeStateDir}/live/gens/{id}/complete` | Marker written after PFX write → reload → validate succeeds |
 
-`certificate.pfx` is the canonical TLS server credential. It is loaded with `AcmeCertificatePassword` into an `X509Certificate2` (with private key) for the future TLS listener. Incomplete generations (missing `complete` or invalid `current`) are never treated as active. A known-good generation remains current until a replacement PFX is validated and committed.
+`certificate.pfx` is the canonical TLS server credential. It is loaded with `AcmeCertificatePassword` into an `SslStreamCertificateContext` (leaf + chain) for the implicit TLS listener. Incomplete generations (missing `complete` or invalid `current`) are never treated as active. A known-good generation remains current until a replacement PFX is validated and committed.
 
 ### Lifecycle
 
@@ -167,7 +167,7 @@ When TLS is enabled, `AcmeCertificateService` runs after Cloudflare DNS reconcil
 1. Ensure ACME account (reuse persisted key / register once)
 2. Evaluate existing certificate (SANs, validity, key match, renewal threshold)
 3. Issue or renew via ACME when needed
-4. Expose material through `IServerCertificateProvider` for a future TLS listener
+4. Publish an immutable TLS certificate context for the TLS listener (atomic swap on renewal)
 
 Failure to obtain a usable certificate prevents `Running`. When TLS is disabled, the service is idle and performs no ACME work. Shutdown does not contact Let's Encrypt.
 
@@ -254,7 +254,7 @@ Cloudflare’s DNS Records API does **not** provide an atomic transaction spanni
 
 #### Relation to sockets (current phase)
 
-NNTP listeners/sockets are **not** implemented yet. DNS reconciliation publishes the **resolved eligible bind-address set** derived from `BindAddress` and local NIC enumeration — not a measured set of currently bound sockets. When wildcard binding is configured, DNS enumerates eligible NIC addresses that a future `0.0.0.0` / `::` listener would accept; when explicit IPs are configured, DNS publishes those eligible addresses. Do not interpret startup DNS success as proof that sockets are already listening.
+NNTP listeners bind configured `BindAddress` entries on `BindPort` (plain) and, when TLS is enabled, `BindPortTls` (implicit TLS after ACME publishes a certificate context). DNS reconciliation publishes the **resolved eligible bind-address set** derived from `BindAddress` and local NIC enumeration — that set is related to, but not identical to, listen wildcards (for example `*` expands differently for DNS vs dual-stack listen). Do not interpret startup DNS success alone as proof that sockets are listening; listener start is a separate application-service step after Cloudflare reconciliation.
 
 **Runtime:** A/AAAA are reconciled at **startup**; the exact FQDN is removed at **shutdown**. NIC address changes and configuration reloads are not monitored while Running. If the eventual listen set diverges after start, DNS can drift until the next successful startup reconciliation.
 
