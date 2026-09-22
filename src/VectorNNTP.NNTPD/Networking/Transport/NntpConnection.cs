@@ -26,6 +26,10 @@ public sealed class NntpConnection : INntpConnection
     private readonly object _completeGate = new();
     private Socket? _socket;
     private SslStream? _sslStream;
+    /// <summary>
+    /// Lease retained for the TLS connection lifetime so rotation cannot dispose the context used by
+    /// this connection's <see cref="SslStream"/> while the connection is still alive.
+    /// </summary>
     private TlsCertificateLease? _certificateLease;
     private Task? _receiveTask;
     private Task? _sendTask;
@@ -87,6 +91,11 @@ public sealed class NntpConnection : INntpConnection
     /// <summary>
     /// Performs a server TLS handshake then starts the duplex pipe pumps over the encrypted stream.
     /// </summary>
+    /// <remarks>
+    /// Acquires a certificate context lease before the handshake and holds it until
+    /// <see cref="DisposeAsync"/> so the leased context object outlives handshake-only use and remains
+    /// valid across later certificate publication/rotation.
+    /// </remarks>
     public static async Task<NntpConnection> StartTlsAsync(
         Socket socket,
         ITlsCertificateContextProvider certificateProvider,
@@ -101,6 +110,7 @@ public sealed class NntpConnection : INntpConnection
         var remote = TryGetRemote(socket);
         var local = TryGetLocal(socket);
         var connection = new NntpConnection(socket, remote, local, isTls: true, logger);
+        // Connection-lifetime lease (not handshake-only); released in DisposeAsync.
         var lease = certificateProvider.Acquire();
         connection._certificateLease = lease;
 

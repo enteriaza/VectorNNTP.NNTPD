@@ -7,22 +7,37 @@ using VectorNNTP.NNTPD.Acme;
 namespace VectorNNTP.NNTPD.Networking.Certificates;
 
 /// <summary>
-/// Publishes and leases immutable <see cref="SslStreamCertificateContext"/> instances for TLS handshakes.
+/// Publishes and leases immutable <see cref="SslStreamCertificateContext"/> instances for TLS use.
 /// </summary>
+/// <remarks>
+/// A successful <see cref="Acquire"/> takes ownership of a reference to the currently published context.
+/// That <em>object</em> remains alive until the returned <see cref="TlsCertificateLease"/> is disposed.
+/// Rotation and provider disposal do not invalidate already-acquired leases. A lease does not guarantee
+/// that the X.509 certificate remains within its <c>NotAfter</c> validity window.
+/// </remarks>
 public interface ITlsCertificateContextProvider
 {
     /// <summary>Gets whether a certificate context is currently published.</summary>
     bool IsAvailable { get; }
 
     /// <summary>
-    /// Acquires a lease on the current context for one handshake (or inspection). Caller must dispose the lease.
+    /// Acquires a lease on the currently published certificate context.
     /// </summary>
+    /// <returns>
+    /// A lease that keeps the leased context object alive until disposed. Callers choose the hold duration
+    /// (for example handshake-only or for the full TLS connection); dispose when finished with the context.
+    /// </returns>
     /// <exception cref="InvalidOperationException">Thrown when no context is available.</exception>
+    /// <exception cref="ObjectDisposedException">Thrown when the provider has been disposed.</exception>
     TlsCertificateLease Acquire();
 
     /// <summary>
-    /// Builds a new context from a validated PFX and atomically publishes it for new handshakes.
+    /// Builds a new context from a validated PFX and atomically publishes it for subsequent <see cref="Acquire"/> calls.
     /// </summary>
+    /// <remarks>
+    /// Existing leases continue to reference the previous context until they are disposed; that retired
+    /// context remains alive while those leases exist.
+    /// </remarks>
     void PublishFromPfx(ReadOnlySpan<byte> pfxBytes, string password);
 }
 
@@ -30,8 +45,16 @@ public interface ITlsCertificateContextProvider
 /// Reference-counted lease over a published <see cref="SslStreamCertificateContext"/>.
 /// </summary>
 /// <remarks>
-/// Dispose releases the lease. The underlying context is disposed only after the last lease
-/// (including the publisher's own publication reference) is released.
+/// <para>
+/// Acquiring a lease establishes ownership of one reference to a published (or already-leased) holder.
+/// The leased context object remains valid for the lifetime of this lease: certificate rotation and
+/// provider disposal retire the holder from publication but do not dispose it while this lease is outstanding.
+/// </para>
+/// <para>
+/// Dispose releases that reference. The underlying context is disposed only after the last reference
+/// (including the provider's publication reference) is released. This contract covers managed object
+/// lifetime only; it does not keep an X.509 certificate cryptographically valid past <c>NotAfter</c>.
+/// </para>
 /// </remarks>
 public sealed class TlsCertificateLease : IDisposable
 {
@@ -44,6 +67,7 @@ public sealed class TlsCertificateLease : IDisposable
     }
 
     /// <summary>Gets the immutable certificate context for TLS authentication.</summary>
+    /// <exception cref="ObjectDisposedException">Thrown when this lease has been disposed.</exception>
     public SslStreamCertificateContext Context =>
         (_holder ?? throw new ObjectDisposedException(nameof(TlsCertificateLease))).Context;
 
@@ -63,7 +87,14 @@ public sealed class TlsCertificateLease : IDisposable
     internal TlsCertificateHolder Holder =>
         _holder ?? throw new ObjectDisposedException(nameof(TlsCertificateLease));
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Releases this lease's reference to the certificate context holder.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call more than once. After dispose, <see cref="Context"/> and related members throw
+    /// <see cref="ObjectDisposedException"/>. The holder (and context) may remain alive for other leases
+    /// or until the provider drops its publication reference.
+    /// </remarks>
     public void Dispose()
     {
         var holder = Interlocked.Exchange(ref _holder, null);
@@ -81,6 +112,10 @@ public sealed class TlsCertificateLease : IDisposable
 /// <para>
 /// PFX load / context construction run outside the gate. Holder disposal after the last release also runs
 /// outside the gate so expensive crypto dispose does not block unrelated acquires of a newer generation.
+/// </para>
+/// <para>
+/// <see cref="DisposeAsync"/> retires the current publication and drops the provider's reference; outstanding
+/// leases keep their leased context objects alive until those leases are disposed.
 /// </para>
 /// </remarks>
 public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAsyncDisposable
@@ -178,8 +213,9 @@ public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvid
 /// Reference-counted holder for one immutable certificate context.
 /// </summary>
 /// <remarks>
-/// Lifecycle: Published (publication ref) → optional leases → Retired (removed from provider) →
-/// last release → disposed exactly once. Retired holders reject <see cref="AddRef"/>.
+/// Lifecycle: Published (publication ref) → optional leases → Retired (removed from provider; no new
+/// <see cref="AddRef"/>) → last release → disposed exactly once. Retirement does not dispose while
+/// leases still hold references.
 /// </remarks>
 internal sealed class TlsCertificateHolder
 {
