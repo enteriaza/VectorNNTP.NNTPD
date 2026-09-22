@@ -394,12 +394,10 @@ public sealed class NntpConnection : INntpConnection
                         continue;
                     }
 
+                    // WriteAsync encrypts and writes ciphertext to the inner NetworkStream.
+                    // NetworkStream does not buffer (Flush/FlushAsync are no-ops), so an explicit
+                    // SslStream.FlushAsync after each pipe batch is redundant for this stack.
                     await ssl.WriteAsync(segment, token).ConfigureAwait(false);
-                }
-
-                if (!buffer.IsEmpty)
-                {
-                    await ssl.FlushAsync(token).ConfigureAwait(false);
                 }
             }
             finally

@@ -9,7 +9,7 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 /// <param name="Port">TCP port.</param>
 /// <param name="DualMode">
 /// When <see langword="true"/> and <see cref="Address"/> is IPv6, the socket also accepts IPv4
-/// (mapped) connections.
+/// (mapped) connections (<c>IPV6_V6ONLY = 0</c> / <see cref="Socket.DualMode"/>).
 /// </param>
 public readonly record struct ListenBinding(IPAddress Address, int Port, bool DualMode)
 {
@@ -21,6 +21,14 @@ public readonly record struct ListenBinding(IPAddress Address, int Port, bool Du
 /// Plans listen bindings from configured <see cref="NntpdOptions.BindAddress"/> entries without
 /// duplicating DNS eligibility filtering.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Invariants: no overlapping listeners; <c>*</c> is a single dual-stack IPv6-any socket;
+/// <c>::</c> alone is dual-stack and therefore covers IPv4; <c>0.0.0.0</c> with <c>::</c> uses
+/// separate single-family sockets (<see cref="ListenBinding.DualMode"/> false) so both wildcards
+/// remain meaningful without overlap.
+/// </para>
+/// </remarks>
 public static class ListenEndpointPlanner
 {
     /// <summary>
@@ -85,8 +93,13 @@ public static class ListenEndpointPlanner
             return result;
         }
 
+        // Dual-stack :: covers IPv4 only when we are not also planning a separate IPv4-any socket.
+        var dualStackIpv6Any = hasIpv6Any && !hasIpv4Any;
+
         if (hasIpv4Any && hasIpv6Any)
         {
+            // Both family wildcards requested: use two single-family sockets (no DualMode) so
+            // coverage does not overlap and each wildcard retains independent meaning.
             result.Add(new ListenBinding(IPAddress.Any, port, DualMode: false));
             result.Add(new ListenBinding(IPAddress.IPv6Any, port, DualMode: false));
         }
@@ -94,25 +107,14 @@ public static class ListenEndpointPlanner
         {
             result.Add(new ListenBinding(IPAddress.Any, port, DualMode: false));
         }
-        else if (hasIpv6Any)
+        else if (dualStackIpv6Any)
         {
             result.Add(new ListenBinding(IPAddress.IPv6Any, port, DualMode: true));
         }
 
         foreach (var address in explicits)
         {
-            // Skip explicits already covered by a wildcard binding on the same family.
-            if (hasStar)
-            {
-                continue;
-            }
-
-            if (address.AddressFamily == AddressFamily.InterNetwork && hasIpv4Any)
-            {
-                continue;
-            }
-
-            if (address.AddressFamily == AddressFamily.InterNetworkV6 && hasIpv6Any)
+            if (IsCoveredByPlannedWildcard(address, hasIpv4Any, hasIpv6Any, dualStackIpv6Any))
             {
                 continue;
             }
@@ -121,6 +123,35 @@ public static class ListenEndpointPlanner
         }
 
         return result;
+    }
+
+    private static bool IsCoveredByPlannedWildcard(
+        IPAddress address,
+        bool hasIpv4Any,
+        bool hasIpv6Any,
+        bool dualStackIpv6Any)
+    {
+        if (address.AddressFamily == AddressFamily.InterNetwork)
+        {
+            // IPv4-any or dual-stack :: already accepts all IPv4 destinations on this port.
+            return hasIpv4Any || dualStackIpv6Any;
+        }
+
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (hasIpv6Any)
+            {
+                return true;
+            }
+
+            // IPv4-mapped IPv6 literals are covered by dual-stack IPv6-any the same as native IPv4.
+            if (dualStackIpv6Any && address.IsIPv4MappedToIPv6)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ContainsAddress(List<IPAddress> addresses, IPAddress candidate)

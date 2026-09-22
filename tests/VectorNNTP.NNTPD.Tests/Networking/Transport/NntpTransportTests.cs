@@ -29,6 +29,52 @@ public sealed class ListenEndpointPlannerTests
     }
 
     [Fact]
+    public void Star_IgnoresAdditionalExplicits()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["*", "127.0.0.1", "::1"], 1199);
+        Assert.Single(bindings);
+        Assert.True(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void Ipv4Any_Alone_ProducesIpv4Wildcard()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["0.0.0.0"], 1200);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.Any, bindings[0].Address);
+        Assert.False(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void Ipv6Any_Alone_ProducesDualStack()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["::"], 1200);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.IPv6Any, bindings[0].Address);
+        Assert.True(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void ExplicitIpv4_Alone()
+    {
+        var address = IPAddress.Parse("192.0.2.10");
+        var bindings = ListenEndpointPlanner.Plan(["192.0.2.10"], 1200);
+        Assert.Single(bindings);
+        Assert.Equal(address, bindings[0].Address);
+        Assert.False(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void ExplicitIpv6_Alone()
+    {
+        var address = IPAddress.Parse("2001:db8::10");
+        var bindings = ListenEndpointPlanner.Plan(["2001:db8::10"], 1200);
+        Assert.Single(bindings);
+        Assert.Equal(address, bindings[0].Address);
+        Assert.False(bindings[0].DualMode);
+    }
+
+    [Fact]
     public void ExplicitAddresses_Deduplicate()
     {
         var bindings = ListenEndpointPlanner.Plan(["127.0.0.1", "127.0.0.1", "::1"], 1200);
@@ -36,12 +82,94 @@ public sealed class ListenEndpointPlannerTests
     }
 
     [Fact]
-    public void Ipv4AnyAndIpv6Any_AreSeparate()
+    public void MultipleIndependentExplicits_AreRetained()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["192.0.2.10", "2001:db8::10"], 1200);
+        Assert.Equal(2, bindings.Count);
+        Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.Parse("192.0.2.10")));
+        Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.Parse("2001:db8::10")));
+    }
+
+    [Fact]
+    public void Ipv4AnyAndIpv6Any_AreSeparateSingleFamilySockets()
     {
         var bindings = ListenEndpointPlanner.Plan(["0.0.0.0", "::"], 1201);
         Assert.Equal(2, bindings.Count);
         Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.Any) && !b.DualMode);
         Assert.Contains(bindings, static b => b.Address.Equals(IPAddress.IPv6Any) && !b.DualMode);
+    }
+
+    [Fact]
+    public void Ipv6AnyDualMode_PlusExplicitIpv4_DoesNotOverlap()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["::", "192.0.2.10"], 1202);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.IPv6Any, bindings[0].Address);
+        Assert.True(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void Ipv6AnyDualMode_PlusIpv4MappedExplicit_DoesNotOverlap()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["::", "::ffff:192.0.2.10"], 1203);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.IPv6Any, bindings[0].Address);
+        Assert.True(bindings[0].DualMode);
+    }
+
+    [Fact]
+    public void Ipv4Any_PlusExplicitIpv4_SkipsExplicit()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["0.0.0.0", "192.0.2.10"], 1204);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.Any, bindings[0].Address);
+    }
+
+    [Fact]
+    public void Ipv6Any_PlusExplicitIpv6_SkipsExplicit()
+    {
+        var bindings = ListenEndpointPlanner.Plan(["::", "2001:db8::10"], 1205);
+        Assert.Single(bindings);
+        Assert.Equal(IPAddress.IPv6Any, bindings[0].Address);
+        Assert.True(bindings[0].DualMode);
+    }
+}
+
+/// <summary>
+/// Binds planned dual-stack endpoints on loopback/ephemeral ports (Windows dual-stack semantics).
+/// </summary>
+public sealed class ListenEndpointBindTests
+{
+    [Fact]
+    public async Task DualStackIpv6Any_AcceptsIpv4AndIpv6Loopback()
+    {
+        if (!Socket.OSSupportsIPv6)
+        {
+            return;
+        }
+
+        var plan = ListenEndpointPlanner.Plan(["::", "127.0.0.1"], port: 1199);
+        Assert.Single(plan);
+        Assert.True(plan[0].DualMode);
+
+        // Ephemeral port: one DualMode IPv6Any listener (no separate IPv4 socket from the planner).
+        var binding = new ListenBinding(IPAddress.IPv6Any, 0, DualMode: true);
+        await using var listener = new SocketAcceptListener(
+            binding,
+            static (_, _) => ValueTask.CompletedTask,
+            NullLogger<SocketAcceptListener>.Instance);
+        listener.Start();
+        var port = listener.LocalEndPoint.Port;
+
+        using (var v4 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        {
+            await v4.ConnectAsync(new IPEndPoint(IPAddress.Loopback, port));
+        }
+
+        using (var v6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp))
+        {
+            await v6.ConnectAsync(new IPEndPoint(IPAddress.IPv6Loopback, port));
+        }
     }
 }
 
@@ -101,22 +229,58 @@ public sealed class NntpPlainTransportTests
         await using var host = await TransportTestHost.StartPlainAsync();
         var client = await host.ConnectPlainClientAsync();
         await using var server = await host.AcceptAsync();
+
+        // Arm inbound read before FIN so Ordering A/B are both covered without sleeps.
+        var inboundRead = server.Input.ReadAsync().AsTask();
+
         client.Shutdown(SocketShutdown.Send);
         client.Dispose();
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var result = await server.Input.ReadAsync(cts.Token);
-        Assert.True(result.IsCompleted);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        // 1) Inbound side must complete: EOF ReadResult, or reader already completed by teardown.
+        //    Do not wait on ConnectionClosed first — it is cancelled at the start of CompleteAsync,
+        //    before a pending ReadAsync is guaranteed to have settled.
         try
         {
-            // Transport ObservePump may CompleteAsync (completing the reader) concurrently
-            // after ReadAsync returns; AdvanceTo is best-effort in that window.
-            server.Input.AdvanceTo(result.Buffer.End);
+            var result = await inboundRead.WaitAsync(timeout.Token);
+            Assert.True(result.IsCompleted);
+            try
+            {
+                server.Input.AdvanceTo(result.Buffer.End);
+            }
+            catch (InvalidOperationException)
+            {
+                // Teardown completed the reader after the EOF read returned.
+            }
         }
         catch (InvalidOperationException)
         {
-            // Reader already completed by connection teardown.
+            // Ordering B: PipeReader was completed by CompleteAsync before/during ReadAsync.
         }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            Assert.Fail("Timed out waiting for inbound completion after remote FIN.");
+        }
+
+        // 2) Connection lifecycle must reach closed (may already be cancelled).
+        if (!server.ConnectionClosed.IsCancellationRequested)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                server.ConnectionClosed,
+                timeout.Token);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, linked.Token);
+                Assert.Fail("Expected ConnectionClosed after remote FIN.");
+            }
+            catch (OperationCanceledException) when (server.ConnectionClosed.IsCancellationRequested)
+            {
+            }
+        }
+
+        Assert.True(server.ConnectionClosed.IsCancellationRequested);
+        Assert.False(timeout.IsCancellationRequested);
     }
 
     [Fact]
@@ -211,6 +375,41 @@ public sealed class NntpTlsTransportTests
         await client.Stream.WriteAsync(payload);
         await client.Stream.FlushAsync();
         Assert.Equal(payload, await TransportTestShared.ReadExactAsync(server.Input, payload.Length));
+    }
+
+    [Fact]
+    public async Task TlsOutbound_MultiplePipeBatches_PreserveOrderWithoutSslFlush()
+    {
+        await using var host = await TransportTestHost.StartTlsAsync(
+            TransportTestShared.CreatePfx("nntpd01.usenet.ninja"));
+        await using var client = await host.ConnectTlsClientAsync();
+        await using var server = await host.AcceptAsync();
+
+        // Distinct PipeWriter flushes → distinct send-pump ReadAsync batches.
+        // Delivery must not depend on SslStream.FlushAsync (NetworkStream is unbuffered).
+        var batch1 = new byte[] { 0x01, 0x02, 0x03 };
+        var batch2 = new byte[] { 0xFE, 0xFF, 0x00 };
+        var batch3 = new byte[] { 0x0D, 0x0A, 0x2E, 0x2E };
+
+        await server.Output.WriteAsync(batch1);
+        await server.Output.FlushAsync();
+        await server.Output.WriteAsync(batch2);
+        await server.Output.FlushAsync();
+        await server.Output.WriteAsync(batch3);
+        await server.Output.FlushAsync();
+
+        var expected = batch1.Concat(batch2).Concat(batch3).ToArray();
+        var received = new byte[expected.Length];
+        var total = 0;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (total < expected.Length)
+        {
+            var n = await client.Stream.ReadAsync(received.AsMemory(total), cts.Token);
+            Assert.True(n > 0, "TLS stream closed before all outbound batches arrived.");
+            total += n;
+        }
+
+        Assert.Equal(expected, received);
     }
 
     [Fact]

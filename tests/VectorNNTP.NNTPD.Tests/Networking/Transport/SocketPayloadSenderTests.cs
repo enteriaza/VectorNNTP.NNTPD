@@ -95,4 +95,30 @@ public sealed class SocketPayloadSenderTests
         Assert.Equal(4, sent.Count);
         Assert.Equal(payload.AsSpan(0, 4).ToArray(), sent.ToArray());
     }
+
+    [Fact]
+    public async Task SendAllAsync_ThrowAfterPartial_PropagatesWithoutClaimingSuccess()
+    {
+        var payload = new byte[] { 1, 2, 3, 4, 5, 6 };
+        var sent = 0;
+
+        var ex = await Assert.ThrowsAsync<IOException>(async () =>
+            await SocketPayloadSender.SendAllAsync(
+                (memory, _, _) =>
+                {
+                    if (sent > 0)
+                    {
+                        throw new IOException("peer reset after partial send");
+                    }
+
+                    sent += memory.Length >= 3 ? 3 : memory.Length;
+                    return ValueTask.FromResult(3);
+                },
+                payload,
+                state: null,
+                CancellationToken.None));
+
+        Assert.Equal(3, sent);
+        Assert.Contains("peer reset", ex.Message, StringComparison.Ordinal);
+    }
 }
