@@ -11,6 +11,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Tests.Acme;
 using VectorNNTP.NNTPD.Tests.Fixtures;
@@ -307,6 +308,7 @@ public sealed class NntpPlainTransportTests
         options.BindPort = TestHostFactory.GetFreeTcpPort();
         await using var service = new NntpPlainListenerService(
             Options.Create(options),
+            new TrustedProxyHosts(Options.Create(options)),
             NullLoggerFactory.Instance,
             NullLogger<NntpPlainListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -337,6 +339,7 @@ public sealed class NntpTlsTransportTests
         await using var service = new NntpTlsListenerService(
             Options.Create(options),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            new TrustedProxyHosts(Options.Create(options)),
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -352,6 +355,7 @@ public sealed class NntpTlsTransportTests
         await using var service = new NntpTlsListenerService(
             Options.Create(options),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            new TrustedProxyHosts(Options.Create(options)),
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
@@ -541,7 +545,17 @@ internal sealed class TransportTestHost : IAsyncDisposable
 
     public static Task<TransportTestHost> StartTlsAsync(byte[] pfx) => StartAsync(tls: true, pfx);
 
-    private static Task<TransportTestHost> StartAsync(bool tls, byte[]? pfx)
+    /// <summary>
+    /// Starts a TLS test host that resolves PROXY identity via <paramref name="trustedProxyHosts"/>
+    /// before the TLS handshake (production listener ordering).
+    /// </summary>
+    public static Task<TransportTestHost> StartTlsWithProxyAsync(byte[] pfx, ITrustedProxyHosts trustedProxyHosts) =>
+        StartAsync(tls: true, pfx, trustedProxyHosts);
+
+    private static Task<TransportTestHost> StartAsync(
+        bool tls,
+        byte[]? pfx,
+        ITrustedProxyHosts? trustedProxyHosts = null)
     {
         TlsCertificateContextProvider? certs = null;
         if (tls)
@@ -551,20 +565,47 @@ internal sealed class TransportTestHost : IAsyncDisposable
             certs.PublishFromPfx(pfx, AcmeConfigurationTests.TestPfxPassword);
         }
 
+        trustedProxyHosts ??= new TrustedProxyHosts(Options.Create(new NntpdOptions { ProxyHosts = [] }));
+
         TransportTestHost? host = null;
         var binding = new ListenBinding(IPAddress.Loopback, 0, DualMode: false);
         var listener = new SocketAcceptListener(
             binding,
             async (socket, ct) =>
             {
+                if (!ProxyPreambleResolver.TryGetTcpPeer(socket, out var tcpPeer))
+                {
+                    socket.Dispose();
+                    return;
+                }
+
+                ProxyPreambleResolution preamble;
+                try
+                {
+                    preamble = await ProxyPreambleResolver
+                        .ResolveAsync(socket, tcpPeer, trustedProxyHosts, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (ProxyProtocolException)
+                {
+                    socket.Dispose();
+                    return;
+                }
+
                 INntpConnection connection = tls
                     ? await NntpConnection.StartTlsAsync(
                             socket,
                             certs!,
+                            preamble.Identity,
                             NullLogger<NntpConnection>.Instance,
-                            ct)
+                            ct,
+                            preamble.Leftover)
                         .ConfigureAwait(false)
-                    : NntpConnection.StartPlain(socket, NullLogger<NntpConnection>.Instance);
+                    : NntpConnection.StartPlain(
+                        socket,
+                        preamble.Identity,
+                        NullLogger<NntpConnection>.Instance,
+                        preamble.Leftover);
 
                 lock (host!._gate)
                 {

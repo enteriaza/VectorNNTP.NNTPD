@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -15,11 +18,13 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 /// <remarks>
 /// Idle when <see cref="NntpdOptions.IsTlsListenerEnabled"/> is <see langword="false"/>.
 /// Does not rebind or restart on certificate rotation; new handshakes observe the latest context.
+/// PROXY preamble (when required) is consumed on the cleartext socket before TLS.
 /// </remarks>
 public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposable
 {
     private readonly IOptions<NntpdOptions> _options;
     private readonly ITlsCertificateContextProvider _certificateProvider;
+    private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -33,15 +38,18 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     public NntpTlsListenerService(
         IOptions<NntpdOptions> options,
         ITlsCertificateContextProvider certificateProvider,
+        ITrustedProxyHosts trustedProxyHosts,
         ILoggerFactory loggerFactory,
         ILogger<NntpTlsListenerService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
+        ArgumentNullException.ThrowIfNull(trustedProxyHosts);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _certificateProvider = certificateProvider;
+        _trustedProxyHosts = trustedProxyHosts;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -59,7 +67,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     internal int ActiveConnectionCount => _connections.Count;
 
     /// <summary>Gets bound local endpoints after start (tests).</summary>
-    internal IReadOnlyList<System.Net.IPEndPoint> LocalEndPoints =>
+    internal IReadOnlyList<IPEndPoint> LocalEndPoints =>
         _listeners.Select(static l => l.LocalEndPoint).ToArray();
 
     /// <inheritdoc />
@@ -179,14 +187,51 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         NntpConnection? connection = null;
         try
         {
+            if (!ProxyPreambleResolver.TryGetTcpPeer(socket, out var tcpPeer))
+            {
+                _logger.LogDebug("TLS accept discarded: remote endpoint unavailable.");
+                return;
+            }
+
+            ProxyPreambleResolution preamble;
+            try
+            {
+                preamble = await ProxyPreambleResolver
+                    .ResolveAsync(socket, tcpPeer, _trustedProxyHosts, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ProxyProtocolException ex)
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Rejected TLS connection from trusted proxy peer {TcpPeer}: invalid PROXY preamble.",
+                    tcpPeer);
+                return;
+            }
+
+            if (preamble.Identity.IsTrustedProxy)
+            {
+                _logger.LogInformation(
+                    "Accepted trusted HAProxy TLS connection from {TcpPeer}; effective client {Client}.",
+                    preamble.Identity.TcpPeer,
+                    preamble.Identity.Client);
+            }
+
             connection = await NntpConnection.StartTlsAsync(
                     socket,
                     _certificateProvider,
+                    preamble.Identity,
                     _loggerFactory.CreateLogger<NntpConnection>(),
-                    cancellationToken)
+                    cancellationToken,
+                    preamble.Leftover)
                 .ConfigureAwait(false);
             _connections[connection] = 0;
-            _logger.LogDebug("TLS connection accepted from {Remote}.", connection.RemoteEndPoint);
+
+            _ = new NntpSession(connection);
+            _logger.LogDebug(
+                "TLS connection accepted from {Remote}; client {Client}.",
+                connection.RemoteEndPoint,
+                connection.ClientIdentity.Client);
 
             try
             {

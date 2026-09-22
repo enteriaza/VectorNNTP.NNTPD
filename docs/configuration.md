@@ -26,6 +26,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `CloudFlareOperationTimeout` | duration | `00:02:00` | no | Wall-clock budget for one reconcile or cleanup operation (shared by HTTP 429 retries and reconciler attempt backoffs) |
 | `DnsSuffix` | string | `usenet.ninja` | no | DNS suffix used to generate the FQDN |
 | `ServerId` | int | _(none)_ | **yes** | Server identity `1–99`; no silent default |
+| `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
@@ -77,6 +78,39 @@ Multiple addresses:
 
 ```json
 "BindAddress": [ "198.18.0.66", "2001:db8::1" ]
+```
+
+## ProxyHosts (HAProxy PROXY protocol)
+
+`ProxyHosts` is an optional JSON array of **literal** IPv4/IPv6 addresses for trusted HAProxy peers. DNS names and CIDR/network prefixes are not supported.
+
+| Situation | Behavior |
+|-----------|----------|
+| `ProxyHosts` omitted / `[]` | PROXY processing **disabled**. Effective client identity is always the TCP peer. No PROXY bytes are read. |
+| TCP peer **matches** `ProxyHosts` | Peer is a trusted HAProxy source. PROXY protocol **v1 or v2 is required**. Effective client IP/port come from the PROXY header (or remain the TCP peer for UNKNOWN/LOCAL/UNSPEC per the PROXY specification). Malformed, incomplete, or timed-out headers **fail the connection** — there is no silent fallback to TCP identity. |
+| TCP peer **does not match** `ProxyHosts` | Peer is **untrusted**. PROXY is **not** consumed and **cannot** influence identity. Effective client identity remains the TCP peer. |
+
+### Mixed-mode product policy
+
+VectorNNTP deliberately allows direct clients and trusted HAProxy peers on the same listener when `ProxyHosts` is non-empty:
+
+- Trust is decided **only** from the accepted socket’s TCP peer address (never from PROXY contents).
+- Untrusted peers never get PROXY parsing; a forged PROXY header cannot replace client IP or source port.
+- If an untrusted peer sends octets that look like a PROXY v1/v2 header, those octets **remain in the application/TLS input stream** and are **not** interpreted as client identity. Once an NNTP session/command layer exists, they are ordinary application bytes (and will typically fail command parsing). On the TLS listener they are presented to `SslStream` as handshake input and normally fail the handshake.
+
+This is **not** the same as an HAProxy-recommended exclusive PROXY port. The PROXY specification discourages sharing one listener between public clients and PROXY senders (“MUST NOT guess” whether a header is present). Operators who want exclusive HAProxy access should restrict the listen address/firewall to trusted proxy IPs in addition to configuring `ProxyHosts`.
+
+Additional notes:
+
+- IPv4-mapped IPv6 peer addresses match a configured IPv4 entry (and vice versa after canonicalization).
+- Supported protocol: HAProxy PROXY protocol versions **1 and 2** (`docs/standards/haproxy/proxy-protocol.txt`).
+- TLS backend ordering: TCP accept → PROXY (when the peer is trusted) → TLS handshake → NNTP.
+- Connection-establishment PROXY gathering currently uses a large temporary buffer (up to the protocol maximum). That is a known allocation cost, not a steady-state data-path cost.
+
+Example:
+
+```json
+"ProxyHosts": [ "198.51.100.10", "2001:db8::proxy" ]
 ```
 
 ## TCP ports

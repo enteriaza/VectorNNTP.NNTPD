@@ -6,6 +6,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
@@ -24,6 +25,7 @@ public sealed class NntpConnection : INntpConnection
     private readonly Pipe _outputPipe;
     private readonly CancellationTokenSource _connectionCts = new();
     private readonly object _completeGate = new();
+    private readonly ConnectionClientIdentity _clientIdentity;
     private Socket? _socket;
     private SslStream? _sslStream;
     /// <summary>
@@ -31,6 +33,7 @@ public sealed class NntpConnection : INntpConnection
     /// this connection's <see cref="SslStream"/> while the connection is still alive.
     /// </summary>
     private TlsCertificateLease? _certificateLease;
+    private byte[]? _receivePrefix;
     private Task? _receiveTask;
     private Task? _sendTask;
     private int _completed;
@@ -41,12 +44,14 @@ public sealed class NntpConnection : INntpConnection
         EndPoint? remoteEndPoint,
         EndPoint? localEndPoint,
         bool isTls,
+        ConnectionClientIdentity clientIdentity,
         ILogger logger)
     {
         _socket = socket;
         RemoteEndPoint = remoteEndPoint;
         LocalEndPoint = localEndPoint;
         IsTls = isTls;
+        _clientIdentity = clientIdentity;
         _logger = logger;
         var options = NntpPipeOptions.Create();
         _inputPipe = new Pipe(options);
@@ -66,15 +71,23 @@ public sealed class NntpConnection : INntpConnection
     public EndPoint? LocalEndPoint { get; }
 
     /// <inheritdoc />
+    public ConnectionClientIdentity ClientIdentity => _clientIdentity;
+
+    /// <inheritdoc />
     public bool IsTls { get; }
 
     /// <inheritdoc />
     public CancellationToken ConnectionClosed => _connectionCts.Token;
 
     /// <summary>Creates and starts a plain TCP connection transport.</summary>
-    public static NntpConnection StartPlain(Socket socket, ILogger logger)
+    public static NntpConnection StartPlain(
+        Socket socket,
+        ConnectionClientIdentity clientIdentity,
+        ILogger logger,
+        ReadOnlyMemory<byte> receivePrefix = default)
     {
         ArgumentNullException.ThrowIfNull(socket);
+        ArgumentNullException.ThrowIfNull(clientIdentity);
         ArgumentNullException.ThrowIfNull(logger);
 
         ConfigureAcceptedSocket(socket);
@@ -83,7 +96,13 @@ public sealed class NntpConnection : INntpConnection
             TryGetRemote(socket),
             TryGetLocal(socket),
             isTls: false,
+            clientIdentity,
             logger);
+        if (!receivePrefix.IsEmpty)
+        {
+            connection._receivePrefix = receivePrefix.ToArray();
+        }
+
         connection.StartPumps();
         return connection;
     }
@@ -94,29 +113,37 @@ public sealed class NntpConnection : INntpConnection
     /// <remarks>
     /// Acquires a certificate context lease before the handshake and holds it until
     /// <see cref="DisposeAsync"/> so the leased context object outlives handshake-only use and remains
-    /// valid across later certificate publication/rotation.
+    /// valid across later certificate publication/rotation. Any PROXY leftover octets must already
+    /// have been consumed from the socket and supplied as <paramref name="tlsPrefix"/> so they are
+    /// presented to <see cref="SslStream"/> before subsequent socket reads.
     /// </remarks>
     public static async Task<NntpConnection> StartTlsAsync(
         Socket socket,
         ITlsCertificateContextProvider certificateProvider,
+        ConnectionClientIdentity clientIdentity,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> tlsPrefix = default)
     {
         ArgumentNullException.ThrowIfNull(socket);
         ArgumentNullException.ThrowIfNull(certificateProvider);
+        ArgumentNullException.ThrowIfNull(clientIdentity);
         ArgumentNullException.ThrowIfNull(logger);
 
         ConfigureAcceptedSocket(socket);
         var remote = TryGetRemote(socket);
         var local = TryGetLocal(socket);
-        var connection = new NntpConnection(socket, remote, local, isTls: true, logger);
+        var connection = new NntpConnection(socket, remote, local, isTls: true, clientIdentity, logger);
         // Connection-lifetime lease (not handshake-only); released in DisposeAsync.
         var lease = certificateProvider.Acquire();
         connection._certificateLease = lease;
 
         // NetworkStream does not own the socket; NntpConnection disposes the socket after SslStream.
         var networkStream = new NetworkStream(socket, ownsSocket: false);
-        var sslStream = new SslStream(networkStream, leaveInnerStreamOpen: false);
+        Stream sslInner = tlsPrefix.IsEmpty
+            ? networkStream
+            : new PrefixedStream(networkStream, tlsPrefix, leaveInnerOpen: false);
+        var sslStream = new SslStream(sslInner, leaveInnerStreamOpen: false);
         connection._sslStream = sslStream;
 
         try
@@ -274,6 +301,20 @@ public sealed class NntpConnection : INntpConnection
         var socket = _socket ?? throw new InvalidOperationException("Socket missing.");
         var writer = _inputPipe.Writer;
         var token = _connectionCts.Token;
+
+        var prefix = Interlocked.Exchange(ref _receivePrefix, null);
+        if (prefix is { Length: > 0 })
+        {
+            var memory = writer.GetMemory(prefix.Length);
+            prefix.CopyTo(memory);
+            writer.Advance(prefix.Length);
+            var prefixFlush = await writer.FlushAsync(token).ConfigureAwait(false);
+            if (prefixFlush.IsCompleted || prefixFlush.IsCanceled)
+            {
+                await writer.CompleteAsync().ConfigureAwait(false);
+                return;
+            }
+        }
 
         while (!token.IsCancellationRequested)
         {

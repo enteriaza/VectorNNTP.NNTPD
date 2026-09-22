@@ -36,6 +36,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateTimeouts(options, failures);
         ValidateSystemd(options, failures);
         ValidateBindAddresses(options, failures);
+        ValidateProxyHosts(options, failures);
         ValidatePorts(options, failures);
         ValidateCloudFlare(options, failures);
         ValidateDnsSuffixAndServerId(options, failures);
@@ -148,6 +149,44 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             {
                 failures.Add(
                     $"{nameof(NntpdOptions.BindAddress)}[{i}] '{FormatAddressForMessage(address)}' is not assigned to any local network interface.");
+            }
+        }
+    }
+
+    private static void ValidateProxyHosts(NntpdOptions options, List<string> failures)
+    {
+        if (options.ProxyHosts is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < options.ProxyHosts.Length; i++)
+        {
+            var entry = options.ProxyHosts[i];
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                failures.Add($"{nameof(NntpdOptions.ProxyHosts)}[{i}] must not be empty.");
+                continue;
+            }
+
+            var trimmed = entry.Trim();
+            if (trimmed.Contains('/') || trimmed.Contains('*'))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.ProxyHosts)}[{i}] must be a literal IPv4 or IPv6 address (CIDR and wildcards are not supported).");
+                continue;
+            }
+
+            if (!IPAddress.TryParse(trimmed, out var address))
+            {
+                failures.Add($"{nameof(NntpdOptions.ProxyHosts)}[{i}] is not a valid IPv4 or IPv6 address.");
+                continue;
+            }
+
+            if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.ProxyHosts)}[{i}] must not be an any-address wildcard; use an explicit proxy peer address.");
             }
         }
     }

@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.Hosting.Systemd;
 using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -39,6 +40,7 @@ public static class NntpdServiceCollectionExtensions
 
         services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
         services.TryAddSingleton<IBindAddressResolver, BindAddressResolver>();
+        services.TryAddSingleton<ITrustedProxyHosts, TrustedProxyHosts>();
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
 
@@ -83,6 +85,7 @@ public static class NntpdServiceCollectionExtensions
             {
                 options.Systemd ??= new SystemdOptions();
                 NormalizeBindAddresses(options);
+                NormalizeProxyHosts(options);
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
@@ -245,6 +248,20 @@ public static class NntpdServiceCollectionExtensions
         for (var i = 0; i < options.BindAddress.Length; i++)
         {
             options.BindAddress[i] = options.BindAddress[i]?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static void NormalizeProxyHosts(NntpdOptions options)
+    {
+        if (options.ProxyHosts is null)
+        {
+            options.ProxyHosts = [];
+            return;
+        }
+
+        for (var i = 0; i < options.ProxyHosts.Length; i++)
+        {
+            options.ProxyHosts[i] = options.ProxyHosts[i]?.Trim() ?? string.Empty;
         }
     }
 }

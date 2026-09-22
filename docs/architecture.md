@@ -56,9 +56,11 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - AcmeCertificateService (TLS/ACME when BindPortTls > 0)   │
 │  - NntpTlsListenerService (implicit TLS accept/transport)   │
 │  - Optional: PlaceholderApplicationService (tests only)     │
-│  - Later: NNTP session/command layer on INntpConnection     │
+│  - Later: NNTP command dispatcher on NntpSession            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer + effective client endpoint). When `ProxyHosts` is non-empty and the TCP peer is trusted, HAProxy PROXY v1/v2 is required on the cleartext socket before TLS/NNTP. Untrusted peers keep TCP identity; PROXY-looking bytes are left as application input and never rewrite client identity (intentional mixed-mode policy; exclusive PROXY ports remain a deployment/firewall choice). `NntpSession` exposes the effective client IP/port without re-parsing the transport.
 
 ## Cloudflare DNS reconciliation
 

@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Net;
+using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
@@ -24,11 +25,16 @@ public interface INntpConnection : IAsyncDisposable
     /// <summary>Gets the writer used by the application to send octets to the network.</summary>
     PipeWriter Output { get; }
 
-    /// <summary>Gets the remote endpoint when known.</summary>
+    /// <summary>Gets the remote TCP peer endpoint when known.</summary>
     EndPoint? RemoteEndPoint { get; }
 
     /// <summary>Gets the local endpoint when known.</summary>
     EndPoint? LocalEndPoint { get; }
+
+    /// <summary>
+    /// Gets the immutable effective client identity established at connection initialization.
+    /// </summary>
+    ConnectionClientIdentity ClientIdentity { get; }
 
     /// <summary>Gets a value indicating whether the connection is TLS-protected.</summary>
     bool IsTls { get; }

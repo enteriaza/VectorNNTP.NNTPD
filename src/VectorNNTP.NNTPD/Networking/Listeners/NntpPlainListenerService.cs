@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -17,6 +20,7 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 public sealed class NntpPlainListenerService : IApplicationService, IAsyncDisposable
 {
     private readonly IOptions<NntpdOptions> _options;
+    private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -29,13 +33,16 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     /// <summary>Initializes a new instance of the <see cref="NntpPlainListenerService"/> class.</summary>
     public NntpPlainListenerService(
         IOptions<NntpdOptions> options,
+        ITrustedProxyHosts trustedProxyHosts,
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(trustedProxyHosts);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
+        _trustedProxyHosts = trustedProxyHosts;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -50,7 +57,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     internal int ActiveConnectionCount => _connections.Count;
 
     /// <summary>Gets bound local endpoints after start (tests).</summary>
-    internal IReadOnlyList<System.Net.IPEndPoint> LocalEndPoints =>
+    internal IReadOnlyList<IPEndPoint> LocalEndPoints =>
         _listeners.Select(static l => l.LocalEndPoint).ToArray();
 
     /// <inheritdoc />
@@ -158,11 +165,49 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         NntpConnection? connection = null;
         try
         {
+            if (!ProxyPreambleResolver.TryGetTcpPeer(socket, out var tcpPeer))
+            {
+                _logger.LogDebug("Plain accept discarded: remote endpoint unavailable.");
+                return;
+            }
+
+            ProxyPreambleResolution preamble;
+            try
+            {
+                preamble = await ProxyPreambleResolver
+                    .ResolveAsync(socket, tcpPeer, _trustedProxyHosts, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ProxyProtocolException ex)
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Rejected plain connection from trusted proxy peer {TcpPeer}: invalid PROXY preamble.",
+                    tcpPeer);
+                return;
+            }
+
+            if (preamble.Identity.IsTrustedProxy)
+            {
+                _logger.LogInformation(
+                    "Accepted trusted HAProxy connection from {TcpPeer}; effective client {Client}.",
+                    preamble.Identity.TcpPeer,
+                    preamble.Identity.Client);
+            }
+
             connection = NntpConnection.StartPlain(
                 socket,
-                _loggerFactory.CreateLogger<NntpConnection>());
+                preamble.Identity,
+                _loggerFactory.CreateLogger<NntpConnection>(),
+                preamble.Leftover);
             _connections[connection] = 0;
-            _logger.LogDebug("Plain connection accepted from {Remote}.", connection.RemoteEndPoint);
+
+            // Session boundary: identity is available without inspecting the transport stream.
+            _ = new NntpSession(connection);
+            _logger.LogDebug(
+                "Plain connection accepted from {Remote}; client {Client}.",
+                connection.RemoteEndPoint,
+                connection.ClientIdentity.Client);
 
             try
             {

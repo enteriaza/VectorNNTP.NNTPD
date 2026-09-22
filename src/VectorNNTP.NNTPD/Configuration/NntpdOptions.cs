@@ -107,6 +107,23 @@ public sealed class NntpdOptions
     public SystemdOptions Systemd { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets trusted HAProxy PROXY-protocol peer addresses.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Optional. Each entry must be a literal IPv4 or IPv6 address (not a DNS name, not a CIDR).
+    /// When empty or omitted, PROXY protocol processing is disabled and every connection's
+    /// effective client endpoint is the TCP peer.
+    /// </para>
+    /// <para>
+    /// When non-empty, a TCP peer whose address matches an entry is treated as a trusted proxy
+    /// and must present a valid PROXY v1/v2 header before TLS/NNTP. Untrusted peers are not
+    /// permitted to supply PROXY metadata that replaces their TCP identity.
+    /// </para>
+    /// </remarks>
+    public string[] ProxyHosts { get; set; } = [];
+
+    /// <summary>
     /// Gets or sets the local listen addresses for NNTPD.
     /// </summary>
     /// <remarks>
