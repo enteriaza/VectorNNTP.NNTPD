@@ -13,8 +13,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </para>
 /// <para>
 /// MODE STREAM (RFC 4644 §2.3) is retained for legacy clients. It returns <c>203</c> and
-/// MUST NOT change session state. CHECK/TAKETHIS are gated by transit authorization and the
-/// advertised <c>STREAMING</c> capability — not by issuing MODE STREAM first.
+/// MUST NOT change session state. Authorization is <see cref="NntpCommandAccess.RequiresStreaming"/>
+/// (peer or authenticated streaming privilege). CHECK/TAKETHIS are gated by transit authorization
+/// and the advertised <c>STREAMING</c> capability — not by issuing MODE STREAM first.
 /// </para>
 /// </remarks>
 internal static class Mode
@@ -28,6 +29,7 @@ internal static class Mode
     /// <summary>Handles <c>MODE STREAM</c>.</summary>
     public static ValueTask HandleStreamAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
         NntpCommandExecution.RunAsync(Logger, context, "MODE STREAM", ExecuteStreamAsync, cancellationToken);
+
     private static async ValueTask ExecuteReaderAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
         // RFC 4643: client MUST NOT issue MODE READER after authentication; reject consistently.
@@ -66,13 +68,12 @@ internal static class Mode
         }
     }
 
-    private static ValueTask ExecuteStreamAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static async ValueTask ExecuteStreamAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        // RFC 4644 §2.3.2: MUST return 203 (or 501 with arguments — catalog enforces no args)
-        // and MUST NOT affect server state despite the command name.
-        return context.Response.WriteLineAsync(
-            NntpReplyCodes.StreamingPermitted,
-            "Streaming permitted",
-            cancellationToken);
+        // RFC 4644 §2.3.2: MUST return 203 and MUST NOT affect server state despite the name.
+        // StreamingPermitted is enforced by the dispatcher (RequiresStreaming).
+        await context.Response
+            .WriteLineAsync(NntpReplyCodes.StreamingPermitted, "Streaming permitted", cancellationToken)
+            .ConfigureAwait(false);
     }
 }

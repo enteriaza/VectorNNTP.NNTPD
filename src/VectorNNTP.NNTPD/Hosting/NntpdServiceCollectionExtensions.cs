@@ -14,6 +14,7 @@ using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 
 namespace VectorNNTP.NNTPD.Hosting;
@@ -47,6 +48,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
         // Real account backends replace this registration; default rejects all credentials.
         services.TryAddSingleton<INntpAuthenticationProvider>(DenyAllNntpAuthenticationProvider.Instance);
+        services.TryAddSingleton<ITransitPeerAuthorization, TransitPeerAuthorization>();
 
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {
@@ -89,8 +91,10 @@ public static class NntpdServiceCollectionExtensions
             {
                 options.Systemd ??= new SystemdOptions();
                 options.ArticleIngestion ??= new ArticleIngestionOptions();
+                options.Transit ??= new TransitOptions();
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
+                NormalizeTransitPeers(options);
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
@@ -274,6 +278,21 @@ public static class NntpdServiceCollectionExtensions
         for (var i = 0; i < options.ProxyHosts.Length; i++)
         {
             options.ProxyHosts[i] = options.ProxyHosts[i]?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static void NormalizeTransitPeers(NntpdOptions options)
+    {
+        options.Transit ??= new TransitOptions();
+        if (options.Transit.AllowedPeers is null)
+        {
+            options.Transit.AllowedPeers = [];
+            return;
+        }
+
+        for (var i = 0; i < options.Transit.AllowedPeers.Length; i++)
+        {
+            options.Transit.AllowedPeers[i] = options.Transit.AllowedPeers[i]?.Trim() ?? string.Empty;
         }
     }
 }

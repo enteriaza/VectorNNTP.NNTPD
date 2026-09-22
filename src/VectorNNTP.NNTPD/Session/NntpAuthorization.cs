@@ -18,6 +18,17 @@ public sealed class NntpAuthorization
         postingPermitted: false,
         streamingPermitted: false);
 
+    /// <summary>
+    /// Unauthenticated transit/streaming peer privileges (ACL match).
+    /// Does not grant reader access, posting, or <see cref="IsAuthenticated"/>.
+    /// </summary>
+    public static NntpAuthorization TrustedTransitPeer { get; } = new(
+        isAuthenticated: false,
+        authorizedReader: false,
+        authorizedTransit: true,
+        postingPermitted: false,
+        streamingPermitted: true);
+
     /// <summary>Initializes a new instance of the <see cref="NntpAuthorization"/> class.</summary>
     public NntpAuthorization(
         bool isAuthenticated,

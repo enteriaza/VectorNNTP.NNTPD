@@ -91,7 +91,7 @@ public static class DefaultNntpCommandCatalog
             "MODE", NntpCommandAccess.Public, Mode.HandleReaderAsync, "READER", modeLog));
         registry.Register(new NntpCommandDescriptor(
             "MODE",
-            NntpCommandAccess.RequiresAuthentication | NntpCommandAccess.RequiresTransit | NntpCommandAccess.RequiresStreaming,
+            NntpCommandAccess.RequiresStreaming,
             Mode.HandleStreamAsync,
             "STREAM",
             modeLog));
@@ -175,8 +175,8 @@ public static class DefaultNntpCommandCatalog
             Post.HandleAsync,
             logger: postLog));
 
-        // Streaming / transit
-        var transitAccess = NntpCommandAccess.RequiresAuthentication | NntpCommandAccess.RequiresTransit;
+        // Streaming / transit — peer privilege (RequiresTransit / RequiresStreaming), not AUTHINFO.
+        var transitAccess = NntpCommandAccess.RequiresTransit;
         registry.Register(new NntpCommandDescriptor("IHAVE", transitAccess, IHave.HandleAsync, logger: iHaveLog));
         registry.Register(new NntpCommandDescriptor("CHECK", transitAccess, Check.HandleAsync, logger: checkLog));
         registry.Register(new NntpCommandDescriptor("TAKETHIS", transitAccess, TakeThis.HandleAsync, logger: takeThisLog));

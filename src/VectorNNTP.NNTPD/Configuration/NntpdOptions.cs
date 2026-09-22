@@ -317,6 +317,16 @@ public sealed class NntpdOptions
     }
 
     /// <summary>
+    /// Gets or sets transit/streaming peer authorization options.
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="TransitOptions"/>. Default empty = no trusted transit peers.
+    /// Grants peer privileges, not user authentication. Distinct from <see cref="ProxyHosts"/>.
+    /// </remarks>
+    [Required]
+    public TransitOptions Transit { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets article ingestion / incoming spool options.
     /// </summary>
     /// <remarks>

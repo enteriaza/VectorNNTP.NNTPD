@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
@@ -101,6 +102,7 @@ public sealed class ConnectionAcceptanceLoggingTests
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             DenyAllNntpAuthenticationProvider.Instance,
             DisabledArticleIngestionQueue.Instance,
+            TransitPeerAuthorization.Disabled,
             NullLoggerFactory.Instance,
             recording);
 

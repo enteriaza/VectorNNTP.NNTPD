@@ -17,11 +17,14 @@ namespace VectorNNTP.NNTPD.Session;
 /// Transport owns sockets, TLS, DEFLATE, PROXY identity, and connection lifecycle.
 /// This type owns NNTP protocol sequencing and does not touch sockets or stream wrappers directly.
 /// Authentication and authorization are distinct; AUTHINFO success applies only provider-returned privileges.
+/// Connection-time <see cref="ITransitPeerAuthorization"/> may grant transit/streaming peer privileges
+/// without authentication.
 /// </remarks>
 public sealed class NntpSession
 {
     private readonly ILogger<NntpSession> _logger;
     private readonly NntpCommandDispatcher _dispatcher;
+    private readonly NntpAuthorization _connectionAuthorization;
     private NntpResponseWriter? _response;
     private NntpAuthorization _authorization;
     private NntpAuthenticationState _authentication;
@@ -38,14 +41,17 @@ public sealed class NntpSession
         INntpAuthenticationProvider? authenticationProvider = null,
         bool allowCleartextAuth = true,
         ILoggerFactory? loggerFactory = null,
-        IArticleIngestionQueue? articleIngestion = null)
+        IArticleIngestionQueue? articleIngestion = null,
+        ITransitPeerAuthorization? transitPeerAuthorization = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
         Connection = connection;
         ClientIdentity = connection.ClientIdentity;
         _logger = logger;
-        _authorization = NntpAuthorization.Unauthenticated;
+        _connectionAuthorization = (transitPeerAuthorization ?? TransitPeerAuthorization.Disabled)
+            .Resolve(ClientIdentity.ClientAddress);
+        _authorization = _connectionAuthorization;
         _authentication = NntpAuthenticationState.Unauthenticated;
         _mode = NntpSessionMode.Unspecified;
         AllowCleartextAuth = allowCleartextAuth;
@@ -146,14 +152,14 @@ public sealed class NntpSession
     }
 
     /// <summary>
-    /// Records a failed authentication attempt: session remains unauthenticated with default-deny
-    /// authorization. Pending USER is retained so the client may retry <c>AUTHINFO PASS</c>
-    /// or issue a new <c>AUTHINFO USER</c>.
+    /// Records a failed authentication attempt: session remains unauthenticated.
+    /// Connection-time peer privileges (if any) are restored; pending USER is retained so the
+    /// client may retry <c>AUTHINFO PASS</c> or issue a new <c>AUTHINFO USER</c>.
     /// </summary>
     public void ApplyFailedAuthentication()
     {
         _authentication = NntpAuthenticationState.Unauthenticated;
-        _authorization = NntpAuthorization.Unauthenticated;
+        _authorization = _connectionAuthorization;
     }
 
     /// <summary>Requests the command loop to exit after the current response (e.g. QUIT).</summary>

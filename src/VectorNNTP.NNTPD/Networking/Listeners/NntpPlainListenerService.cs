@@ -27,6 +27,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly ITlsCertificateContextProvider _certificateProvider;
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
+    private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -43,6 +44,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ITlsCertificateContextProvider certificateProvider,
         INntpAuthenticationProvider authenticationProvider,
         IArticleIngestionQueue articleIngestion,
+        ITransitPeerAuthorization transitPeerAuthorization,
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger)
     {
@@ -51,6 +53,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ArgumentNullException.ThrowIfNull(certificateProvider);
         ArgumentNullException.ThrowIfNull(authenticationProvider);
         ArgumentNullException.ThrowIfNull(articleIngestion);
+        ArgumentNullException.ThrowIfNull(transitPeerAuthorization);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
@@ -58,6 +61,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _certificateProvider = certificateProvider;
         _authenticationProvider = authenticationProvider;
         _articleIngestion = articleIngestion;
+        _transitPeerAuthorization = transitPeerAuthorization;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -217,7 +221,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory,
-                articleIngestion: _articleIngestion);
+                articleIngestion: _articleIngestion,
+                transitPeerAuthorization: _transitPeerAuthorization);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             try

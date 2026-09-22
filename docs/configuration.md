@@ -32,6 +32,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Bounded in-memory ingestion queue size (`1–100000`) |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
+| `Transit:AllowedPeers` | string array | `[]` (empty) | no | Effective client IPs trusted as **transit/streaming peers**. Grants `AuthorizedTransit` + `StreamingPermitted` without authentication (not user identity). Does **not** grant reader, posting, or `IsAuthenticated`. Distinct from `ProxyHosts`. Literal IPv4/IPv6 only (no CIDR/DNS). Empty = deny-by-default. Matched against `ConnectionClientIdentity.ClientAddress` (PROXY effective client when used). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -115,6 +116,31 @@ Example:
 
 ```json
 "ProxyHosts": [ "198.51.100.10", "2001:db8::proxy" ]
+```
+
+## Transit:AllowedPeers (trusted feed peers)
+
+`Transit:AllowedPeers` is an optional JSON array of **literal** IPv4/IPv6 addresses for NNTP peers trusted to offer articles (transit/streaming). This is **peer authorization**, not user authentication.
+
+| Situation | Behavior |
+|-----------|----------|
+| Omitted / `[]` | Deny-by-default. Sessions start with no transit/streaming privileges. |
+| Effective client matches an entry | Session starts with `AuthorizedTransit` + `StreamingPermitted`, still `IsAuthenticated = false`, no reader/posting. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE` without AUTHINFO. |
+| Effective client does not match | Same as empty list for that connection. |
+
+Notes:
+
+- Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source when the TCP peer is a trusted `ProxyHosts` entry).
+- **Not** the same as `ProxyHosts`. `ProxyHosts` only controls whether PROXY headers are trusted; it does not grant feed privileges.
+- DNS names and CIDR prefixes are not supported in this version.
+- AUTHINFO remains an independent user-authentication path.
+
+Example:
+
+```json
+"Transit": {
+  "AllowedPeers": [ "198.18.0.70", "2001:db8::feed" ]
+}
 ```
 
 ## TCP ports

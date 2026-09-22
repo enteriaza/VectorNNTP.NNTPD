@@ -42,10 +42,54 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateDnsSuffixAndServerId(options, failures);
         ValidateAcme(options, failures);
         ValidateArticleIngestion(options, failures);
+        ValidateTransit(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
+    }
+
+    private static void ValidateTransit(NntpdOptions options, List<string> failures)
+    {
+        var transit = options.Transit ?? new TransitOptions();
+        var entries = transit.AllowedPeers;
+        if (entries is null)
+        {
+            failures.Add($"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)} must not be null.");
+            return;
+        }
+
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var entry = entries[i];
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)}[{i}] must not be empty.");
+                continue;
+            }
+
+            var trimmed = entry.Trim();
+            if (trimmed.Contains('/') || trimmed.Contains('*') || trimmed.Contains('+'))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)}[{i}] must be a literal IPv4 or IPv6 address (CIDR and wildcards are not supported).");
+                continue;
+            }
+
+            if (!IPAddress.TryParse(trimmed, out var address))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)}[{i}] is not a valid IPv4 or IPv6 address.");
+                continue;
+            }
+
+            if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)}[{i}] must not be an any-address wildcard; use an explicit peer address.");
+            }
+        }
     }
 
     private static void ValidateArticleIngestion(NntpdOptions options, List<string> failures)

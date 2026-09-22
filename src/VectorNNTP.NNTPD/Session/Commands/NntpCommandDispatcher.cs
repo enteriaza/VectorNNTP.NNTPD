@@ -131,15 +131,15 @@ public sealed class NntpCommandDispatcher
 
         if (access.HasFlag(NntpCommandAccess.RequiresStreaming) && !authz.StreamingPermitted)
         {
-            await response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Streaming not permitted", cancellationToken)
-                .ConfigureAwait(false);
+            var code = authz.IsAuthenticated ? NntpReplyCodes.CommandUnavailable : NntpReplyCodes.AuthenticationRequired;
+            var text = authz.IsAuthenticated ? "Streaming not permitted" : "Authentication required";
+            await response.WriteLineAsync(code, text, cancellationToken).ConfigureAwait(false);
             NntpCommandExecution.WriteCompletion(
                 descriptor.Logger,
                 session,
                 descriptor.RegistryKey,
                 Stopwatch.GetElapsedTime(gateStarted),
-                "streaming not permitted");
+                authz.IsAuthenticated ? "streaming not permitted" : "authentication required");
             return;
         }
 

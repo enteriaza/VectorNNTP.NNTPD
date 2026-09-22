@@ -29,6 +29,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
+    private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -45,6 +46,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ITrustedProxyHosts trustedProxyHosts,
         INntpAuthenticationProvider authenticationProvider,
         IArticleIngestionQueue articleIngestion,
+        ITransitPeerAuthorization transitPeerAuthorization,
         ILoggerFactory loggerFactory,
         ILogger<NntpTlsListenerService> logger)
     {
@@ -53,6 +55,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
         ArgumentNullException.ThrowIfNull(authenticationProvider);
         ArgumentNullException.ThrowIfNull(articleIngestion);
+        ArgumentNullException.ThrowIfNull(transitPeerAuthorization);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
@@ -60,6 +63,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _certificateProvider = certificateProvider;
         _trustedProxyHosts = trustedProxyHosts;
         _articleIngestion = articleIngestion;
+        _transitPeerAuthorization = transitPeerAuthorization;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -236,7 +240,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory,
-                articleIngestion: _articleIngestion);
+                articleIngestion: _articleIngestion,
+                transitPeerAuthorization: _transitPeerAuthorization);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {
