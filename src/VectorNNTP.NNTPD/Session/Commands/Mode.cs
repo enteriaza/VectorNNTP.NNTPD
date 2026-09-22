@@ -12,8 +12,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// MODE READER is rejected (RFC 4643).
 /// </para>
 /// <para>
-/// MODE STREAM is registered for STREAMING clients; RFC 4644 deprecates requiring it before
-/// CHECK/TAKETHIS. The STREAM handler is a deliberate placeholder until streaming mode state is implemented.
+/// MODE STREAM (RFC 4644 §2.3) is retained for legacy clients. It returns <c>203</c> and
+/// MUST NOT change session state. CHECK/TAKETHIS are gated by transit authorization and the
+/// advertised <c>STREAMING</c> capability — not by issuing MODE STREAM first.
 /// </para>
 /// </remarks>
 internal static class Mode
@@ -26,14 +27,7 @@ internal static class Mode
 
     /// <summary>Handles <c>MODE STREAM</c>.</summary>
     public static ValueTask HandleStreamAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
-            context,
-            "MODE STREAM",
-            ExecuteStreamAsync,
-            cancellationToken,
-            successDetail: "not implemented");
-
+        NntpCommandExecution.RunAsync(Logger, context, "MODE STREAM", ExecuteStreamAsync, cancellationToken);
     private static async ValueTask ExecuteReaderAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
         // RFC 4643: client MUST NOT issue MODE READER after authentication; reject consistently.
@@ -72,9 +66,13 @@ internal static class Mode
         }
     }
 
-    private static ValueTask ExecuteStreamAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        context.Response.WriteLineAsync(
-            NntpReplyCodes.SyntaxError,
-            "MODE STREAM not implemented",
+    private static ValueTask ExecuteStreamAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    {
+        // RFC 4644 §2.3.2: MUST return 203 (or 501 with arguments — catalog enforces no args)
+        // and MUST NOT affect server state despite the command name.
+        return context.Response.WriteLineAsync(
+            NntpReplyCodes.StreamingPermitted,
+            "Streaming permitted",
             cancellationToken);
+    }
 }

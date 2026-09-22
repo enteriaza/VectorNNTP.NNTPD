@@ -6,6 +6,7 @@ using System.Security.Authentication;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -99,6 +100,7 @@ public sealed class ConnectionAcceptanceLoggingTests
             new TrustedProxyHosts(Options.Create(options)),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             DenyAllNntpAuthenticationProvider.Instance,
+            DisabledArticleIngestionQueue.Instance,
             NullLoggerFactory.Instance,
             recording);
 

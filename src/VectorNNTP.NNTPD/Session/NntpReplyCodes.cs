@@ -24,8 +24,20 @@ public static class NntpReplyCodes
     /// <summary>Compression layer activated (COMPRESS; RFC 8054).</summary>
     public const int CompressionActive = 206;
 
+    /// <summary>Streaming permitted (MODE STREAM; RFC 4644 §2.3).</summary>
+    public const int StreamingPermitted = 203;
+
     /// <summary>Article follows (ARTICLE; RFC 3977 §6.2.1).</summary>
     public const int ArticleFollows = 220;
+
+    /// <summary>Article transferred OK (TAKETHIS; RFC 4644 §2.5).</summary>
+    public const int ArticleTransferredOk = 239;
+
+    /// <summary>Service temporarily unavailable (close connection; RFC 4644 §2.5).</summary>
+    public const int ServiceTemporarilyUnavailable = 400;
+
+    /// <summary>Transfer rejected; do not retry (TAKETHIS; RFC 4644 §2.5).</summary>
+    public const int TransferRejected = 439;
 
     /// <summary>Authentication accepted (AUTHINFO).</summary>
     public const int AuthenticationAccepted = 281;

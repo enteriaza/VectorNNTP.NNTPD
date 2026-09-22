@@ -8,6 +8,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
@@ -312,6 +313,7 @@ public sealed class NntpPlainTransportTests
             new TrustedProxyHosts(Options.Create(options)),
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             DenyAllNntpAuthenticationProvider.Instance,
+            DisabledArticleIngestionQueue.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpPlainListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -344,6 +346,7 @@ public sealed class NntpTlsTransportTests
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             new TrustedProxyHosts(Options.Create(options)),
             DenyAllNntpAuthenticationProvider.Instance,
+            DisabledArticleIngestionQueue.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -361,6 +364,7 @@ public sealed class NntpTlsTransportTests
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
             new TrustedProxyHosts(Options.Create(options)),
             DenyAllNntpAuthenticationProvider.Instance,
+            DisabledArticleIngestionQueue.Instance,
             NullLoggerFactory.Instance,
             NullLogger<NntpTlsListenerService>.Instance);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));

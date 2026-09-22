@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -27,6 +28,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ITlsCertificateContextProvider _certificateProvider;
     private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly INntpAuthenticationProvider _authenticationProvider;
+    private readonly IArticleIngestionQueue _articleIngestion;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -42,6 +44,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ITlsCertificateContextProvider certificateProvider,
         ITrustedProxyHosts trustedProxyHosts,
         INntpAuthenticationProvider authenticationProvider,
+        IArticleIngestionQueue articleIngestion,
         ILoggerFactory loggerFactory,
         ILogger<NntpTlsListenerService> logger)
     {
@@ -49,12 +52,14 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ArgumentNullException.ThrowIfNull(certificateProvider);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
         ArgumentNullException.ThrowIfNull(authenticationProvider);
+        ArgumentNullException.ThrowIfNull(articleIngestion);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _authenticationProvider = authenticationProvider;
         _certificateProvider = certificateProvider;
         _trustedProxyHosts = trustedProxyHosts;
+        _articleIngestion = articleIngestion;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -230,7 +235,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 certificateProvider: _certificateProvider,
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
-                loggerFactory: _loggerFactory);
+                loggerFactory: _loggerFactory,
+                articleIngestion: _articleIngestion);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

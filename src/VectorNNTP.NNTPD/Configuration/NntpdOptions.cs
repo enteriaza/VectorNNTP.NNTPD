@@ -317,6 +317,16 @@ public sealed class NntpdOptions
     }
 
     /// <summary>
+    /// Gets or sets article ingestion / incoming spool options.
+    /// </summary>
+    /// <remarks>
+    /// Defaults: queue capacity 256, max article 4 MiB, directory <c>spool/incoming</c>.
+    /// Used by <c>TAKETHIS</c> (and later <c>POST</c>).
+    /// </remarks>
+    [Required]
+    public ArticleIngestionOptions ArticleIngestion { get; set; } = new();
+
+    /// <summary>
     /// Returns whether a bind-address entry is a wildcard (all interfaces / any-address).
     /// </summary>
     public static bool IsBindAddressWildcard(string entry)

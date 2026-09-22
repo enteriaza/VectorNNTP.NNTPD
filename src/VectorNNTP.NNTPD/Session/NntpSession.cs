@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.Logging;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -36,7 +37,8 @@ public sealed class NntpSession
         ITlsCertificateContextProvider? certificateProvider = null,
         INntpAuthenticationProvider? authenticationProvider = null,
         bool allowCleartextAuth = true,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IArticleIngestionQueue? articleIngestion = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -48,6 +50,7 @@ public sealed class NntpSession
         _mode = NntpSessionMode.Unspecified;
         AllowCleartextAuth = allowCleartextAuth;
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
+        ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
         registry ??= DefaultNntpCommandCatalog.Create(
             certificateProvider,
             AuthenticationProvider,
@@ -60,6 +63,11 @@ public sealed class NntpSession
 
     /// <summary>Gets the immutable client identity established at connection start.</summary>
     public ConnectionClientIdentity ClientIdentity { get; }
+
+    /// <summary>
+    /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, later <c>POST</c>).
+    /// </summary>
+    public IArticleIngestionQueue ArticleIngestion { get; }
 
     /// <summary>Gets the effective client IP address for this session.</summary>
     public IPAddress ClientAddress => ClientIdentity.ClientAddress;
@@ -213,6 +221,18 @@ public sealed class NntpSession
         }
         finally
         {
+            if (_response is not null)
+            {
+                try
+                {
+                    await _response.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+            }
+
             try
             {
                 await Connection.CompleteAsync().ConfigureAwait(false);

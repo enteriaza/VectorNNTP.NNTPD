@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -125,9 +126,10 @@ public sealed class CloudflareDnsReconciliationServiceTests
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(CloudflareDnsReconciliationService), services[0].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[1].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[2].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[3].GetType());
+        Assert.Equal(typeof(IncomingSpoolWriterService), services[1].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[2].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[3].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[4].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -25,6 +26,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly ITlsCertificateContextProvider _certificateProvider;
     private readonly INntpAuthenticationProvider _authenticationProvider;
+    private readonly IArticleIngestionQueue _articleIngestion;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -40,6 +42,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ITrustedProxyHosts trustedProxyHosts,
         ITlsCertificateContextProvider certificateProvider,
         INntpAuthenticationProvider authenticationProvider,
+        IArticleIngestionQueue articleIngestion,
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger)
     {
@@ -47,12 +50,14 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
         ArgumentNullException.ThrowIfNull(certificateProvider);
         ArgumentNullException.ThrowIfNull(authenticationProvider);
+        ArgumentNullException.ThrowIfNull(articleIngestion);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _options = options;
         _trustedProxyHosts = trustedProxyHosts;
         _certificateProvider = certificateProvider;
         _authenticationProvider = authenticationProvider;
+        _articleIngestion = articleIngestion;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -211,7 +216,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 certificateProvider: _certificateProvider,
                 authenticationProvider: _authenticationProvider,
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
-                loggerFactory: _loggerFactory);
+                loggerFactory: _loggerFactory,
+                articleIngestion: _articleIngestion);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             try

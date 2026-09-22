@@ -16,15 +16,16 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] MODE READER
 [x] HELP
 [x] DATE
+[x] MODE STREAM
 [x] QUIT
 [x] STARTTLS
 [x] COMPRESS DEFLATE
+[x] TAKETHIS
 ```
 
 ## Placeholder (registered, not implemented)
 
 ```text
-[ ] MODE STREAM
 [ ] AUTHINFO SASL
 [ ] LIST
 [ ] GROUP
@@ -42,7 +43,6 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [ ] POST
 [ ] IHAVE
 [ ] CHECK
-[ ] TAKETHIS
 ```
 
 ## File map
@@ -71,5 +71,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 | `IHave.cs` | IHAVE |
 | `Check.cs` | CHECK |
 | `TakeThis.cs` | TAKETHIS |
+
+Article ingestion (TAKETHIS → bounded queue → `spool/incoming`) lives under `ArticleIngestion/`.
 
 Registration lives in `DefaultNntpCommandCatalog.cs` (descriptors + authorization metadata only).

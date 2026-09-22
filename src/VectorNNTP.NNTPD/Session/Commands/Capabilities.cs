@@ -7,9 +7,10 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// CAPABILITIES command as defined by RFC 3977, Section 5.2.
 /// </summary>
 /// <remarks>
-/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, and related labels).
+/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, STREAMING, and related labels).
 /// Advertisement of AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
 /// COMPRESS / STARTTLS / MODE-READER / AUTHINFO arguments follow RFC 8054 once a compression layer is active.
+/// STREAMING (RFC 4644) is advertised when TAKETHIS/CHECK streaming transfer is implemented.
 /// </remarks>
 internal static class Capabilities
 {
@@ -82,6 +83,9 @@ internal static class Capabilities
             await context.Response.WriteMultilineDataAsync("COMPRESS DEFLATE", cancellationToken)
                 .ConfigureAwait(false);
         }
+
+        // RFC 4644 §2.2: STREAMING capability for CHECK/TAKETHIS (MODE STREAM is legacy discovery).
+        await context.Response.WriteMultilineDataAsync("STREAMING", cancellationToken).ConfigureAwait(false);
 
         await context.Response.WriteMultilineEndAsync(cancellationToken).ConfigureAwait(false);
     }

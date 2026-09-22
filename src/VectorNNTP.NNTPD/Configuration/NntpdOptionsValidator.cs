@@ -41,10 +41,34 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateCloudFlare(options, failures);
         ValidateDnsSuffixAndServerId(options, failures);
         ValidateAcme(options, failures);
+        ValidateArticleIngestion(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
+    }
+
+    private static void ValidateArticleIngestion(NntpdOptions options, List<string> failures)
+    {
+        var ingestion = options.ArticleIngestion ?? new ArticleIngestionOptions();
+        if (string.IsNullOrWhiteSpace(ingestion.IncomingDirectory))
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.IncomingDirectory)} must be a non-empty path.");
+        }
+        else if (ingestion.IncomingDirectory.Length > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.IncomingDirectory)} must be 512 characters or fewer.");
+        }
+
+        if (ingestion.QueueCapacity is < 1 or > 100_000)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.QueueCapacity)} must be between 1 and 100000.");
+        }
+
+        if (ingestion.MaxArticleBytes is < 1 or > 100 * 1024 * 1024)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxArticleBytes)} must be between 1 and 104857600.");
+        }
     }
 
     private static void ValidateApplicationName(NntpdOptions options, List<string> failures)

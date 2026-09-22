@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -87,6 +88,7 @@ public static class NntpdServiceCollectionExtensions
             .PostConfigure(static options =>
             {
                 options.Systemd ??= new SystemdOptions();
+                options.ArticleIngestion ??= new ArticleIngestionOptions();
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
             });
@@ -99,9 +101,16 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → plain NNTP listener → ACME (publish TLS context) → TLS NNTP listener.
+        // Cloudflare DNS → incoming spool writer → plain NNTP listener → ACME → TLS NNTP listener.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
+
+        services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
+        services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
+        services.TryAddSingleton<IncomingSpoolWriterService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, IncomingSpoolWriterService>(static sp =>
+                sp.GetRequiredService<IncomingSpoolWriterService>()));
 
         services.TryAddSingleton<NntpPlainListenerService>();
         services.TryAddEnumerable(

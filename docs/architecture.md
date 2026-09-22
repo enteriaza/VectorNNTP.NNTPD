@@ -69,12 +69,28 @@ Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer
 
 Session concepts (distinct):
 
-- **Mode:** `Unspecified` | `Reader` | `Stream` (`MODE READER` / future `MODE STREAM`)
+- **Mode:** `Unspecified` | `Reader` | `Stream` (`MODE READER`; `MODE STREAM` is RFC 4644 legacy discovery and does **not** change mode)
 - **Authentication:** `NntpAuthenticationState` (identity after successful AUTHINFO); pending `AUTHINFO USER` username is separate and does not authenticate
 - **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`). Defaults: unauthenticated; streaming and posting denied. `MODE STREAM` additionally requires `StreamingPermitted` (distinct from transit authorization). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
 - **Dispatch:** `NntpCommandRegistry` + `NntpCommandDispatcher` apply a fixed gate order: resolve → authentication → authorization → mode → handler.
 
-Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md` for the full inventory checklist). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/streaming verbs are registered placeholders (`500` / `501` after authz gates). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
+Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions: multiline article receive → bounded in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/`IHAVE`/`CHECK` remain registered placeholders (`500` / `501` after authz gates). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
+
+### Article ingestion (TAKETHIS)
+
+```text
+TAKETHIS
+   ↓
+read/unstuff multiline article (session receive path)
+   ↓
+bounded in-memory ingestion queue
+   ↓
+background IncomingSpoolWriterService
+   ↓
+spool/incoming
+```
+
+`239`/`439` status lines are enqueued on the session's ordered response writer without waiting for network delivery, so pipelined TAKETHIS can continue receiving the next article. Disk I/O is never on the TAKETHIS receive critical path.
 
 AUTHINFO flow:
 
@@ -242,4 +258,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP storage, article/group data plane, posting, streaming feed handlers (`MODE STREAM` / `IHAVE` / `CHECK` / `TAKETHIS`), AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), and the session authorization gates are in place.
+NNTP article/group data plane, posting, `IHAVE`/`CHECK`, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), and the session authorization gates are in place.
