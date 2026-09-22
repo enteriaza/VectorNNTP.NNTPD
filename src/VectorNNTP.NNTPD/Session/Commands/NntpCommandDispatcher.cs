@@ -33,26 +33,21 @@ public sealed class NntpCommandDispatcher
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(response);
 
-        var status = _registry.Resolve(parsed, out var descriptor, out var arguments);
-        switch (status)
+        if (!_registry.TryResolve(parsed, out var descriptor, out var arguments, out var status))
         {
-            case NntpCommandResolveStatus.UnknownCommand:
-                await response
-                    .WriteLineAsync(NntpReplyCodes.UnknownCommand, "Unknown command", cancellationToken)
-                    .ConfigureAwait(false);
-                return;
-            case NntpCommandResolveStatus.UnknownSubcommand:
-                await response
-                    .WriteLineAsync(NntpReplyCodes.SyntaxError, "Unknown command variant", cancellationToken)
-                    .ConfigureAwait(false);
-                return;
-            case NntpCommandResolveStatus.Found when descriptor is not null:
-                break;
-            default:
-                await response
-                    .WriteLineAsync(NntpReplyCodes.UnknownCommand, "Unknown command", cancellationToken)
-                    .ConfigureAwait(false);
-                return;
+            switch (status)
+            {
+                case NntpCommandResolveStatus.UnknownSubcommand:
+                    await response
+                        .WriteLineAsync(NntpReplyCodes.SyntaxError, "Unknown command variant", cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+                default:
+                    await response
+                        .WriteLineAsync(NntpReplyCodes.UnknownCommand, "Unknown command", cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+            }
         }
 
         var access = descriptor.Access;

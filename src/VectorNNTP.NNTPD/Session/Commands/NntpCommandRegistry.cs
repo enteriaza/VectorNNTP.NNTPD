@@ -46,12 +46,30 @@ public sealed class NntpCommandRegistry
     }
 
     /// <summary>
-    /// Resolves a parsed command. Prefer verb+first-token exact match (e.g. AUTHINFO USER), then verb-only.
+    /// Gets all registered registry keys (verb, or <c>VERB SUBCOMMAND</c>), ordered for stable inventory tests.
     /// </summary>
-    public NntpCommandResolveStatus Resolve(
+    public IReadOnlyList<string> GetRegisteredKeys()
+    {
+        var keys = new List<string>(_exact.Count + _verbOnly.Count);
+        keys.AddRange(_exact.Keys);
+        keys.AddRange(_verbOnly.Keys);
+        keys.Sort(StringComparer.Ordinal);
+        return keys;
+    }
+
+    /// <summary>
+    /// Attempts to resolve a parsed command. Prefer verb+first-token exact match (e.g. AUTHINFO USER), then verb-only.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when a descriptor was found; <paramref name="descriptor"/> is then non-null.
+    /// When <see langword="false"/>, <paramref name="status"/> is <see cref="NntpCommandResolveStatus.UnknownCommand"/>
+    /// or <see cref="NntpCommandResolveStatus.UnknownSubcommand"/>.
+    /// </returns>
+    public bool TryResolve(
         NntpParsedCommand parsed,
         [NotNullWhen(true)] out NntpCommandDescriptor? descriptor,
-        out IReadOnlyList<string> handlerArguments)
+        out IReadOnlyList<string> handlerArguments,
+        out NntpCommandResolveStatus status)
     {
         if (parsed.Tokens.Count > 0)
         {
@@ -61,23 +79,23 @@ public sealed class NntpCommandRegistry
                 handlerArguments = parsed.Tokens.Count == 1
                     ? Array.Empty<string>()
                     : parsed.Tokens.Skip(1).ToArray();
-                return NntpCommandResolveStatus.Found;
+                status = NntpCommandResolveStatus.Found;
+                return true;
             }
         }
 
         if (_verbOnly.TryGetValue(parsed.Verb, out descriptor))
         {
             handlerArguments = parsed.Tokens;
-            return NntpCommandResolveStatus.Found;
+            status = NntpCommandResolveStatus.Found;
+            return true;
         }
 
         descriptor = null;
         handlerArguments = Array.Empty<string>();
-        if (_knownVerbs.Contains(parsed.Verb))
-        {
-            return NntpCommandResolveStatus.UnknownSubcommand;
-        }
-
-        return NntpCommandResolveStatus.UnknownCommand;
+        status = _knownVerbs.Contains(parsed.Verb)
+            ? NntpCommandResolveStatus.UnknownSubcommand
+            : NntpCommandResolveStatus.UnknownCommand;
+        return false;
     }
 }
