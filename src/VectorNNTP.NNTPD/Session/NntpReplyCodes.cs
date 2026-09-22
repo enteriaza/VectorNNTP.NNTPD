@@ -24,6 +24,9 @@ public static class NntpReplyCodes
     /// <summary>Compression layer activated (COMPRESS; RFC 8054).</summary>
     public const int CompressionActive = 206;
 
+    /// <summary>Article follows (ARTICLE; RFC 3977 §6.2.1).</summary>
+    public const int ArticleFollows = 220;
+
     /// <summary>Authentication accepted (AUTHINFO).</summary>
     public const int AuthenticationAccepted = 281;
 

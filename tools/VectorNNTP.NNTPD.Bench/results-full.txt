@@ -1,0 +1,139 @@
+VectorNNTP.NNTPD.Bench — temporary real-TCP BENCHIT harness
+Host=198.18.0.66 PlainPort=1199 TlsPort=5633 Warmup=5s Measure=60s Runs=2
+ArticleBytes(expected)=768000 ServerPid=18592
+
+=== plain × 1 conn × run 1/2 ===
+requests=157641 (2627.3/s)  logical=16.142 Gbit/s  wire=16.144 Gbit/s  comp=-  p50=0.37ms p95=0.43ms p99=0.52ms max=4.15ms
+server CPU≈4.5%  cpuTime=64.77s  WS=87 MB  GC0/1/2=//
+
+=== plain × 1 conn × run 2/2 ===
+requests=155524 (2592.1/s)  logical=15.926 Gbit/s  wire=15.927 Gbit/s  comp=-  p50=0.37ms p95=0.44ms p99=0.55ms max=2.92ms
+server CPU≈4.5%  cpuTime=64.95s  WS=87 MB  GC0/1/2=//
+
+=== plain × 10 conn × run 1/2 ===
+requests=1219528 (20325.3/s)  logical=124.879 Gbit/s  wire=124.888 Gbit/s  comp=-  p50=0.49ms p95=0.56ms p99=0.64ms max=29.41ms
+server CPU≈41.8%  cpuTime=602.20s  WS=92 MB  GC0/1/2=//
+
+=== plain × 10 conn × run 2/2 ===
+requests=1217232 (20287.0/s)  logical=124.644 Gbit/s  wire=124.653 Gbit/s  comp=-  p50=0.49ms p95=0.57ms p99=0.65ms max=16.58ms
+server CPU≈42.5%  cpuTime=611.47s  WS=95 MB  GC0/1/2=//
+
+=== plain × 50 conn × run 1/2 ===
+requests=1130402 (18839.1/s)  logical=115.748 Gbit/s  wire=115.756 Gbit/s  comp=-  p50=2.58ms p95=3.83ms p99=4.91ms max=34.54ms
+server CPU≈38.3%  cpuTime=551.48s  WS=104 MB  GC0/1/2=//
+
+=== plain × 50 conn × run 2/2 ===
+requests=1130904 (18847.5/s)  logical=115.799 Gbit/s  wire=115.807 Gbit/s  comp=-  p50=2.60ms p95=3.79ms p99=4.67ms max=34.81ms
+server CPU≈39.1%  cpuTime=562.86s  WS=103 MB  GC0/1/2=//
+
+=== deflate × 1 conn × run 1/2 ===
+requests=141204 (2353.4/s)  logical=14.459 Gbit/s  wire=0.109 Gbit/s  comp=133.40  p50=0.41ms p95=0.51ms p99=0.62ms max=3.01ms
+server CPU≈5.7%  cpuTime=82.00s  WS=102 MB  GC0/1/2=//
+
+=== deflate × 1 conn × run 2/2 ===
+requests=143527 (2392.1/s)  logical=14.697 Gbit/s  wire=0.110 Gbit/s  comp=133.40  p50=0.40ms p95=0.48ms p99=0.57ms max=16.61ms
+server CPU≈6.4%  cpuTime=92.23s  WS=102 MB  GC0/1/2=//
+
+=== deflate × 10 conn × run 1/2 ===
+requests=876288 (14604.6/s)  logical=89.731 Gbit/s  wire=0.674 Gbit/s  comp=133.40  p50=0.67ms p95=0.82ms p99=0.90ms max=28.31ms
+server CPU≈48.5%  cpuTime=698.86s  WS=106 MB  GC0/1/2=//
+
+=== deflate × 10 conn × run 2/2 ===
+requests=885973 (14766.0/s)  logical=90.723 Gbit/s  wire=0.681 Gbit/s  comp=133.40  p50=0.66ms p95=0.81ms p99=0.90ms max=32.80ms
+server CPU≈48.8%  cpuTime=702.30s  WS=107 MB  GC0/1/2=//
+
+=== deflate × 50 conn × run 1/2 ===
+requests=872838 (14546.7/s)  logical=89.375 Gbit/s  wire=0.671 Gbit/s  comp=133.40  p50=3.37ms p95=4.54ms p99=7.99ms max=61.09ms
+server CPU≈51.1%  cpuTime=736.34s  WS=121 MB  GC0/1/2=//
+
+=== deflate × 50 conn × run 2/2 ===
+requests=878079 (14634.0/s)  logical=89.911 Gbit/s  wire=0.675 Gbit/s  comp=133.40  p50=3.35ms p95=4.52ms p99=7.62ms max=84.64ms
+server CPU≈51.4%  cpuTime=739.81s  WS=121 MB  GC0/1/2=//
+
+=== tls × 1 conn × run 1/2 ===
+requests=106622 (1777.0/s)  logical=10.918 Gbit/s  wire=10.934 Gbit/s  comp=-  p50=0.54ms p95=0.67ms p99=0.81ms max=3.03ms
+server CPU≈5.3%  cpuTime=76.61s  WS=104 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls × 1 conn × run 2/2 ===
+requests=105835 (1763.9/s)  logical=10.837 Gbit/s  wire=10.853 Gbit/s  comp=-  p50=0.54ms p95=0.68ms p99=0.87ms max=12.32ms
+server CPU≈5.3%  cpuTime=76.27s  WS=104 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls × 10 conn × run 1/2 ===
+requests=551369 (9189.3/s)  logical=56.459 Gbit/s  wire=56.541 Gbit/s  comp=-  p50=1.07ms p95=1.30ms p99=1.48ms max=38.32ms
+server CPU≈44.3%  cpuTime=637.50s  WS=105 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls × 10 conn × run 2/2 ===
+requests=562387 (9372.9/s)  logical=57.587 Gbit/s  wire=57.671 Gbit/s  comp=-  p50=1.06ms p95=1.25ms p99=1.39ms max=37.40ms
+server CPU≈44.7%  cpuTime=643.83s  WS=105 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls × 50 conn × run 1/2 ===
+requests=656803 (10945.8/s)  logical=67.251 Gbit/s  wire=67.349 Gbit/s  comp=-  p50=3.38ms p95=12.24ms p99=31.42ms max=88.57ms
+server CPU≈51.9%  cpuTime=747.33s  WS=107 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls × 50 conn × run 2/2 ===
+requests=641505 (10691.1/s)  logical=65.686 Gbit/s  wire=65.781 Gbit/s  comp=-  p50=3.44ms p95=12.60ms p99=32.31ms max=87.58ms
+server CPU≈51.3%  cpuTime=738.05s  WS=108 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 1 conn × run 1/2 ===
+requests=135029 (2250.5/s)  logical=13.827 Gbit/s  wire=0.109 Gbit/s  comp=127.55  p50=0.43ms p95=0.53ms p99=0.64ms max=1.66ms
+server CPU≈5.7%  cpuTime=81.94s  WS=105 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 1 conn × run 2/2 ===
+requests=133828 (2230.5/s)  logical=13.704 Gbit/s  wire=0.108 Gbit/s  comp=127.55  p50=0.43ms p95=0.55ms p99=0.67ms max=3.48ms
+server CPU≈5.6%  cpuTime=80.16s  WS=105 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 10 conn × run 1/2 ===
+requests=824939 (13748.8/s)  logical=84.473 Gbit/s  wire=0.666 Gbit/s  comp=127.55  p50=0.71ms p95=0.87ms p99=0.97ms max=20.90ms
+server CPU≈48.0%  cpuTime=691.22s  WS=109 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 10 conn × run 2/2 ===
+requests=825979 (13766.2/s)  logical=84.579 Gbit/s  wire=0.666 Gbit/s  comp=127.55  p50=0.71ms p95=0.86ms p99=0.95ms max=32.20ms
+server CPU≈48.2%  cpuTime=693.41s  WS=109 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 50 conn × run 1/2 ===
+requests=829626 (13826.4/s)  logical=84.949 Gbit/s  wire=0.669 Gbit/s  comp=127.55  p50=3.55ms p95=4.78ms p99=9.55ms max=60.26ms
+server CPU≈53.3%  cpuTime=768.17s  WS=123 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+=== tls+deflate × 50 conn × run 2/2 ===
+requests=831194 (13852.5/s)  logical=85.110 Gbit/s  wire=0.671 Gbit/s  comp=127.55  p50=3.53ms p95=4.82ms p99=11.76ms max=58.27ms
+server CPU≈52.2%  cpuTime=751.31s  WS=122 MB  GC0/1/2=//
+TLS=Tls13 cipher=TLS_AES_256_GCM_SHA384
+
+
+| Mode        | Conn | Run | Req/s   | Logical Gbps | Wire Gbps | Comp  | p50 ms | p95 ms | p99 ms | CPU % |
+| ----------- | ---: | --: | ------: | -----------: | --------: | ----: | -----: | -----: | -----: | ----: |
+| plain       |    1 |   1 |  2627.3 |       16.142 |    16.144 |     - |   0.37 |   0.43 |   0.52 |   4.5 |
+| plain       |    1 |   2 |  2592.1 |       15.926 |    15.927 |     - |   0.37 |   0.44 |   0.55 |   4.5 |
+| plain       |   10 |   1 | 20325.3 |      124.879 |   124.888 |     - |   0.49 |   0.56 |   0.64 |  41.8 |
+| plain       |   10 |   2 | 20287.0 |      124.644 |   124.653 |     - |   0.49 |   0.57 |   0.65 |  42.5 |
+| plain       |   50 |   1 | 18839.1 |      115.748 |   115.756 |     - |   2.58 |   3.83 |   4.91 |  38.3 |
+| plain       |   50 |   2 | 18847.5 |      115.799 |   115.807 |     - |   2.60 |   3.79 |   4.67 |  39.1 |
+| deflate     |    1 |   1 |  2353.4 |       14.459 |     0.109 | 133.40 |   0.41 |   0.51 |   0.62 |   5.7 |
+| deflate     |    1 |   2 |  2392.1 |       14.697 |     0.110 | 133.40 |   0.40 |   0.48 |   0.57 |   6.4 |
+| deflate     |   10 |   1 | 14604.6 |       89.731 |     0.674 | 133.40 |   0.67 |   0.82 |   0.90 |  48.5 |
+| deflate     |   10 |   2 | 14766.0 |       90.723 |     0.681 | 133.40 |   0.66 |   0.81 |   0.90 |  48.8 |
+| deflate     |   50 |   1 | 14546.7 |       89.375 |     0.671 | 133.40 |   3.37 |   4.54 |   7.99 |  51.1 |
+| deflate     |   50 |   2 | 14634.0 |       89.911 |     0.675 | 133.40 |   3.35 |   4.52 |   7.62 |  51.4 |
+| tls         |    1 |   1 |  1777.0 |       10.918 |    10.934 |     - |   0.54 |   0.67 |   0.81 |   5.3 |
+| tls         |    1 |   2 |  1763.9 |       10.837 |    10.853 |     - |   0.54 |   0.68 |   0.87 |   5.3 |
+| tls         |   10 |   1 |  9189.3 |       56.459 |    56.541 |     - |   1.07 |   1.30 |   1.48 |  44.3 |
+| tls         |   10 |   2 |  9372.9 |       57.587 |    57.671 |     - |   1.06 |   1.25 |   1.39 |  44.7 |
+| tls         |   50 |   1 | 10945.8 |       67.251 |    67.349 |     - |   3.38 |  12.24 |  31.42 |  51.9 |
+| tls         |   50 |   2 | 10691.1 |       65.686 |    65.781 |     - |   3.44 |  12.60 |  32.31 |  51.3 |
+| tls+deflate |    1 |   1 |  2250.5 |       13.827 |     0.109 | 127.55 |   0.43 |   0.53 |   0.64 |   5.7 |
+| tls+deflate |    1 |   2 |  2230.5 |       13.704 |     0.108 | 127.55 |   0.43 |   0.55 |   0.67 |   5.6 |
+| tls+deflate |   10 |   1 | 13748.8 |       84.473 |     0.666 | 127.55 |   0.71 |   0.87 |   0.97 |  48.0 |
+| tls+deflate |   10 |   2 | 13766.2 |       84.579 |     0.666 | 127.55 |   0.71 |   0.86 |   0.95 |  48.2 |
+| tls+deflate |   50 |   1 | 13826.4 |       84.949 |     0.669 | 127.55 |   3.55 |   4.78 |   9.55 |  53.3 |
+| tls+deflate |   50 |   2 | 13852.5 |       85.110 |     0.671 | 127.55 |   3.53 |   4.82 |  11.76 |  52.2 |

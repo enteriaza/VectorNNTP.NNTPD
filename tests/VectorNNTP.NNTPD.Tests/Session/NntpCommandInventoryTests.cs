@@ -14,7 +14,17 @@ public sealed class NntpCommandInventoryTests
     public void Catalog_RegistersCompleteInventory()
     {
         var registry = DefaultNntpCommandCatalog.Create();
-        Assert.Equal(DefaultNntpCommandCatalog.InventoryKeys, registry.GetRegisteredKeys());
+        var keys = registry.GetRegisteredKeys();
+
+        // Production inventory remains complete; BENCHIT is an internal extra (not in InventoryKeys).
+        foreach (var key in DefaultNntpCommandCatalog.InventoryKeys)
+        {
+            Assert.Contains(key, keys);
+        }
+
+        Assert.Contains("BENCHIT", keys);
+        Assert.DoesNotContain("BENCHIT", DefaultNntpCommandCatalog.InventoryKeys);
+        Assert.Equal(DefaultNntpCommandCatalog.InventoryKeys.Count + 1, keys.Count);
     }
 
     [Theory]

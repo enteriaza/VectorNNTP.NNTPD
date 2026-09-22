@@ -105,6 +105,9 @@ public static class DefaultNntpCommandCatalog
             Compress.HandleAsync,
             logger: compressLog));
 
+        // Internal BENCHIT benchmark facility — not in InventoryKeys / CAPABILITIES / HELP.
+        registry.Register(BenchIt.CreateDescriptor());
+
         // Authentication
         registry.Register(new NntpCommandDescriptor(
             "AUTHINFO",

@@ -175,11 +175,15 @@ public sealed class NntpSession
                     break;
                 }
 
-                var client = NntpCommandLogFormat.Client(this);
-                _logger.LogInformation(
-                    "[{Client}] RX: {Command}",
-                    client,
-                    NntpCommandLogFormat.RedactRxLine(line));
+                // BENCHIT is internal transport-benchmark infrastructure; suppress per-request RX INFO
+                // so Serilog does not become the measured bottleneck during sustained runs.
+                if (!IsBenchItCommand(line))
+                {
+                    _logger.LogInformation(
+                        "[{Client}] RX: {Command}",
+                        NntpCommandLogFormat.Client(this),
+                        NntpCommandLogFormat.RedactRxLine(line));
+                }
 
                 if (!NntpCommandParser.TryParse(line, out var parsed))
                 {
@@ -234,5 +238,21 @@ public sealed class NntpSession
             NntpReplyCodes.PostingProhibited,
             "VectorNNTP.NNTPD ready, posting prohibited",
             cancellationToken);
+    }
+
+    private static bool IsBenchItCommand(string line)
+    {
+        // Verb-only internal benchmark command; ignore trailing spaces / unexpected args for log suppression.
+        if (line.Length < 7)
+        {
+            return false;
+        }
+
+        if (!line.StartsWith("BENCHIT", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return line.Length == 7 || line[7] is ' ' or '\t';
     }
 }

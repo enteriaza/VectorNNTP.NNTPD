@@ -56,6 +56,43 @@ public sealed class NntpResponseWriter
         return FlushAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Writes a precomputed byte payload to the session output pipe and flushes (honoring pipe backpressure).
+    /// </summary>
+    /// <remarks>
+    /// Intended for BENCHIT reuse of an immutable wire buffer. Still uses the production
+    /// <see cref="PipeWriter"/> path; does not bypass transport pumps.
+    /// </remarks>
+    public async ValueTask WriteBytesAndFlushAsync(
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken = default)
+    {
+        var remaining = payload;
+        while (!remaining.IsEmpty)
+        {
+            var memory = _output.GetMemory(Math.Min(remaining.Length, 64 * 1024));
+            var toCopy = Math.Min(memory.Length, remaining.Length);
+            remaining.Span[..toCopy].CopyTo(memory.Span);
+            _output.Advance(toCopy);
+            remaining = remaining[toCopy..];
+
+            var flush = _output.FlushAsync(cancellationToken);
+            if (!flush.IsCompletedSuccessfully)
+            {
+                var result = await flush.ConfigureAwait(false);
+                if (result.IsCanceled)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                if (result.IsCompleted)
+                {
+                    throw new InvalidOperationException("NNTP output pipe completed while writing.");
+                }
+            }
+        }
+    }
+
     private ValueTask WriteAsciiAndFlushAsync(string text, CancellationToken cancellationToken)
     {
         var byteCount = Encoding.ASCII.GetByteCount(text);
