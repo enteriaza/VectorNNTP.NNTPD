@@ -520,6 +520,8 @@ public sealed class NntpdConfigurationTests
     {
         var options = TestHostFactory.CreateValidOptions();
         options.BindPortTls = port;
+        options.AcmeEmail = "ops@example.org";
+        options.AcmeCertificatePassword = "unit-test-pfx-password";
         Assert.True(options.IsTlsListenerEnabled);
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
@@ -787,6 +789,11 @@ public sealed class NntpdConfigurationTests
         builder.Configuration.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
+        builder.Services.PostConfigure<NntpdOptions>(static options =>
+        {
+            options.BindPortTls = 0;
+            options.AcmeEmail = string.Empty;
+        });
         builder.ConfigureNntpdLogging(static lc => lc.MinimumLevel.Fatal());
         builder.Services.AddNntpdHosting(includePlaceholderService: false);
         return builder.Build();
@@ -814,7 +821,12 @@ public sealed class NntpdConfigurationTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(
             assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
-        builder.Services.PostConfigure<NntpdOptions>(static options => options.BindAddress = ["*"]);
+        builder.Services.PostConfigure<NntpdOptions>(static options =>
+        {
+            options.BindAddress = ["*"];
+            options.BindPortTls = 0;
+            options.AcmeEmail = string.Empty;
+        });
 
         builder.ConfigureNntpdLogging(static lc => lc.MinimumLevel.Fatal());
         builder.Services.AddNntpdHosting(includePlaceholderService: false);

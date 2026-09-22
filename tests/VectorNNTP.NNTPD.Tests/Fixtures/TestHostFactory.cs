@@ -88,9 +88,13 @@ internal static class TestHostFactory
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
 
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.
+        // Force TLS off so ACME never contacts Let's Encrypt during offline host tests
+        // (committed appsettings may set BindPortTls > 0 for local operator use).
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindAddress = ["*"];
+            options.BindPortTls = 0;
+            options.AcmeEmail = string.Empty;
         });
     }
 }

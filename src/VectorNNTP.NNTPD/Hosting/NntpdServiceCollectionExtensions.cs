@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -47,6 +48,14 @@ public static class NntpdServiceCollectionExtensions
             client.DefaultRequestHeaders.ExpectContinue = false;
         });
 
+        services.AddHttpClient(CertesAcmeIssuer.HttpClientName, static client =>
+        {
+            // ACME directory / order HTTP. Stall protection is left to call cancellation;
+            // avoid a hard HttpClient.Timeout that races with application shutdown budgets.
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            client.DefaultRequestHeaders.ExpectContinue = false;
+        });
+
         services.TryAddSingleton<ICloudflareDnsClient>(static sp =>
         {
             var httpClient = sp.GetRequiredService<IHttpClientFactory>()
@@ -56,6 +65,10 @@ public static class NntpdServiceCollectionExtensions
                 sp.GetRequiredService<IOptions<NntpdOptions>>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CloudflareDnsClient>>());
         });
+
+        services.TryAddSingleton<AcmeComponentFactory>();
+        services.TryAddSingleton<IServerCertificateProvider>(static sp =>
+            sp.GetRequiredService<AcmeComponentFactory>().GetCertificateProvider());
 
         var optionsBuilder = services
             .AddOptions<NntpdOptions>()
@@ -79,6 +92,12 @@ public static class NntpdServiceCollectionExtensions
         // when bind addresses cannot be resolved or Cloudflare DNS cannot be made correct.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
+
+        // ACME certificate ensure runs after DNS reconciliation and before placeholder / future TLS listeners.
+        services.TryAddSingleton<AcmeCertificateService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateService>(static sp =>
+                sp.GetRequiredService<AcmeCertificateService>()));
 
         if (includePlaceholderService)
         {

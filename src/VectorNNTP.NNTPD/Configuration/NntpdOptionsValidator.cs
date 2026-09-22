@@ -39,6 +39,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidatePorts(options, failures);
         ValidateCloudFlare(options, failures);
         ValidateDnsSuffixAndServerId(options, failures);
+        ValidateAcme(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -165,6 +166,89 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         }
     }
 
+    private static void ValidateAcme(NntpdOptions options, List<string> failures)
+    {
+        // Directory URL and state directory are always validated when present so misconfiguration
+        // is caught early; email and zone-coverage rules apply only when TLS is enabled.
+        if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
+        {
+            failures.Add($"{nameof(NntpdOptions.AcmeDirectoryUrl)} must be a non-empty HTTPS ACME directory URL.");
+        }
+        else if (!Uri.TryCreate(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute, out var directoryUri)
+                 || directoryUri.Scheme != Uri.UriSchemeHttps)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.AcmeDirectoryUrl)} must be an absolute HTTPS URL " +
+                "(default is Let's Encrypt staging).");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.AcmeStateDir))
+        {
+            failures.Add($"{nameof(NntpdOptions.AcmeStateDir)} must be a non-empty filesystem path.");
+        }
+
+        if (options.AcmeRenewalThresholdDays is < 1 or > 90)
+        {
+            failures.Add($"{nameof(NntpdOptions.AcmeRenewalThresholdDays)} must be an integer in the range 1–90.");
+        }
+
+        if (!options.IsTlsListenerEnabled)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.AcmeEmail) || !IsPlausibleEmail(options.AcmeEmail))
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.AcmeEmail)} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
+                "and must be a valid contact email address.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))
+        {
+            failures.Add(
+                $"{NntpdOptions.AcmeCertificatePasswordConfigurationKey} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
+                $"(use environment variable {NntpdOptions.AcmeCertificatePasswordEnvironmentVariable} or secrets; never commit the value).");
+        }
+
+        // DNS-01 identities (FQDN + news.usenet.ninja) must fall under DnsSuffix / Cloudflare zone.
+        if (options.ServerId is >= 1 and <= 99 && !string.IsNullOrWhiteSpace(options.DnsSuffix))
+        {
+            try
+            {
+                var fqdn = NntpdOptions.FormatFqdn(options.ServerId.Value, options.DnsSuffix.Trim().TrimEnd('.'));
+                var identities = Acme.CertificateIdentities.ForFqdn(fqdn);
+                Acme.DnsZoneCoverage.RequireIdentitiesInDnsZone(identities, options.DnsSuffix);
+            }
+            catch (Acme.AcmeConfigurationException ex)
+            {
+                failures.Add(ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                failures.Add(ex.Message);
+            }
+        }
+    }
+
+    private static bool IsPlausibleEmail(string email)
+    {
+        var trimmed = email.Trim();
+        if (trimmed.Length is 0 or > 254)
+        {
+            return false;
+        }
+
+        var at = trimmed.IndexOf('@');
+        if (at <= 0 || at != trimmed.LastIndexOf('@') || at == trimmed.Length - 1)
+        {
+            return false;
+        }
+
+        var domain = trimmed[(at + 1)..];
+        return domain.Contains('.', StringComparison.Ordinal) && IsValidDnsSuffix(domain);
+    }
+
     private static void ValidateCloudFlare(NntpdOptions options, List<string> failures)
     {
         // Cloudflare DNS integration settings are mandatory for this host configuration.
@@ -279,16 +363,16 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
     }
 
     /// <summary>
-    /// Returns whether <paramref name="text"/> contains the API key (for tests / diagnostics hygiene).
+    /// Returns whether <paramref name="text"/> contains a configured secret (for tests / diagnostics hygiene).
     /// </summary>
-    public static bool ContainsSecret(string text, string? apiKey)
+    public static bool ContainsSecret(string text, string? secret)
     {
-        if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(text))
+        if (string.IsNullOrEmpty(secret) || string.IsNullOrEmpty(text))
         {
             return false;
         }
 
-        return text.Contains(apiKey, StringComparison.Ordinal);
+        return text.Contains(secret, StringComparison.Ordinal);
     }
 
     /// <summary>

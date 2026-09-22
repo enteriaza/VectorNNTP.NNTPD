@@ -17,7 +17,8 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// be bound or overridden from configuration or environment variables.
 /// </para>
 /// <para>
-/// Never log complete <see cref="NntpdOptions"/> instances: <see cref="CloudFlareApiKey"/> is a secret.
+/// Never log complete <see cref="NntpdOptions"/> instances:
+/// <see cref="CloudFlareApiKey"/> and <see cref="AcmeCertificatePassword"/> are secrets.
 /// </para>
 /// </remarks>
 public sealed class NntpdOptions
@@ -28,6 +29,9 @@ public sealed class NntpdOptions
     /// <summary>Configuration key for the Cloudflare API key secret.</summary>
     public const string CloudFlareApiKeyConfigurationKey = "CloudFlareApiKey";
 
+    /// <summary>Configuration key for the ACME PKCS#12 password secret.</summary>
+    public const string AcmeCertificatePasswordConfigurationKey = "AcmeCertificatePassword";
+
     /// <summary>Configuration key for the Cloudflare zone id.</summary>
     public const string CloudFlareZoneIdConfigurationKey = "CloudFlareZoneId";
 
@@ -36,6 +40,12 @@ public sealed class NntpdOptions
     /// (<c>nntpd__cloudflareapikey</c>).
     /// </summary>
     public const string CloudFlareApiKeyEnvironmentVariable = "nntpd__cloudflareapikey";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="AcmeCertificatePassword"/>
+    /// (<c>nntpd__AcmeCertificatePassword</c>).
+    /// </summary>
+    public const string AcmeCertificatePasswordEnvironmentVariable = "nntpd__AcmeCertificatePassword";
 
     /// <summary>
     /// Environment variable that supplies <see cref="CloudFlareZoneId"/>
@@ -139,8 +149,67 @@ public sealed class NntpdOptions
     /// <remarks>
     /// <see langword="false"/> when <see cref="BindPortTls"/> is <c>0</c> (disabled / unset default).
     /// <see langword="true"/> when <see cref="BindPortTls"/> is in <c>1–65535</c>.
+    /// When enabled, ACME certificate acquisition is required (see <see cref="AcmeEmail"/>).
     /// </remarks>
     public bool IsTlsListenerEnabled => BindPortTls > 0;
+
+    /// <summary>
+    /// Default Let's Encrypt <strong>staging</strong> ACME directory URL.
+    /// </summary>
+    public const string DefaultAcmeDirectoryUrl =
+        "https://acme-staging-v02.api.letsencrypt.org/directory";
+
+    /// <summary>Default relative ACME state directory.</summary>
+    public const string DefaultAcmeStateDir = "certs/";
+
+    /// <summary>Default certificate renewal lead time in days.</summary>
+    public const int DefaultAcmeRenewalThresholdDays = 30;
+
+    /// <summary>
+    /// Gets or sets the ACME directory URL (Let's Encrypt staging by default).
+    /// </summary>
+    /// <remarks>
+    /// The configured value is authoritative. Production Let's Encrypt requires an explicit
+    /// override (for example <c>https://acme-v02.api.letsencrypt.org/directory</c>).
+    /// Used only when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
+    /// </remarks>
+    public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
+
+    /// <summary>
+    /// Gets or sets the ACME account contact email.
+    /// </summary>
+    /// <remarks>
+    /// No default. Required when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
+    /// Ignored when TLS is disabled — missing email must not prevent non-TLS startup.
+    /// </remarks>
+    public string AcmeEmail { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the filesystem directory for ACME account and certificate state.
+    /// </summary>
+    /// <remarks>
+    /// Default is <c>certs/</c>. The TLS server credential is a PKCS#12/PFX file; the ACME account
+    /// private key is stored separately as PKCS#8 DER. The Windows Certificate Store is not used.
+    /// </remarks>
+    public string AcmeStateDir { get; set; } = DefaultAcmeStateDir;
+
+    /// <summary>
+    /// Gets or sets how many days before <c>NotAfter</c> a certificate is considered due for renewal.
+    /// </summary>
+    /// <remarks>Default is <c>30</c>. Valid range is <c>1–90</c>.</remarks>
+    [Range(1, 90)]
+    public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
+
+    /// <summary>
+    /// Gets or sets the password used to protect and load the TLS server PKCS#12/PFX file.
+    /// </summary>
+    /// <remarks>
+    /// No default. Required when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
+    /// Supply via <see cref="AcmeCertificatePasswordEnvironmentVariable"/> or user/deployment secrets —
+    /// never commit this value. Do not log it or include it in exception messages.
+    /// Ignored when TLS is disabled.
+    /// </remarks>
+    public string AcmeCertificatePassword { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the Cloudflare API key used for DNS integration.

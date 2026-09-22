@@ -15,7 +15,12 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `Systemd:*` | object | see existing docs | no | systemd notify / watchdog options |
 | `BindAddress` | string array | omitted → `["*"]` after normalize | no | Local listen addresses (see below) |
 | `BindPort` | int | `119` | no | Cleartext NNTP TCP port (`1–65535`) |
-| `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables) |
+| `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. |
+| `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
+| `AcmeEmail` | string | _(none)_ | **yes when TLS enabled** | ACME account contact email; ignored when `BindPortTls` is `0` |
+| `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state |
+| `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
+| `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
 | `CloudFlareZoneId` | string | _(none)_ | **yes** | Cloudflare zone identifier |
 | `CloudFlareOperationTimeout` | duration | `00:02:00` | no | Wall-clock budget for one reconcile or cleanup operation (shared by HTTP 429 retries and reconciler attempt backoffs) |
@@ -82,6 +87,91 @@ Multiple addresses:
 | `BindPortTls` | `0` | `0` or `1–65535` | `0` / unset → TLS disabled (`IsTlsListenerEnabled == false`); `1–65535` → TLS enabled |
 
 Negative values and values above `65535` fail validation. This phase does not bind sockets or implement TLS listeners; dependents use `BindPortTls` / `IsTlsListenerEnabled` to distinguish disabled vs enabled configuration.
+
+## TLS and ACME (Let's Encrypt)
+
+TLS is controlled exclusively by `BindPortTls`:
+
+| `BindPortTls` | TLS | ACME |
+|---------------|-----|------|
+| unset / `0` | disabled | **completely disabled** — no account registration, no Let's Encrypt calls, no certificate requirement, existing files under `AcmeStateDir` are not touched |
+| `1–65535` | enabled | required — account + usable certificate must exist before the application enters `Running` |
+
+### ACME settings
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `AcmeDirectoryUrl` | `https://acme-staging-v02.api.letsencrypt.org/directory` | **Staging** by default. Production requires an explicit override such as `https://acme-v02.api.letsencrypt.org/directory`. |
+| `AcmeEmail` | _(none)_ | Required only when TLS is enabled. Must be a plausible contact email. |
+| `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). |
+| `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
+| `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
+
+Do **not** commit real emails, PFX passwords, production directory URLs tied to live accounts, or machine-specific absolute paths into tracked `appsettings.json`.
+
+Example (TLS enabled against staging — values are illustrative; supply secrets via environment / user secrets):
+
+```json
+"Nntpd": {
+  "BindPortTls": 563,
+  "AcmeEmail": "ops@example.org",
+  "AcmeDirectoryUrl": "https://acme-staging-v02.api.letsencrypt.org/directory",
+  "AcmeStateDir": "certs/",
+  "AcmeRenewalThresholdDays": 30
+}
+```
+
+```text
+nntpd__AcmeCertificatePassword=<secret>
+```
+
+Production directory (explicit only):
+
+```json
+"AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
+```
+
+Staging certificates are **not** trusted by normal clients. Use staging for integration testing; switch the directory URL only when ready for a production CA.
+
+### Certificate identities (SANs)
+
+Every TLS certificate must include exactly these DNS names (no wildcards, no extras):
+
+1. The generated `{Fqdn}` (for example `nntpd01.usenet.ninja`)
+2. `news.usenet.ninja`
+
+Both names must fall under `DnsSuffix` (label-boundary zone coverage) because DNS-01 challenges are published in the single Cloudflare zone identified by `CloudFlareZoneId`.
+
+### Challenge mechanism
+
+ACME uses **DNS-01** only (Cloudflare TXT records named `_acme-challenge.{domain}`). HTTP-01 and TLS-ALPN-01 are not used. Challenge TXT records use TTL `120` and `proxied=false`. A durable journal under `{AcmeStateDir}/dns01/journal/` supports crash recovery cleanup. Authoritative TXT visibility is checked before challenge completion. ACME challenge TXT must not be confused with A/AAAA FQDN reconciliation — reconcile mutates only A/AAAA for `{Fqdn}`; challenge records use distinct `_acme-challenge.*` names.
+
+### Persistence
+
+The Windows Certificate Store is **not** used (`X509Store` is not employed).
+
+| Path | Format |
+|------|--------|
+| `{AcmeStateDir}/account/private_key.der` | PKCS#8 DER **ACME account private key** (separate from the TLS credential) |
+| `{AcmeStateDir}/account/registration.json` | Account URI + directory URL metadata |
+| `{AcmeStateDir}/live/current` | Active generation id |
+| `{AcmeStateDir}/live/gens/{id}/certificate.pfx` | PKCS#12/PFX: leaf certificate + private key + issuing chain |
+| `{AcmeStateDir}/live/gens/{id}/complete` | Marker written after PFX write → reload → validate succeeds |
+
+`certificate.pfx` is the canonical TLS server credential. It is loaded with `AcmeCertificatePassword` into an `X509Certificate2` (with private key) for the future TLS listener. Incomplete generations (missing `complete` or invalid `current`) are never treated as active. A known-good generation remains current until a replacement PFX is validated and committed.
+
+### Lifecycle
+
+When TLS is enabled, `AcmeCertificateService` runs after Cloudflare DNS reconciliation:
+
+1. Ensure ACME account (reuse persisted key / register once)
+2. Evaluate existing certificate (SANs, validity, key match, renewal threshold)
+3. Issue or renew via ACME when needed
+4. Expose material through `IServerCertificateProvider` for a future TLS listener
+
+Failure to obtain a usable certificate prevents `Running`. When TLS is disabled, the service is idle and performs no ACME work. Shutdown does not contact Let's Encrypt.
+
+Background renewal checks run every 6 hours while the service is running (startup also evaluates the 30-day threshold).
 
 ## Cloudflare
 
@@ -176,14 +266,16 @@ Use these exact names:
 nntpd__cloudflareapikey
 nntpd__CloudFlareZoneId
 nntpd__ServerId
+nntpd__AcmeCertificatePassword
 ```
 
-Example (user scope, PowerShell — replace the key value locally; do not commit it):
+Example (user scope, PowerShell — replace secret values locally; do not commit them):
 
 ```powershell
 [Environment]::SetEnvironmentVariable("nntpd__cloudflareapikey", "<YOUR_API_KEY>", "User")
 [Environment]::SetEnvironmentVariable("nntpd__CloudFlareZoneId", "5811a29d39a0732afb5f160c9b137c3d", "User")
 [Environment]::SetEnvironmentVariable("nntpd__ServerId", "1", "User")
+[Environment]::SetEnvironmentVariable("nntpd__AcmeCertificatePassword", "<YOUR_PFX_PASSWORD>", "User")
 ```
 
 `DnsSuffix` should correspond to the zone identified by `CloudFlareZoneId`. The host validates DNS suffix **syntax** only; it does not verify zone membership via the Cloudflare API.
