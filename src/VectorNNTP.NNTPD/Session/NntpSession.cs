@@ -1,3 +1,4 @@
+using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -216,6 +217,13 @@ public sealed class NntpSession
                 {
                     break;
                 }
+
+                // Held 239/439 lines flush when the inbound pipe has nothing ready. Continuous
+                // STREAM leftover stays unconsumed so the pump can reach the measured batch of 8.
+                if (response.HasCoalescedUnflushed && !HasUnconsumedInput(Connection.Input))
+                {
+                    await response.FlushCoalescedAsync(token).ConfigureAwait(false);
+                }
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -318,6 +326,33 @@ public sealed class NntpSession
         await dispatcher
             .DispatchAsync(this, parsed, response, cancellationToken, preReadArticle)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Peeks the application input pipe without consuming. Used to decide whether a partial
+    /// coalesced TX batch must flush before the session waits for more inbound octets.
+    /// </summary>
+    private static bool HasUnconsumedInput(PipeReader input)
+    {
+        try
+        {
+            if (!input.TryRead(out var result))
+            {
+                return false;
+            }
+
+            var has = !result.Buffer.IsEmpty;
+            // Peek only. Examined must stay at Start: AdvanceTo(Start, End) tells the Pipe
+            // the reader needs more data, so the next ReadAsync waits even though leftover
+            // TAKETHIS bytes are already buffered (same rule as NntpContinuousRxReader
+            // after a complete unit, and NntpConnection.EnsureApplicationInputDrainedForUpgrade).
+            input.AdvanceTo(result.Buffer.Start, result.Buffer.Start);
+            return has;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static bool IsBenchItCommand(string line)

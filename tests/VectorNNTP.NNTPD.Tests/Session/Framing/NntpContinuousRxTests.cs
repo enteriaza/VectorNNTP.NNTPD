@@ -237,6 +237,56 @@ public sealed class NntpContinuousRxTests
     }
 
     [Fact]
+    public async Task ManyCrlfLines_PreserveExactPayload()
+    {
+        var body = new StringBuilder();
+        for (var i = 0; i < 200; i++)
+        {
+            body.Append("line-").Append(i).Append("\r\n");
+        }
+
+        var stored = Encoding.ASCII.GetBytes(body.ToString());
+        var wire = FramingWireFactory.BuildTakeThisTransaction("<many@t>", stored);
+        var unit = await ReadOneAsync(wire, consumeTakeThisArticle: true);
+        Assert.Equal(stored, unit.Article.Payload.ToArray());
+    }
+
+    [Fact]
+    public async Task StuffedDotLines_ArePayloadNotTerminator()
+    {
+        var wire = Encoding.ASCII.GetBytes("TAKETHIS <dots@t>\r\n..one\r\n..two\r\n...three\r\n.\r\n");
+        var unit = await ReadOneAsync(wire, consumeTakeThisArticle: true);
+        Assert.Equal("..one\r\n..two\r\n...three\r\n"u8.ToArray(), unit.Article.Payload.ToArray());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public async Task FiveByteTerminator_SplitAcrossEveryByteBoundary(int holdBack)
+    {
+        var wire = Encoding.ASCII.GetBytes("TAKETHIS <five@t>\r\nbody-line\r\n.\r\n");
+        var unit = await ReadSplitAsync(wire, holdBack, consumeTakeThisArticle: true);
+        Assert.Equal(NntpMultilineReadStatus.Completed, unit.Article.Status);
+        Assert.Equal("body-line\r\n"u8.ToArray(), unit.Article.Payload.ToArray());
+    }
+
+    [Fact]
+    public async Task BinaryCrLfInsideLine_DoesNotPrematurelyTerminate()
+    {
+        // RFC 3977 forbids isolated CR/LF in a line; STREAM still treats only \r\n.\r\n as the end.
+        var body = new byte[] { (byte)'a', (byte)'\r', (byte)'b', (byte)'\n', (byte)'c', (byte)'\r', (byte)'\n' };
+        var ms = new MemoryStream();
+        ms.Write("TAKETHIS <bin@t>\r\n"u8);
+        ms.Write(body);
+        ms.Write(".\r\n"u8);
+        var unit = await ReadOneAsync(ms.ToArray(), consumeTakeThisArticle: true);
+        Assert.Equal(body, unit.Article.Payload.ToArray());
+    }
+
+    [Fact]
     public void TryConsume_MultipleUnitsFromOneSequence()
     {
         var wire = Encoding.ASCII.GetBytes(

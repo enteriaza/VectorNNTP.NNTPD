@@ -111,6 +111,33 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
+    public async Task TakeThis_TwoPipelinedInOneWrite_IdleFlushPeekLeavesSecondArticleReadable()
+    {
+        // Session idle-flush peeks Connection.Input after each TAKETHIS. That peek must
+        // AdvanceTo(Start, Start). AdvanceTo(Start, End) marks leftover examined, so the
+        // next STREAM ReadAsync waits even though the second TAKETHIS is already buffered.
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string first = "<peek1@ex.com>";
+        const string second = "<peek2@ex.com>";
+        await duplex.WriteClientAsync(
+            BuildTakeThis(first, "Subject: 1\r\n\r\na\r\n") +
+            BuildTakeThis(second, "Subject: 2\r\n\r\nb\r\n"));
+
+        Assert.Equal($"239 {first}", await duplex.ReadClientLineAsync());
+        Assert.Equal($"239 {second}", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task TakeThis_SlowOutboundFlush_DoesNotBlockArticleReceive()
     {
         // Pause after ~1 byte so the first 239 flush blocks until the client reads.

@@ -28,6 +28,97 @@ public static class NntpDelimiterSearch
     public static int IndexOfFiveByteTerminator(ReadOnlySpan<byte> span) => span.IndexOf(FiveByteTerminator);
 
     /// <summary>
+    /// Bytes that must remain unconsumed when a STREAM article terminator is incomplete.
+    /// </summary>
+    /// <remarks>
+    /// <c>\r\n.\r\n</c> is five octets; four may already be present at the tail of a Pipe read.
+    /// </remarks>
+    public const int ArticleTerminatorLookbehind = 4;
+
+    /// <summary>
+    /// Locates the STREAM article terminator in <paramref name="buffer"/> without walking CRLF lines.
+    /// </summary>
+    /// <param name="buffer">Unread article octets (not previously copied into the parser buffer).</param>
+    /// <param name="atArticleStart">
+    /// <see langword="true"/> when no article payload has been accepted yet, so a leading
+    /// <c>.\r\n</c> is the empty-article terminator.
+    /// </param>
+    /// <param name="payloadBytes">
+    /// Count of <paramref name="buffer"/> octets that are article payload (includes the last
+    /// content line's CRLF; excludes the terminator).
+    /// </param>
+    /// <param name="consumedBytes">
+    /// Count of <paramref name="buffer"/> octets to consume (payload plus terminator).
+    /// </param>
+    /// <returns><see langword="true"/> when a complete terminator is present.</returns>
+    /// <remarks>
+    /// RFC 3977 §3.1.1: a non-empty multiline block ends with the five octets CRLF "." CRLF;
+    /// an empty block is "." CRLF. Payload excludes the terminating line. STREAM copies those
+    /// payload octets as received (no destuff).
+    /// </remarks>
+    public static bool TryFindArticleTerminator(
+        ReadOnlySequence<byte> buffer,
+        bool atArticleStart,
+        out int payloadBytes,
+        out int consumedBytes)
+    {
+        payloadBytes = 0;
+        consumedBytes = 0;
+
+        if (atArticleStart && StartsWithEmptyTerminator(buffer))
+        {
+            consumedBytes = EmptyTerminator.Length;
+            return true;
+        }
+
+        if (buffer.Length < FiveByteTerminator.Length)
+        {
+            return false;
+        }
+
+        if (buffer.IsSingleSegment)
+        {
+            var index = IndexOfFiveByteTerminator(buffer.FirstSpan);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            payloadBytes = index + Crlf.Length;
+            consumedBytes = index + FiveByteTerminator.Length;
+            return true;
+        }
+
+        var reader = new SequenceReader<byte>(buffer);
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> before, FiveByteTerminator, advancePastDelimiter: true))
+        {
+            return false;
+        }
+
+        payloadBytes = checked((int)before.Length + Crlf.Length);
+        consumedBytes = checked((int)reader.Consumed);
+        return true;
+    }
+
+    /// <summary>Returns whether <paramref name="buffer"/> begins with the empty-article terminator.</summary>
+    public static bool StartsWithEmptyTerminator(ReadOnlySequence<byte> buffer)
+    {
+        if (buffer.Length < EmptyTerminator.Length)
+        {
+            return false;
+        }
+
+        if (buffer.IsSingleSegment)
+        {
+            return buffer.FirstSpan.StartsWith(EmptyTerminator);
+        }
+
+        Span<byte> prefix = stackalloc byte[3];
+        buffer.Slice(0, 3).CopyTo(prefix);
+        return prefix.SequenceEqual(EmptyTerminator);
+    }
+
+    /// <summary>
     /// Reads one CRLF-terminated line from <paramref name="buffer"/> (CRLF not included).
     /// </summary>
     /// <returns><see langword="true"/> when a complete line was found.</returns>

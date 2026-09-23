@@ -12,6 +12,10 @@ The purpose of this benchmark was to answer:
 The benchmark was deliberately performed before implementing the remaining heavy NNTP data-plane and
 storage functionality so that transport performance could be isolated.
 
+This document also records a later **TAKETHIS** STREAM ingest benchmark on the same host, using the
+.NET client in `tools/VectorNNTP.NNTPD.Bench`. BENCHIT and TAKETHIS exercise different portions of
+the server and are not substitutes for each other.
+
 ## Test Environment
 
 | Item | Value |
@@ -221,6 +225,163 @@ specific bottleneck unless established by direct measurement.
 
 Future optimization should be driven by realistic workloads and measured evidence.
 
+## TAKETHIS
+
+`TAKETHIS` is an RFC 4644 STREAM ingest workload. It is **not** a transport-capacity substitute for
+BENCHIT, and BENCHIT is **not** a TAKETHIS ceiling.
+
+The authoritative client is the .NET workload in `tools/VectorNNTP.NNTPD.Bench`
+(`--benchmark TAKETHIS`). The historical Python client (`tools/nntp_takethis.py`) is **not** used
+for the numbers in this document.
+
+Workload characteristics:
+
+- real TCP to the production `VectorNNTP.NNTPD` host (no in-process fake transport)
+- plain TCP only (no DEFLATE, no TLS)
+- `MODE STREAM` then pipelined `TAKETHIS`
+- article is built once and reused (immutable)
+- target body size argument: `768000` bytes (`750 KiB`)
+- article body: `767930` bytes
+- framed article on the wire: `768054` bytes (headers + body + multiline terminator)
+- command + article: `768105` bytes
+- TAKETHIS command Message-ID is unique per article
+- article-header Message-ID is static so the payload is not rebuilt
+- one vectored `Socket.SendAsync` per article (`TAKETHIS <message-id>\r\n` + article)
+- does **not** rebuild the ~768 KiB article per transaction
+- does **not** use two separate command/article socket writes
+- does **not** use `FlushAsync` on the TAKETHIS hot path
+- does **not** use the Python client
+- bounded pipeline: `256` outstanding TAKETHIS commands per connection
+- real `239` / `439` response processing
+- no production-server bypass
+
+### TAKETHIS methodology
+
+Comparable timing and concurrency to the BENCHIT baseline:
+
+- Warm-up: 5 seconds. Warm-up article counts are discarded.
+- Measurement: 60 seconds per scenario.
+- Two runs per scenario.
+- Concurrency: 1, 10, and 50 connections.
+- Same host and plain port as BENCHIT: `198.18.0.66:1199`.
+- `--server-pid` samples the VectorNNTP.NNTPD process (same sampler as BENCHIT).
+- The TAKETHIS client does not record per-article latency; p50/p95/p99 are not reported.
+- In-flight TAKETHIS commands are allowed a short drain after the measure window.
+
+Throughput definitions (as reported by the harness):
+
+- **TAKETHIS/sec** = articles sent during the measurement window ÷ wall-clock elapsed of the run.
+  The harness elapsed includes connect, warmup, measure, and drain (observed 65.0–65.2 seconds for
+  these runs). Warm-up sends are excluded from the count.
+- **Logical payload Gbit/s** = framed article bytes (`768054`) × articles sent ÷ elapsed.
+- **Wire Gbit/s** = command + article bytes actually sent ÷ elapsed.
+
+TAKETHIS/sec is **not** the same unit as BENCHIT req/s. Do not compare them as if they were the
+same work item.
+
+The same-host client/server CPU contention described under BENCHIT applies here as well. Reported
+throughput is an end-to-end measurement of the complete benchmark system. Isolated server-only
+capacity was not measured and must not be extrapolated.
+
+### TAKETHIS results
+
+Complete table (both runs preserved). Every cell is from the live production-host run on
+`198.18.0.66:1199`. All runs completed with a 100% `239` response ratio and zero `439`, protocol,
+connection, and temporary-`400` errors.
+
+| Mode  | Conn |      TAKETHIS/s |     Logical Gbps |       Wire Gbps |            Sent |             239 | 439 | Err |     CPU % |
+| ----- | ---: | --------------: | ---------------: | --------------: | --------------: | --------------: | --: | --: | --------: |
+| plain |    1 | 1075.9 / 1072.9 |    6.611 / 6.593 |   6.611 / 6.593 |   70067 / 69784 |   70067 / 69784 |   0 |   0 |   6.1–5.9 |
+| plain |   10 | 4374.7 / 4321.4 |  26.880 / 26.553 | 26.882 / 26.554 | 284631 / 281098 | 284631 / 281098 |   0 |   0 |      30.2 |
+| plain |   50 | 4152.0 / 4326.5 |  25.511 / 26.584 | 25.513 / 26.586 | 270730 / 282026 | 270730 / 282026 |   0 |   0 | 31.0–30.9 |
+
+Observed max outstanding TAKETHIS commands per connection was 11–14 (limit 256).
+
+Raw harness output: `.artifacts/takethis-performance-md/takethis-results.txt`.
+
+### TAKETHIS interpretation
+
+- Measured single-connection TAKETHIS throughput: approximately 1073–1076 articles/s
+  (approximately 6.59–6.61 Gbit/s logical) on this host and workload.
+- Measured 10-connection TAKETHIS throughput: approximately 4321–4375 articles/s
+  (approximately 26.6–26.9 Gbit/s logical).
+- Measured 50-connection TAKETHIS throughput: approximately 4152–4327 articles/s
+  (approximately 25.5–26.6 Gbit/s logical).
+- The 10→50 connection result plateaus rather than scaling linearly.
+- Server-process CPU as reported by the harness remains approximately 6% at 1 connection and
+  approximately 30–31% at 10 and 50 connections.
+- These figures are measurements of this STREAM/TAKETHIS ingest path on this host. They are not a
+  transport ceiling, not a product SLA, and not a claim that VectorNNTP supports a universal Gbit/s
+  rate.
+
+## Workload comparison
+
+BENCHIT and TAKETHIS are different workloads. Neither replaces the other.
+
+| Aspect | BENCHIT | TAKETHIS |
+| --- | --- | --- |
+| What it measures | Production transport/TX path with a static multiline response | Real STREAM/TAKETHIS receive, framing, response, and ingestion processing, plus the relevant transport path |
+| Direction of bulk data | Server → client | Client → server |
+| Command | Internal unadvertised `BENCHIT` | RFC 4644 `MODE STREAM` + `TAKETHIS` |
+| Pipelining | Non-pipelined request/response | Bounded pipeline (256 / connection) |
+| Article accounting | `768000`-byte response payload | `768054`-byte framed article |
+| Reported work unit | completed requests / s | articles sent / s |
+| Modes in this document | plain, DEFLATE, TLS, TLS+DEFLATE | plain TCP only |
+| Latency | p50 / p95 / p99 recorded | not recorded by this client |
+
+On this host, the existing BENCHIT plain 10-connection measurement is approximately 124.9 Gbit/s
+logical. The TAKETHIS 10-connection measurement is approximately 26.9 Gbit/s logical. Those numbers
+are not a ranking and not a statement that one path is “the” ceiling. They count different work.
+
+iperf3 remains a raw TCP reference (10 streams: 262 Gbit/s). It is not a TAKETHIS ceiling and not a
+BENCHIT efficiency score.
+
+## Reproduction
+
+The server under test is the production `VectorNNTP.NNTPD` host bound to `198.18.0.66:1199` (and
+`5633` for BENCHIT TLS). Start it separately, then run the client from the repository root.
+
+`--benchmark BENCHIT` is the explicit workload selector. Omitting `--benchmark` keeps the historical
+BENCHIT default.
+
+```powershell
+cd src\VectorNNTP.NNTPD
+dotnet run -c Release --no-launch-profile
+```
+
+```powershell
+# BENCHIT (default workload; --benchmark BENCHIT is optional)
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark BENCHIT `
+  --host 198.18.0.66 --plain-port 1199 --tls-port 5633 `
+  --server-pid <pid> --runs 2
+```
+
+TAKETHIS CLI defaults differ from this document (warmup 0 s, one run, 30 s measure) unless the
+flags below are supplied. Use these flags to reproduce the table.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark TAKETHIS `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --pipeline-depth 256 --server-pid <pid>
+
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark TAKETHIS `
+  --host 198.18.0.66 --port 1199 `
+  --connections 10 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --pipeline-depth 256 --server-pid <pid>
+
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark TAKETHIS `
+  --host 198.18.0.66 --port 1199 `
+  --connections 50 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --pipeline-depth 256 --server-pid <pid>
+```
+
+`--duration` is an alias for `--measure-seconds`. `--port` is an alias for `--plain-port`.
+
 ## Limitations
 
 - Static in-memory article.
@@ -232,6 +393,12 @@ Future optimization should be driven by realistic workloads and measured evidenc
 - No realistic article entropy distribution.
 - No realistic client think time.
 - BENCHIT is not intended to represent production application throughput.
+- TAKETHIS is not intended to represent a universal production ingest SLA.
+- TAKETHIS uses a static in-memory article and a unique command Message-ID; it is not a realistic
+  article-size or entropy distribution.
+- The measured TAKETHIS server does not write incoming article payloads to disk (the persist write
+  is inactive). Message-ID hashing and incoming-directory setup still run.
+- TAKETHIS/sec is not interchangeable with BENCHIT req/s.
 - Logical Gbit/s should not be interpreted as network wire throughput when compression is active.
 - Results are specific to the test host, network path, runtime, OS, and benchmark implementation.
 - Benchmark client and server share the same physical host, so isolated server-only capacity was not measured.
@@ -252,7 +419,7 @@ Future benchmarks should eventually measure realistic workloads such as:
 - NEWNEWS
 - NEWGROUPS
 - POST
-- streaming commands
+- additional streaming/ingest variants beyond the TAKETHIS workload documented above
 - article-store/cache behavior
 - overview database behavior
 - realistic article size and entropy distributions
@@ -270,3 +437,7 @@ establish that the socket/transport architecture is fundamentally sound.
 - `git diff --check`: clean
 - Complete live BENCHIT benchmark suite completed
 - Benchmark results retained at: `tools/VectorNNTP.NNTPD.Bench/results-full.txt`
+- Complete live TAKETHIS benchmark (1 / 10 / 50 connections, 5 s warmup, 60 s measure, 2 runs)
+  completed on 2026-09-23 against production `VectorNNTP.NNTPD` on `198.18.0.66:1199`
+- TAKETHIS harness exit code 0 on every cell; 100% `239`; zero `439` / protocol / connection errors
+- TAKETHIS raw output retained at: `.artifacts/takethis-performance-md/takethis-results.txt`

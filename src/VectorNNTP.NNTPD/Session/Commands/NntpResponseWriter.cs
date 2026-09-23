@@ -18,6 +18,13 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// delivery of the prior 239/439.
 /// </para>
 /// <para>
+/// The pump coalesces fire-and-forget lines into batches of at most
+/// <see cref="CoalesceResponseBatchSize"/> before one <see cref="PipeWriter.FlushAsync"/>.
+/// Logical response bytes, CRLF framing, and channel order are unchanged; only write
+/// granularity changes. Awaiting writes (status lines, article chunks, STARTTLS/COMPRESS/QUIT)
+/// flush any held batch first.
+/// </para>
+/// <para>
 /// Large article bodies use the WriteArticleAsync APIs: externally supplied destuffed bytes →
 /// restuff → bounded owned chunks → the same ordered Channel (no second TX pipeline;
 /// mode-independent). The writer does not own article storage or lookup.
@@ -25,6 +32,16 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 public sealed class NntpResponseWriter : IAsyncDisposable
 {
+    /// <summary>
+    /// Maximum fire-and-forget responses held into one <see cref="PipeWriter.FlushAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Chosen from the measured N=8 reverse-path cell in
+    /// <c>.artifacts/STREAM-TCP-WIRE-MECHANISM-AUDIT.md</c> (~200 × 264-byte TCP segments/s
+    /// versus N=1 ~1450 × 33-byte segments/s). Not a configuration setting.
+    /// </remarks>
+    internal const int CoalesceResponseBatchSize = 8;
+
     private static readonly byte[] DotCrlf = ".\r\n"u8.ToArray();
 
     private readonly PipeWriter _output;
@@ -35,6 +52,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     private long _channelEnqueueCount;
     private long _pipeFlushCount;
     private long _ownedPayloadBytesEnqueued;
+    private int _coalescedUnflushed;
 
     private readonly struct WriteRequest
     {
@@ -82,6 +100,11 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     internal long OwnedPayloadBytesEnqueued => Volatile.Read(ref _ownedPayloadBytesEnqueued);
 
     /// <summary>
+    /// Gets whether any fire-and-forget lines have been accepted and not yet flushed.
+    /// </summary>
+    internal bool HasCoalescedUnflushed => Volatile.Read(ref _coalescedUnflushed) > 0;
+
+    /// <summary>
     /// Writes a single-line response (<c>code text</c>), waiting until the ordered pump has
     /// flushed it into the outbound pipe (subject to pipe backpressure).
     /// </summary>
@@ -104,6 +127,23 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(code);
         ArgumentNullException.ThrowIfNull(text);
         return EnqueueAsync(new WriteRequest(EncodeLine(code, text), completed: null), cancellationToken);
+    }
+
+    /// <summary>
+    /// Flushes any held fire-and-forget lines without writing additional response bytes.
+    /// </summary>
+    /// <remarks>
+    /// No-op when the coalesce buffer is empty so MODE READER / WriteLineAsync paths are not
+    /// delayed. Used when the session is about to wait for more inbound octets, and by tests.
+    /// </remarks>
+    internal ValueTask FlushCoalescedAsync(CancellationToken cancellationToken = default)
+    {
+        if (!HasCoalescedUnflushed)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return WriteAndAwaitFlushAsync([], cancellationToken);
     }
 
     /// <summary>Begins a multi-line response and writes the initial status line.</summary>
@@ -407,6 +447,10 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             await _channel.Writer.WriteAsync(request, cancellationToken).ConfigureAwait(false);
             Interlocked.Increment(ref _channelEnqueueCount);
             Interlocked.Add(ref _ownedPayloadBytesEnqueued, request.Payload.Length);
+            if (request.Completed is null)
+            {
+                Interlocked.Increment(ref _coalescedUnflushed);
+            }
         }
         catch (ChannelClosedException ex)
         {
@@ -416,23 +460,94 @@ public sealed class NntpResponseWriter : IAsyncDisposable
 
     private async Task PumpAsync(CancellationToken cancellationToken)
     {
+        var batch = new WriteRequest[CoalesceResponseBatchSize + 1];
+        var count = 0;
+        var coalesceCount = 0;
+
+        void CancelHeld()
+        {
+            var coalesced = 0;
+            for (var i = 0; i < count; i++)
+            {
+                if (batch[i].Completed is null)
+                {
+                    coalesced++;
+                }
+
+                batch[i].Completed?.TrySetCanceled();
+            }
+
+            if (coalesced > 0)
+            {
+                Interlocked.Add(ref _coalescedUnflushed, -coalesced);
+            }
+
+            count = 0;
+            coalesceCount = 0;
+        }
+
         try
         {
             await foreach (var request in _channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 try
                 {
-                    await WritePayloadToPipeAsync(request.Payload, cancellationToken).ConfigureAwait(false);
-                    request.Completed?.TrySetResult();
+                    if (request.Completed is not null)
+                    {
+                        batch[count++] = request;
+                        await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);
+                        count = 0;
+                        coalesceCount = 0;
+                        continue;
+                    }
+
+                    batch[count++] = request;
+                    coalesceCount++;
+
+                    while (coalesceCount < CoalesceResponseBatchSize &&
+                           _channel.Reader.TryRead(out var queued))
+                    {
+                        if (queued.Completed is not null)
+                        {
+                            batch[count++] = queued;
+                            await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);
+                            count = 0;
+                            coalesceCount = 0;
+                            break;
+                        }
+
+                        batch[count++] = queued;
+                        coalesceCount++;
+                    }
+
+                    if (coalesceCount >= CoalesceResponseBatchSize)
+                    {
+                        await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);
+                        count = 0;
+                        coalesceCount = 0;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    request.Completed?.TrySetException(ex);
+                    for (var i = 0; i < count; i++)
+                    {
+                        batch[i].Completed?.TrySetException(ex);
+                    }
+
+                    count = 0;
+                    coalesceCount = 0;
                     if (cancellationToken.IsCancellationRequested)
                     {
                         break;
                     }
                 }
+            }
+
+            if (count > 0 && !cancellationToken.IsCancellationRequested)
+            {
+                await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);
+                count = 0;
+                coalesceCount = 0;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -441,14 +556,60 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         }
         finally
         {
+            CancelHeld();
             while (_channel.Reader.TryRead(out var leftover))
             {
+                if (leftover.Completed is null)
+                {
+                    Interlocked.Decrement(ref _coalescedUnflushed);
+                }
+
                 leftover.Completed?.TrySetCanceled();
             }
         }
     }
 
-    private async ValueTask WritePayloadToPipeAsync(byte[] payload, CancellationToken cancellationToken)
+    private async ValueTask FlushHeldAsync(
+        WriteRequest[] batch,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var coalesced = 0;
+        for (var i = 0; i < count; i++)
+        {
+            if (batch[i].Completed is null)
+            {
+                coalesced++;
+            }
+        }
+
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                await CopyPayloadToPipeAsync(batch[i].Payload, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_output.UnflushedBytes > 0)
+            {
+                await FlushOutputAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                batch[i].Completed?.TrySetResult();
+            }
+        }
+        finally
+        {
+            if (coalesced > 0)
+            {
+                Interlocked.Add(ref _coalescedUnflushed, -coalesced);
+            }
+        }
+    }
+
+    private async ValueTask CopyPayloadToPipeAsync(byte[] payload, CancellationToken cancellationToken)
     {
         var remaining = payload.AsMemory();
         while (!remaining.IsEmpty)
@@ -459,28 +620,36 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             _output.Advance(toCopy);
             remaining = remaining[toCopy..];
 
-            var flush = _output.FlushAsync(cancellationToken);
-            FlushResult result;
-            if (flush.IsCompletedSuccessfully)
+            if (_output.UnflushedBytes >= 64 * 1024)
             {
-                result = flush.Result;
+                await FlushOutputAsync(cancellationToken).ConfigureAwait(false);
             }
-            else
-            {
-                result = await flush.ConfigureAwait(false);
-            }
+        }
+    }
 
-            Interlocked.Increment(ref _pipeFlushCount);
+    private async ValueTask FlushOutputAsync(CancellationToken cancellationToken)
+    {
+        var flush = _output.FlushAsync(cancellationToken);
+        FlushResult result;
+        if (flush.IsCompletedSuccessfully)
+        {
+            result = flush.Result;
+        }
+        else
+        {
+            result = await flush.ConfigureAwait(false);
+        }
 
-            if (result.IsCanceled)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+        Interlocked.Increment(ref _pipeFlushCount);
 
-            if (result.IsCompleted)
-            {
-                throw new InvalidOperationException("NNTP output pipe completed while writing.");
-            }
+        if (result.IsCanceled)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        if (result.IsCompleted)
+        {
+            throw new InvalidOperationException("NNTP output pipe completed while writing.");
         }
     }
 

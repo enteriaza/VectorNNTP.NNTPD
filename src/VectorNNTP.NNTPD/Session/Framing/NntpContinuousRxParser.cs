@@ -65,10 +65,12 @@ public readonly struct NntpContinuousRxUnit
 /// Stateful command/article scanner over <see cref="ReadOnlySequence{T}"/>.
 /// </summary>
 /// <remarks>
-/// Command CRLF ends a command. Inside an article, only a terminator line (<c>.</c>) ends the
-/// unit; CHECK/QUIT/TAKETHIS text in the body is payload. Incomplete bytes stay in parser state
-/// across Pipe reads. STREAM article bytes are copied as received (no destuff) into an owned
-/// buffer before the caller advances the Pipe. The terminator is framing, not payload.
+/// Command CRLF ends a command. Inside an article, the terminator is the five-octet
+/// <c>\r\n.\r\n</c> (or a leading <c>.\r\n</c> for an empty article). CHECK/QUIT/TAKETHIS
+/// text in the body is payload. Incomplete tails of at most four octets stay in the Pipe.
+/// STREAM article bytes are copied as received (no destuff) into an owned buffer before the
+/// caller advances the Pipe. The terminator is framing, not payload. MODE READER destuff
+/// remains line-oriented in <see cref="TryConsumeArticleOnly"/>.
 /// </remarks>
 public sealed class NntpContinuousRxParser
 {
@@ -137,21 +139,37 @@ public sealed class NntpContinuousRxParser
 
     private NntpContinuousRxUnit TryConsumeArticle(ref ReadOnlySequence<byte> buffer)
     {
-        while (NntpDelimiterSearch.TryReadLine(ref buffer, out var lineBytes))
+        var atArticleStart = _article.WrittenCount == 0 && !_articleExceeded;
+        if (NntpDelimiterSearch.TryFindArticleTerminator(
+                buffer,
+                atArticleStart,
+                out var payloadBytes,
+                out var consumedBytes))
         {
-            if (NntpDelimiterSearch.IsTerminatorLine(lineBytes))
+            if (payloadBytes > 0)
             {
-                var article = NntpArticleDestuffer.Complete(_article, _articleExceeded);
-                var unit = new NntpContinuousRxUnit(
-                    NntpContinuousRxKind.TakeThis,
-                    commandLine: _pendingTakeThisLine,
-                    messageId: _pendingMessageId,
-                    article: article);
-                Reset();
-                return unit;
+                AppendFramedWire(buffer.Slice(0, payloadBytes));
             }
 
-            AppendFramedWireLine(_article, lineBytes, _maxArticleBytes, ref _articleExceeded);
+            buffer = buffer.Slice(consumedBytes);
+            var article = NntpArticleDestuffer.Complete(_article, _articleExceeded);
+            var unit = new NntpContinuousRxUnit(
+                NntpContinuousRxKind.TakeThis,
+                commandLine: _pendingTakeThisLine,
+                messageId: _pendingMessageId,
+                article: article);
+            Reset();
+            return unit;
+        }
+
+        // Incomplete terminator: copy the prefix that cannot be a delimiter lookbehind
+        // so Pipe memory can be released. The last 0–4 octets stay unconsumed.
+        var hold = (int)Math.Min(NntpDelimiterSearch.ArticleTerminatorLookbehind, buffer.Length);
+        var copyBytes = (int)buffer.Length - hold;
+        if (copyBytes > 0)
+        {
+            AppendFramedWire(buffer.Slice(0, copyBytes));
+            buffer = buffer.Slice(copyBytes);
         }
 
         return NntpContinuousRxUnit.NeedMore;
@@ -190,32 +208,25 @@ public sealed class NntpContinuousRxParser
     }
 
     /// <summary>
-    /// Copies one framed content line plus its CRLF without destuffing.
+    /// Copies framed STREAM wire octets (already including content CRLFs) without destuffing.
     /// </summary>
-    private static void AppendFramedWireLine(
-        ArrayBufferWriter<byte> output,
-        ReadOnlySequence<byte> lineBytes,
-        int maxArticleBytes,
-        ref bool exceeded)
+    private void AppendFramedWire(ReadOnlySequence<byte> wireBytes)
     {
-        ArgumentNullException.ThrowIfNull(output);
-        if (exceeded)
+        if (_articleExceeded || wireBytes.IsEmpty)
         {
             return;
         }
 
-        var needed = checked((int)lineBytes.Length + 2);
-        if (output.WrittenCount + needed > maxArticleBytes)
+        var needed = checked((int)wireBytes.Length);
+        if (_article.WrittenCount + needed > _maxArticleBytes)
         {
-            exceeded = true;
+            _articleExceeded = true;
             return;
         }
 
-        var span = output.GetSpan(needed);
-        lineBytes.CopyTo(span);
-        span[(int)lineBytes.Length] = (byte)'\r';
-        span[(int)lineBytes.Length + 1] = (byte)'\n';
-        output.Advance(needed);
+        var span = _article.GetSpan(needed);
+        wireBytes.CopyTo(span);
+        _article.Advance(needed);
     }
 
     private static bool IsTakeThisVerb(
