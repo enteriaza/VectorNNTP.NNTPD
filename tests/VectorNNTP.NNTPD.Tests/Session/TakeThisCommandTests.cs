@@ -475,7 +475,7 @@ public sealed class TakeThisCommandTests
         await duplex.WriteClientAsync(
             "CHECK <c@ex.com>\r\n" + BuildTakeThis("<in@body>", stored) + "QUIT\r\n");
 
-        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+        Assert.Equal("238 <c@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
         Assert.Equal("239 <in@body>", await duplex.ReadClientLineAsync());
         var article = await queue.DequeueAsync(CancellationToken.None);
         Assert.Equal(stored, Encoding.ASCII.GetString(article!.Payload.Span));

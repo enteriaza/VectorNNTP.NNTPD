@@ -92,7 +92,7 @@ public sealed class TransitPeerAuthorizationTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("CHECK <x@ex.com>");
-        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+        Assert.Equal("238 <x@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("IHAVE <x@ex.com>");
         Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());

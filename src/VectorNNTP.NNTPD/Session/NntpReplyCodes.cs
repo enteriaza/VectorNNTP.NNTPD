@@ -39,6 +39,9 @@ public static class NntpReplyCodes
     /// <summary>Article exists / selected (STAT; RFC 3977 §6.2.4).</summary>
     public const int ArticleExists = 223;
 
+    /// <summary>Send article to be transferred (CHECK; RFC 4644 §2.4).</summary>
+    public const int SendArticleToBeTransferred = 238;
+
     /// <summary>Article transferred OK (TAKETHIS; RFC 4644 §2.5).</summary>
     public const int ArticleTransferredOk = 239;
 
