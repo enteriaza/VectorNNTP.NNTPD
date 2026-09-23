@@ -17,6 +17,9 @@ TestResults/
 publish/
 artifacts/
 
+## Experimental / historical knowledge base (not production)
+.artifacts/
+
 ## OS
 Thumbs.db
 Desktop.ini

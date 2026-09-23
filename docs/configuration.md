@@ -33,6 +33,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Bounded in-memory ingestion queue size (`1–100000`) |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
 | `Transit:AllowedPeers` | string array | `[]` (empty) | no | Effective client IPs trusted as **transit/streaming peers**. Grants `AuthorizedTransit` + `StreamingPermitted` without authentication (not user identity). Does **not** grant reader, posting, or `IsAuthenticated`. Distinct from `ProxyHosts`. Literal IPv4/IPv6 only (no CIDR/DNS). Empty = deny-by-default. Matched against `ConnectionClientIdentity.ClientAddress` (PROXY effective client when used). |
+| `Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -139,9 +140,12 @@ Example:
 
 ```json
 "Transit": {
-  "AllowedPeers": [ "198.18.0.70", "2001:db8::feed" ]
+  "AllowedPeers": [ "198.18.0.70", "2001:db8::feed" ],
+  "StreamOutstandingArticleDepth": 8
 }
 ```
+
+`StreamOutstandingArticleDepth` bounds concurrent outbound STREAM article TX operations (valid `4–16`). It is independent of the TAKETHIS ingestion queue and the response writer Channel.
 
 ## TCP ports
 

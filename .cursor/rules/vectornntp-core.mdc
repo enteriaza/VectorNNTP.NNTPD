@@ -20,6 +20,7 @@ alwaysApply: true
 - Lifecycle: `ApplicationLifecycle` + `ApplicationServiceManager` + `IApplicationService` (see `docs/architecture.md`)
 - Config contract: `docs/configuration.md` (authoritative over memory)
 - NNTP standards library: `docs/standards/rfcs/` — read applicable RFC text before protocol work
+- Experimental/historical material: `.artifacts/` (index: `.artifacts/ARTIFACT-INDEX.md`; policy: `.artifacts/REPOSITORY-ARTIFACT-POLICY.md`). Does not override `src/` / `tests/` / accepted `docs/`.
 
 ## Evidence and honesty
 

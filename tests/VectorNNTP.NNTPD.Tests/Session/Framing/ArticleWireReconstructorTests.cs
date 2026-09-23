@@ -1,12 +1,8 @@
 using System.Buffers;
 using System.IO.Pipelines;
 using System.Text;
-using VectorNNTP.NNTPD.MultilineFramerBench.ContinuousStream;
-using VectorNNTP.NNTPD.MultilineFramerBench.Corpus;
 using VectorNNTP.NNTPD.Session.Framing;
 using Xunit;
-using BenchWire = VectorNNTP.NNTPD.MultilineFramerBench.Corpus.ArticleWireReconstructor;
-using ArticleWireReconstructor = VectorNNTP.NNTPD.Session.Framing.ArticleWireReconstructor;
 
 namespace VectorNNTP.NNTPD.Tests.Session.Framing;
 
@@ -39,12 +35,10 @@ public sealed class ArticleWireReconstructorTests
     [Fact]
     public async Task Restuff_LoneDotContentLine_DoesNotTerminateEarly()
     {
-        // Stored representation of a content line that was ".\r\n" after destuff of "..\r\n"
         var stored = ".\r\n"u8.ToArray();
         var wire = ArticleWireReconstructor.RestuffArticle(stored);
         Assert.Equal("..\r\n.\r\n"u8.ToArray(), wire);
 
-        // Production reader must consume one article with payload ".\r\n"
         var reader = PipeReader.Create(new ReadOnlySequence<byte>(wire));
         var result = await NntpMultilineDataReader
             .ReadArticleAsync(reader, 1024, CancellationToken.None);
@@ -76,33 +70,34 @@ public sealed class ArticleWireReconstructorTests
     public void BuildTakeThisTransaction_PrefixesCommand()
     {
         var stored = "body\r\n"u8.ToArray();
-        var txn = BenchWire.BuildTakeThisTransaction("<a@b>", stored);
+        var txn = FramingWireFactory.BuildTakeThisTransaction("<a@b>", stored);
         Assert.StartsWith("TAKETHIS <a@b>\r\n", Encoding.ASCII.GetString(txn));
         Assert.EndsWith(".\r\n", Encoding.ASCII.GetString(txn));
     }
 
     [Fact]
-    public void ContinuousParser_DoesNotTreatCommandsInsideArticleAsControl()
+    public async Task ContinuousParser_DoesNotTreatCommandsInsideArticleAsControl()
     {
         var stored = Encoding.ASCII.GetBytes("QUIT\r\nCHECK x\r\nTAKETHIS y\r\n");
-        var txn = BenchWire.BuildTakeThisTransaction("<in@body>", stored);
-        var next = BenchWire.BuildTakeThisTransaction("<next@id>", "x\r\n"u8);
+        var txn = FramingWireFactory.BuildTakeThisTransaction("<in@body>", stored);
+        var next = FramingWireFactory.BuildTakeThisTransaction("<next@id>", "x\r\n"u8);
         var stream = txn.Concat(next).ToArray();
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(stream), sink);
+        var result = await ProductionTakethisStream.ParseAsync(stream);
         Assert.True(result.IsComplete);
         Assert.Equal(2, result.Articles);
         Assert.Equal(0, result.Quits);
         Assert.Equal(0, result.Checks);
+        Assert.Equal(stored, result.Payloads[0].ToArray());
     }
 
     [Fact]
-    public void ProductionAndBenchRestuff_AreByteIdentical()
+    public void Restuff_IsDeterministic_AndMatchesByteEstimate()
     {
         var stored = Encoding.ASCII.GetBytes(".a\r\nbb\r\n..c\r\n");
-        Assert.Equal(
-            BenchWire.RestuffArticle(stored),
-            ArticleWireReconstructor.RestuffArticle(stored));
+        var first = ArticleWireReconstructor.RestuffArticle(stored);
+        var second = ArticleWireReconstructor.RestuffArticle(stored);
+        Assert.Equal(first, second);
+        Assert.Equal(first.Length, ArticleWireReconstructor.EstimateRestuffedWireBytes(stored));
     }
 }
 
@@ -130,7 +125,6 @@ public sealed class MessageIdDigestTests
     [Fact]
     public void ExtractMessageId_AcceptsBareLfAfterPath()
     {
-        // Observed in corpus: Path terminated with LF only, then Message-ID with CRLF.
         var stored = Encoding.ASCII.GetBytes(
             "Path: host!not-for-mail\n" +
             "Message-ID: <barelf@test.local>\r\n" +

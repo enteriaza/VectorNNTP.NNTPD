@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Session.Commands;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -89,6 +90,13 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
                 failures.Add(
                     $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.AllowedPeers)}[{i}] must not be an any-address wildcard; use an explicit peer address.");
             }
+        }
+
+        var depth = transit.StreamOutstandingArticleDepth;
+        if (!NntpStreamArticleTxScheduler.IsValidDepth(depth))
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.Transit)}.{nameof(TransitOptions.StreamOutstandingArticleDepth)} must be between {NntpStreamArticleTxScheduler.MinDepth} and {NntpStreamArticleTxScheduler.MaxDepth}.");
         }
     }
 

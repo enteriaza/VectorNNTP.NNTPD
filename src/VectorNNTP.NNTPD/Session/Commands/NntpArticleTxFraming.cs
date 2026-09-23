@@ -4,18 +4,22 @@ using System.Text;
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>
-/// Framing kind for shared article TX. Mode-independent: callers choose framing; the TX primitive
-/// does not branch on MODE READER vs MODE STREAM.
+/// Wire framing kind for shared article TX. Mode-independent: callers choose framing; the TX
+/// primitive does not branch on MODE READER vs MODE STREAM and does not perform article lookup.
 /// </summary>
+/// <remarks>
+/// <c>Customer*</c> names mean RFC 3977 ARTICLE/BODY response shapes for externally supplied
+/// bytes — not an NNTPD customer article store.
+/// </remarks>
 public enum NntpArticleTxFrameKind
 {
-    /// <summary>Customer ARTICLE: <c>220 n|0 &lt;message-id&gt;\r\n</c> + full article + terminator.</summary>
+    /// <summary>ARTICLE wire shape: <c>220 n|0 &lt;message-id&gt;\r\n</c> + full article + terminator.</summary>
     CustomerArticle = 0,
 
     /// <summary>Peer TAKETHIS-style feed: <c>TAKETHIS &lt;message-id&gt;\r\n</c> + article + terminator.</summary>
     PeerTakeThis = 1,
 
-    /// <summary>Customer BODY: <c>222 n|0 &lt;message-id&gt;\r\n</c> + body only + terminator.</summary>
+    /// <summary>BODY wire shape: <c>222 n|0 &lt;message-id&gt;\r\n</c> + body only + terminator.</summary>
     CustomerBody = 2,
 }
 

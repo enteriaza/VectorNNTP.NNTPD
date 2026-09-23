@@ -8,7 +8,8 @@ using Xunit;
 namespace VectorNNTP.NNTPD.Tests.Session.Commands;
 
 /// <summary>
-/// Phase 2: ARTICLE/BODY wire shapes on the shared TX path (handlers remain blocked on storage).
+/// ARTICLE/BODY wire shapes on the shared TX path from externally supplied destuffed bytes
+/// (handlers remain NotImplemented; storage/catalog is out of scope for NNTPD).
 /// </summary>
 public sealed class NntpArticleBodyTxIntegrationTests
 {
@@ -219,9 +220,9 @@ public sealed class NntpArticleBodyTxIntegrationTests
     }
 
     [Fact]
-    public void ArticleHandlers_RemainNotImplemented_UntilStorageExists()
+    public void ArticleHandlers_RemainNotImplemented_StorageOutOfScope()
     {
-        // Structural guard: Phase 2 must not invent a catalog by wiring fake lookups.
+        // Structural guard: do not invent catalog/lookup by wiring fake retrieval.
         var src = File.ReadAllText(
             Path.Combine(
                 FindRepoRoot(),

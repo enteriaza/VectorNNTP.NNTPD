@@ -241,7 +241,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory,
                 articleIngestion: _articleIngestion,
-                transitPeerAuthorization: _transitPeerAuthorization);
+                transitPeerAuthorization: _transitPeerAuthorization,
+                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

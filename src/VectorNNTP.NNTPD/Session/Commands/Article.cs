@@ -7,14 +7,16 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Deliberate placeholders until article <strong>retrieval</strong> / selection state exist.
-/// Ingestion (TAKETHIS → spool) is not a substitute for a customer article catalog.
+/// Deliberate <see cref="NntpCommandNotImplemented"/> placeholders. Article storage, catalog,
+/// GROUP selection, and Message-ID / article-number lookup are <strong>out of scope</strong> for
+/// VectorNNTP.NNTPD (network / data plane only). Do not invent retrieval here.
 /// </para>
 /// <para>
-/// Phase 2 TX readiness: when a lookup API exists, handlers must transmit via the shared
-/// article TX data plane — <see cref="NntpResponseWriter.WriteCustomerArticleAsync"/> /
-/// <see cref="NntpResponseWriter.WriteCustomerBodyAsync"/> (or WriteArticleAsync with
-/// <see cref="NntpArticleTxFraming"/>) — not per-line
+/// TAKETHIS → spool ingestion is an ingress / application boundary — not an article repository
+/// for ARTICLE/BODY. Callers that already hold destuffed article bytes transmit via the shared
+/// TX path (<see cref="NntpResponseWriter.WriteArticleAsync(ReadOnlyMemory{byte}, NntpArticleTxFraming, CancellationToken)"/> /
+/// <see cref="NntpResponseWriter.WriteCustomerArticleAsync"/> /
+/// <see cref="NntpResponseWriter.WriteCustomerBodyAsync"/>), not per-line
 /// <see cref="NntpResponseWriter.WriteMultilineDataAsync"/>.
 /// </para>
 /// </remarks>

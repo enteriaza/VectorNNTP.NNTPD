@@ -18,8 +18,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// delivery of the prior 239/439.
 /// </para>
 /// <para>
-/// Large article bodies use the WriteArticleAsync APIs: restuff → bounded owned chunks →
-/// the same ordered Channel (no second TX pipeline; mode-independent).
+/// Large article bodies use the WriteArticleAsync APIs: externally supplied destuffed bytes →
+/// restuff → bounded owned chunks → the same ordered Channel (no second TX pipeline;
+/// mode-independent). The writer does not own article storage or lookup.
 /// </para>
 /// </remarks>
 public sealed class NntpResponseWriter : IAsyncDisposable
@@ -146,9 +147,10 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     /// Writes one framed article through the shared bounded article TX path (default 64 KiB chunks).
     /// </summary>
     /// <param name="storedDestuffedArticle">
-    /// Stored de-stuffed article bytes (no terminating <c>.\r\n</c>); see <see cref="ArticleWireReconstructor"/>.
+    /// Destuffed article payload bytes supplied by the caller (no terminating <c>.\r\n</c>);
+    /// see <see cref="ArticleWireReconstructor"/>. Not an NNTPD storage API.
     /// </param>
-    /// <param name="framing">Mode-independent framing (ARTICLE or TAKETHIS header).</param>
+    /// <param name="framing">Mode-independent wire framing (e.g. 220 ARTICLE, 222 BODY, TAKETHIS).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
     /// Materialized restuff → owned chunks → existing ordered Channel. Does not inspect session mode.
@@ -167,8 +169,8 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     /// <summary>
     /// Writes one framed article through the shared bounded article TX path with an explicit chunk budget.
     /// </summary>
-    /// <param name="storedDestuffedArticle">Stored de-stuffed article bytes.</param>
-    /// <param name="framing">Mode-independent framing.</param>
+    /// <param name="storedDestuffedArticle">Caller-supplied destuffed article payload bytes.</param>
+    /// <param name="framing">Mode-independent wire framing.</param>
     /// <param name="chunkBytes">Production chunk budget (64–256 KiB).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public ValueTask WriteArticleAsync(
@@ -195,12 +197,15 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     }
 
     /// <summary>
-    /// Writes a customer ARTICLE response (full stored article) via the shared chunked TX path.
+    /// Convenience: ARTICLE-style (220) response from caller-supplied full destuffed article bytes.
     /// </summary>
-    /// <param name="storedDestuffedArticle">Full de-stuffed stored article (headers + body).</param>
+    /// <param name="storedDestuffedArticle">Full destuffed article (headers + body); external input.</param>
     /// <param name="messageId">Message-id for the 220 status line.</param>
-    /// <param name="articleNumber">Article number, or 0 when selected by message-id.</param>
+    /// <param name="articleNumber">Article number for the status line, or 0 when mid-selected.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Name reflects RFC 3977 ARTICLE wire shape, not an NNTPD customer repository.
+    /// </remarks>
     public ValueTask WriteCustomerArticleAsync(
         ReadOnlyMemory<byte> storedDestuffedArticle,
         string messageId,
@@ -212,17 +217,18 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             cancellationToken);
 
     /// <summary>
-    /// Writes a customer BODY response (body only) via the shared chunked TX path.
+    /// Convenience: BODY-style (222) response; strips headers at the first <c>\r\n\r\n</c>.
     /// </summary>
     /// <param name="storedDestuffedArticle">
-    /// Full de-stuffed stored article; headers are stripped at the first <c>\r\n\r\n</c>.
+    /// Full destuffed article; headers stripped at the first blank line.
     /// When no blank line exists, an empty body is transmitted (still with 222 + terminator).
     /// </param>
     /// <param name="messageId">Message-id for the 222 status line.</param>
-    /// <param name="articleNumber">Article number, or 0 when selected by message-id.</param>
+    /// <param name="articleNumber">Article number for the status line, or 0 when mid-selected.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
     /// Same Channel → pump → PipeWriter path as ARTICLE. Does not create a BODY-specific TX stack.
+    /// Name reflects RFC 3977 BODY wire shape, not storage ownership.
     /// </remarks>
     public ValueTask WriteCustomerBodyAsync(
         ReadOnlyMemory<byte> storedDestuffedArticle,
@@ -243,11 +249,11 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     }
 
     /// <summary>
-    /// Writes a customer BODY response from an already-separated body payload via the shared TX path.
+    /// Convenience: BODY-style (222) response from an already-separated destuffed body payload.
     /// </summary>
-    /// <param name="storedDestuffedBody">De-stuffed body bytes only (no headers; no terminator).</param>
+    /// <param name="storedDestuffedBody">Destuffed body bytes only (no headers; no terminator).</param>
     /// <param name="messageId">Message-id for the 222 status line.</param>
-    /// <param name="articleNumber">Article number, or 0 when selected by message-id.</param>
+    /// <param name="articleNumber">Article number for the status line, or 0 when mid-selected.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public ValueTask WriteCustomerBodyFromBodyAsync(
         ReadOnlyMemory<byte> storedDestuffedBody,
@@ -291,26 +297,73 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
 
+        var chunks = PrepareArticleChunks(storedDestuffedArticle, framing, chunkBytes);
+        foreach (var chunk in chunks)
+        {
+            // Ownership of `chunk` transfers to the Channel; do not mutate after enqueue.
+            await WriteAndAwaitFlushAsync(chunk, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Builds owned framed wire chunks (header + restuff) without touching the TX Channel.
+    /// </summary>
+    /// <remarks>
+    /// Used by <see cref="NntpStreamArticleTxScheduler"/> so preparation can run outside the
+    /// article-atomic enqueue gate. Caller owns the returned arrays until each is enqueued.
+    /// </remarks>
+    internal static List<byte[]> PrepareArticleChunks(
+        ReadOnlyMemory<byte> storedDestuffedArticle,
+        NntpArticleTxFraming framing,
+        int chunkBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(chunkBytes, 1);
         var header = framing.BuildHeaderBytes();
         var body = ArticleWireReconstructor.RestuffArticle(storedDestuffedArticle.Span);
         var totalLength = header.Length + body.Length;
         if (totalLength == 0)
         {
-            return;
+            return [];
         }
 
+        var chunks = new List<byte[]>((totalLength + chunkBytes - 1) / chunkBytes);
         var offset = 0;
         while (offset < totalLength)
         {
-            var remaining = totalLength - offset;
-            var take = Math.Min(chunkBytes, remaining);
+            var take = Math.Min(chunkBytes, totalLength - offset);
             var chunk = new byte[take];
             CopyFramedWire(header, body, offset, chunk.AsSpan());
+            chunks.Add(chunk);
             offset += take;
-
-            // Ownership of `chunk` transfers to the Channel; do not mutate after enqueue.
-            await WriteAndAwaitFlushAsync(chunk, cancellationToken).ConfigureAwait(false);
         }
+
+        return chunks;
+    }
+
+    /// <summary>
+    /// Enqueues an owned payload into the ordered TX Channel and returns a task that completes
+    /// when the pump has flushed that item into the outbound Pipe (not peer delivery).
+    /// </summary>
+    /// <remarks>
+    /// Does not await flush before returning. Used with a short article-atomic enqueue gate so all
+    /// chunks of one article can be admitted contiguously before awaiting backpressure.
+    /// </remarks>
+    internal async ValueTask<Task> EnqueueOwnedPayloadAsync(
+        byte[] payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await EnqueueAsync(new WriteRequest(payload, completed), cancellationToken).ConfigureAwait(false);
+        return WaitForFlushAsync(completed, cancellationToken);
+    }
+
+    private static async Task WaitForFlushAsync(TaskCompletionSource completed, CancellationToken cancellationToken)
+    {
+        using var registration = cancellationToken.Register(
+            static state => ((TaskCompletionSource)state!).TrySetCanceled(),
+            completed);
+        await completed.Task.ConfigureAwait(false);
     }
 
     private static void CopyFramedWire(byte[] header, byte[] body, int absoluteOffset, Span<byte> destination)

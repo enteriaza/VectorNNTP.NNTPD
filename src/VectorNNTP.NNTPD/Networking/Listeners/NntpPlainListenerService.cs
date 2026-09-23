@@ -222,7 +222,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 allowCleartextAuth: _options.Value.AllowCleartextAuth,
                 loggerFactory: _loggerFactory,
                 articleIngestion: _articleIngestion,
-                transitPeerAuthorization: _transitPeerAuthorization);
+                transitPeerAuthorization: _transitPeerAuthorization,
+                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             try

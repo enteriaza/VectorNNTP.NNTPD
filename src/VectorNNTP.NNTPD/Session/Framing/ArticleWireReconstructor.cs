@@ -3,19 +3,21 @@ using System.Buffers;
 namespace VectorNNTP.NNTPD.Session.Framing;
 
 /// <summary>
-/// Reconstructs NNTP multiline wire bytes from a de-stuffed stored article payload.
+/// Reconstructs NNTP multiline wire bytes from a destuffed article payload (wire-framing utility).
 /// </summary>
 /// <remarks>
 /// <para>
-/// Storage semantics (aligned with <see cref="NntpMultilineDataReader"/>):
+/// Destuffed payload convention (aligned with <see cref="NntpMultilineDataReader"/> ingest output).
+/// This type does not own article storage or catalogs; callers supply bytes (bench corpus, spool
+/// snapshot, peer feed, etc.).
 /// </para>
 /// <list type="bullet">
-/// <item>Terminator <c>.\r\n</c> is not stored.</item>
-/// <item>Dot-stuffing is removed on ingest: a wire line starting with <c>..</c> is stored with one leading <c>.</c> removed.</item>
-/// <item>Stored lines use <c>\r\n</c> (CRLF). A final line without CRLF is still emitted with CRLF on the wire.</item>
+/// <item>Terminator <c>.\r\n</c> is not part of the destuffed payload.</item>
+/// <item>Dot-stuffing is removed on ingest: a wire line starting with <c>..</c> is kept with one leading <c>.</c> removed.</item>
+/// <item>Payload lines use <c>\r\n</c> (CRLF). A final line without CRLF is still emitted with CRLF on the wire.</item>
 /// </list>
 /// <para>
-/// Re-stuffing (RFC 3977 §3.1.1): any stored line whose content begins with <c>.</c> gets an extra
+/// Re-stuffing (RFC 3977 §3.1.1): any destuffed line whose content begins with <c>.</c> gets an extra
 /// <c>.</c> prepended on the wire, then <c>\r\n</c>, then the article is terminated with <c>.\r\n</c>.
 /// </para>
 /// </remarks>
@@ -104,9 +106,9 @@ public static class ArticleWireReconstructor
     }
 
     /// <summary>
-    /// Splits a stored de-stuffed article into header block and body at the first blank line (<c>\r\n\r\n</c>).
+    /// Splits a destuffed article into header block and body at the first blank line (<c>\r\n\r\n</c>).
     /// </summary>
-    /// <param name="storedDestuffedArticle">Full stored article (headers + body; no NNTP terminator).</param>
+    /// <param name="storedDestuffedArticle">Full destuffed article (headers + body; no NNTP terminator).</param>
     /// <param name="headers">Header bytes including the blank-line separator when present.</param>
     /// <param name="body">Body bytes after the blank line (may be empty).</param>
     /// <returns>
@@ -115,7 +117,7 @@ public static class ArticleWireReconstructor
     /// </returns>
     /// <remarks>
     /// Used by BODY TX to transmit only the body portion. Does not invent alternate separators;
-    /// matches CRLF blank-line semantics of the stored article representation.
+    /// matches CRLF blank-line semantics of the destuffed payload convention.
     /// </remarks>
     public static bool TrySplitHeadersAndBody(
         ReadOnlySpan<byte> storedDestuffedArticle,

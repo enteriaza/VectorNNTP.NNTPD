@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
+    <!-- Bench-only visibility for Phase 3D data-plane timing around PrepareArticleChunks / EnqueueOwnedPayloadAsync. -->
+    <InternalsVisibleTo Include="VectorNNTP.NNTPD.CommandResponsePathBench" />
   </ItemGroup>
 
   <ItemGroup>

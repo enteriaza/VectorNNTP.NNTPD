@@ -1,0 +1,32 @@
+---
+description: Placement of production vs experimental/historical material; artifact memory
+alwaysApply: true
+---
+
+# Production vs artifacts
+
+| Kind | Location |
+|------|----------|
+| Production code | `src/` |
+| Production tests | `tests/` |
+| Permanent docs (explicitly accepted only) | `docs/` |
+| Experiments, benches, audits, generated reports, prototypes | `.artifacts/` |
+
+If unsure a document is permanent: write it under `.artifacts/`. Never default to `docs/SOMETHING.md`.
+
+Do not put experimental/benchmark/prototype/diagnostic code under `src/`, `tests/`, `docs/`, or `tools/` unless the user explicitly promotes it.
+
+Promotion (`.artifacts/` → `docs/` or `src/`/`tests/`) requires an explicit user decision.
+
+## Source of truth
+
+1. Current `src/`
+2. Current `tests/`
+3. Accepted `docs/`
+4. `.artifacts/` (historical evidence only)
+
+Before command or data-plane work: inspect production code, then `.artifacts/ARTIFACT-INDEX.md`, then relevant artifacts. Do not treat an old report as current architecture.
+
+Policy: `.artifacts/REPOSITORY-ARTIFACT-POLICY.md`.
+
+Do not delete or “clean up” historical artifacts. Do not implement features or optimize as part of indexing/hygiene tasks.

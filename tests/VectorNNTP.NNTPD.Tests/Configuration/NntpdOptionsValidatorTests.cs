@@ -58,6 +58,34 @@ public sealed class NntpdOptionsValidatorTests
         var result = CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
     }
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(16)]
+    public void Validate_Succeeds_ForValidStreamOutstandingArticleDepth(int depth)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.Transit.StreamOutstandingArticleDepth = depth;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(17)]
+    [InlineData(0)]
+    [InlineData(64)]
+    public void Validate_Fails_ForInvalidStreamOutstandingArticleDepth(int depth)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.Transit.StreamOutstandingArticleDepth = depth;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            f => f.Contains("StreamOutstandingArticleDepth", StringComparison.Ordinal));
+    }
 }
 
 public sealed class NntpdConfigurationTests

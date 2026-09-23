@@ -1,0 +1,592 @@
+{
+  "Directory": "C:\\Users\\chrisk\\source\\repos\\Vector.NNTP\\Vector.NNTP.NNTPD\\bin\\x64\\Debug\\net8.0\\win-x64\\Logs",
+  "AnalyzedUtc": "2026-09-22T18:13:15.2167382+00:00",
+  "Files": [
+    {
+      "Name": "news-20260918.log",
+      "LengthBytes": 2135224,
+      "LastWriteUtc": "2026-09-18T21:59:57.512465+00:00",
+      "CreationUtc": "2026-09-17T22:00:04.2170472+00:00"
+    },
+    {
+      "Name": "news-20260919.log",
+      "LengthBytes": 8509606,
+      "LastWriteUtc": "2026-09-19T21:59:58.7212884+00:00",
+      "CreationUtc": "2026-09-18T22:00:04.1060837+00:00"
+    },
+    {
+      "Name": "news-20260920.log",
+      "LengthBytes": 621233,
+      "LastWriteUtc": "2026-09-20T21:59:53.3453207+00:00",
+      "CreationUtc": "2026-09-19T22:00:08.3779694+00:00"
+    },
+    {
+      "Name": "news-20260921.log",
+      "LengthBytes": 685905,
+      "LastWriteUtc": "2026-09-21T21:58:45.8720041+00:00",
+      "CreationUtc": "2026-09-20T22:00:03.6898828+00:00"
+    },
+    {
+      "Name": "news-20260922.log",
+      "LengthBytes": 584577,
+      "LastWriteUtc": "2026-09-22T18:13:13.1076625+00:00",
+      "CreationUtc": "2026-09-21T22:00:04.2693113+00:00"
+    }
+  ],
+  "UnparsedLineCount": 86,
+  "UnparsedLineSamples": [
+    "Sep 18 07:40:03.009 c BlueWorldHosting \u003C118iirg$vtnj$1@dont-email.me\u003E Cancelling \u003C118hnf2$mu1e$1@dont-email.me\u003E",
+    "Sep 18 11:31:36.729 c BlueWorldHosting \u003C118j0do$7h5$1@news.kraft-s.ru\u003E Cancelling \u003C118j0ct$7gs$1@news.kraft-s.ru\u003E",
+    "Sep 18 12:37:13.219 c BlueWorldHosting \u003Cnh4iioFcj1eU2@mid.individual.net\u003E Cancelling \u003Cnh4ickFcj1eU1@mid.individual.net\u003E",
+    "Sep 18 16:40:30.206 c BlueWorldHosting \u003C118jigt$g45i$1@solani.org\u003E Cancelling \u003C118gvmg$29ahu$1@paganini.bofh.team\u003E",
+    "Sep 18 17:13:41.542 c BlueWorldHosting \u003C118jkf5$fs8$2@reader1.panix.com\u003E Cancelling \u003C118jekn$1si$1@reader1.panix.com\u003E",
+    "Sep 18 18:15:10.110 c BlueWorldHosting \u003Ccancel.118jna1$1ee8v$1@dont-email.me\u003E Cancelling \u003C118jna1$1ee8v$1@dont-email.me\u003E",
+    "Sep 18 18:40:26.012 c BlueWorldHosting \u003CChQxOB1OwwVoogliYI-Tz0Zd60g@jntp\u003E Cancelling \u003CgeH2UOSsDbWgCIcdXCdjC0rxAkY@jntp\u003E",
+    "Sep 18 21:29:53.742 c BlueWorldHosting \u003C118k3fg$1jq5j$1@dont-email.me\u003E Cancelling \u003C118k2fe$1jfe0$1@dont-email.me\u003E",
+    "Sep 19 14:19:00.000 c BlueWorldHosting \u003C1s1ot37.bej6ceespibkN@ID-7682.user.dfncis.de\u003E Cancelling \u003C1s1ook1.b3b8umbdubzrN@ID-7682.user.dfncis.de\u003E",
+    "Sep 19 14:49:35.053 c BlueWorldHosting \u003CRbOwjjCCn5FcGqT4vZUvZ5P_XhQ@jntp\u003E Cancelling \u003C2oVdSg6lFOfhg8dIhNobFj5OMR4@jntp\u003E",
+    "Sep 19 15:22:03.905 c BlueWorldHosting \u003CvzwkuUqfYLl3DwPAyE4ZlRaNLFk@jntp\u003E Cancelling \u003Ci1GSqcFl9h_TGx5UfO3n80d6etI@jntp\u003E",
+    "Sep 19 16:30:57.605 c BlueWorldHosting \u003CEN0eWKAqKEdKKqJyBTUqrObhhtQ@jntp\u003E Cancelling \u003CNo5D0A27zrwOkP6S9U8pYQ1N3oY@jntp\u003E",
+    "Sep 19 20:25:59.993 c BlueWorldHosting \u003Cytue_pM2YKXhajSyQ34i3c9vl60@jntp\u003E Cancelling \u003CU5XNUdkqsRIhBWsXQDsNIBvoWrQ@jntp\u003E",
+    "Sep 19 22:00:30.990 c BlueWorldHosting \u003C118mpkt$g0vb$1@solani.org\u003E Cancelling \u003C118motr$g0jq$1@solani.org\u003E",
+    "Sep 19 23:11:03.304 c BlueWorldHosting \u003C118mtp5$2jrd6$1@dont-email.me\u003E Cancelling \u003CErBrS.547364$9H1.488661@fx01.ams4\u003E",
+    "Sep 19 23:20:36.882 c BlueWorldHosting \u003C118mub3$2k0da$1@dont-email.me\u003E Cancelling \u003CY%CrS.474944$5D1.122561@fx06.ams4\u003E",
+    "Sep 19 23:21:00.777 c BlueWorldHosting \u003C118mubr$2k0d9$1@dont-email.me\u003E Cancelling \u003CY%CrS.474944$5D1.122561@fx06.ams4\u003E",
+    "Sep 20 00:08:08.515 c BlueWorldHosting \u003C118n147$8ln$2@reader1.panix.com\u003E Cancelling \u003C118n0vs$5qb$1@reader1.panix.com\u003E",
+    "Sep 20 00:38:12.695 c BlueWorldHosting \u003C118n2si$2lhg4$1@dont-email.me\u003E Cancelling \u003CD8ErS.258862$kqHe.189724@fx07.ams4\u003E",
+    "Sep 20 00:38:29.700 c BlueWorldHosting \u003C118n2t4$2lhg4$2@dont-email.me\u003E Cancelling \u003CD8ErS.258862$kqHe.189724@fx07.ams4\u003E",
+    "Sep 20 00:49:05.216 c BlueWorldHosting \u003C118n3gv$2ln7b$1@dont-email.me\u003E Cancelling \u003CUiErS.258863$kqHe.48358@fx07.ams4\u003E",
+    "Sep 20 05:35:32.137 c BlueWorldHosting \u003C1s1q6i3.888x091q96j3aN@ID-7682.user.dfncis.de\u003E Cancelling \u003C1s1pugz.aa9zxuwjbggdN@ID-7682.user.dfncis.de\u003E",
+    "Sep 20 06:20:48.087 c BlueWorldHosting \u003C1s1q1kk.9yt0nu1unwfooN@ID-7682.user.dfncis.de\u003E Cancelling \u003C1s1q6i5.16obqp6171m0ueN@ID-7682.user.dfncis.de\u003E",
+    "Sep 20 07:38:33.019 c BlueWorldHosting \u003Cnh99qmF52o0U2@mid.individual.net\u003E Cancelling \u003Cnh99aqF50gsU1@mid.individual.net\u003E",
+    "Sep 20 11:06:51.791 c BlueWorldHosting \u003C118o7nb$22hf$1@solani.org\u003E Cancelling \u003C118o7k5$22fn$1@solani.org\u003E",
+    "Sep 20 13:53:26.562 c BlueWorldHosting \u003CAABqr8kyuQsAADKw.A3.flnews@ferrat.uplawski.eu\u003E Cancelling \u003CAABqr8j4kRwAAAgO.A3.flnews@ferrat.uplawski.eu\u003E",
+    "Sep 20 14:34:00.070 c BlueWorldHosting \u003CcfvZvnll_c9DgHTMYzoJGLC41eQ@jntp\u003E Cancelling \u003C1sIgCDMyMPh51S6eALsPjJmqR6s@jntp\u003E",
+    "Sep 20 15:51:00.141 c BlueWorldHosting \u003C06pvalhnlsnldf23jac7okavvuldcsqsou@kgbh.org\u003E Cancelling \u003Cbjoval1sv2m4ntne5g0tajnb6lsnu0rsu5@kgbh.org\u003E",
+    "Sep 20 17:26:54.739 c BlueWorldHosting \u003C118otvr$37et7$3@dont-email.me\u003E Cancelling \u003C118otsc$37et7$2@dont-email.me\u003E",
+    "Sep 20 18:26:21.806 c BlueWorldHosting \u003C118p1fc$392kj$1@dont-email.me\u003E Cancelling \u003C118o1ha$2tpta$1@dont-email.me\u003E",
+    "Sep 20 20:24:31.188 c BlueWorldHosting \u003C118p8ct$3bt82$1@dont-email.me\u003E Cancelling \u003C118c6fn$2o479$1@dont-email.me\u003E",
+    "Sep 20 20:24:37.749 c BlueWorldHosting \u003C118p8d4$3btaf$1@dont-email.me\u003E Cancelling \u003C118dmu3$38fgn$1@dont-email.me\u003E"
+  ],
+  "CaptureStartUtc": "2026-09-18T00:00:04.216+00:00",
+  "CaptureEndUtc": "2026-09-22T20:13:12.798+00:00",
+  "BlueWorldHosting": {
+    "Name": "BlueWorldHosting",
+    "AcceptedCount": 45081,
+    "RejectedCount": 909,
+    "TotalBytes": 241239048,
+    "MinBytes": 512,
+    "MaxBytes": 406735,
+    "MeanBytes": 5351.235509416384,
+    "P50": 2139,
+    "P75": 3849,
+    "P90": 9400,
+    "P95": 44938,
+    "P99": 45002,
+    "P999": 51950,
+    "ArticlesPerSec": 0.10774911634658328,
+    "ArticlesPerMin": 6.464946980794997,
+    "BytesPerSec": 576.5908975020739,
+    "BytesPerMin": 34595.45385012443,
+    "Histogram": [
+      {
+        "Label": "\u003C1 KiB",
+        "MinInclusive": 0,
+        "MaxExclusive": 1024,
+        "ArticleCount": 2808,
+        "ArticlePercent": 6.228788181273707,
+        "TotalBytes": 2153994,
+        "BytePercent": 0.8928877882157784
+      },
+      {
+        "Label": "1\u20134 KiB",
+        "MinInclusive": 1024,
+        "MaxExclusive": 4096,
+        "ArticleCount": 31570,
+        "ArticlePercent": 70.0295024511435,
+        "TotalBytes": 64194199,
+        "BytePercent": 26.610202424609138
+      },
+      {
+        "Label": "4\u201316 KiB",
+        "MinInclusive": 4096,
+        "MaxExclusive": 16384,
+        "ArticleCount": 7886,
+        "ArticlePercent": 17.49295712162552,
+        "TotalBytes": 56687729,
+        "BytePercent": 23.498571010776
+      },
+      {
+        "Label": "16\u201364 KiB",
+        "MinInclusive": 16384,
+        "MaxExclusive": 65536,
+        "ArticleCount": 2795,
+        "ArticlePercent": 6.199951198952996,
+        "TotalBytes": 115380825,
+        "BytePercent": 47.82841996624029
+      },
+      {
+        "Label": "64\u2013128 KiB",
+        "MinInclusive": 65536,
+        "MaxExclusive": 131072,
+        "ArticleCount": 15,
+        "ArticlePercent": 0.03327344113928263,
+        "TotalBytes": 1377349,
+        "BytePercent": 0.570947784539425
+      },
+      {
+        "Label": "128\u2013256 KiB",
+        "MinInclusive": 131072,
+        "MaxExclusive": 262144,
+        "ArticleCount": 5,
+        "ArticlePercent": 0.011091147046427541,
+        "TotalBytes": 749124,
+        "BytePercent": 0.31053181738637936
+      },
+      {
+        "Label": "256\u2013512 KiB",
+        "MinInclusive": 262144,
+        "MaxExclusive": 524288,
+        "ArticleCount": 2,
+        "ArticlePercent": 0.004436458818571016,
+        "TotalBytes": 695828,
+        "BytePercent": 0.2884392082329889
+      },
+      {
+        "Label": "512\u2013640 KiB",
+        "MinInclusive": 524288,
+        "MaxExclusive": 655360,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "640\u2013700 KiB",
+        "MinInclusive": 655360,
+        "MaxExclusive": 716800,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "700\u2013768 KiB",
+        "MinInclusive": 716800,
+        "MaxExclusive": 786432,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "768 KiB\u20131 MiB",
+        "MinInclusive": 786432,
+        "MaxExclusive": 1048576,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "1\u20132 MiB",
+        "MinInclusive": 1048576,
+        "MaxExclusive": 2097152,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "2\u20134 MiB",
+        "MinInclusive": 2097152,
+        "MaxExclusive": 4194304,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "4\u20138 MiB",
+        "MinInclusive": 4194304,
+        "MaxExclusive": 8388608,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "\u003E8 MiB",
+        "MinInclusive": 8388608,
+        "MaxExclusive": 9223372036854775807,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      }
+    ]
+  },
+  "Giganews": {
+    "Name": "Giganews",
+    "AcceptedCount": 90098,
+    "RejectedCount": 688,
+    "TotalBytes": 67970502082,
+    "MinBytes": 971,
+    "MaxBytes": 4158598,
+    "MeanBytes": 754406.3362338786,
+    "P50": 740484,
+    "P75": 740696,
+    "P90": 792949,
+    "P95": 793507,
+    "P99": 2064121,
+    "P999": 3095536,
+    "ArticlesPerSec": 0.21534526484759567,
+    "ArticlesPerMin": 12.92071589085574,
+    "BytesPerSec": 162457.8322789889,
+    "BytesPerMin": 9747469.936739335,
+    "Histogram": [
+      {
+        "Label": "\u003C1 KiB",
+        "MinInclusive": 0,
+        "MaxExclusive": 1024,
+        "ArticleCount": 1,
+        "ArticlePercent": 0.001109902550556061,
+        "TotalBytes": 971,
+        "BytePercent": 1.4285608760526443E-06
+      },
+      {
+        "Label": "1\u20134 KiB",
+        "MinInclusive": 1024,
+        "MaxExclusive": 4096,
+        "ArticleCount": 31,
+        "ArticlePercent": 0.03440697906723789,
+        "TotalBytes": 75984,
+        "BytePercent": 0.00011178967003705883
+      },
+      {
+        "Label": "4\u201316 KiB",
+        "MinInclusive": 4096,
+        "MaxExclusive": 16384,
+        "ArticleCount": 15,
+        "ArticlePercent": 0.01664853825834092,
+        "TotalBytes": 112028,
+        "BytePercent": 0.00016481855594482558
+      },
+      {
+        "Label": "16\u201364 KiB",
+        "MinInclusive": 16384,
+        "MaxExclusive": 65536,
+        "ArticleCount": 22,
+        "ArticlePercent": 0.024417856112233346,
+        "TotalBytes": 888502,
+        "BytePercent": 0.0013071876369665566
+      },
+      {
+        "Label": "64\u2013128 KiB",
+        "MinInclusive": 65536,
+        "MaxExclusive": 131072,
+        "ArticleCount": 30,
+        "ArticlePercent": 0.03329707651668184,
+        "TotalBytes": 2701725,
+        "BytePercent": 0.003974849261434944
+      },
+      {
+        "Label": "128\u2013256 KiB",
+        "MinInclusive": 131072,
+        "MaxExclusive": 262144,
+        "ArticleCount": 85,
+        "ArticlePercent": 0.0943417167972652,
+        "TotalBytes": 16728508,
+        "BytePercent": 0.024611423319808104
+      },
+      {
+        "Label": "256\u2013512 KiB",
+        "MinInclusive": 262144,
+        "MaxExclusive": 524288,
+        "ArticleCount": 2954,
+        "ArticlePercent": 3.2786521343426047,
+        "TotalBytes": 1076462174,
+        "BytePercent": 1.5837196151668116
+      },
+      {
+        "Label": "512\u2013640 KiB",
+        "MinInclusive": 524288,
+        "MaxExclusive": 655360,
+        "ArticleCount": 109,
+        "ArticlePercent": 0.12097937801061066,
+        "TotalBytes": 62054039,
+        "BytePercent": 0.09129554306533981
+      },
+      {
+        "Label": "640\u2013700 KiB",
+        "MinInclusive": 655360,
+        "MaxExclusive": 716800,
+        "ArticleCount": 1047,
+        "ArticlePercent": 1.1620679704321961,
+        "TotalBytes": 693079248,
+        "BytePercent": 1.019676516680523
+      },
+      {
+        "Label": "700\u2013768 KiB",
+        "MinInclusive": 716800,
+        "MaxExclusive": 786432,
+        "ArticleCount": 76324,
+        "ArticlePercent": 84.71220226864081,
+        "TotalBytes": 56484295581,
+        "BytePercent": 83.10118926715742
+      },
+      {
+        "Label": "768 KiB\u20131 MiB",
+        "MinInclusive": 786432,
+        "MaxExclusive": 1048576,
+        "ArticleCount": 6525,
+        "ArticlePercent": 7.242114142378299,
+        "TotalBytes": 5180760274,
+        "BytePercent": 7.622071509417278
+      },
+      {
+        "Label": "1\u20132 MiB",
+        "MinInclusive": 1048576,
+        "MaxExclusive": 2097152,
+        "ArticleCount": 2488,
+        "ArticlePercent": 2.76143754578348,
+        "TotalBytes": 3270223492,
+        "BytePercent": 4.811239275612212
+      },
+      {
+        "Label": "2\u20134 MiB",
+        "MinInclusive": 2097152,
+        "MaxExclusive": 4194304,
+        "ArticleCount": 467,
+        "ArticlePercent": 0.5183244911096806,
+        "TotalBytes": 1183119556,
+        "BytePercent": 1.7406367758953403
+      },
+      {
+        "Label": "4\u20138 MiB",
+        "MinInclusive": 4194304,
+        "MaxExclusive": 8388608,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "\u003E8 MiB",
+        "MinInclusive": 8388608,
+        "MaxExclusive": 9223372036854775807,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      }
+    ]
+  },
+  "Combined": {
+    "Name": "Combined",
+    "AcceptedCount": 135179,
+    "RejectedCount": 1597,
+    "TotalBytes": 68211741130,
+    "MinBytes": 512,
+    "MaxBytes": 4158598,
+    "MeanBytes": 504603.09019892145,
+    "P50": 740320,
+    "P75": 740573,
+    "P90": 741105,
+    "P95": 793279,
+    "P99": 1083947,
+    "P999": 3095291,
+    "ArticlesPerSec": 0.32309438119417894,
+    "ArticlesPerMin": 19.385662871650737,
+    "BytesPerSec": 163034.423176491,
+    "BytesPerMin": 9782065.390589459,
+    "Histogram": [
+      {
+        "Label": "\u003C1 KiB",
+        "MinInclusive": 0,
+        "MaxExclusive": 1024,
+        "ArticleCount": 2809,
+        "ArticlePercent": 2.0779854859112734,
+        "TotalBytes": 2154965,
+        "BytePercent": 0.003159228842865926
+      },
+      {
+        "Label": "1\u20134 KiB",
+        "MinInclusive": 1024,
+        "MaxExclusive": 4096,
+        "ArticleCount": 31601,
+        "ArticlePercent": 23.37715177653334,
+        "TotalBytes": 64270183,
+        "BytePercent": 0.09422158404886916
+      },
+      {
+        "Label": "4\u201316 KiB",
+        "MinInclusive": 4096,
+        "MaxExclusive": 16384,
+        "ArticleCount": 7901,
+        "ArticlePercent": 5.844842764038793,
+        "TotalBytes": 56799757,
+        "BytePercent": 0.08326976567237787
+      },
+      {
+        "Label": "16\u201364 KiB",
+        "MinInclusive": 16384,
+        "MaxExclusive": 65536,
+        "ArticleCount": 2817,
+        "ArticlePercent": 2.0839035649028324,
+        "TotalBytes": 116269327,
+        "BytePercent": 0.1704535393377665
+      },
+      {
+        "Label": "64\u2013128 KiB",
+        "MinInclusive": 65536,
+        "MaxExclusive": 131072,
+        "ArticleCount": 45,
+        "ArticlePercent": 0.03328919432752129,
+        "TotalBytes": 4079074,
+        "BytePercent": 0.005980017416981011
+      },
+      {
+        "Label": "128\u2013256 KiB",
+        "MinInclusive": 131072,
+        "MaxExclusive": 262144,
+        "ArticleCount": 90,
+        "ArticlePercent": 0.06657838865504258,
+        "TotalBytes": 17477632,
+        "BytePercent": 0.025622615271893735
+      },
+      {
+        "Label": "256\u2013512 KiB",
+        "MinInclusive": 262144,
+        "MaxExclusive": 524288,
+        "ArticleCount": 2956,
+        "ArticlePercent": 2.186730187381176,
+        "TotalBytes": 1077158002,
+        "BytePercent": 1.579138699812866
+      },
+      {
+        "Label": "512\u2013640 KiB",
+        "MinInclusive": 524288,
+        "MaxExclusive": 655360,
+        "ArticleCount": 109,
+        "ArticlePercent": 0.080633826259996,
+        "TotalBytes": 62054039,
+        "BytePercent": 0.09097266536817399
+      },
+      {
+        "Label": "640\u2013700 KiB",
+        "MinInclusive": 655360,
+        "MaxExclusive": 716800,
+        "ArticleCount": 1047,
+        "ArticlePercent": 0.7745285880203286,
+        "TotalBytes": 693079248,
+        "BytePercent": 1.0160703077188846
+      },
+      {
+        "Label": "700\u2013768 KiB",
+        "MinInclusive": 716800,
+        "MaxExclusive": 786432,
+        "ArticleCount": 76324,
+        "ArticlePercent": 56.461432618971884,
+        "TotalBytes": 56484295581,
+        "BytePercent": 82.80729189033677
+      },
+      {
+        "Label": "768 KiB\u20131 MiB",
+        "MinInclusive": 786432,
+        "MaxExclusive": 1048576,
+        "ArticleCount": 6525,
+        "ArticlePercent": 4.826933177490586,
+        "TotalBytes": 5180760274,
+        "BytePercent": 7.5951151343965115
+      },
+      {
+        "Label": "1\u20132 MiB",
+        "MinInclusive": 1048576,
+        "MaxExclusive": 2097152,
+        "ArticleCount": 2488,
+        "ArticlePercent": 1.8405225663749547,
+        "TotalBytes": 3270223492,
+        "BytePercent": 4.7942237477379575
+      },
+      {
+        "Label": "2\u20134 MiB",
+        "MinInclusive": 2097152,
+        "MaxExclusive": 4194304,
+        "ArticleCount": 467,
+        "ArticlePercent": 0.34546786113227645,
+        "TotalBytes": 1183119556,
+        "BytePercent": 1.7344808040380832
+      },
+      {
+        "Label": "4\u20138 MiB",
+        "MinInclusive": 4194304,
+        "MaxExclusive": 8388608,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      },
+      {
+        "Label": "\u003E8 MiB",
+        "MinInclusive": 8388608,
+        "MaxExclusive": 9223372036854775807,
+        "ArticleCount": 0,
+        "ArticlePercent": 0,
+        "TotalBytes": 0,
+        "BytePercent": 0
+      }
+    ]
+  },
+  "OtherAcceptedFeeds": {},
+  "ByteThresholdPercentsGiganews": {
+    "\u003E=64 KiB": 99.99841477557618,
+    "\u003E=128 KiB": 99.99443992631474,
+    "\u003E=256 KiB": 99.96982850299493,
+    "\u003E=512 KiB": 98.38610888782812,
+    "\u003E=640 KiB": 98.29481334476279,
+    "\u003E=700 KiB": 97.27513682808225,
+    "\u003E=768 KiB": 14.17394756092483,
+    "\u003E=1 MiB": 6.551876051507552,
+    "\u003E=2 MiB": 1.7406367758953403,
+    "\u003E=4 MiB": 0
+  },
+  "ByteThresholdPercentsCombined": {
+    "\u003E=64 KiB": 99.64889588209812,
+    "\u003E=128 KiB": 99.64291586468114,
+    "\u003E=256 KiB": 99.61729324940924,
+    "\u003E=512 KiB": 98.03815454959638,
+    "\u003E=640 KiB": 97.9471818842282,
+    "\u003E=700 KiB": 96.93111157650932,
+    "\u003E=768 KiB": 14.123819686172553,
+    "\u003E=1 MiB": 6.528704551776041,
+    "\u003E=2 MiB": 1.7344808040380832,
+    "\u003E=4 MiB": 0
+  },
+  "Temporal": {
+    "Peak1sArticlesCombined": 242,
+    "Peak1sBytesCombined": 176316832,
+    "Peak1sArticlesGiganews": 242,
+    "Peak1sBytesGiganews": 176316832,
+    "Peak1sArticlesBlueWorld": 10,
+    "Peak1sBytesBlueWorld": 414336,
+    "Peak10sBytesCombined": 962349605,
+    "Peak60sBytesCombined": 5495748466,
+    "Peak10sBytesGiganews": 962349605,
+    "Peak60sBytesGiganews": 5495748466,
+    "GiganewsFirstUtc": "2026-09-18T14:09:24.459+00:00",
+    "GiganewsLastUtc": "2026-09-19T08:51:46.3+00:00",
+    "GiganewsActiveSeconds": 848,
+    "GiganewsPatternNotes": "Giganews spans 18.71 hours wall clock with 848 distinct active UTC seconds (106.2 articles/active-sec). Pattern consistent with sustained high-volume runs rather than isolated single articles."
+  },
+  "Profiles": {
+    "ProfileTextBytes": 2139,
+    "ProfileBinaryMedianBytes": 740484,
+    "ProfileBinaryP90Bytes": 792949,
+    "ProfileBinaryP95Bytes": 793507,
+    "ProfileBinaryP99Bytes": 2064121,
+    "ProfileByteWeightedBytes": 740504,
+    "ProfileLargeBytes": 4158598,
+    "ProfilePathologicalBytes": 4158598
+  }
+}

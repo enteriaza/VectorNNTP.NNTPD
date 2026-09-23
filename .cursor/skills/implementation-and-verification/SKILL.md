@@ -23,10 +23,10 @@ Execute a complete engineering task continuously, safely, and with verified resu
 1. **Restate** the task and acceptance criteria.
 2. **Inspect** repo state and relevant implementation (`git status` / key files).
 3. Identify affected components and dependencies; choose other skills as needed.
-4. Inspect applicable RFCs (`nntp-protocol`) and docs when relevant.
-5. Plan a **focused** implementation (smallest correct change).
-6. Implement the change.
-7. Add or update meaningful tests (`testing`).
+4. Inspect applicable RFCs (`nntp-protocol`) and accepted `docs/` when relevant. For historical experiments, start at `.artifacts/ARTIFACT-INDEX.md` — do not treat artifacts as current architecture.
+5. Plan a **focused** implementation (smallest correct change). Command work implements only the requested command.
+6. Implement production changes under `src/`. Put experiments, benches, and generated reports under `.artifacts/` (not `docs/` or `tools/` unless explicitly promoted).
+7. Add or update meaningful production tests under `tests/` (`testing`).
 8. Run relevant verification for this repo, typically:
    - `dotnet build VectorNNTP.NNTPD.sln -c Release`
    - `dotnet test VectorNNTP.NNTPD.sln -c Release --no-build` (or build+test as needed)

@@ -42,7 +42,8 @@ public sealed class NntpSession
         bool allowCleartextAuth = true,
         ILoggerFactory? loggerFactory = null,
         IArticleIngestionQueue? articleIngestion = null,
-        ITransitPeerAuthorization? transitPeerAuthorization = null)
+        ITransitPeerAuthorization? transitPeerAuthorization = null,
+        int streamOutstandingArticleDepth = NntpStreamArticleTxScheduler.DefaultDepth)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -57,6 +58,7 @@ public sealed class NntpSession
         AllowCleartextAuth = allowCleartextAuth;
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
+        StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
         registry ??= DefaultNntpCommandCatalog.Create(
             certificateProvider,
             AuthenticationProvider,
@@ -74,6 +76,16 @@ public sealed class NntpSession
     /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, later <c>POST</c>).
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
+
+    /// <summary>
+    /// Gets the bounded STREAM article TX scheduler (depth gate above
+    /// <see cref="NntpResponseWriter.WriteArticleAsync(System.ReadOnlyMemory{byte}, NntpArticleTxFraming, System.Threading.CancellationToken)"/>).
+    /// </summary>
+    /// <remarks>
+    /// Available for outbound STREAM article producers that already hold destuffed bytes.
+    /// No production command currently supplies those bytes (storage/catalog is out of scope).
+    /// </remarks>
+    public NntpStreamArticleTxScheduler StreamArticleTx { get; }
 
     /// <summary>Gets the effective client IP address for this session.</summary>
     public IPAddress ClientAddress => ClientIdentity.ClientAddress;
@@ -237,6 +249,15 @@ public sealed class NntpSession
                 {
                     // Best-effort.
                 }
+            }
+
+            try
+            {
+                await StreamArticleTx.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort.
             }
 
             try

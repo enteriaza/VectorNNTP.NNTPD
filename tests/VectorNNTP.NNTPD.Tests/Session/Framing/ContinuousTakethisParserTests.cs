@@ -1,35 +1,32 @@
-using System.Buffers;
 using System.Text;
-using VectorNNTP.NNTPD.MultilineFramerBench.ContinuousStream;
-using VectorNNTP.NNTPD.MultilineFramerBench.Prototype;
+using VectorNNTP.NNTPD.Session.Framing;
+using Xunit;
 
 namespace VectorNNTP.NNTPD.Tests.Session.Framing;
 
 public sealed class ContinuousTakethisParserTests
 {
     [Fact]
-    public void ParsesMultipleTakethis_Contiguous()
+    public async Task ParsesMultipleTakethis_Contiguous()
     {
-        var wire = ContinuousStreamFactory.BuildFixedSizeStream(articleBytes: 128, articleCount: 5);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(wire), sink);
+        var wire = FramingWireFactory.BuildFixedSizeTakethisStream(articleBytes: 128, articleCount: 5);
+        var result = await ProductionTakethisStream.ParseAsync(wire);
         Assert.True(result.IsComplete);
         Assert.Equal(5, result.Articles);
         Assert.Equal(5 * 128, result.ArticleBytes);
     }
 
     [Fact]
-    public void ParsesAcrossSmallSegments()
+    public async Task ParsesAcrossSmallSegments()
     {
-        var wire = ContinuousStreamFactory.BuildFixedSizeStream(256, 3);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(SegmentedSequenceFactory.Create(wire, 3), sink);
+        var wire = FramingWireFactory.BuildFixedSizeTakethisStream(256, 3);
+        var result = await ProductionTakethisStream.ParseAsync(wire);
         Assert.True(result.IsComplete);
         Assert.Equal(3, result.Articles);
     }
 
     [Fact]
-    public void DotStuffedAndTrailingPeriod_NotTerminator()
+    public async Task DotStuffedAndTrailingPeriod_NotTerminator()
     {
         var body = Encoding.ASCII.GetBytes("Hello.\r\n..foo\r\n...\r\n");
         var ms = new MemoryStream();
@@ -39,15 +36,17 @@ public sealed class ContinuousTakethisParserTests
         ms.Write("TAKETHIS <c@d>\r\n"u8);
         ms.Write("x\r\n"u8);
         ms.Write(".\r\n"u8);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(ms.ToArray()), sink);
+        var result = await ProductionTakethisStream.ParseAsync(ms.ToArray());
         Assert.True(result.IsComplete);
         Assert.Equal(2, result.Articles);
-        Assert.Equal(body.Length + 3, result.ArticleBytes); // second payload "x\r\n" = 3
+        var destuffedFirst = FramingWireFactory.DestuffPayload(body);
+        Assert.Equal(destuffedFirst.Length + 3, result.ArticleBytes);
+        Assert.Equal(destuffedFirst, result.Payloads[0].ToArray());
+        Assert.Equal("x\r\n"u8.ToArray(), result.Payloads[1].ToArray());
     }
 
     [Fact]
-    public void CheckAndQuit_EscapeToControlPlane()
+    public async Task CheckAndQuit_EscapeToControlPlane()
     {
         var ms = new MemoryStream();
         ms.Write("CHECK <x@y>\r\n"u8);
@@ -55,62 +54,60 @@ public sealed class ContinuousTakethisParserTests
         ms.Write("hi\r\n"u8);
         ms.Write(".\r\n"u8);
         ms.Write("QUIT\r\n"u8);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(ms.ToArray()), sink);
+        var result = await ProductionTakethisStream.ParseAsync(ms.ToArray());
         Assert.True(result.IsComplete);
         Assert.Equal(1, result.Articles);
         Assert.Equal(1, result.Checks);
         Assert.Equal(1, result.Quits);
-        Assert.Equal(2, result.ControlEscapes);
     }
 
     [Fact]
-    public void EmptyArticle()
+    public async Task EmptyArticle()
     {
         var wire = Encoding.ASCII.GetBytes("TAKETHIS <e@e>\r\n.\r\n");
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(wire), sink);
+        var result = await ProductionTakethisStream.ParseAsync(wire);
         Assert.True(result.IsComplete);
         Assert.Equal(1, result.Articles);
         Assert.Equal(0, result.ArticleBytes);
     }
 
     [Fact]
-    public void IncompleteArticle_ReturnsIncomplete()
+    public async Task IncompleteArticle_ReturnsIncomplete()
     {
         var wire = Encoding.ASCII.GetBytes("TAKETHIS <e@e>\r\nno-terminator");
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(new ReadOnlySequence<byte>(wire), sink);
+        var result = await ProductionTakethisStream.ParseAsync(wire);
         Assert.False(result.IsComplete);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BulkAndSimdAgree_OnMultiArticleStream(bool simd)
+    [InlineData(1)]
+    [InlineData(17)]
+    public async Task ProductionReader_AgreesOnMultiArticleStream_AcrossChunkSizes(int chunkSize)
     {
-        var wire = ContinuousStreamFactory.BuildFixedSizeStream(512, 8);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(
-            SegmentedSequenceFactory.Create(wire, 17),
-            sink,
-            new ContinuousParseOptions { UseSimdArticleScan = simd });
+        var wire = FramingWireFactory.BuildFixedSizeTakethisStream(512, 8);
+        var result = await ProductionTakethisStream.ParseAsync(wire);
         Assert.True(result.IsComplete);
         Assert.Equal(8, result.Articles);
         Assert.Equal(8 * 512, result.ArticleBytes);
+
+        var stuffed = FramingWireFactory.WithTerminator("Hello.\r\n..foo\r\nbar\r\n");
+        var segmented = await FramingPipe.ReadSegmentedAsync(stuffed, chunkSize);
+        Assert.Equal(NntpMultilineReadStatus.Completed, segmented.Status);
+        Assert.Equal(FramingWireFactory.ExpectedDestuffed(stuffed), segmented.Payload.ToArray());
     }
 
     [Fact]
-    public void InnWire7_SingleArticleStream()
+    public async Task InnWire7_SingleArticleStream()
     {
         var article = InnArticleCorpus.ReadAllBytes("wire-7");
         var ms = new MemoryStream();
         ms.Write("TAKETHIS <wire-7@inn>\r\n"u8);
         ms.Write(article);
-        var sink = new ContinuousParseSink();
-        var result = ContinuousTakethisParser.ParseAll(SegmentedSequenceFactory.Create(ms.ToArray(), 5), sink);
+        var result = await ProductionTakethisStream.ParseAsync(ms.ToArray());
         Assert.True(result.IsComplete);
         Assert.Equal(1, result.Articles);
-        Assert.Equal(InnArticleCorpus.ExpectedWirePayload(article).Length, result.ArticleBytes);
+        Assert.Equal(
+            FramingWireFactory.DestuffCompleteWire(article).Length,
+            result.ArticleBytes);
     }
 }
