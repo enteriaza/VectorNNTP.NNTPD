@@ -16,5 +16,5 @@ public static class CloudflareManagedDnsPolicy
     /// (TTL and proxy), given that its content is already the desired address.
     /// </summary>
     public static bool MatchesManagedAttributes(CloudflareDnsRecord record) =>
-        record.Ttl == ManagedTtl && record.Proxied == ManagedProxied;
+        record is { Ttl: ManagedTtl, Proxied: ManagedProxied };
 }

@@ -1,7 +1,6 @@
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Acme;
 
 namespace VectorNNTP.NNTPD.Networking.Certificates;
@@ -181,7 +180,7 @@ public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvid
         }
 
         _logger.LogInformation(
-            "TLS certificate context published (generation={Generation}).",
+            "TLS certificate context published (generation={Generation})",
             holder.Generation);
 
         // Drop the publisher's publication reference outside the gate (may dispose if no leases remain).

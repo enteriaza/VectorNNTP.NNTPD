@@ -45,12 +45,7 @@ public sealed class TrustedProxyHosts : ITrustedProxyHosts
     public static IPAddress Canonicalize(IPAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
-        if (address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv4MappedToIPv6)
-        {
-            return address.MapToIPv4();
-        }
-
-        return address;
+        return address is { AddressFamily: AddressFamily.InterNetworkV6, IsIPv4MappedToIPv6: true } ? address.MapToIPv4() : address;
     }
 
     private static HashSet<IPAddress> BuildSet(string[]? entries)

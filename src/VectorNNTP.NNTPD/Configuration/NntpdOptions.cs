@@ -85,11 +85,11 @@ public sealed class NntpdOptions
     public TimeSpan? StartupTimeout { get; set; }
 
     /// <summary>
-    /// Gets or sets the maximum wall-clock duration for a single Cloudflare reconcile or cleanup operation.
+    /// Gets or sets the maximum wall-clock duration for a single Cloudflare reconcile or clean-up operation.
     /// </summary>
     /// <remarks>
     /// Default is two minutes. Nested HTTP 429 retries and reconciler attempt backoffs share this budget
-    /// together with the caller's cancellation token; the earlier deadline wins. Failed-start cleanup uses
+    /// together with the caller's cancellation token; the earlier deadline wins. Failed-start clean-up uses
     /// a shorter dedicated budget (15 seconds).
     /// </remarks>
     public TimeSpan CloudFlareOperationTimeout { get; set; } = TimeSpan.FromMinutes(2);
@@ -153,7 +153,7 @@ public sealed class NntpdOptions
     /// Gets or sets the TLS NNTP TCP port.
     /// </summary>
     /// <remarks>
-    /// Default and unset behavior is <c>0</c>, which disables TLS listeners.
+    /// Default and unset behaviour is <c>0</c>, which disables TLS listeners.
     /// Values <c>1–65535</c> enable TLS listener configuration.
     /// See <see cref="IsTlsListenerEnabled"/>.
     /// </remarks>

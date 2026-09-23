@@ -1,5 +1,4 @@
 using System.IO.Pipelines;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -96,7 +95,7 @@ internal static class Compress
         {
             Logger.LogWarning(
                 ex,
-                "[{Client}] COMPRESS DEFLATE refused before activation.",
+                "[{Client}] COMPRESS DEFLATE refused before activation",
                 NntpCommandLogFormat.Client(context.Session));
             await context.Response
                 .WriteLineAsync(
@@ -128,7 +127,7 @@ internal static class Compress
             // expects compressed traffic. Terminate so we never leave a half-compressed session.
             Logger.LogError(
                 ex,
-                "[{Client}] COMPRESS DEFLATE activation failed after 206.",
+                "[{Client}] COMPRESS DEFLATE activation failed after 206",
                 NntpCommandLogFormat.Client(context.Session));
             if (!context.Connection.IsCompleted)
             {

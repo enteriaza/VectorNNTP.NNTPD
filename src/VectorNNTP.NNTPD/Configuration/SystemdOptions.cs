@@ -3,7 +3,7 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Optional systemd-specific hosting behavior for Linux deployments.
+/// Optional systemd-specific hosting behaviour for Linux deployments.
 /// </summary>
 /// <remarks>
 /// These settings never override systemd-supplied watchdog deadlines

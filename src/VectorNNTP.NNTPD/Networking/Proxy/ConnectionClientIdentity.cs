@@ -14,7 +14,7 @@ namespace VectorNNTP.NNTPD.Networking.Proxy;
 /// </para>
 /// <para>
 /// Trust and PROXY parsing are completed before this value is published; the session layer
-/// must not re-parse PROXY headers or inspect the socket to obtain the client endpoint.
+/// must not reparse PROXY headers or inspect the socket to obtain the client endpoint.
 /// </para>
 /// </remarks>
 public sealed class ConnectionClientIdentity

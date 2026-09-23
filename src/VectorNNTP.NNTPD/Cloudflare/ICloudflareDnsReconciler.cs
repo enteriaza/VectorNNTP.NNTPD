@@ -7,7 +7,7 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// </summary>
 /// <remarks>
 /// Startup reconciliation publishes A/AAAA for resolved bind addresses.
-/// Shutdown cleanup removes every DNS record for the exact FQDN (all types).
+/// Shutdown clean-up removes every DNS record for the exact FQDN (all types).
 /// </remarks>
 public interface ICloudflareDnsReconciler
 {
@@ -42,8 +42,8 @@ public interface ICloudflareDnsReconciler
     /// <param name="fqdn">Generated server FQDN (exact ownership boundary).</param>
     /// <param name="cancellationToken">Cancellation token (cooperates with graceful shutdown).</param>
     /// <param name="operationTimeout">
-    /// Optional wall-clock budget for this cleanup. When null, <c>CloudFlareOperationTimeout</c> is used.
-    /// Failed-start cleanup passes a shorter dedicated budget.
+    /// Optional wall-clock budget for this clean-up. When null, <c>CloudFlareOperationTimeout</c> is used.
+    /// Failed-start clean-up passes a shorter dedicated budget.
     /// </param>
     /// <returns>A task that completes only after verification that no records remain for the FQDN.</returns>
     /// <exception cref="CloudflareDnsException">
@@ -51,7 +51,7 @@ public interface ICloudflareDnsReconciler
     /// </exception>
     /// <remarks>
     /// Parent, child/subdomain, and other hostnames are never deleted. Idempotent when the FQDN is already absent.
-    /// Serialized with <see cref="ReconcileAsync"/> on the same instance so startup cannot recreate after cleanup begins.
+    /// Serialized with <see cref="ReconcileAsync"/> on the same instance so startup cannot recreate after clean-up begins.
     /// </remarks>
     Task RemoveAllRecordsForFqdnAsync(
         string zoneId,

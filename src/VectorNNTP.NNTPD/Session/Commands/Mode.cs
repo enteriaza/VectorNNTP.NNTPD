@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Session;
-
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>

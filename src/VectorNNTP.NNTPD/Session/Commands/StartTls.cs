@@ -1,5 +1,4 @@
 using System.IO.Pipelines;
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Transport;
 
@@ -90,7 +89,7 @@ internal static class StartTls
         {
             Logger.LogError(
                 ex,
-                "[{Client}] STARTTLS handshake failed.",
+                "[{Client}] STARTTLS handshake failed",
                 NntpCommandLogFormat.Client(context.Session));
             context.Session.RequestClose();
             // Handshake failures complete the connection; do not rethrow into the dispatcher error path.

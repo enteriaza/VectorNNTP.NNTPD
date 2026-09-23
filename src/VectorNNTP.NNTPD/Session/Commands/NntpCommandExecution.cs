@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -56,7 +54,7 @@ internal static class NntpCommandExecution
             detail = "failed";
             logger.LogError(
                 ex,
-                "[{Client}] {Command} failed.",
+                "[{Client}] {Command} failed",
                 NntpCommandLogFormat.Client(context.Session),
                 command);
             throw;

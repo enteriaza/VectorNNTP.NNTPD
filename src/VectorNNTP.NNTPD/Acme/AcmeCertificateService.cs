@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -18,7 +17,7 @@ namespace VectorNNTP.NNTPD.Acme;
 /// </remarks>
 public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposable
 {
-    /// <summary>Background renewal check interval (matches pyNNTPD default 6 hours).</summary>
+    /// <summary>Background renewal check interval (default 6 hours).</summary>
     public static readonly TimeSpan RenewalCheckInterval = TimeSpan.FromHours(6);
 
     private readonly IOptions<NntpdOptions> _options;
@@ -68,17 +67,17 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         var options = _options.Value;
         if (!options.IsTlsListenerEnabled)
         {
-            _logger.LogInformation("TLS disabled (BindPortTls=0); ACME certificate service idle.");
+            _logger.LogInformation("TLS disabled (BindPortTls=0); ACME certificate service idle");
             return;
         }
 
         _manager = _factory.GetOrCreateManager()
             ?? throw new AcmeConfigurationException(
                 "manager_missing",
-                "TLS is enabled but CertificateManager could not be created.");
+                "TLS is enabled but CertificateManager could not be created");
 
         _logger.LogInformation(
-            "Ensuring ACME certificate for TLS (directory={Directory}).",
+            "Ensuring ACME certificate for TLS (directory={Directory})",
             options.AcmeDirectoryUrl);
 
         try
@@ -93,7 +92,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(
-                "ACME certificate provisioning failed ({Failure}).",
+                "ACME certificate provisioning failed ({Failure})",
                 AcmeFailureSanitizer.Sanitize(ex));
             throw;
         }
@@ -120,7 +119,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "ACME renewal loop ended with an error during stop.");
+            _logger.LogDebug(ex, "ACME renewal loop ended with an error during stop");
         }
     }
 
@@ -163,7 +162,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
                     var material = _manager.CurrentMaterial
                         ?? throw new AcmeCertificateException("no_certificate", "renewed without material");
                     _tlsCertificateContextProvider.PublishFromPfx(material.PfxBytes, password);
-                    _logger.LogInformation("ACME renewal completed successfully.");
+                    _logger.LogInformation("ACME renewal completed successfully");
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -173,7 +172,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
             catch (Exception ex)
             {
                 _logger.LogWarning(
-                    "ACME renewal check failed ({Failure}); will retry next interval.",
+                    "ACME renewal check failed ({Failure}); will retry next interval",
                     AcmeFailureSanitizer.Sanitize(ex));
             }
         }

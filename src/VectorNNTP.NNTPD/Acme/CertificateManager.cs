@@ -1,5 +1,4 @@
 using System.Security.Cryptography.X509Certificates;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Acme;
 
@@ -89,7 +88,7 @@ public sealed class CertificateManager
         try
         {
             var status = EvaluateExisting();
-            if (status.Usable && status.Material is not null && !status.DueForRenewal)
+            if (status is { Usable: true, Material: not null, DueForRenewal: false })
             {
                 _current = status.Material;
                 _logger.LogInformation(
@@ -98,14 +97,14 @@ public sealed class CertificateManager
                 return status.Material;
             }
 
-            if (status.Usable && status.DueForRenewal)
+            if (status is { Usable: true, DueForRenewal: true })
             {
-                _logger.LogInformation("Existing certificate due for renewal; issuing replacement.");
+                _logger.LogInformation("Existing certificate due for renewal; issuing replacement");
             }
             else
             {
                 _logger.LogInformation(
-                    "No usable server certificate ({Reason}); requesting issuance.",
+                    "No usable server certificate ({Reason}); requesting issuance",
                     status.Reason);
             }
 
@@ -127,7 +126,7 @@ public sealed class CertificateManager
         try
         {
             var status = EvaluateExisting();
-            if (status.Usable && status.Material is not null && !status.DueForRenewal)
+            if (status is { Usable: true, Material: not null, DueForRenewal: false })
             {
                 _current = status.Material;
                 return false;
@@ -143,7 +142,7 @@ public sealed class CertificateManager
             {
                 _current = prior;
                 _logger.LogWarning(
-                    "Certificate renewal failed ({Failure}); preserving existing certificate.",
+                    "Certificate renewal failed ({Failure}); preserving existing certificate",
                     AcmeFailureSanitizer.Sanitize(ex));
                 return false;
             }

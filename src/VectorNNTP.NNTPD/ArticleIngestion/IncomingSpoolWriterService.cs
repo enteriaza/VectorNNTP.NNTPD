@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -78,19 +77,19 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(
-                "Incoming spool writer stop canceled with {Queued} article(s) still buffered.",
+                "Incoming spool writer stop canceled with {Queued} article(s) still buffered",
                 _queue.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Incoming spool writer stopped with an error.");
+            _logger.LogError(ex, "Incoming spool writer stopped with an error");
         }
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation(
-            "Incoming spool writer started (capacity {Capacity}, max article {MaxBytes} bytes, dir {Dir}).",
+            "Incoming spool writer started (capacity {Capacity}, max article {MaxBytes} bytes, dir {Dir})",
             _queue.Capacity,
             _queue.MaxArticleBytes,
             _options.Value.ArticleIngestion?.IncomingDirectory
@@ -124,7 +123,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 // Already accepted (239). Log and continue — do not poison the drain loop.
                 _logger.LogError(
                     ex,
-                    "Failed to persist incoming article {MessageId} ({Bytes} bytes).",
+                    "Failed to persist incoming article {MessageId} ({Bytes} bytes)",
                     article.MessageId,
                     article.Payload.Length);
             }
@@ -135,6 +134,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             }
         }
 
-        _logger.LogInformation("Incoming spool writer stopped.");
+        _logger.LogInformation("Incoming spool writer stopped");
     }
 }

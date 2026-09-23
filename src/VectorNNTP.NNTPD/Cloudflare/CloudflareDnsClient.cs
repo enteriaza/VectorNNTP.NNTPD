@@ -2,7 +2,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -18,8 +17,8 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// <see cref="CloudflareDnsException.IsOutcomeUncertain"/> because Cloudflare may already have applied them.
 /// List operations require complete, consistent <c>result_info</c> pagination metadata and reject records
 /// whose <c>zone_id</c> (when present) does not match the requested zone.
-/// Each HTTP attempt is canceled after <see cref="PerRequestTimeout"/> or the remaining
-/// <see cref="CloudflareOperationBudget"/>, whichever is shorter. Caller cancellation is honored immediately
+/// Each HTTP attempt is cancelled after <see cref="PerRequestTimeout"/> or the remaining
+/// <see cref="CloudflareOperationBudget"/>, whichever is shorter. Caller cancellation is honoured immediately
 /// and is not converted into success.
 /// </remarks>
 public sealed class CloudflareDnsClient : ICloudflareDnsClient
@@ -309,12 +308,12 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Caller or shared operation budget canceled. A mutation may already have been applied;
+                // Caller or shared operation budget cancelled. A mutation may already have been applied;
                 // do not claim definitive failure — propagate cancellation so the caller stops.
                 if (isMutation)
                 {
                     _logger.LogWarning(
-                        "Cloudflare DNS {Method} {Path} canceled during a mutation; remote outcome is uncertain.",
+                        "Cloudflare DNS {Method} {Path} canceled during a mutation; remote outcome is uncertain",
                         method.Method,
                         relativePath);
                 }
@@ -343,7 +342,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                 {
                     rateLimitDelay = GetRetryDelay(response, attempt);
                     _logger.LogWarning(
-                        "Cloudflare DNS rate limited (HTTP 429) for {Method} {Path}. Retrying after {DelayMs} ms (attempt {Attempt}/{MaxAttempts}).",
+                        "Cloudflare DNS rate limited (HTTP 429) for {Method} {Path}. Retrying after {DelayMs} ms (attempt {Attempt}/{MaxAttempts})",
                         method.Method,
                         relativePath,
                         rateLimitDelay.Value.TotalMilliseconds,
@@ -421,7 +420,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     }
 
     /// <summary>
-    /// Builds a per-attempt token canceled when the operation cancels or the request timeout elapses.
+    /// Builds a per-attempt token cancelled when the operation cancels or the request timeout elapses.
     /// </summary>
     /// <remarks>
     /// Timeout is <see cref="PerRequestTimeout"/> capped by remaining <see cref="CloudflareOperationBudget"/>
@@ -647,7 +646,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     }
 
     /// <summary>
-    /// Validates a cleanup listing record: identity fields required; type-specific TTL/proxy not enforced.
+    /// Validates a clean-up listing record: identity fields required; type-specific TTL/proxy not enforced.
     /// </summary>
     internal static void EnsureListedCleanupRecordValid(CloudflareDnsRecord record)
     {

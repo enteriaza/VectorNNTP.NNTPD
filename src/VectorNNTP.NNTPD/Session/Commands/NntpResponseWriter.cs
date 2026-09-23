@@ -132,7 +132,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         WriteAndAwaitFlushAsync(DotCrlf.ToArray(), cancellationToken);
 
     /// <summary>
-    /// Writes a precomputed byte payload to the session output pipe and flushes (honoring pipe backpressure).
+    /// Writes a precomputed byte payload to the session output pipe and flushes (honouring pipe backpressure).
     /// </summary>
     /// <remarks>
     /// Intended for BENCHIT reuse of an immutable wire buffer. Still uses the production

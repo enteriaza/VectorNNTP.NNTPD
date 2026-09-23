@@ -1,5 +1,4 @@
 using VectorNNTP.NNTPD.Networking.Transport;
-using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;

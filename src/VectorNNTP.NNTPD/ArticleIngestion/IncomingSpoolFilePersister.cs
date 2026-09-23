@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -63,7 +62,7 @@ public sealed class IncomingSpoolFilePersister : IIncomingArticlePersister
             }
             catch
             {
-                // Best-effort temp cleanup.
+                // Best-effort temp clean-up.
             }
 
             throw;

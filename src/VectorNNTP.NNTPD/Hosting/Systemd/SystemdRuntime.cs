@@ -1,7 +1,6 @@
 ﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting.Systemd;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting.Systemd;
 
@@ -17,7 +16,7 @@ namespace VectorNNTP.NNTPD.Hosting.Systemd;
 /// </para>
 /// <para>
 /// Watchdog configuration is read from <c>WATCHDOG_USEC</c> and optionally <c>WATCHDOG_PID</c>.
-/// Missing or malformed values disable watchdog behavior rather than inventing an interval.
+/// Missing or malformed values disable watchdog behaviour rather than inventing an interval.
 /// </para>
 /// </remarks>
 public sealed class SystemdRuntime : ISystemdRuntime
@@ -54,7 +53,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
         if (IsLinux)
         {
             _logger.LogInformation(
-                "systemd runtime detection: isSystemdService={IsSystemdService}, notifyEnabled={NotifyEnabled}, watchdogConfigured={WatchdogConfigured}, watchdogTimeout={WatchdogTimeout}, detail={Detail}.",
+                "systemd runtime detection: isSystemdService={IsSystemdService}, notifyEnabled={NotifyEnabled}, watchdogConfigured={WatchdogConfigured}, watchdogTimeout={WatchdogTimeout}, detail={Detail}",
                 IsSystemdService,
                 IsNotifyEnabled,
                 IsWatchdogConfigured,
@@ -97,7 +96,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
         {
             reason = "WATCHDOG_USEC missing or invalid";
             _logger.LogWarning(
-                "Ignoring malformed systemd watchdog configuration (WATCHDOG_USEC is not a positive integer).");
+                "Ignoring malformed systemd watchdog configuration (WATCHDOG_USEC is not a positive integer)");
             return null;
         }
 
@@ -108,7 +107,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
             {
                 reason = "WATCHDOG_PID malformed";
                 _logger.LogWarning(
-                    "Ignoring systemd watchdog configuration because WATCHDOG_PID is malformed.");
+                    "Ignoring systemd watchdog configuration because WATCHDOG_PID is malformed");
                 return null;
             }
 
@@ -116,7 +115,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
             {
                 reason = "WATCHDOG_PID does not match current process";
                 _logger.LogInformation(
-                    "systemd watchdog is configured for a different PID; watchdog keep-alives will remain disabled.");
+                    "systemd watchdog is configured for a different PID; watchdog keep-alives will remain disabled");
                 return null;
             }
         }
@@ -125,7 +124,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
         if (usec > (ulong)(TimeSpan.MaxValue.Ticks / 10))
         {
             reason = "WATCHDOG_USEC out of range";
-            _logger.LogWarning("Ignoring systemd watchdog configuration because WATCHDOG_USEC is out of range.");
+            _logger.LogWarning("Ignoring systemd watchdog configuration because WATCHDOG_USEC is out of range");
             return null;
         }
 

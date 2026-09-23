@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>
@@ -7,7 +5,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Deliberate <see cref="NntpCommandNotImplemented"/> placeholders. Article storage, catalog,
+/// Deliberate <see cref="NntpCommandNotImplemented"/> placeholders. Article storage, catalogue,
 /// GROUP selection, and Message-ID / article-number lookup are <strong>out of scope</strong> for
 /// VectorNNTP.NNTPD (network / data plane only). Do not invent retrieval here.
 /// </para>

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;

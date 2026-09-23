@@ -1,6 +1,5 @@
 ﻿using System.Net;
 using System.Net.Sockets;
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Networking;
@@ -62,14 +61,14 @@ public sealed class BindAddressResolver : IBindAddressResolver
             {
                 // Configuration validation should already reject this; keep resolver defensive.
                 _logger.LogWarning(
-                    "Ignoring non-IP BindAddress entry during resolution (validation should have failed earlier).");
+                    "Ignoring non-IP BindAddress entry during resolution (validation should have failed earlier)");
                 continue;
             }
 
             if (!IpAddressEligibility.IsEligibleForDns(explicitAddress))
             {
                 _logger.LogInformation(
-                    "BindAddress entry {Address} is not eligible for DNS publication and will be omitted from the reconciled set.",
+                    "BindAddress entry {Address} is not eligible for DNS publication and will be omitted from the reconciled set",
                     IpAddressEligibility.ToDnsContent(explicitAddress));
                 continue;
             }
@@ -79,7 +78,7 @@ public sealed class BindAddressResolver : IBindAddressResolver
 
         var resolved = new ResolvedBindAddresses(collected);
         _logger.LogInformation(
-            "Resolved {TotalCount} eligible bind address(es) for DNS ({IPv4Count} IPv4, {IPv6Count} IPv6).",
+            "Resolved {TotalCount} eligible bind address(es) for DNS ({IPv4Count} IPv4, {IPv6Count} IPv6)",
             resolved.All.Count,
             resolved.IPv4.Count,
             resolved.IPv6.Count);

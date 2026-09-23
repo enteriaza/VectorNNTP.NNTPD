@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
@@ -108,7 +107,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
 
         _execution = WaitUntilStoppedAsync(_runCts.Token);
         _logger.LogInformation(
-            "Plain NNTP listeners started ({ListenerCount}) on port {Port}.",
+            "Plain NNTP listeners started ({ListenerCount}) on port {Port}",
             _listeners.Count,
             options.BindPort);
         return Task.CompletedTask;
@@ -134,7 +133,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error completing plain connection during stop.");
+                _logger.LogDebug(ex, "Error completing plain connection during stop");
             }
         }
 
@@ -186,7 +185,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         {
             if (!ProxyPreambleResolver.TryGetTcpPeer(socket, out var tcpPeer))
             {
-                _logger.LogDebug("Plain accept discarded: remote endpoint unavailable.");
+                _logger.LogDebug("Plain accept discarded: remote endpoint unavailable");
                 return;
             }
 
@@ -201,7 +200,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
             {
                 _logger.LogInformation(
                     ex,
-                    "Rejected plain connection from trusted proxy peer {TcpPeer}: invalid PROXY preamble.",
+                    "Rejected plain connection from trusted proxy peer {TcpPeer}: invalid PROXY preamble",
                     tcpPeer);
                 return;
             }

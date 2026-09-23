@@ -360,7 +360,7 @@ public sealed class Dns01Solver
     private static string NormalizeTxt(string value)
     {
         var cleaned = value.Trim();
-        if (cleaned.Length >= 2 && cleaned[0] == '"' && cleaned[^1] == '"')
+        if (cleaned is ['"', _, ..] && cleaned[^1] == '"')
         {
             cleaned = cleaned[1..^1];
         }

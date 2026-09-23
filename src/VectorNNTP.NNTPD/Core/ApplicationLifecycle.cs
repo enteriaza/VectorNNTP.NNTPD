@@ -110,7 +110,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
     /// <param name="cancellationToken">Token used to cancel startup.</param>
     /// <returns>A task that completes when the application enters <see cref="ApplicationState.Running"/>.</returns>
     /// <exception cref="InvalidOperationException">Thrown for invalid transitions or concurrent unsafe use.</exception>
-    /// <exception cref="OperationCanceledException">Thrown when startup is canceled.</exception>
+    /// <exception cref="OperationCanceledException">Thrown when startup is cancelled.</exception>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -121,7 +121,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             Transition(ApplicationState.Starting);
 
             _logger.LogInformation(
-                "Application startup initiated for {ApplicationName}. Current state: {State}.",
+                "Application startup initiated for {ApplicationName}. Current state: {State}",
                 _options.Value.ApplicationName,
                 State);
 
@@ -140,7 +140,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning(
-                    "Application startup canceled after {ElapsedMs} ms. Transitioning to shutdown.",
+                    "Application startup canceled after {ElapsedMs} ms. Transitioning to shutdown",
                     sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
                 throw;
@@ -148,7 +148,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             catch (OperationCanceledException) when (startupCts.IsCancellationRequested)
             {
                 _logger.LogError(
-                    "Application startup timed out after {Timeout} ({ElapsedMs} ms).",
+                    "Application startup timed out after {Timeout} ({ElapsedMs} ms)",
                     _options.Value.StartupTimeout,
                     sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
@@ -159,7 +159,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             {
                 _logger.LogError(
                     ex,
-                    "Application startup failed after {ElapsedMs} ms. Rolling back and transitioning to Stopped.",
+                    "Application startup failed after {ElapsedMs} ms. Rolling back and transitioning to Stopped",
                     sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
                 throw;
@@ -168,7 +168,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             Transition(ApplicationState.Running);
 
             _logger.LogInformation(
-                "Application initialization completed for {ApplicationName} in {ElapsedMs} ms. State: {State}.",
+                "Application initialization completed for {ApplicationName} in {ElapsedMs} ms. State: {State}",
                 _options.Value.ApplicationName,
                 sw.ElapsedMilliseconds,
                 State);
@@ -203,7 +203,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
                 var from = _state;
                 _state = ApplicationState.Stopped;
                 _logger.LogInformation(
-                    "Application stop requested before startup. State transition: {From} -> {To}.",
+                    "Application stop requested before startup. State transition: {From} -> {To}",
                     ApplicationState.Created,
                     ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
@@ -225,7 +225,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
     /// <summary>
     /// Waits until shutdown completes or an unexpected termination is observed.
     /// </summary>
-    /// <param name="cancellationToken">Token canceled when the host requests shutdown.</param>
+    /// <param name="cancellationToken">Token cancelled when the host requests shutdown.</param>
     /// <exception cref="InvalidOperationException">
     /// Thrown when an application service terminates unexpectedly while <see cref="ApplicationState.Running"/>.
     /// </exception>
@@ -276,7 +276,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         catch (Exception ex)
         {
             shutdownFailure = ex;
-            _logger.LogError(ex, "ApplicationLifecycle disposal encountered a shutdown failure.");
+            _logger.LogError(ex, "ApplicationLifecycle disposal encountered a shutdown failure");
         }
         finally
         {
@@ -355,7 +355,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             }
 
             _logger.LogInformation(
-                "Application shutdown initiated for {ApplicationName}. State: {State}. Timeout: {Timeout}.",
+                "Application shutdown initiated for {ApplicationName}. State: {State}. Timeout: {Timeout}",
                 _options.Value.ApplicationName,
                 State,
                 _options.Value.GracefulShutdownTimeout);
@@ -370,7 +370,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             {
                 _logger.LogError(
                     ex,
-                    "Application shutdown timed out after {ElapsedMs} ms.",
+                    "Application shutdown timed out after {ElapsedMs} ms",
                     sw.ElapsedMilliseconds);
                 Transition(ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
@@ -380,7 +380,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             {
                 _logger.LogError(
                     ex,
-                    "Application shutdown failed after {ElapsedMs} ms. Forcing Stopped state.",
+                    "Application shutdown failed after {ElapsedMs} ms. Forcing Stopped state",
                     sw.ElapsedMilliseconds);
                 Transition(ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
@@ -390,7 +390,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             Transition(ApplicationState.Stopped);
 
             _logger.LogInformation(
-                "Application shutdown completed for {ApplicationName} in {ElapsedMs} ms. State: {State}.",
+                "Application shutdown completed for {ApplicationName} in {ElapsedMs} ms. State: {State}",
                 _options.Value.ApplicationName,
                 sw.ElapsedMilliseconds,
                 State);
@@ -428,7 +428,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Additional cleanup after startup failure encountered an error.");
+            _logger.LogError(ex, "Additional cleanup after startup failure encountered an error");
         }
 
         await Task.CompletedTask.ConfigureAwait(false);
@@ -458,7 +458,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
 
             _state = to;
             _logger.LogInformation(
-                "Application lifecycle state transition: {FromState} -> {ToState}.",
+                "Application lifecycle state transition: {FromState} -> {ToState}",
                 from,
                 to);
         }
@@ -476,7 +476,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         {
             _logger.LogError(
                 ex,
-                "An ApplicationLifecycle.StateChanged handler failed for transition {FromState} -> {ToState}.",
+                "An ApplicationLifecycle.StateChanged handler failed for transition {FromState} -> {ToState}",
                 from,
                 to);
         }
@@ -491,7 +491,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
 
         _logger.LogCritical(
             e.Exception,
-            "Unexpected termination of application service {ServiceName} while Running (completedNormally={CompletedNormally}).",
+            "Unexpected termination of application service {ServiceName} while Running (completedNormally={CompletedNormally})",
             e.ServiceName,
             e.CompletedNormally);
 

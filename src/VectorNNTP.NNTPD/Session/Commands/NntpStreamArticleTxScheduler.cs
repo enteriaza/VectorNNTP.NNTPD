@@ -27,7 +27,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </para>
 /// <para>
 /// This type does not load or look up articles. Callers supply destuffed bytes (bench, peer feed,
-/// or other external source). Article storage/catalog is out of scope for NNTPD.
+/// or other external source). Article storage/catalogue is out of scope for NNTPD.
 /// </para>
 /// </remarks>
 public sealed class NntpStreamArticleTxScheduler : IAsyncDisposable
@@ -86,7 +86,7 @@ public sealed class NntpStreamArticleTxScheduler : IAsyncDisposable
     internal Func<CancellationToken, ValueTask>? TestBeforeAwaitFlush { get; set; }
 
     /// <summary>Returns <see langword="true"/> when <paramref name="depth"/> is in the valid range.</summary>
-    public static bool IsValidDepth(int depth) => depth >= MinDepth && depth <= MaxDepth;
+    public static bool IsValidDepth(int depth) => depth is >= MinDepth and <= MaxDepth;
 
     /// <summary>Throws if <paramref name="depth"/> is outside <see cref="MinDepth"/>–<see cref="MaxDepth"/>.</summary>
     public static void ThrowIfNotValidDepth(int depth)

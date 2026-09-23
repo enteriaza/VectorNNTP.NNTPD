@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 
@@ -61,7 +59,7 @@ public sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
         if (_runtime.IsLinux && (_runtime.IsSystemdService || _notify.IsEnabled))
         {
             _logger.LogInformation(
-                "systemd lifecycle notifications activated (notifyEnabled={NotifyEnabled}, isSystemdService={IsSystemdService}).",
+                "systemd lifecycle notifications activated (notifyEnabled={NotifyEnabled}, isSystemdService={IsSystemdService}",
                 _notify.IsEnabled,
                 _runtime.IsSystemdService);
         }
@@ -150,7 +148,7 @@ public sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
         }
 
         _notify.NotifyReady();
-        _logger.LogInformation("Reported systemd readiness after successful application initialization.");
+        _logger.LogInformation("Reported systemd readiness after successful application initialization");
     }
 
     private void TryNotifyStopping()
@@ -174,7 +172,7 @@ public sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
         Interlocked.Exchange(ref _readySent, 1);
 
         _notify.NotifyStopping();
-        _logger.LogInformation("Reported systemd STOPPING notification for graceful shutdown.");
+        _logger.LogInformation("Reported systemd STOPPING notification for graceful shutdown");
     }
 
     private void TryNotifyStatus(string status)

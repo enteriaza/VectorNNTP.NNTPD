@@ -1,6 +1,5 @@
 using System.Net;
 using DnsClient;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Acme;
 
@@ -88,7 +87,7 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
             {
                 _logger.LogDebug(
                     ex,
-                    "Authoritative TXT lookup failed for {Name} via {Server}.",
+                    "Authoritative TXT lookup failed for {Name} via {Server}",
                     name,
                     server);
             }
@@ -144,7 +143,7 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogDebug(ex, "Failed resolving authoritative NS address for {NsName}.", nsName);
+                _logger.LogDebug(ex, "Failed resolving authoritative NS address for {NsName}", nsName);
             }
         }
 

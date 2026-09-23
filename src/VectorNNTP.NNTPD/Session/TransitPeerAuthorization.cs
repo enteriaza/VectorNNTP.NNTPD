@@ -1,6 +1,4 @@
 using System.Net;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -46,7 +44,7 @@ public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
         if (_peers.Count > 0)
         {
             logger.LogWarning(
-                "Trusted transit/streaming peers configured ({Count}): {Peers}. These addresses receive transit privileges without authentication.",
+                "Trusted transit/streaming peers configured ({Count}): {Peers}. These addresses receive transit privileges without authentication",
                 _peers.Count,
                 string.Join(", ", _peers));
         }

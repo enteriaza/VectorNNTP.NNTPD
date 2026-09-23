@@ -1,5 +1,4 @@
 using System.Net;
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -84,7 +83,7 @@ public sealed class NntpSession
     /// </summary>
     /// <remarks>
     /// Available for outbound STREAM article producers that already hold destuffed bytes.
-    /// No production command currently supplies those bytes (storage/catalog is out of scope).
+    /// No production command currently supplies those bytes (storage/catalogue is out of scope).
     /// </remarks>
     public NntpStreamArticleTxScheduler StreamArticleTx { get; }
 
@@ -225,7 +224,7 @@ public sealed class NntpSession
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "NNTP session ended with an error for {Client}.", ClientAddress);
+            _logger.LogDebug(ex, "NNTP session ended with an error for {Client}", ClientAddress);
         }
         finally
         {

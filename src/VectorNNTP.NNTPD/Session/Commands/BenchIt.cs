@@ -29,7 +29,7 @@ internal static class BenchIt
     public const int TargetArticleContentBytes = 750 * 1024;
 
     /// <summary>Stable Message-ID used in the static article and 220 status line.</summary>
-    public const string MessageId = "<benchit-static@vectornntp.local>";
+    private const string MessageId = "<benchit-static@vectornntp.local>";
 
     /// <summary>Immutable ASCII article bytes (headers + body), length <see cref="ArticleContentBytes"/>.</summary>
     public static readonly ReadOnlyMemory<byte> ArticleContent;
@@ -55,7 +55,7 @@ internal static class BenchIt
     }
 
     /// <summary>Handles <c>BENCHIT</c> (internal; public access; non-pipelined via normal session loop).</summary>
-    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         // Intentionally skip NntpCommandExecution TX INFO logging — benchmark must not measure Serilog.

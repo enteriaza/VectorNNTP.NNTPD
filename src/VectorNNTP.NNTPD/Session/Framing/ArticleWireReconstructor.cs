@@ -8,7 +8,7 @@ namespace VectorNNTP.NNTPD.Session.Framing;
 /// <remarks>
 /// <para>
 /// Destuffed payload convention (aligned with <see cref="NntpMultilineDataReader"/> ingest output).
-/// This type does not own article storage or catalogs; callers supply bytes (bench corpus, spool
+/// This type does not own article storage or catalogues; callers supply bytes (bench corpus, spool
 /// snapshot, peer feed, etc.).
 /// </para>
 /// <list type="bullet">
@@ -110,7 +110,7 @@ public static class ArticleWireReconstructor
     /// </summary>
     /// <param name="storedDestuffedArticle">Full destuffed article (headers + body; no NNTP terminator).</param>
     /// <param name="headers">Header bytes including the blank-line separator when present.</param>
-    /// <param name="body">Body bytes after the blank line (may be empty).</param>
+    /// <param name="body">Body bytes after the blank line (maybe empty).</param>
     /// <returns>
     /// <see langword="true"/> when a blank line was found; otherwise <see langword="false"/> and
     /// <paramref name="body"/> is empty (entire payload treated as headers-only / no body).

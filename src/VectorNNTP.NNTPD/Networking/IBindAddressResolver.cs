@@ -12,7 +12,7 @@ public interface IBindAddressResolver
     /// Resolves <paramref name="options"/> bind entries into eligible IPv4/IPv6 addresses.
     /// </summary>
     /// <param name="options">Validated NNTPD options.</param>
-    /// <returns>The resolved address set (may be empty when no eligible addresses exist).</returns>
+    /// <returns>The resolved address set (maybe empty when no eligible addresses exist).</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> is null.</exception>
     ResolvedBindAddresses Resolve(NntpdOptions options);
 }

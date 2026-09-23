@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -64,7 +63,7 @@ public sealed class SocketAcceptListener : IAsyncDisposable
         _listenSocket.Listen(backlog);
         _acceptLoop = AcceptLoopAsync(_cts.Token);
         _logger.LogInformation(
-            "NNTP listener started on {EndPoint} (dualMode={DualMode}).",
+            "NNTP listener started on {EndPoint} (dualMode={DualMode})",
             LocalEndPoint,
             _binding.DualMode);
     }
@@ -107,11 +106,11 @@ public sealed class SocketAcceptListener : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Accept loop ended with an error during stop.");
+                _logger.LogDebug(ex, "Accept loop ended with an error during stop");
             }
         }
 
-        _logger.LogInformation("NNTP listener stopped ({Address}/{Port}).", _binding.Address, _binding.Port);
+        _logger.LogInformation("NNTP listener stopped ({Address}/{Port})", _binding.Address, _binding.Port);
     }
 
     /// <inheritdoc />
@@ -145,12 +144,12 @@ public sealed class SocketAcceptListener : IAsyncDisposable
             }
             catch (SocketException ex) when (cancellationToken.IsCancellationRequested || _stopped != 0)
             {
-                _logger.LogDebug(ex, "Accept interrupted during listener shutdown.");
+                _logger.LogDebug(ex, "Accept interrupted during listener shutdown");
                 break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Accept failed on {EndPoint}; listener continues.", _binding.EndPoint);
+                _logger.LogError(ex, "Accept failed on {EndPoint}; listener continues", _binding.EndPoint);
                 continue;
             }
 
@@ -177,7 +176,7 @@ public sealed class SocketAcceptListener : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Accepted connection handler failed; listener continues.");
+            _logger.LogDebug(ex, "Accepted connection handler failed; listener continues");
             try
             {
                 accepted.Dispose();

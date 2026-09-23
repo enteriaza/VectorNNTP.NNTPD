@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -48,13 +46,13 @@ public sealed class NntpdHostedService : BackgroundService
     {
         var sw = Stopwatch.StartNew();
         _logger.LogInformation(
-            "Host starting application {ApplicationName}.",
+            "Host starting application {ApplicationName}",
             _options.Value.ApplicationName);
 
         await _lifecycle.StartAsync(cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
-            "Application entered Running state after {ElapsedMs} ms. Host startup continuing.",
+            "Application entered Running state after {ElapsedMs} ms. Host startup continuing",
             sw.ElapsedMilliseconds);
 
         await base.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -69,13 +67,13 @@ public sealed class NntpdHostedService : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            _logger.LogInformation("Hosted service execution canceled due to host shutdown.");
+            _logger.LogInformation("Hosted service execution canceled due to host shutdown");
         }
         catch (InvalidOperationException ex)
         {
             _logger.LogCritical(
                 ex,
-                "Background hosted service observed unexpected application-service termination.");
+                "Background hosted service observed unexpected application-service termination");
             _hostLifetime.NotifyUnexpectedTermination();
             throw;
         }
@@ -85,7 +83,7 @@ public sealed class NntpdHostedService : BackgroundService
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation(
-            "Host stopping application {ApplicationName}.",
+            "Host stopping application {ApplicationName}",
             _options.Value.ApplicationName);
 
         try

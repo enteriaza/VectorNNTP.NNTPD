@@ -33,7 +33,7 @@ public sealed record CertificateMaterial(
 /// <param name="Usable">Whether the material can be used for TLS.</param>
 /// <param name="DueForRenewal">Whether renewal should be attempted.</param>
 /// <param name="Material">Validated material when usable.</param>
-/// <param name="Reason">Short reason code.</param>
+/// <param name="Reason">Short Reason code.</param>
 public sealed record CertificateStatus(
     bool Usable,
     bool DueForRenewal,

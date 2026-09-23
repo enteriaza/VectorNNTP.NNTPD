@@ -21,7 +21,7 @@ public static class NntpArticleTxChunkBudget
 
     /// <summary>Returns <see langword="true"/> when <paramref name="chunkBytes"/> is in the production range.</summary>
     public static bool IsProductionRange(int chunkBytes) =>
-        chunkBytes >= MinBytes && chunkBytes <= MaxBytes;
+        chunkBytes is >= MinBytes and <= MaxBytes;
 
     /// <summary>Throws if <paramref name="chunkBytes"/> is outside the production range.</summary>
     public static void ThrowIfNotProductionRange(int chunkBytes)

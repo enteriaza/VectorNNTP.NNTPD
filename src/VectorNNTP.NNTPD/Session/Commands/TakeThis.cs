@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Session.Framing;
 
@@ -150,7 +149,7 @@ internal static class TakeThis
         context.Session.RequestClose();
         context.CompletionDetail = "temporary failure";
         Logger.LogWarning(
-            "[{Client}] TAKETHIS temporary failure; closing connection.",
+            "[{Client}] TAKETHIS temporary failure; closing connection",
             NntpCommandLogFormat.Client(context.Session));
     }
 }

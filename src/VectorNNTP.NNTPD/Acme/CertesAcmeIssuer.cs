@@ -3,7 +3,6 @@ using System.Security.Cryptography.X509Certificates;
 using Certes;
 using Certes.Acme;
 using Certes.Acme.Resource;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -131,10 +130,10 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         try
         {
             await _dnsSolver.PlaceAsync(specs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME DNS-01 TXT records placed for {DomainCount} identifier(s).", specs.Count);
+            _logger.LogInformation("ACME DNS-01 TXT records placed for {DomainCount} identifier(s)", specs.Count);
 
             await _dnsSolver.WaitPropagatedAsync(specs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME DNS-01 authoritative visibility confirmed.");
+            _logger.LogInformation("ACME DNS-01 authoritative visibility confirmed");
 
             foreach (var challenge in challenges)
             {
@@ -143,11 +142,11 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
             }
 
             _logger.LogInformation(
-                "ACME DNS-01 challenges triggered; waiting for authorization (timeout={TimeoutSeconds}s).",
+                "ACME DNS-01 challenges triggered; waiting for authorization (timeout={TimeoutSeconds}s)",
                 (int)_readinessTimeout.TotalSeconds);
 
             await WaitForOrderReadyAsync(order, authzs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME order ready for finalization.");
+            _logger.LogInformation("ACME order ready for finalization");
 
             cancellationToken.ThrowIfCancellationRequested();
             CertificateChain certChain;
@@ -179,7 +178,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                     $"{AcmeProblemDiagnostics.FormatException(ex)} order_status={orderStatus}");
             }
 
-            _logger.LogInformation("ACME certificate finalized.");
+            _logger.LogInformation("ACME certificate finalized");
 
             await CleanupDnsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -360,7 +359,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // Ignore cleanup cancel during best-effort.
+            // Ignore clean-up cancel during best-effort.
         }
         catch
         {

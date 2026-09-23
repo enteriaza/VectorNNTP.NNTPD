@@ -1,6 +1,3 @@
-using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Session;
-
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>
@@ -8,7 +5,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, STREAMING, and related labels).
-/// Advertisement of AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
+/// Advertisement for AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
 /// COMPRESS / STARTTLS / MODE-READER / AUTHINFO arguments follow RFC 8054 once a compression layer is active.
 /// STREAMING (RFC 4644) is advertised when TAKETHIS/CHECK streaming transfer is implemented.
 /// </remarks>

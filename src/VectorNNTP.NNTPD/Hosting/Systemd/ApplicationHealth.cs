@@ -20,7 +20,5 @@ public sealed class ApplicationHealth : IApplicationHealth
 
     /// <inheritdoc />
     public bool IsHealthyForWatchdog =>
-        _lifecycle.State == ApplicationState.Running
-        && !_lifecycle.UnexpectedTermination.IsCompleted
-        && !_lifecycle.ShutdownRequested;
+        _lifecycle is { State: ApplicationState.Running, UnexpectedTermination.IsCompleted: false, ShutdownRequested: false };
 }

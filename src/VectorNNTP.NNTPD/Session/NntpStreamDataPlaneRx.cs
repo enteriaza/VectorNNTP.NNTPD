@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 
@@ -52,8 +51,7 @@ internal sealed class NntpStreamDataPlaneRx
             return false;
         }
 
-        if (unit.Kind == NntpContinuousRxKind.TakeThis
-            && unit.Article.Status == NntpMultilineReadStatus.Incomplete)
+        if (unit is { Kind: NntpContinuousRxKind.TakeThis, Article.Status: NntpMultilineReadStatus.Incomplete })
         {
             return false;
         }

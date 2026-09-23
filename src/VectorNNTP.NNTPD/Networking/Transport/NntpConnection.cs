@@ -4,7 +4,6 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
@@ -660,7 +659,7 @@ public sealed class NntpConnection : INntpConnection
         catch (Exception ex)
         {
             error = ex;
-            _logger.LogDebug(ex, "NNTP connection {Pump} pump ended with an error.", name);
+            _logger.LogDebug(ex, "NNTP connection {Pump} pump ended with an error", name);
         }
         finally
         {

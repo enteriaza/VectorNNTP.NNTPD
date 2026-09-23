@@ -1,6 +1,4 @@
 using System.Net.Sockets;
-using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Networking.Transport;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -50,8 +48,7 @@ internal static class Quit
 
             // Prefer observing send-pump idle so 205 has left the outbound pipe before teardown,
             // matching STARTTLS/COMPRESS delivery waits. Peer-gone during this wait is expected.
-            if (!context.Connection.IsCompleted &&
-                !context.Connection.ConnectionClosed.IsCancellationRequested)
+            if (context.Connection is { IsCompleted: false, ConnectionClosed.IsCancellationRequested: false })
             {
                 await context.Connection
                     .WaitForOutboundDeliveryAsync(idleVersionBefore205, cancellationToken)
@@ -68,7 +65,7 @@ internal static class Quit
             context.CompletionDetail = "peer disconnected";
             Logger.LogDebug(
                 ex,
-                "[{Client}] Peer disconnected during QUIT termination.",
+                "[{Client}] Peer disconnected during QUIT termination",
                 NntpCommandLogFormat.Client(context.Session));
         }
         catch (Exception ex)

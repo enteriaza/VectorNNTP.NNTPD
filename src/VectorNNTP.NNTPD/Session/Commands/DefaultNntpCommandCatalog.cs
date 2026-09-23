@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Session.Authentication;
 

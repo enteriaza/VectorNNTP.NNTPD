@@ -1,5 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking;
@@ -16,15 +15,15 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// <see cref="StopAsync"/> deletes every DNS record for the exact FQDN (all types), then verifies none remain.
 /// </para>
 /// <para>
-/// Registered first among application services so reverse-order stop runs cleanup after other services
-/// (including future listeners) have stopped. Startup failure after reconcile work begins attempts cleanup
+/// Registered first among application services so reverse-order stop runs clean-up after other services
+/// (including future listeners) have stopped. Startup failure after reconcile work begins attempts clean-up
 /// so partial A/AAAA publications are not left without a recovery path. Concurrent start/stop are rejected
-/// by <see cref="ApplicationServiceManager"/>; reconcile and cleanup share the reconciler gate.
+/// by <see cref="ApplicationServiceManager"/>; reconcile and clean-up share the reconciler gate.
 /// </para>
 /// </remarks>
 public sealed class CloudflareDnsReconciliationService : IApplicationService
 {
-    /// <summary>Maximum wall-clock budget for best-effort cleanup after a failed or canceled startup reconcile.</summary>
+    /// <summary>Maximum wall-clock budget for best-effort clean-up after a failed or cancelled startup reconcile.</summary>
     public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
 
     private readonly IOptions<NntpdOptions> _options;
@@ -77,7 +76,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
         }
 
         _logger.LogInformation(
-            "Starting Cloudflare DNS reconciliation for {Fqdn} in zone {ZoneId}.",
+            "Starting Cloudflare DNS reconciliation for {Fqdn} in zone {ZoneId}",
             fqdn,
             options.CloudFlareZoneId);
 
@@ -102,7 +101,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
             Volatile.Write(ref _fqdnOwnershipActive, 1);
 
             _logger.LogInformation(
-                "Cloudflare DNS reconciliation completed for {Fqdn} with {AddressCount} address(es).",
+                "Cloudflare DNS reconciliation completed for {Fqdn} with {AddressCount} address(es)",
                 fqdn,
                 resolved.All.Count);
         }
@@ -124,12 +123,12 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         // Runs during normal shutdown and startup rollback while lifecycle may already be Stopping.
-        // Do not skip cleanup merely because ownership tracking or lifecycle state changed.
+        // Do not skip clean-up merely because ownership tracking or lifecycle state changed.
         if (Interlocked.Exchange(ref _fqdnOwnershipActive, 0) == 0)
         {
             _logger.LogInformation(
                 "Cloudflare DNS cleanup skipped: FQDN ownership was not active " +
-                "(reconcile never completed successfully in this process).");
+                "(reconcile never completed successfully in this process)");
             return;
         }
 
@@ -142,7 +141,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
         }
 
         _logger.LogInformation(
-            "Stopping Cloudflare DNS reconciliation: removing all records for exact FQDN {Fqdn}.",
+            "Stopping Cloudflare DNS reconciliation: removing all records for exact FQDN {Fqdn}",
             fqdn);
 
         await _reconciler
@@ -151,7 +150,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
 
         _logger.LogInformation(
             "Cloudflare DNS cleanup completed for {Fqdn}: Cloudflare API reports no remaining records " +
-            "for the exact name. Recursive DNS caches may still return prior answers until TTLs expire.",
+            "for the exact name. Recursive DNS caches may still return prior answers until TTLs expire",
             fqdn);
     }
 
@@ -167,11 +166,11 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
                 original,
                 "Cloudflare DNS reconciliation did not complete successfully for {Fqdn}. " +
                 "Attempting authoritative cleanup of the exact FQDN before failing startup " +
-                "(cancellation={Canceled}).",
+                "(cancellation={Canceled})",
                 fqdn,
                 cancellationException);
 
-            // Best-effort cleanup after failed/canceled reconcile: dedicated 15s budget (not unbounded).
+            // Best-effort clean-up after failed/cancelled reconcile: dedicated 15s budget (not unbounded).
             using var cleanupCts = new CancellationTokenSource(FailedStartCleanupTimeout);
             await _reconciler
                 .RemoveAllRecordsForFqdnAsync(
@@ -183,7 +182,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
 
             Volatile.Write(ref _fqdnOwnershipActive, 0);
             _logger.LogInformation(
-                "Post-failure Cloudflare DNS cleanup verified for {Fqdn}: no exact-name records remain.",
+                "Post-failure Cloudflare DNS cleanup verified for {Fqdn}: no exact-name records remain",
                 fqdn);
         }
         catch (OperationCanceledException cleanupEx)
@@ -192,10 +191,10 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
                 cleanupEx,
                 "Post-failure Cloudflare DNS cleanup for {Fqdn} timed out or was canceled " +
                 "(budget={CleanupBudget}). Records may remain; cleanup is not claimed successful. " +
-                "The next successful startup will re-read and reconcile.",
+                "The next successful startup will re-read and reconcile",
                 fqdn,
                 FailedStartCleanupTimeout);
-            // Preserve the original startup failure; do not replace it with cleanup failure.
+            // Preserve the original startup failure; do not replace it with clean-up failure.
         }
         catch (Exception cleanupEx)
         {
@@ -203,9 +202,9 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
                 cleanupEx,
                 "Post-failure Cloudflare DNS cleanup for {Fqdn} did not verify removal. " +
                 "Records may remain; the next successful startup will re-read and reconcile. " +
-                "Cleanup is not claimed successful.",
+                "Cleanup is not claimed successful",
                 fqdn);
-            // Preserve the original startup failure; do not replace it with cleanup failure.
+            // Preserve the original startup failure; do not replace it with clean-up failure.
         }
     }
 }

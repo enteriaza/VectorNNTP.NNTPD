@@ -54,7 +54,7 @@ public sealed class AcmeOrderException : AcmeException
     }
 }
 
-/// <summary>DNS-01 challenge placement, propagation, or cleanup failure.</summary>
+/// <summary>DNS-01 challenge placement, propagation, or clean-up failure.</summary>
 public sealed class AcmeChallengeException : AcmeException
 {
     /// <inheritdoc cref="AcmeException(string, string)"/>

@@ -48,7 +48,7 @@ public readonly struct NntpContinuousRxUnit
     /// <summary>Gets the command line without CRLF, when present.</summary>
     public string? CommandLine { get; }
 
-    /// <summary>Gets the TAKETHIS message-id argument (may be empty).</summary>
+    /// <summary>Gets the TAKETHIS message-id argument (maybe empty).</summary>
     public string? MessageId { get; }
 
     /// <summary>

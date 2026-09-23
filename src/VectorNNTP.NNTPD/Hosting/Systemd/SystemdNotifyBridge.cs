@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Hosting.Systemd;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting.Systemd;
 
@@ -63,11 +62,11 @@ public sealed class SystemdNotifyBridge : ISystemdNotifyBridge
         try
         {
             _notifier.Notify(state);
-            _logger.LogDebug("Sent systemd notification {Notification}.", label);
+            _logger.LogDebug("Sent systemd notification {Notification}", label);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send systemd notification {Notification}.", label);
+            _logger.LogError(ex, "Failed to send systemd notification {Notification}", label);
             throw;
         }
     }

@@ -1,13 +1,13 @@
 namespace VectorNNTP.NNTPD.Cloudflare;
 
 /// <summary>
-/// Shared wall-clock deadline for a single Cloudflare reconcile or cleanup operation.
+/// Shared wall-clock deadline for a single Cloudflare reconcile or clean-up operation.
 /// </summary>
 /// <remarks>
 /// Nested HTTP 429 retries and reconciler attempt backoffs must observe this deadline so
 /// Retry-After cannot extend past the remaining operation budget. The earlier of this
 /// deadline and the caller's <see cref="CancellationToken"/> wins. The budget is created once
-/// per reconcile/cleanup call and is not reset on individual HTTP attempts or reconciler retries.
+/// per reconcile/clean-up call and is not reset on individual HTTP attempts or reconciler retries.
 /// </remarks>
 internal sealed class CloudflareOperationBudget : IDisposable
 {
@@ -45,7 +45,7 @@ internal sealed class CloudflareOperationBudget : IDisposable
     /// </summary>
     /// <param name="timeout">Maximum wall-clock duration for the operation.</param>
     /// <param name="callerToken">Caller / lifecycle cancellation (earlier deadline wins).</param>
-    /// <param name="linkedToken">Token canceled when either the caller cancels or the timeout elapses.</param>
+    /// <param name="linkedToken">Token cancelled when either the caller cancels or the timeout elapses.</param>
     /// <returns>A scope that restores the previous budget when disposed.</returns>
     public static CloudflareOperationBudget Begin(
         TimeSpan timeout,
@@ -69,7 +69,7 @@ internal sealed class CloudflareOperationBudget : IDisposable
     private CancellationTokenSource? LinkedCts { get; init; }
 
     /// <summary>
-    /// Throws <see cref="OperationCanceledException"/> when the budget has expired or the token is canceled.
+    /// Throws <see cref="OperationCanceledException"/> when the budget has expired or the token is cancelled.
     /// </summary>
     public void ThrowIfExpired(CancellationToken cancellationToken)
     {
