@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -45,7 +46,12 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
         // Real account backends replace this registration; default rejects all credentials.
         services.TryAddSingleton<INntpAuthenticationProvider>(DenyAllNntpAuthenticationProvider.Instance);
+        services.TryAddSingleton<TransitConfigurationStore>();
+        services.TryAddSingleton<ITransitDnsResolver, TransitDnsClientResolver>();
+        services.TryAddSingleton<ITransitDnsAddressCache, TransitDnsAddressCache>();
+        services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
         services.TryAddSingleton<ITransitPeerAuthorization, TransitPeerAuthorization>();
+        services.TryAddSingleton<TransitConfigurationHotReload>();
 
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {
@@ -91,10 +97,17 @@ public static class NntpdServiceCollectionExtensions
                 options.Transit ??= new TransitOptions();
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
-                NormalizeTransitPeers(options);
+                options.Transit ??= new TransitOptions();
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
+
+        services
+            .AddOptions<TransitPeersOptions>()
+            .BindConfiguration(TransitPeersOptions.SectionName);
+        // Validation is applied when building the immutable snapshot (startup throw /
+        // reload ignore). IValidateOptions is not registered so an invalid reload
+        // cannot throw from IOptionsMonitor before the last valid snapshot is kept.
 
         if (configure is not null)
         {
@@ -102,7 +115,8 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → incoming spool writer → plain NNTP listener → ACME → TLS NNTP listener.
+        // Cloudflare DNS → incoming spool writer → Transit AllowFrom DNS refresh →
+        // plain NNTP listener → ACME → TLS NNTP listener.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
 
@@ -112,6 +126,14 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, IncomingSpoolWriterService>(static sp =>
                 sp.GetRequiredService<IncomingSpoolWriterService>()));
+
+        services.TryAddSingleton<TransitDnsRefreshService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, TransitDnsRefreshService>(static sp =>
+            {
+                _ = sp.GetRequiredService<TransitConfigurationHotReload>();
+                return sp.GetRequiredService<TransitDnsRefreshService>();
+            }));
 
         services.TryAddSingleton<NntpPlainListenerService>();
         services.TryAddEnumerable(
@@ -278,20 +300,6 @@ public static class NntpdServiceCollectionExtensions
         }
     }
 
-    private static void NormalizeTransitPeers(NntpdOptions options)
-    {
-        options.Transit ??= new TransitOptions();
-        if (options.Transit.AllowedPeers is null)
-        {
-            options.Transit.AllowedPeers = [];
-            return;
-        }
-
-        for (var i = 0; i < options.Transit.AllowedPeers.Length; i++)
-        {
-            options.Transit.AllowedPeers[i] = options.Transit.AllowedPeers[i]?.Trim() ?? string.Empty;
-        }
-    }
 }
 
 /// <summary>

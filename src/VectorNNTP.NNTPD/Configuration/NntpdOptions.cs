@@ -317,11 +317,11 @@ public sealed class NntpdOptions
     }
 
     /// <summary>
-    /// Gets or sets transit/streaming peer authorization options.
+    /// Gets or sets NNTPD-local transit runtime options (STREAM TX depth).
     /// </summary>
     /// <remarks>
-    /// See <see cref="TransitOptions"/>. Default empty = no trusted transit peers.
-    /// Grants peer privileges, not user authentication. Distinct from <see cref="ProxyHosts"/>.
+    /// Named Transit peers bind from the top-level <c>Transit</c> section
+    /// (<see cref="TransitPeersOptions"/>), not from this property.
     /// </remarks>
     [Required]
     public TransitOptions Transit { get; set; } = new();

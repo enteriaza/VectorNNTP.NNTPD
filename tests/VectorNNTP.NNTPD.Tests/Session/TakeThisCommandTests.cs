@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
+using VectorNNTP.NNTPD.Tests.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
@@ -384,9 +385,13 @@ public sealed class TakeThisCommandTests
     [Fact]
     public async Task ModeStream_KeepsStreamDataPlaneRx_WithoutSettingMode()
     {
+        var source = System.Net.IPAddress.Parse("192.0.2.10");
         await using var duplex = await TakeThisDuplex.CreateAsync();
-        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
-        session.SetAuthorization(TransitAuth);
+        var session = duplex.CreateSession(
+            new ArticleIngestionQueue(new ArticleIngestionOptions()),
+            TransitTestPeers.ForAllowFrom(source),
+            source);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -486,9 +491,13 @@ public sealed class TakeThisCommandTests
     [Fact]
     public async Task ModeStream_Returns203_WithoutChangingMode()
     {
+        var source = System.Net.IPAddress.Parse("192.0.2.10");
         await using var duplex = await TakeThisDuplex.CreateAsync();
-        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
-        session.SetAuthorization(TransitAuth);
+        var session = duplex.CreateSession(
+            new ArticleIngestionQueue(new ArticleIngestionOptions()),
+            TransitTestPeers.ForAllowFrom(source),
+            source);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -588,7 +597,7 @@ public sealed class TakeThisCommandTests
             var options = new ArticleIngestionOptions { IncomingDirectory = dir, QueueCapacity = 8 };
             var queue = new ArticleIngestionQueue(options);
             var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var persister = new GatedPersister(gate.Task, new ConcurrentBag<string>());
+            _ = new GatedPersister(gate.Task, []);
             // Use real file persister after gate for drain proof — compose:
             var filePersister = new IncomingSpoolFilePersister(
                 Options.Create(new NntpdOptions { ArticleIngestion = options }),
@@ -716,16 +725,10 @@ public sealed class TakeThisCommandTests
         return line.ToString();
     }
 
-    private sealed class GatedPersister : IIncomingArticlePersister
+    private sealed class GatedPersister(Task gate, ConcurrentBag<string> persisted) : IIncomingArticlePersister
     {
-        private readonly Task _gate;
-        private readonly ConcurrentBag<string> _persisted;
-
-        public GatedPersister(Task gate, ConcurrentBag<string> persisted)
-        {
-            _gate = gate;
-            _persisted = persisted;
-        }
+        private readonly Task _gate = gate;
+        private readonly ConcurrentBag<string> _persisted = persisted;
 
         public async Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
         {
@@ -734,16 +737,10 @@ public sealed class TakeThisCommandTests
         }
     }
 
-    private sealed class ChainedPersister : IIncomingArticlePersister
+    private sealed class ChainedPersister(Task gate, IIncomingArticlePersister inner) : IIncomingArticlePersister
     {
-        private readonly Task _gate;
-        private readonly IIncomingArticlePersister _inner;
-
-        public ChainedPersister(Task gate, IIncomingArticlePersister inner)
-        {
-            _gate = gate;
-            _inner = inner;
-        }
+        private readonly Task _gate = gate;
+        private readonly IIncomingArticlePersister _inner = inner;
 
         public async Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
         {
@@ -777,16 +774,21 @@ public sealed class TakeThisCommandTests
             return Task.FromResult(new TakeThisDuplex(outputOptions));
         }
 
-        public NntpSession CreateSession(IArticleIngestionQueue queue)
+        public NntpSession CreateSession(
+            IArticleIngestionQueue queue,
+            ITransitPeerAuthorization? transitPeers = null,
+            System.Net.IPAddress? clientAddress = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
                 _serverToClient.Writer,
-                ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)));
+                ConnectionClientIdentity.Direct(
+                    new System.Net.IPEndPoint(clientAddress ?? System.Net.IPAddress.Loopback, 119)));
             return new NntpSession(
                 connection,
                 NullLogger<NntpSession>.Instance,
-                articleIngestion: queue);
+                articleIngestion: queue,
+                transitPeerAuthorization: transitPeers);
         }
 
         public async Task WriteClientLineAsync(string line)
@@ -825,21 +827,14 @@ public sealed class TakeThisCommandTests
         }
     }
 
-    private sealed class PipeNntpConnection : INntpConnection
+    private sealed class PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity) : INntpConnection
     {
         private readonly CancellationTokenSource _closed = new();
         private int _compressed;
 
-        public PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity)
-        {
-            Input = input;
-            Output = output;
-            ClientIdentity = identity;
-        }
-
-        public PipeReader Input { get; }
-        public PipeWriter Output { get; }
-        public ConnectionClientIdentity ClientIdentity { get; }
+        public PipeReader Input { get; } = input;
+        public PipeWriter Output { get; } = output;
+        public ConnectionClientIdentity ClientIdentity { get; } = identity;
         public System.Net.EndPoint? RemoteEndPoint => ClientIdentity.TcpPeer;
         public System.Net.EndPoint? LocalEndPoint => null;
         public bool IsTls => false;

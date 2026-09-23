@@ -19,7 +19,7 @@ namespace VectorNNTP.NNTPD.Session;
 /// This type owns NNTP protocol sequencing and does not touch sockets or stream wrappers directly.
 /// Authentication and authorization are distinct; AUTHINFO success applies only provider-returned privileges.
 /// Connection-time <see cref="ITransitPeerAuthorization"/> may grant transit/streaming peer privileges
-/// without authentication.
+/// without authentication and retains the named Transit peer policy.
 /// </remarks>
 public sealed class NntpSession
 {

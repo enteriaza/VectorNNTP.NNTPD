@@ -127,9 +127,10 @@ public sealed class CloudflareDnsReconciliationServiceTests
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(CloudflareDnsReconciliationService), services[0].GetType());
         Assert.Equal(typeof(IncomingSpoolWriterService), services[1].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[2].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[3].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[4].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[2].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[3].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[4].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[5].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

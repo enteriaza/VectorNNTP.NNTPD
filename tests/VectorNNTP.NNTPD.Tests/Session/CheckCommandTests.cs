@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Tests.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
@@ -43,13 +44,10 @@ public sealed class CheckCommandTests
     [Fact]
     public async Task TransitPeer_Check_Returns238_WithoutUserAuthentication()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([TransitPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
         await using var duplex = await CheckDuplex.CreateAsync(TransitPeer);
         var session = duplex.CreateSession(peers);
-        Assert.False(session.Authorization.IsAuthenticated);
-        Assert.True(session.Authorization.AuthorizedTransit);
-        Assert.Equal(NntpAuthorization.TrustedTransitPeer.IsAuthenticated, session.Authorization.IsAuthenticated);
-        Assert.Equal(NntpAuthorization.TrustedTransitPeer.AuthorizedTransit, session.Authorization.AuthorizedTransit);
+        AssertNamedTransitPeer(session);
 
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
@@ -68,9 +66,10 @@ public sealed class CheckCommandTests
     [Fact]
     public async Task TransitPeer_CheckDoesNotRequireModeStream()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([TransitPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
         await using var duplex = await CheckDuplex.CreateAsync(TransitPeer);
         var session = duplex.CreateSession(peers);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -89,10 +88,11 @@ public sealed class CheckCommandTests
     [Fact]
     public async Task TransitPeer_CheckThenTakeThis_SameAuthorization()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([TransitPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         await using var duplex = await CheckDuplex.CreateAsync(TransitPeer);
         var session = duplex.CreateSession(peers, queue);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -111,11 +111,12 @@ public sealed class CheckCommandTests
     [Fact]
     public async Task NonAuthorizedPeer_CheckAndTakeThis_BothReturn480()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([TransitPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
         await using var duplex = await CheckDuplex.CreateAsync(OtherPeer);
         var session = duplex.CreateSession(peers);
         Assert.False(session.Authorization.IsAuthenticated);
         Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.Null(session.Authorization.TransitPeerName);
 
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
@@ -178,9 +179,10 @@ public sealed class CheckCommandTests
     [Fact]
     public async Task TransitPeer_MissingMessageId_Returns501AfterAuthorization()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([TransitPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
         await using var duplex = await CheckDuplex.CreateAsync(TransitPeer);
         var session = duplex.CreateSession(peers);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -206,6 +208,15 @@ public sealed class CheckCommandTests
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
         await run;
+    }
+
+    private static void AssertNamedTransitPeer(NntpSession session)
+    {
+        Assert.False(session.Authorization.IsAuthenticated);
+        Assert.True(session.Authorization.AuthorizedTransit);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
+        Assert.NotNull(session.Authorization.TransitPeerPolicy);
+        Assert.Equal(TransitPeer, session.ClientAddress);
     }
 
     private sealed class CheckDuplex : IAsyncDisposable
@@ -265,22 +276,15 @@ public sealed class CheckCommandTests
         }
     }
 
-    private sealed class PipeNntpConnection : INntpConnection
+    private sealed class PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity) : INntpConnection
     {
         private readonly CancellationTokenSource _cts = new();
 
-        public PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity)
-        {
-            Input = input;
-            Output = output;
-            ClientIdentity = identity;
-        }
-
-        public PipeReader Input { get; }
-        public PipeWriter Output { get; }
+        public PipeReader Input { get; } = input;
+        public PipeWriter Output { get; } = output;
         public EndPoint? RemoteEndPoint => ClientIdentity.TcpPeer;
         public EndPoint? LocalEndPoint => null;
-        public ConnectionClientIdentity ClientIdentity { get; }
+        public ConnectionClientIdentity ClientIdentity { get; } = identity;
         public bool IsTls => false;
         public bool IsCompressed => false;
         public CancellationToken ConnectionClosed => _cts.Token;

@@ -6,10 +6,13 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// AUTHINFO USER / PASS (RFC 4643, Section 2.3) and AUTHINFO SASL (RFC 4643, Section 2.4).
 /// </summary>
 /// <remarks>
-/// USER caches a username; PASS authenticates via <see cref="INntpAuthenticationProvider"/>.
-/// SASL is registered but deliberately not implemented yet. Passwords and SASL material must never
-/// appear in command logs (RX redaction is applied at the session boundary). After a successful
-/// COMPRESS (RFC 8054 §2.2.2 / §7), AUTHINFO commands are rejected with <c>502</c>.
+/// USER caches a username; PASS authenticates via <see cref="INntpAuthenticationProvider"/>
+/// unless the session is already an identified Transit peer, in which case only that peer's
+/// Username and Password are compared (no global peer search). AUTHINFO is publicly callable
+/// and never creates Transit identity. SASL is registered but deliberately not implemented yet.
+/// Passwords and SASL material must never appear in command logs (RX redaction is applied at
+/// the session boundary). After a successful COMPRESS (RFC 8054 §2.2.2 / §7), AUTHINFO
+/// commands are rejected with <c>502</c>.
 /// </remarks>
 internal static class AuthInfo
 {
@@ -160,9 +163,21 @@ internal static class AuthInfo
         NntpAuthenticationResult result;
         try
         {
-            result = await authenticationProvider
-                .AuthenticateAsync(pending, password, cancellationToken)
-                .ConfigureAwait(false);
+            var peerPolicy = context.Session.Authorization.TransitPeerPolicy;
+            if (peerPolicy is not null)
+            {
+                // Identified Transit peer: only that peer's Username+Password may authenticate.
+                // Incomplete or mismatched credentials never fall through to the ordinary provider.
+                result = peerPolicy.CredentialsMatch(pending, password)
+                    ? NntpAuthenticationResult.Success(pending, context.Session.Authorization)
+                    : NntpAuthenticationResult.Failed;
+            }
+            else
+            {
+                result = await authenticationProvider
+                    .AuthenticateAsync(pending, password, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         finally
         {

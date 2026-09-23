@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive). Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive) plus the top-level `Transit` peer dictionary. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.**
 
@@ -32,8 +32,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Bounded in-memory ingestion queue size (`1–100000`) |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
-| `Transit:AllowedPeers` | string array | `[]` (empty) | no | Effective client IPs trusted as **transit/streaming peers**. Grants `AuthorizedTransit` + `StreamingPermitted` without authentication (not user identity). Does **not** grant reader, posting, or `IsAuthenticated`. Distinct from `ProxyHosts`. Literal IPv4/IPv6 only (no CIDR/DNS). Empty = deny-by-default. Matched against `ConnectionClientIdentity.ClientAddress` (PROXY effective client when used). |
-| `Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. |
+| `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
+| `Transit:{peer-name}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; see below). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -119,33 +119,148 @@ Example:
 "ProxyHosts": [ "198.51.100.10", "2001:db8::proxy" ]
 ```
 
-## Transit:AllowedPeers (trusted feed peers)
+## Transit named peers (top-level `Transit`)
 
-`Transit:AllowedPeers` is an optional JSON array of **literal** IPv4/IPv6 addresses for NNTP peers trusted to offer articles (transit/streaming). This is **peer authorization**, not user authentication.
+Trusted feed peers are configured in a **top-level** `Transit` dictionary. Peer names are the keys. There is no nested `Transit:Peers` layer.
+
+This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy.
+
+`AUTHINFO USER/PASS` is a **public** command (READER, STREAM, transit peers, and non-transit clients may issue it). Authentication succeeds for an identified Transit peer only when **both** configured `Username` and `Password` are non-empty and both supplied values match (ordinal). AUTHINFO success is not Transit authorization: a non-transit client that authenticates through the ordinary provider does not become a Transit peer.
 
 | Situation | Behavior |
 |-----------|----------|
-| Omitted / `[]` | Deny-by-default. Sessions start with no transit/streaming privileges. |
-| Effective client matches an entry | Session starts with `AuthorizedTransit` + `StreamingPermitted`, still `IsAuthenticated = false`, no reader/posting. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE` without AUTHINFO. |
-| Effective client does not match | Same as empty list for that connection. |
+| `Transit` omitted / `{}` | Deny-by-default. Sessions start with no transit/streaming privileges. |
+| Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE`. Peer AUTHINFO may authenticate against that peer only. |
+| Effective client matches no peer | Same as empty dictionary for that connection. AUTHINFO uses the ordinary authentication provider. |
+| Effective client matches more than one peer | Transit is **denied**. A WARNING is logged on **every** such connection (`source IP` + matching peer names). Literal/CIDR and duplicate-hostname overlap is rejected at configuration validation; residual DNS-vs-literal overlap is still denied at identification time. |
 
-Notes:
+`Nntpd:Transit:StreamOutstandingArticleDepth` is unrelated peer policy: it only bounds concurrent outbound STREAM article TX operations (valid `4–16`).
 
-- Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source when the TCP peer is a trusted `ProxyHosts` entry).
-- **Not** the same as `ProxyHosts`. `ProxyHosts` only controls whether PROXY headers are trusted; it does not grant feed privileges.
-- DNS names and CIDR prefixes are not supported in this version.
-- AUTHINFO remains an independent user-authentication path.
+### Peer name
+
+The JSON key is the peer name. Names are **human-readable labels** and are **not** normalized (no case-folding). Spaces, commas, punctuation, and printable Unicode are allowed (`Giganews, Inc.`, `Blueworld Hosting`). A name must be non-empty, not whitespace-only, at most 256 characters, and must not contain control characters. The configured string is preserved exactly.
+
+### Peer fields
+
+| Field | Type | Default | Required? | Description |
+|-------|------|---------|-----------|-------------|
+| `MaxIncomingConnections` | int | _(none)_ | **yes** | Max simultaneous inbound connections associated with this peer (`0–4096`). Counted only after peer identification. `0` admits no new inbound connections. Lowering the limit does not disconnect existing sessions. |
+| `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
+| `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
+| `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |
+| `Username` | string | `""` | no | Peer AUTHINFO username. Must be set together with `Password`, or both blank. Authentication requires both configured values and both supplied values to match. |
+| `Password` | string | `""` | no | Peer AUTHINFO password. Never log this value. Must be set together with `Username`, or both blank. |
+| `Ssl` | string | `""` | no | Blank = no TLS; `TLS` = native TLS; `STARTTLS` = upgrade. Case-insensitive; invalid values fail validation. |
+| `Patterns` | string | `*` | no | One newsfeeds(5) / `uwildmat_poison` subscription expression (comma-separated string, not a JSON array, regex, or .NET glob). |
+| `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE duplicate handling (`431`/`436` vs `438`/`435`). No duplicate database is implemented yet. |
+| `PathToken` | string | `""` | no | Exact token reserved for outbound Path-header loop prevention. Not a DNS name or IP; not case-folded. Empty is allowed. **Not consumed** by article-routing code yet. Max 255 characters; no control characters. |
+| `MaxSize` | long | `10485760` | no | Peer incoming-article size policy in bytes (`1–2147483647`). Stored only; not wired into TAKETHIS ingestion. Distinct from `Nntpd:ArticleIngestion:MaxArticleBytes`. |
+| `MessageTypes` | string array | `["default"]` (when omitted or empty) | no | Diablo article-type names (see below). Not regex, MIME types, or newsgroup Patterns. Classification is not implemented. |
+
+### AllowFrom
+
+Each entry is one of:
+
+- DNS hostname: `news.example.net` (resolved to A/AAAA; all current addresses are authorized)
+- IPv4 address: `192.0.2.10`
+- IPv4 prefix: `192.0.2.0/24`
+- IPv6 address: `2001:db8::10`
+- IPv6 prefix: `2001:db8:1234::/48`
+
+Private, ULA, documentation, and lab addresses are accepted. `IPAddress.IsGlobal` is not used.
+
+AllowFrom is **materialized into an IP-only runtime ACL** before connection handling:
+
+```text
+configured AllowFrom
+       │
+       ├── literal IP/prefix → IP ACL
+       │
+       └── DNS hostname
+                ↓
+           DNS resolution (refresh layer)
+                ↓
+         resolved IP addresses
+                ↓
+             IP ACL
+```
+
+Connection-time identification is **IP-only**. A connection never triggers DNS resolution, reverse DNS, hostname lookup, or other network I/O for ACL matching.
+
+DNS resolution (refresh layer only):
+
+- Lookups are asynchronous (DnsClient A + AAAA), ahead of connection handling.
+- Record TTLs are honoured when DnsClient exposes `TimeToLive` on answers.
+- Refresh is never more frequent than **60 seconds**. If TTL is greater than 60 seconds, the TTL is used; if TTL is less than 60 seconds or unavailable, the 60-second floor applies.
+- A refresh atomically replaces that hostname's address set.
+- Transient failures (timeout, SERVFAIL, transport error) keep the last valid set.
+- NXDOMAIN / NOERROR with no A/AAAA clears the set.
+- Temporary DNS failure must not erase a previously valid set.
+- Every failed resolution attempt logs WARNING with the peer name, hostname, and reason. Repeated failures are not suppressed. Passwords are never logged.
+
+Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source when the TCP peer is a trusted `ProxyHosts` entry). **Not** the same as `ProxyHosts`.
+
+### MessageTypes
+
+`MessageTypes` is a JSON string array of Diablo `ArtTypeConv` names (case-insensitive, surrounding whitespace ignored). Unknown values fail validation. Duplicates are OR-ed (harmless). `binary` and `binaries` map to the same flag. `pgp` maps to `PgpMessage`. `all` is the union of every concrete flag. `default` and `none` are distinct.
+
+Recognised names: `none`, `default`, `control`, `cancel`, `mime`, `binary`/`binaries`, `uuencode`, `base64`, `yenc`, `bommanews`, `unidata`, `multipart`, `html`, `ps`, `binhex`, `partial`, `pgp`, `all`.
+
+This is stored peer policy only. Articles are not classified yet.
+
+### ConnectTo / Ssl
+
+`ConnectTo` requires an explicit port. Defaults are not inferred from `Ssl` because this host's own TLS listen port is independently configurable (not assumed to be 563). Examples: `news.example.net:119`, `192.0.2.10:119`, `[2001:db8::10]:563`. No outbound connection is established from this setting.
+
+### Patterns
+
+`Patterns` is a newsfeeds(5) expression compiled with INN `uwildmat_poison` semantics (see [libinn-uwildmat](https://www.eyrie.org/~eagle/software/inn/docs/libinn-uwildmat.html) and [newsfeeds(5)](https://www.eyrie.org/~eagle/software/inn/docs/newsfeeds.html)):
+
+- The complete newsgroup name is matched (anchored).
+- Comma separates patterns; `\,` is a literal comma.
+- The rightmost matching pattern wins.
+- `!` excludes; `@` poisons.
+- `*` any sequence, `?` one character, `[...]` / `[^...]` sets, `\` escapes.
+- Empty or invalid expressions fail configuration validation.
+
+The matcher is stored on the peer policy. Article-ingestion routing does not apply Patterns yet.
+
+### Hot reload
+
+The entire top-level `Transit` section reloads through `IOptionsMonitor` when `appsettings.json` changes (Generic Host change tokens; no custom file poll). Adding, removing, or modifying a peer replaces the active immutable snapshot atomically. New connections use the new snapshot. Existing connections are not disconnected solely because configuration changed. Invalid reloads are ignored; the last valid snapshot remains.
 
 Example:
 
 ```json
 "Transit": {
-  "AllowedPeers": [ "198.18.0.70", "2001:db8::feed" ],
-  "StreamOutstandingArticleDepth": 8
+  "news-example": {
+    "MaxIncomingConnections": 10,
+    "MaxOutgoingConnections": 2,
+    "AllowFrom": [
+      "news.example.net",
+      "192.0.2.0/24",
+      "2001:db8:1234::/48"
+    ],
+    "ConnectTo": [ "news.example.net:563" ],
+    "Username": "",
+    "Password": "",
+    "Ssl": "TLS",
+    "Patterns": "*",
+    "DeferOnDuplicate": true,
+    "PathToken": "peer.example",
+    "MaxSize": 10485760,
+    "MessageTypes": [ "default" ]
+  }
 }
 ```
 
-`StreamOutstandingArticleDepth` bounds concurrent outbound STREAM article TX operations (valid `4–16`). It is independent of the TAKETHIS ingestion queue and the response writer Channel.
+```json
+"Nntpd": {
+  "Transit": {
+    "StreamOutstandingArticleDepth": 8
+  }
+}
+```
 
 ## TCP ports
 

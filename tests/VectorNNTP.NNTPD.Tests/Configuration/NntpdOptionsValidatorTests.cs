@@ -855,6 +855,7 @@ public sealed class NntpdConfigurationTests
             options.BindPortTls = 0;
             options.AcmeEmail = string.Empty;
         });
+        TestHostFactory.IsolateTransit(builder.Services);
 
         builder.ConfigureNntpdLogging(static lc => lc.MinimumLevel.Fatal());
         builder.Services.AddNntpdHosting(includePlaceholderService: false);

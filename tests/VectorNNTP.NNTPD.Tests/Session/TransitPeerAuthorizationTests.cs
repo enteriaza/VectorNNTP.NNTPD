@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking;
@@ -13,10 +12,11 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
+using VectorNNTP.NNTPD.Tests.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
-/// <summary>Connection-time transit/streaming peer ACL (<c>Transit:AllowedPeers</c>).</summary>
+/// <summary>Connection-time transit/streaming peer ACL (top-level named <c>Transit</c> peers).</summary>
 [Collection(nameof(TransportTestHostCollection))]
 public sealed class TransitPeerAuthorizationTests
 {
@@ -44,15 +44,11 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task AllowedPeer_ReceivesTransitStreamingPrivileges_NotAuthenticated()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var duplex = await PeerDuplex.CreateAsync(AllowedPeer);
         var session = duplex.CreateSession(peers);
 
-        Assert.False(session.Authorization.IsAuthenticated);
-        Assert.True(session.Authorization.AuthorizedTransit);
-        Assert.True(session.Authorization.StreamingPermitted);
-        Assert.False(session.Authorization.AuthorizedReader);
-        Assert.False(session.Authorization.PostingPermitted);
+        AssertNamedTransitPeer(session);
         Assert.False(session.Authentication.IsAuthenticated);
 
         var run = session.RunAsync();
@@ -65,9 +61,10 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task AllowedPeer_ModeStream_Returns203_WithoutChangingMode()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var duplex = await PeerDuplex.CreateAsync(AllowedPeer);
         var session = duplex.CreateSession(peers);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -75,6 +72,7 @@ public sealed class TransitPeerAuthorizationTests
         Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         Assert.Equal(NntpSessionMode.Unspecified, session.Mode);
         Assert.False(session.Authorization.IsAuthenticated);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -84,10 +82,11 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task AllowedPeer_CheckTakeThisIhave_NotBlockedByAuthentication()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         await using var duplex = await PeerDuplex.CreateAsync(AllowedPeer);
         var session = duplex.CreateSession(peers, queue);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -110,9 +109,10 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task AllowedPeer_PostAndReaderCommands_StillRequireAuth()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var duplex = await PeerDuplex.CreateAsync(AllowedPeer);
         var session = duplex.CreateSession(peers);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -140,7 +140,7 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task DifferentSourceAddress_DoesNotReceiveTransitPrivileges()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var duplex = await PeerDuplex.CreateAsync(OtherPeer);
         var session = duplex.CreateSession(peers);
         AssertPeerUnauthorized(session);
@@ -162,9 +162,10 @@ public sealed class TransitPeerAuthorizationTests
     [Fact]
     public async Task AllowedPeer_FailedAuthinfo_RestoresPeerPrivileges_NotAuthenticated()
     {
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var duplex = await PeerDuplex.CreateAsync(AllowedPeer);
         var session = duplex.CreateSession(peers);
+        AssertNamedTransitPeer(session);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
@@ -176,6 +177,7 @@ public sealed class TransitPeerAuthorizationTests
         Assert.False(session.Authorization.IsAuthenticated);
         Assert.True(session.Authorization.AuthorizedTransit);
         Assert.True(session.Authorization.StreamingPermitted);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
 
         await duplex.WriteClientLineAsync("MODE STREAM");
         Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
@@ -189,41 +191,18 @@ public sealed class TransitPeerAuthorizationTests
     public void Resolve_MatchesIpv6AndMappedIpv4()
     {
         var v6 = IPAddress.Parse("2001:db8::1");
-        var peers = TransitPeerAuthorization.FromAddresses([v6, AllowedPeer]);
-        Assert.Equal(NntpAuthorization.TrustedTransitPeer, peers.Resolve(v6));
-        Assert.Equal(NntpAuthorization.TrustedTransitPeer, peers.Resolve(AllowedPeer));
-        Assert.Equal(
-            NntpAuthorization.TrustedTransitPeer,
-            peers.Resolve(IPAddress.Parse("::ffff:198.18.0.70")));
+        var peers = TransitTestPeers.ForAllowFrom([v6, AllowedPeer]);
+        AssertTransitPeer(peers.Resolve(v6), TransitTestPeers.DefaultPeerName);
+        AssertTransitPeer(peers.Resolve(AllowedPeer), TransitTestPeers.DefaultPeerName);
+        AssertTransitPeer(peers.Resolve(IPAddress.Parse("::ffff:198.18.0.70")), TransitTestPeers.DefaultPeerName);
         Assert.Equal(NntpAuthorization.Unauthenticated, peers.Resolve(OtherPeer));
-    }
-
-    [Fact]
-    public void Validator_RejectsMalformedAllowedPeer()
-    {
-        var options = TestHostFactory.CreateValidOptions();
-        options.Transit = new TransitOptions { AllowedPeers = ["not-an-ip"] };
-        var validator = new NntpdOptionsValidator(new AlwaysAssignedAssignee());
-        var result = validator.Validate(Options.DefaultName, options);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("AllowedPeers", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Validator_AcceptsEmptyAllowedPeers()
-    {
-        var options = TestHostFactory.CreateValidOptions();
-        options.Transit = new TransitOptions { AllowedPeers = [] };
-        var validator = new NntpdOptionsValidator(new AlwaysAssignedAssignee());
-        var result = validator.Validate(Options.DefaultName, options);
-        Assert.False(result.Failed);
     }
 
     [Fact]
     public async Task TcpProxyEffectiveClient_AllowedPeer_GrantsTransit()
     {
         var trusted = new TrustedProxyHosts([IPAddress.Loopback]);
-        var peers = TransitPeerAuthorization.FromAddresses([AllowedPeer]);
+        var peers = TransitTestPeers.ForAllowFrom(AllowedPeer);
         await using var host = await TransportTestHost.StartPlainWithProxyAsync(trusted);
 
         using var clientSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -238,11 +217,7 @@ public sealed class TransitPeerAuthorizationTests
             server,
             NullLogger<NntpSession>.Instance,
             transitPeerAuthorization: peers);
-        Assert.False(session.Authorization.IsAuthenticated);
-        Assert.True(session.Authorization.AuthorizedTransit);
-        Assert.True(session.Authorization.StreamingPermitted);
-        Assert.False(session.Authorization.AuthorizedReader);
-        Assert.False(session.Authorization.PostingPermitted);
+        AssertNamedTransitPeer(session);
 
         var sessionTask = session.RunAsync();
         var greeting = await ReadPlainLineAsync(clientSocket);
@@ -256,6 +231,23 @@ public sealed class TransitPeerAuthorizationTests
         await sessionTask.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    private static void AssertNamedTransitPeer(NntpSession session)
+    {
+        AssertTransitPeer(session.Authorization, TransitTestPeers.DefaultPeerName);
+        Assert.Equal(AllowedPeer, session.ClientAddress);
+    }
+
+    private static void AssertTransitPeer(NntpAuthorization authorization, string peerName)
+    {
+        Assert.False(authorization.IsAuthenticated);
+        Assert.True(authorization.AuthorizedTransit);
+        Assert.True(authorization.StreamingPermitted);
+        Assert.False(authorization.AuthorizedReader);
+        Assert.False(authorization.PostingPermitted);
+        Assert.Equal(peerName, authorization.TransitPeerName);
+        Assert.NotNull(authorization.TransitPeerPolicy);
+    }
+
     private static void AssertPeerUnauthorized(NntpSession session)
     {
         Assert.False(session.Authorization.IsAuthenticated);
@@ -263,6 +255,7 @@ public sealed class TransitPeerAuthorizationTests
         Assert.False(session.Authorization.StreamingPermitted);
         Assert.False(session.Authorization.AuthorizedReader);
         Assert.False(session.Authorization.PostingPermitted);
+        Assert.Null(session.Authorization.TransitPeerName);
     }
 
     private static async Task<string> ReadPlainLineAsync(Socket socket)
@@ -284,13 +277,6 @@ public sealed class TransitPeerAuthorizationTests
         }
 
         throw new InvalidOperationException("Line too long.");
-    }
-
-    private sealed class AlwaysAssignedAssignee : ILocalIpAddressAssignee
-    {
-        public bool IsLocallyAssigned(IPAddress address) => true;
-
-        public IReadOnlyList<IPAddress> GetAssignedUnicastAddresses() => [];
     }
 
     private sealed class PeerDuplex : IAsyncDisposable
@@ -350,21 +336,14 @@ public sealed class TransitPeerAuthorizationTests
         }
     }
 
-    private sealed class PipeNntpConnection : INntpConnection
+    private sealed class PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity) : INntpConnection
     {
         private readonly CancellationTokenSource _closed = new();
         private int _compressed;
 
-        public PipeNntpConnection(PipeReader input, PipeWriter output, ConnectionClientIdentity identity)
-        {
-            Input = input;
-            Output = output;
-            ClientIdentity = identity;
-        }
-
-        public PipeReader Input { get; }
-        public PipeWriter Output { get; }
-        public ConnectionClientIdentity ClientIdentity { get; }
+        public PipeReader Input { get; } = input;
+        public PipeWriter Output { get; } = output;
+        public ConnectionClientIdentity ClientIdentity { get; } = identity;
         public EndPoint? RemoteEndPoint => ClientIdentity.TcpPeer;
         public EndPoint? LocalEndPoint => null;
         public bool IsTls => false;

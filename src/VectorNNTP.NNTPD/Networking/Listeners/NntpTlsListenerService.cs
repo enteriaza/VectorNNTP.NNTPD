@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -29,6 +30,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
+    private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -47,7 +49,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IArticleIngestionQueue articleIngestion,
         ITransitPeerAuthorization transitPeerAuthorization,
         ILoggerFactory loggerFactory,
-        ILogger<NntpTlsListenerService> logger)
+        ILogger<NntpTlsListenerService> logger,
+        ITransitInboundConnectionLimiter? inboundConnectionLimiter = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -63,6 +66,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _trustedProxyHosts = trustedProxyHosts;
         _articleIngestion = articleIngestion;
         _transitPeerAuthorization = transitPeerAuthorization;
+        _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -254,6 +258,14 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 tlsVersion,
                 cipher);
 
+            if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))
+            {
+                await TransitConnectionAdmission
+                    .WriteUnavailableAsync(connection, _runCts.Token)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             try
             {
                 await session.RunAsync(_runCts.Token).ConfigureAwait(false);
@@ -261,6 +273,10 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
             catch (OperationCanceledException) when (_runCts.IsCancellationRequested)
             {
                 // Listener stopping.
+            }
+            finally
+            {
+                lease.Dispose();
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

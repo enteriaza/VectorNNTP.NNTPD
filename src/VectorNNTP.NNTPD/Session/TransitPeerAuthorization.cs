@@ -1,105 +1,177 @@
 using System.Net;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session;
 
 /// <summary>
-/// Resolves connection-time transit/streaming peer privileges from effective client identity.
+/// Resolves connection-time transit/streaming peer identity from the active Transit snapshot.
 /// </summary>
 public interface ITransitPeerAuthorization
 {
-    /// <summary>Gets whether any transit peers are configured.</summary>
+    /// <summary>Gets whether any Transit peers are configured in the current snapshot.</summary>
     bool IsEnabled { get; }
 
     /// <summary>
     /// Returns the initial <see cref="NntpAuthorization"/> for <paramref name="effectiveClientAddress"/>.
     /// </summary>
     /// <remarks>
-    /// Allowed peers receive transit + streaming without authentication, reader, or posting.
+    /// Matching uses the precomputed IP-only ACL (literal prefixes plus already-resolved
+    /// AllowFrom addresses). This method never performs DNS, reverse DNS, or network I/O.
+    /// A unique match grants transit + streaming without authentication, reader, or posting,
+    /// and retains the named peer policy. Ambiguous multi-peer matches grant nothing.
     /// Other addresses receive <see cref="NntpAuthorization.Unauthenticated"/>.
     /// </remarks>
     NntpAuthorization Resolve(IPAddress effectiveClientAddress);
 }
 
 /// <summary>
-/// Options-backed implementation of <see cref="ITransitPeerAuthorization"/>.
+/// Snapshot-backed implementation of <see cref="ITransitPeerAuthorization"/>.
 /// </summary>
 public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
 {
-    private readonly HashSet<IPAddress> _peers;
+    private readonly TransitConfigurationStore _store;
+    private readonly ITransitDnsAddressCache _dns;
+    private readonly ILogger<TransitPeerAuthorization>? _logger;
 
-    /// <summary>Disabled shared instance (empty allow-list).</summary>
-    public static TransitPeerAuthorization Disabled { get; } = FromAddresses(Array.Empty<IPAddress>());
+    /// <summary>Disabled shared instance (empty snapshot).</summary>
+    public static TransitPeerAuthorization Disabled { get; } = CreateStatic(TransitConfigurationSnapshot.Empty);
 
-    /// <summary>Creates an instance from <see cref="NntpdOptions.Transit"/> (DI).</summary>
+    /// <summary>Creates an instance from the live snapshot store (DI).</summary>
     [ActivatorUtilitiesConstructor]
     public TransitPeerAuthorization(
-        IOptions<NntpdOptions> options,
+        TransitConfigurationStore store,
+        ITransitDnsAddressCache dns,
+        TransitConfigurationHotReload hotReload,
         ILogger<TransitPeerAuthorization> logger)
-        : this(ParseAddresses(options.Value.Transit?.AllowedPeers))
     {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(dns);
+        ArgumentNullException.ThrowIfNull(hotReload);
         ArgumentNullException.ThrowIfNull(logger);
-        if (_peers.Count > 0)
+        _store = store;
+        _dns = dns;
+        _logger = logger;
+        if (!store.Current.IsEmpty)
         {
-            logger.LogWarning(
-                "Trusted transit/streaming peers configured ({Count}): {Peers}. These addresses receive transit privileges without authentication",
-                _peers.Count,
-                string.Join(", ", _peers));
+            logger.LogInformation(
+                "Trusted Transit peers configured ({Count}): {Peers}",
+                store.Current.Peers.Count,
+                string.Join(", ", store.Current.Peers.Keys));
         }
     }
 
-    /// <summary>Creates an instance from already-parsed addresses (tests).</summary>
-    public static TransitPeerAuthorization FromAddresses(IEnumerable<IPAddress> addresses)
+    private TransitPeerAuthorization(
+        TransitConfigurationStore store,
+        ITransitDnsAddressCache dns,
+        ILogger<TransitPeerAuthorization>? logger = null)
     {
-        ArgumentNullException.ThrowIfNull(addresses);
-        return new TransitPeerAuthorization(addresses);
+        _store = store;
+        _dns = dns;
+        _logger = logger;
     }
 
-    private TransitPeerAuthorization(IEnumerable<IPAddress> addresses)
+    /// <summary>Creates an instance bound to an existing snapshot store (tests).</summary>
+    public static TransitPeerAuthorization CreateForStore(
+        TransitConfigurationStore store,
+        ITransitDnsAddressCache? dns = null,
+        ILogger<TransitPeerAuthorization>? logger = null)
     {
-        _peers = new HashSet<IPAddress>(addresses.Select(TrustedProxyHosts.Canonicalize));
+        ArgumentNullException.ThrowIfNull(store);
+        return new TransitPeerAuthorization(store, dns ?? new EmptyDnsCache(), logger);
+    }
+
+    /// <summary>Creates a static instance from a complete snapshot (tests).</summary>
+    public static TransitPeerAuthorization CreateStatic(
+        TransitConfigurationSnapshot snapshot,
+        ITransitDnsAddressCache? dns = null,
+        ILogger<TransitPeerAuthorization>? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var store = new TransitConfigurationStore();
+        store.Replace(snapshot);
+        return new TransitPeerAuthorization(store, dns ?? new EmptyDnsCache(), logger);
     }
 
     /// <inheritdoc />
-    public bool IsEnabled => _peers.Count > 0;
+    public bool IsEnabled => !_store.Current.IsEmpty;
 
     /// <inheritdoc />
     public NntpAuthorization Resolve(IPAddress effectiveClientAddress)
     {
         ArgumentNullException.ThrowIfNull(effectiveClientAddress);
-        if (_peers.Count == 0)
+        var address = TrustedProxyHosts.Canonicalize(effectiveClientAddress);
+        var snapshot = _store.Current;
+        if (snapshot.IsEmpty)
         {
             return NntpAuthorization.Unauthenticated;
         }
 
-        if (_peers.Contains(TrustedProxyHosts.Canonicalize(effectiveClientAddress)))
+        List<string>? matches = null;
+        TransitPeerPolicy? matched = null;
+        foreach (var peer in snapshot.Peers.Values)
         {
-            return NntpAuthorization.TrustedTransitPeer;
-        }
-
-        return NntpAuthorization.Unauthenticated;
-    }
-
-    private static IEnumerable<IPAddress> ParseAddresses(string[]? entries)
-    {
-        if (entries is null || entries.Length == 0)
-        {
-            yield break;
-        }
-
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry))
+            if (!MatchesIpAcl(peer, address))
             {
                 continue;
             }
 
-            if (IPAddress.TryParse(entry.Trim(), out var address))
+            matches ??= [];
+            matches.Add(peer.Name);
+            matched = peer;
+        }
+
+        if (matches is { Count: > 1 })
+        {
+            _logger?.LogWarning(
+                "Transit peer identification is ambiguous for {ClientAddress}; matching peers: {PeerNames}",
+                address,
+                string.Join(", ", matches));
+            return NntpAuthorization.Unauthenticated;
+        }
+
+        return matched is null
+            ? NntpAuthorization.Unauthenticated
+            : NntpAuthorization.ForTransitPeer(matched);
+    }
+
+    /// <summary>
+    /// Matches <paramref name="address"/> against the peer's already-materialized IP ACL.
+    /// Does not call <see cref="ITransitDnsResolver"/>.
+    /// </summary>
+    private bool MatchesIpAcl(TransitPeerPolicy peer, IPAddress address)
+    {
+        foreach (var prefix in peer.LiteralPrefixes)
+        {
+            if (prefix.Contains(address))
             {
-                yield return address;
+                return true;
             }
         }
+
+        foreach (var hostname in peer.DnsHostnames)
+        {
+            if (_dns.GetResolved(hostname).Contains(address))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class EmptyDnsCache : ITransitDnsAddressCache
+    {
+        public IReadOnlySet<IPAddress> GetResolved(string hostname) => new HashSet<IPAddress>();
+
+        public Task RefreshAllAsync(TransitConfigurationSnapshot snapshot, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task RefreshDueAsync(TransitConfigurationSnapshot snapshot, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public TimeSpan GetDelayUntilNextRefresh(TransitConfigurationSnapshot snapshot) => Timeout.InfiniteTimeSpan;
     }
 }

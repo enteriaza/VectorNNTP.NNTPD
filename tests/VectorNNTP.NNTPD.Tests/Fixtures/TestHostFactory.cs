@@ -95,6 +95,7 @@ internal static class TestHostFactory
         var localAssignee = assignee ?? new FakeLocalIpAddressAssignee(TestIpv4, TestIpv6);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(localAssignee);
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
+        IsolateTransit(builder.Services);
 
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.
         // Force TLS off so ACME never contacts Let's Encrypt during offline host tests
@@ -107,5 +108,15 @@ internal static class TestHostFactory
             options.BindPortTls = 0;
             options.AcmeEmail = string.Empty;
         });
+    }
+
+    /// <summary>
+    /// Drops operator <c>Transit</c> peers inherited from <c>appsettings.json</c>.
+    /// Host tests use deny-by-default Transit so local operator peers do not leak in.
+    /// </summary>
+    public static void IsolateTransit(IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.PostConfigure<TransitPeersOptions>(static options => options.Clear());
     }
 }

@@ -1,3 +1,5 @@
+using VectorNNTP.NNTPD.Transit;
+
 namespace VectorNNTP.NNTPD.Session;
 
 /// <summary>
@@ -6,7 +8,8 @@ namespace VectorNNTP.NNTPD.Session;
 /// <remarks>
 /// Authentication and authorization are distinct: a session may be authenticated without
 /// reader, transit, posting, or streaming privileges. Production default for new sessions is
-/// unauthenticated with <see cref="StreamingPermitted"/> false.
+/// unauthenticated with <see cref="StreamingPermitted"/> false. A Transit AllowFrom match
+/// retains <see cref="TransitPeerName"/> and <see cref="TransitPeerPolicy"/>.
 /// </remarks>
 public sealed class NntpAuthorization
 {
@@ -21,6 +24,7 @@ public sealed class NntpAuthorization
     /// <summary>
     /// Unauthenticated transit/streaming peer privileges (ACL match).
     /// Does not grant reader access, posting, or <see cref="IsAuthenticated"/>.
+    /// Nameless; production identification uses <see cref="ForTransitPeer"/>.
     /// </summary>
     public static NntpAuthorization TrustedTransitPeer { get; } = new(
         isAuthenticated: false,
@@ -35,13 +39,31 @@ public sealed class NntpAuthorization
         bool authorizedReader,
         bool authorizedTransit,
         bool postingPermitted,
-        bool streamingPermitted)
+        bool streamingPermitted,
+        string? transitPeerName = null,
+        TransitPeerPolicy? transitPeerPolicy = null)
     {
         IsAuthenticated = isAuthenticated;
         AuthorizedReader = authorizedReader;
         AuthorizedTransit = authorizedTransit;
         PostingPermitted = postingPermitted;
         StreamingPermitted = streamingPermitted;
+        TransitPeerName = transitPeerName;
+        TransitPeerPolicy = transitPeerPolicy;
+    }
+
+    /// <summary>Creates transit/streaming privileges bound to a named peer policy.</summary>
+    public static NntpAuthorization ForTransitPeer(TransitPeerPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        return new(
+            isAuthenticated: false,
+            authorizedReader: false,
+            authorizedTransit: true,
+            postingPermitted: false,
+            streamingPermitted: true,
+            transitPeerName: policy.Name,
+            transitPeerPolicy: policy);
     }
 
     /// <summary>Gets a value indicating whether the peer has completed authentication.</summary>
@@ -59,7 +81,13 @@ public sealed class NntpAuthorization
     /// <summary>Gets a value indicating whether streaming feed mode may be entered.</summary>
     public bool StreamingPermitted { get; }
 
-    /// <summary>Returns a copy with updated flags.</summary>
+    /// <summary>Gets the configured Transit peer name when this session was identified as a peer.</summary>
+    public string? TransitPeerName { get; }
+
+    /// <summary>Gets the identified Transit peer policy, or <see langword="null"/> when not a named peer.</summary>
+    public TransitPeerPolicy? TransitPeerPolicy { get; }
+
+    /// <summary>Returns a copy with updated flags, preserving Transit peer identity.</summary>
     public NntpAuthorization With(
         bool? isAuthenticated = null,
         bool? authorizedReader = null,
@@ -71,5 +99,7 @@ public sealed class NntpAuthorization
             authorizedReader ?? AuthorizedReader,
             authorizedTransit ?? AuthorizedTransit,
             postingPermitted ?? PostingPermitted,
-            streamingPermitted ?? StreamingPermitted);
+            streamingPermitted ?? StreamingPermitted,
+            TransitPeerName,
+            TransitPeerPolicy);
 }
