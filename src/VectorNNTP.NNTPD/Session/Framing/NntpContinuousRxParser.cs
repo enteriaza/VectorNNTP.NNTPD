@@ -1,0 +1,256 @@
+using System.Buffers;
+using System.Text;
+
+namespace VectorNNTP.NNTPD.Session.Framing;
+
+/// <summary>Scan mode for <see cref="NntpContinuousRxParser"/>.</summary>
+public enum NntpContinuousRxMode
+{
+    /// <summary>Waiting for a command line terminated by CRLF.</summary>
+    Command = 0,
+
+    /// <summary>Inside a TAKETHIS multiline article; only the terminator ends the unit.</summary>
+    Article = 1,
+}
+
+/// <summary>Kind of protocol unit produced by the continuous RX parser.</summary>
+public enum NntpContinuousRxKind
+{
+    /// <summary>Need more Pipe bytes (incomplete command or article).</summary>
+    NeedMore = 0,
+
+    /// <summary>A complete non-article command line (without CRLF).</summary>
+    Command = 1,
+
+    /// <summary>A complete TAKETHIS command plus framed article bytes (no destuff).</summary>
+    TakeThis = 2,
+}
+
+/// <summary>One consumed protocol unit. Pipe memory is not retained.</summary>
+public readonly struct NntpContinuousRxUnit
+{
+    /// <summary>Initializes a new instance of the <see cref="NntpContinuousRxUnit"/> struct.</summary>
+    public NntpContinuousRxUnit(
+        NntpContinuousRxKind kind,
+        string? commandLine = null,
+        string? messageId = null,
+        NntpMultilineReadResult article = default)
+    {
+        Kind = kind;
+        CommandLine = commandLine;
+        MessageId = messageId;
+        Article = article;
+    }
+
+    /// <summary>Gets the unit kind.</summary>
+    public NntpContinuousRxKind Kind { get; }
+
+    /// <summary>Gets the command line without CRLF, when present.</summary>
+    public string? CommandLine { get; }
+
+    /// <summary>Gets the TAKETHIS message-id argument (may be empty).</summary>
+    public string? MessageId { get; }
+
+    /// <summary>
+    /// Gets the article result for <see cref="NntpContinuousRxKind.TakeThis"/>.
+    /// STREAM framing copies wire bytes without destuffing; the terminator is omitted.
+    /// </summary>
+    public NntpMultilineReadResult Article { get; }
+
+    /// <summary>Need-more sentinel.</summary>
+    public static NntpContinuousRxUnit NeedMore { get; } = new(NntpContinuousRxKind.NeedMore);
+}
+
+/// <summary>
+/// Stateful command/article scanner over <see cref="ReadOnlySequence{T}"/>.
+/// </summary>
+/// <remarks>
+/// Command CRLF ends a command. Inside an article, only a terminator line (<c>.</c>) ends the
+/// unit; CHECK/QUIT/TAKETHIS text in the body is payload. Incomplete bytes stay in parser state
+/// across Pipe reads. STREAM article bytes are copied as received (no destuff) into an owned
+/// buffer before the caller advances the Pipe. The terminator is framing, not payload.
+/// </remarks>
+public sealed class NntpContinuousRxParser
+{
+    private readonly ArrayBufferWriter<byte> _article = new(64 * 1024);
+    private bool _articleExceeded;
+    private int _maxArticleBytes = int.MaxValue;
+    private string? _pendingMessageId;
+    private string? _pendingTakeThisLine;
+
+    /// <summary>Gets the current scan mode.</summary>
+    public NntpContinuousRxMode Mode { get; private set; }
+
+    /// <summary>Resets command/article state (does not release writer capacity).</summary>
+    public void Reset()
+    {
+        Mode = NntpContinuousRxMode.Command;
+        _pendingMessageId = null;
+        _pendingTakeThisLine = null;
+        _articleExceeded = false;
+        _maxArticleBytes = int.MaxValue;
+        _article.ResetWrittenCount();
+    }
+
+    /// <summary>
+    /// Attempts to consume one complete protocol unit from <paramref name="buffer"/>.
+    /// Slices <paramref name="buffer"/> to the unconsumed remainder.
+    /// </summary>
+    /// <param name="buffer">Unread Pipe bytes. Sliced to the unconsumed tail.</param>
+    /// <param name="consumeTakeThisArticle">
+    /// When <see langword="true"/>, a TAKETHIS verb consumes the following article in this
+    /// parser. When <see langword="false"/>, TAKETHIS is returned as a command line so session
+    /// gates can reject it without consuming a body (existing 480/502 behaviour).
+    /// </param>
+    /// <param name="maxArticleBytes">Framed (non-destuffed) payload cap for TAKETHIS articles.</param>
+    public NntpContinuousRxUnit TryConsume(
+        ref ReadOnlySequence<byte> buffer,
+        bool consumeTakeThisArticle,
+        int maxArticleBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
+        if (Mode == NntpContinuousRxMode.Article)
+        {
+            return TryConsumeArticle(ref buffer);
+        }
+
+        if (!NntpDelimiterSearch.TryReadLine(ref buffer, out var lineBytes))
+        {
+            return NntpContinuousRxUnit.NeedMore;
+        }
+
+        if (consumeTakeThisArticle && IsTakeThisVerb(lineBytes, out var messageId, out var rawLine))
+        {
+            _pendingMessageId = messageId;
+            _pendingTakeThisLine = rawLine;
+            Mode = NntpContinuousRxMode.Article;
+            _maxArticleBytes = maxArticleBytes;
+            _articleExceeded = false;
+            _article.ResetWrittenCount();
+            return TryConsumeArticle(ref buffer);
+        }
+
+        return new NntpContinuousRxUnit(
+            NntpContinuousRxKind.Command,
+            commandLine: ToAscii(lineBytes));
+    }
+
+    private NntpContinuousRxUnit TryConsumeArticle(ref ReadOnlySequence<byte> buffer)
+    {
+        while (NntpDelimiterSearch.TryReadLine(ref buffer, out var lineBytes))
+        {
+            if (NntpDelimiterSearch.IsTerminatorLine(lineBytes))
+            {
+                var article = NntpArticleDestuffer.Complete(_article, _articleExceeded);
+                var unit = new NntpContinuousRxUnit(
+                    NntpContinuousRxKind.TakeThis,
+                    commandLine: _pendingTakeThisLine,
+                    messageId: _pendingMessageId,
+                    article: article);
+                Reset();
+                return unit;
+            }
+
+            AppendFramedWireLine(_article, lineBytes, _maxArticleBytes, ref _articleExceeded);
+        }
+
+        return NntpContinuousRxUnit.NeedMore;
+    }
+
+    /// <summary>
+    /// Destuffs article lines from <paramref name="buffer"/> up to <paramref name="maxArticleBytes"/>.
+    /// Used by <see cref="NntpMultilineDataReader"/> (MODE READER multiline semantics).
+    /// </summary>
+    public NntpContinuousRxUnit TryConsumeArticleOnly(
+        ref ReadOnlySequence<byte> buffer,
+        int maxArticleBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
+        if (Mode != NntpContinuousRxMode.Article)
+        {
+            Mode = NntpContinuousRxMode.Article;
+            _maxArticleBytes = maxArticleBytes;
+            _articleExceeded = false;
+            _article.ResetWrittenCount();
+        }
+
+        while (NntpDelimiterSearch.TryReadLine(ref buffer, out var lineBytes))
+        {
+            if (NntpDelimiterSearch.IsTerminatorLine(lineBytes))
+            {
+                var article = NntpArticleDestuffer.Complete(_article, _articleExceeded);
+                Reset();
+                return new NntpContinuousRxUnit(NntpContinuousRxKind.TakeThis, article: article);
+            }
+
+            NntpArticleDestuffer.AppendUnstuffedLine(_article, lineBytes, maxArticleBytes, ref _articleExceeded);
+        }
+
+        return NntpContinuousRxUnit.NeedMore;
+    }
+
+    /// <summary>
+    /// Copies one framed content line plus its CRLF without destuffing.
+    /// </summary>
+    private static void AppendFramedWireLine(
+        ArrayBufferWriter<byte> output,
+        ReadOnlySequence<byte> lineBytes,
+        int maxArticleBytes,
+        ref bool exceeded)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (exceeded)
+        {
+            return;
+        }
+
+        var needed = checked((int)lineBytes.Length + 2);
+        if (output.WrittenCount + needed > maxArticleBytes)
+        {
+            exceeded = true;
+            return;
+        }
+
+        var span = output.GetSpan(needed);
+        lineBytes.CopyTo(span);
+        span[(int)lineBytes.Length] = (byte)'\r';
+        span[(int)lineBytes.Length + 1] = (byte)'\n';
+        output.Advance(needed);
+    }
+
+    private static bool IsTakeThisVerb(
+        ReadOnlySequence<byte> lineBytes,
+        out string messageId,
+        out string rawLine)
+    {
+        rawLine = ToAscii(lineBytes);
+        messageId = string.Empty;
+        var span = rawLine.AsSpan().Trim();
+        if (span.Length < 8 || !span[..8].Equals("TAKETHIS", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (span.Length > 8 && !char.IsWhiteSpace(span[8]))
+        {
+            return false;
+        }
+
+        if (span.Length > 8)
+        {
+            messageId = span[8..].Trim().ToString();
+        }
+
+        return true;
+    }
+
+    private static string ToAscii(ReadOnlySequence<byte> lineBytes)
+    {
+        if (lineBytes.IsSingleSegment)
+        {
+            return Encoding.ASCII.GetString(lineBytes.FirstSpan);
+        }
+
+        return Encoding.ASCII.GetString(lineBytes.ToArray());
+    }
+}

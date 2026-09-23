@@ -20,7 +20,7 @@ public sealed class ContinuousTakethisParserTests
     public async Task ParsesAcrossSmallSegments()
     {
         var wire = FramingWireFactory.BuildFixedSizeTakethisStream(256, 3);
-        var result = await ProductionTakethisStream.ParseAsync(wire);
+        var result = await ProductionTakethisStream.ParseAsync(wire, chunkSize: 3);
         Assert.True(result.IsComplete);
         Assert.Equal(3, result.Articles);
     }
@@ -40,9 +40,9 @@ public sealed class ContinuousTakethisParserTests
         Assert.True(result.IsComplete);
         Assert.Equal(2, result.Articles);
         var destuffedFirst = FramingWireFactory.DestuffPayload(body);
-        Assert.Equal(destuffedFirst.Length + 3, result.ArticleBytes);
         Assert.Equal(destuffedFirst, result.Payloads[0].ToArray());
         Assert.Equal("x\r\n"u8.ToArray(), result.Payloads[1].ToArray());
+        Assert.Equal(destuffedFirst.Length + result.Payloads[1].Length, result.ArticleBytes);
     }
 
     [Fact]
@@ -85,7 +85,7 @@ public sealed class ContinuousTakethisParserTests
     public async Task ProductionReader_AgreesOnMultiArticleStream_AcrossChunkSizes(int chunkSize)
     {
         var wire = FramingWireFactory.BuildFixedSizeTakethisStream(512, 8);
-        var result = await ProductionTakethisStream.ParseAsync(wire);
+        var result = await ProductionTakethisStream.ParseAsync(wire, chunkSize: chunkSize);
         Assert.True(result.IsComplete);
         Assert.Equal(8, result.Articles);
         Assert.Equal(8 * 512, result.ArticleBytes);

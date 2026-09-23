@@ -14,9 +14,10 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// (permanent reject). Temporary infrastructure failure uses <c>400</c> and closes the connection.
 /// </para>
 /// <para>
-/// Critical path: parse → read/unstuff article → enqueue → enqueue 239/439 → return to the
-/// command loop. Disk persistence and outbound network delivery of the status line are not
-/// awaited on this path (<see cref="NntpResponseWriter.EnqueueLineAsync"/>).
+/// Critical path: parse → consume article (STREAM: framed wire copy; READER fallback:
+/// <see cref="NntpMultilineDataReader"/> destuff) → enqueue → enqueue 239/439 → return.
+/// Disk persistence and outbound network delivery of the status line are not awaited
+/// (<see cref="NntpResponseWriter.EnqueueLineAsync"/>).
 /// </para>
 /// </remarks>
 internal static class TakeThis
@@ -41,13 +42,20 @@ internal static class TakeThis
         var queue = context.Session.ArticleIngestion;
 
         // Always consume the following multiline block so pipelined bytes stay synchronized,
-        // even when the message-id is malformed.
+        // even when the message-id is malformed — unless the session scanner already did.
         NntpMultilineReadResult article;
         try
         {
-            article = await NntpMultilineDataReader
-                .ReadArticleAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
-                .ConfigureAwait(false);
+            if (context.PreReadArticle is { } preRead)
+            {
+                article = preRead;
+            }
+            else
+            {
+                article = await NntpMultilineDataReader
+                    .ReadArticleAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (
             cancellationToken.IsCancellationRequested

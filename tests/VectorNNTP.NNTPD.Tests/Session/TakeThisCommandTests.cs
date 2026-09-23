@@ -53,22 +53,22 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
-    public async Task TakeThis_DotStuffing_UnstuffsAndOmitsTerminator()
+    public async Task StreamTakeThis_PreservesDotStuffedWire_AndOmitsTerminator()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         await using var duplex = await TakeThisDuplex.CreateAsync();
         var session = duplex.CreateSession(queue);
         session.SetAuthorization(TransitAuth);
+        Assert.Equal(NntpReceiveStrategy.StreamDataPlane, session.ReceiveStrategy);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
         const string id = "<dot@example.com>";
-        // Wire: "..foo" → stored ".foo"; terminator "." not stored.
         await duplex.WriteClientAsync(BuildTakeThis(id, "..foo\r\nbar\r\n"));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
 
         var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal(".foo\r\nbar\r\n", Encoding.ASCII.GetString(article!.Payload.Span));
+        Assert.Equal("..foo\r\nbar\r\n", Encoding.ASCII.GetString(article!.Payload.Span));
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -342,6 +342,117 @@ public sealed class TakeThisCommandTests
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task DefaultUnspecified_UsesStreamDataPlaneRx()
+    {
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
+        Assert.Equal(NntpSessionMode.Unspecified, session.Mode);
+        Assert.Equal(NntpReceiveStrategy.StreamDataPlane, session.ReceiveStrategy);
+    }
+
+    [Fact]
+    public async Task ModeStream_KeepsStreamDataPlaneRx_WithoutSettingMode()
+    {
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
+        Assert.Equal(NntpSessionMode.Unspecified, session.Mode);
+        Assert.Equal(NntpReceiveStrategy.StreamDataPlane, session.ReceiveStrategy);
+
+        var id = "<stream-rx@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: s\r\n\r\nbody\r\n"));
+        Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task ModeReader_UsesReaderCommandRx_AndDoesNotPreConsumeTakeThis()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("MODE READER");
+        Assert.StartsWith("201 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.Equal(NntpSessionMode.Reader, session.Mode);
+        Assert.Equal(NntpReceiveStrategy.ReaderCommand, session.ReceiveStrategy);
+
+        // Transit after MODE READER: TAKETHIS is dispatched as a command; handler reads the article.
+        session.SetAuthorization(TransitAuth);
+        Assert.Equal(NntpReceiveStrategy.ReaderCommand, session.ReceiveStrategy);
+
+        const string id = "<reader-path@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: r\r\n\r\nreader\r\n"));
+        Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
+        var article = await queue.DequeueAsync(CancellationToken.None);
+        Assert.Equal(id, article!.MessageId);
+        Assert.Equal("Subject: r\r\n\r\nreader\r\n", Encoding.ASCII.GetString(article.Payload.Span));
+
+        const string stuffedId = "<reader-destuff@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(stuffedId, "..foo\r\nbar\r\n"));
+        Assert.Equal($"239 {stuffedId}", await duplex.ReadClientLineAsync());
+        var destuffed = await queue.DequeueAsync(CancellationToken.None);
+        Assert.Equal(".foo\r\nbar\r\n", Encoding.ASCII.GetString(destuffed!.Payload.Span));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task ModeReader_TakeThisWithoutTransit_DoesNotConsumeFollowingQuit()
+    {
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("MODE READER");
+        _ = await duplex.ReadClientLineAsync();
+        Assert.Equal(NntpReceiveStrategy.ReaderCommand, session.ReceiveStrategy);
+
+        await duplex.WriteClientLineAsync("TAKETHIS <x@ex.com>");
+        Assert.Equal("480 Authentication required", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        Assert.StartsWith("205 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        await run;
+    }
+
+    [Fact]
+    public async Task StreamRx_CheckThenTakeThis_CommandsInsideArticleRemainPayload()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        Assert.Equal(NntpReceiveStrategy.StreamDataPlane, session.ReceiveStrategy);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        var stored = "QUIT\r\nCHECK x\r\nTAKETHIS y\r\n";
+        await duplex.WriteClientAsync(
+            "CHECK <c@ex.com>\r\n" + BuildTakeThis("<in@body>", stored) + "QUIT\r\n");
+
+        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+        Assert.Equal("239 <in@body>", await duplex.ReadClientLineAsync());
+        var article = await queue.DequeueAsync(CancellationToken.None);
+        Assert.Equal(stored, Encoding.ASCII.GetString(article!.Payload.Span));
+        Assert.StartsWith("205 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await run;
     }
 

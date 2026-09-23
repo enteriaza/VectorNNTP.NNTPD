@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -12,7 +13,8 @@ public sealed class NntpCommandContext
         NntpCommandDescriptor descriptor,
         string rawLine,
         IReadOnlyList<string> arguments,
-        NntpResponseWriter response)
+        NntpResponseWriter response,
+        NntpMultilineReadResult? preReadArticle = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(descriptor);
@@ -24,6 +26,7 @@ public sealed class NntpCommandContext
         RawLine = rawLine;
         Arguments = arguments;
         Response = response;
+        PreReadArticle = preReadArticle;
     }
 
     /// <summary>Gets the owning session.</summary>
@@ -42,6 +45,12 @@ public sealed class NntpCommandContext
 
     /// <summary>Gets the response writer for this command.</summary>
     public NntpResponseWriter Response { get; }
+
+    /// <summary>
+    /// Gets an article already consumed by the continuous RX scanner, when the session
+    /// pre-read a TAKETHIS body so the handler must not read the Pipe again.
+    /// </summary>
+    public NntpMultilineReadResult? PreReadArticle { get; }
 
     /// <summary>
     /// Optional TX completion detail set by the handler after successful work

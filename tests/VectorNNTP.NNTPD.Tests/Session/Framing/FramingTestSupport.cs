@@ -315,12 +315,34 @@ internal static class ProductionTakethisStream
     public static async Task<TakethisStreamResult> ParseAsync(
         byte[] wire,
         bool stopAfterQuit = false,
+        int? chunkSize = null,
         CancellationToken cancellationToken = default)
     {
-        var pipe = new Pipe();
-        await pipe.Writer.WriteAsync(wire, cancellationToken).ConfigureAwait(false);
+        var pipe = new Pipe(new PipeOptions(
+            minimumSegmentSize: Math.Max(1, chunkSize ?? 4096),
+            pauseWriterThreshold: 16 * 1024 * 1024,
+            resumeWriterThreshold: 8 * 1024 * 1024,
+            useSynchronizationContext: false));
+        var parse = ParseFromReaderAsync(pipe.Reader, stopAfterQuit, cancellationToken);
+        if (chunkSize is int size)
+        {
+            await FramingPipe.WriteChunkedAsync(pipe.Writer, wire, size, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await pipe.Writer.WriteAsync(wire, cancellationToken).ConfigureAwait(false);
+        }
+
         await pipe.Writer.CompleteAsync().ConfigureAwait(false);
 
+        return await parse.ConfigureAwait(false);
+    }
+
+    private static async Task<TakethisStreamResult> ParseFromReaderAsync(
+        PipeReader reader,
+        bool stopAfterQuit,
+        CancellationToken cancellationToken)
+    {
         var articles = 0;
         var articleBytes = 0L;
         var checks = 0;
@@ -331,7 +353,7 @@ internal static class ProductionTakethisStream
         while (true)
         {
             var line = await NntpCommandLineReader
-                .ReadLineAsync(pipe.Reader, cancellationToken)
+                .ReadLineAsync(reader, cancellationToken)
                 .ConfigureAwait(false);
             if (line is null)
             {
@@ -342,7 +364,7 @@ internal static class ProductionTakethisStream
             {
                 var id = line["TAKETHIS ".Length..];
                 var article = await NntpMultilineDataReader
-                    .ReadArticleAsync(pipe.Reader, 8 * 1024 * 1024, cancellationToken)
+                    .ReadArticleAsync(reader, 8 * 1024 * 1024, cancellationToken)
                     .ConfigureAwait(false);
                 if (article.Status != NntpMultilineReadStatus.Completed)
                 {

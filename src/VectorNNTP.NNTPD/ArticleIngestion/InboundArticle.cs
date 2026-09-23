@@ -7,8 +7,9 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </summary>
 /// <remarks>
 /// Owned by the ingestion queue until a spool writer successfully persists or discards it.
-/// Payload is the complete NNTP article after multiline dot-unstuffing (headers + body),
-/// without the terminating <c>.</c> line.
+/// Payload is the complete article without the terminating <c>.</c> line.
+/// STREAM TAKETHIS supplies framed wire bytes (no destuff). MODE READER multiline
+/// fallback destuffs per RFC 3977 §3.1.1.
 /// </remarks>
 public sealed class InboundArticle
 {
@@ -31,7 +32,7 @@ public sealed class InboundArticle
     /// <summary>Gets the message-id supplied with the transfer command (e.g. TAKETHIS).</summary>
     public string MessageId { get; }
 
-    /// <summary>Gets the complete article bytes after dot-unstuffing.</summary>
+    /// <summary>Gets the complete article bytes (see type remarks for STREAM vs READER).</summary>
     public ReadOnlyMemory<byte> Payload { get; }
 
     /// <summary>Gets the effective client identity at acceptance time.</summary>

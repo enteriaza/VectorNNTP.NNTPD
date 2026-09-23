@@ -88,7 +88,7 @@ public sealed class SimdBulkMultilineFramerTests
 
     [Theory]
     [MemberData(nameof(AllFixtureNames))]
-    public async Task EveryInnFixture_MatchesProductionDestuffSemantics(string relativePath)
+    public async Task EveryInnFixture_MatchesBulkSemantics(string relativePath)
     {
         var entry = InnArticleCorpus.LoadManifest().Files.Single(f => f.RelativePath == relativePath);
         var wire = InnArticleCorpus.ReadAllBytes(relativePath);
@@ -120,7 +120,7 @@ public sealed class SimdBulkMultilineFramerTests
     }
 
     [Fact]
-    public async Task TrailingPeriodLines_AreNotTerminators()
+    public async Task IndexOfFiveByteDelimiter_RejectsTrailingPeriodLines()
     {
         var content = "Hello.\r\nSomething else.\r\n";
         var withoutTerm = await FramingPipe.ReadOneAsync(System.Text.Encoding.ASCII.GetBytes(content));

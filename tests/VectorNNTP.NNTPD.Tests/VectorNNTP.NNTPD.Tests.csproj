@@ -24,11 +24,11 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageReference Include="Blake3" Version="2.2.1" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VectorNNTP.NNTPD\VectorNNTP.NNTPD.csproj" />
-    <ProjectReference Include="..\..\tools\VectorNNTP.NNTPD.MultilineFramerBench\VectorNNTP.NNTPD.MultilineFramerBench.csproj" />
   </ItemGroup>
 
   <ItemGroup>

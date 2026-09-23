@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -31,7 +32,8 @@ public sealed class NntpCommandDispatcher
         NntpSession session,
         NntpParsedCommand parsed,
         NntpResponseWriter response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        NntpMultilineReadResult? preReadArticle = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(response);
@@ -171,7 +173,13 @@ public sealed class NntpCommandDispatcher
             return;
         }
 
-        var context = new NntpCommandContext(session, descriptor, parsed.RawLine, arguments, response);
+        var context = new NntpCommandContext(
+            session,
+            descriptor,
+            parsed.RawLine,
+            arguments,
+            response,
+            preReadArticle);
         try
         {
             await descriptor.Handler(context, cancellationToken).ConfigureAwait(false);

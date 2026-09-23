@@ -6,6 +6,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -121,6 +122,18 @@ public sealed class NntpSession
     public NntpSessionMode Mode => _mode;
 
     /// <summary>
+    /// Gets the RX strategy implied by <see cref="Mode"/>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NntpReceiveStrategy.ReaderCommand"/> only after <c>MODE READER</c>.
+    /// <c>MODE STREAM</c> does not change this (RFC 4644 §2.3).
+    /// </remarks>
+    internal NntpReceiveStrategy ReceiveStrategy =>
+        _mode == NntpSessionMode.Reader
+            ? NntpReceiveStrategy.ReaderCommand
+            : NntpReceiveStrategy.StreamDataPlane;
+
+    /// <summary>
     /// Gets the pending username from <c>AUTHINFO USER</c> awaiting <c>AUTHINFO PASS</c>,
     /// or <see langword="null"/> when no USER is cached.
     /// </summary>
@@ -192,41 +205,18 @@ public sealed class NntpSession
             var response = _response ??= new NntpResponseWriter(Connection.Output);
             await SendGreetingAsync(response, token).ConfigureAwait(false);
 
+            var readerRx = new NntpReaderCommandRx(this, _dispatcher, _logger);
+            var streamRx = new NntpStreamDataPlaneRx(this, _dispatcher, _logger);
+
             while (!token.IsCancellationRequested && Volatile.Read(ref _closeRequested) == 0)
             {
-                var line = await NntpCommandLineReader.ReadLineAsync(Connection.Input, token)
-                    .ConfigureAwait(false);
-                if (line is null)
+                var progressed = ReceiveStrategy == NntpReceiveStrategy.ReaderCommand
+                    ? await readerRx.ProcessOneAsync(response, token).ConfigureAwait(false)
+                    : await streamRx.ProcessOneAsync(response, token).ConfigureAwait(false);
+                if (!progressed)
                 {
                     break;
                 }
-
-                // BENCHIT / TAKETHIS: suppress per-request RX INFO so Serilog is not the measured
-                // bottleneck during sustained transport/feed benchmarks.
-                if (!IsBenchItCommand(line) && !NntpCommandLogFormat.SuppressHotPathCommandLog(line))
-                {
-                    _logger.LogInformation(
-                        "[{Client}] RX: {Command}",
-                        NntpCommandLogFormat.Client(this),
-                        NntpCommandLogFormat.RedactRxLine(line));
-                }
-
-                if (!NntpCommandParser.TryParse(line, out var parsed))
-                {
-                    var syntaxStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                    await response
-                        .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", token)
-                        .ConfigureAwait(false);
-                    NntpCommandExecution.WriteCompletion(
-                        NntpCommandLoggers.For(typeof(NntpCommandExecution)),
-                        this,
-                        NntpCommandLogFormat.DisplayNameFromRawLine(line),
-                        System.Diagnostics.Stopwatch.GetElapsedTime(syntaxStarted),
-                        "syntax error");
-                    continue;
-                }
-
-                await _dispatcher.DispatchAsync(this, parsed, response, token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -285,6 +275,50 @@ public sealed class NntpSession
             NntpReplyCodes.PostingProhibited,
             "VectorNNTP.NNTPD ready, posting prohibited",
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Logs, parses, and dispatches one already-delimited command line (shared by both RX strategies).
+    /// </summary>
+    internal async ValueTask DispatchRawLineAsync(
+        NntpCommandDispatcher dispatcher,
+        NntpResponseWriter response,
+        ILogger logger,
+        string line,
+        NntpMultilineReadResult? preReadArticle,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(response);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(line);
+
+        if (!IsBenchItCommand(line) && !NntpCommandLogFormat.SuppressHotPathCommandLog(line))
+        {
+            logger.LogInformation(
+                "[{Client}] RX: {Command}",
+                NntpCommandLogFormat.Client(this),
+                NntpCommandLogFormat.RedactRxLine(line));
+        }
+
+        if (!NntpCommandParser.TryParse(line, out var parsed))
+        {
+            var syntaxStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            await response
+                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
+                .ConfigureAwait(false);
+            NntpCommandExecution.WriteCompletion(
+                NntpCommandLoggers.For(typeof(NntpCommandExecution)),
+                this,
+                NntpCommandLogFormat.DisplayNameFromRawLine(line),
+                System.Diagnostics.Stopwatch.GetElapsedTime(syntaxStarted),
+                "syntax error");
+            return;
+        }
+
+        await dispatcher
+            .DispatchAsync(this, parsed, response, cancellationToken, preReadArticle)
+            .ConfigureAwait(false);
     }
 
     private static bool IsBenchItCommand(string line)
