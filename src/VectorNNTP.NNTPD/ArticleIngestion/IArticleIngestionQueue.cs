@@ -85,5 +85,10 @@ public interface IArticleIngestionQueue
     /// <summary>
     /// Reads the next queued article, or <see langword="null"/> when the queue is completed and empty.
     /// </summary>
+    /// <remarks>
+    /// Safe for concurrent callers. A successful read transfers consumer ownership and
+    /// releases reserved payload bytes exactly once. Callers must not release again.
+    /// Items leave the queue in FIFO order; concurrent processing order may differ.
+    /// </remarks>
     ValueTask<InboundArticle?> DequeueAsync(CancellationToken cancellationToken);
 }

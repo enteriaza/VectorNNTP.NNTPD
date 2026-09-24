@@ -280,6 +280,26 @@ public sealed class ArticleIngestionQueueTests
     }
 
     [Fact]
+    public async Task Dequeue_IsFifo()
+    {
+        var queue = CreateQueue(64);
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(Article($"<{i}@fifo>", 2)));
+        }
+
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.Equal($"<{i}@fifo>", (await queue.DequeueAsync(CancellationToken.None))!.MessageId);
+        }
+
+        queue.Complete();
+        Assert.Null(await queue.DequeueAsync(CancellationToken.None));
+        Assert.Equal(0, queue.QueuedBytes);
+        Assert.Equal(0, queue.Count);
+    }
+
+    [Fact]
     public async Task ProducerIdentityAndOrder_RemainIntact()
     {
         var queue = CreateQueue(64);

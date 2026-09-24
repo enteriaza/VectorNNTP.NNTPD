@@ -95,6 +95,8 @@ spool/incoming
 
 `239`/`439` status lines are enqueued on the session's ordered response writer without waiting for network delivery, so pipelined TAKETHIS can continue receiving the next article. Disk I/O is never on the TAKETHIS receive critical path.
 
+The ingestion queue is multi-reader (`DequeueAsync` is safe for concurrent callers). Production drains it with one `IncomingSpoolWriterService` consumer.
+
 ### IHAVE article ingestion
 
 IHAVE is **not pipelined** (RFC 3977 §6.3.2). TAKETHIS receive/framing/performance is **not** changed by this path.

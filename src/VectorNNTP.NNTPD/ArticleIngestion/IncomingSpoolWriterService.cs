@@ -12,6 +12,9 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// that buffers until this service is running. Stop completes the queue writer and drains
 /// already-accepted articles before exiting. IHAVE items are destuffed once via
 /// <see cref="IhaveArticleInterpreter"/> before persist. TAKETHIS payloads are unchanged.
+/// Production starts exactly one drain loop. The queue supports concurrent
+/// <see cref="IArticleIngestionQueue.DequeueAsync"/> callers; this service does not
+/// create additional consumers.
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
 {

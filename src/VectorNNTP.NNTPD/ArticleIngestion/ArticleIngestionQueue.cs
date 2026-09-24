@@ -28,6 +28,13 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// Every successful reservation has exactly one release: consumer dequeue,
 /// failed write after reserve, or (for waiters) cancel/shutdown before admit.
 /// </para>
+/// <para>
+/// The channel is multi-reader. Concurrent <see cref="DequeueAsync"/> callers are
+/// supported. Items leave the channel in FIFO order; worker processing/completion
+/// order may differ. Byte-budget accounting still serializes on the existing
+/// reservation gate. A successful dequeue transfers ownership and releases the
+/// reservation inside <see cref="DequeueAsync"/>; consumers must not release again.
+/// </para>
 /// </remarks>
 public sealed class ArticleIngestionQueue : IArticleIngestionQueue
 {
@@ -67,7 +74,7 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         _maxArticleBytes = options.MaxArticleBytes;
         _channel = Channel.CreateUnbounded<InboundArticle>(new UnboundedChannelOptions
         {
-            SingleReader = true,
+            SingleReader = false,
             SingleWriter = false,
             AllowSynchronousContinuations = false,
         });
@@ -217,19 +224,18 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
     /// <inheritdoc />
     public async ValueTask<InboundArticle?> DequeueAsync(CancellationToken cancellationToken)
     {
+        // WaitToReadAsync + TryRead is the Channel multi-reader contract: another
+        // consumer may take the item between the wait and the read, so retry.
         while (await _channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (_channel.Reader.TryRead(out var article))
+            if (!_channel.Reader.TryRead(out var article) || article is null)
             {
-                var now = Interlocked.Decrement(ref _count);
-                if (now < 0)
-                {
-                    Interlocked.Exchange(ref _count, 0);
-                }
-
-                Release(article.Payload.Length);
-                return article;
+                continue;
             }
+
+            Interlocked.Decrement(ref _count);
+            Release(article.Payload.Length);
+            return article;
         }
 
         return null;
