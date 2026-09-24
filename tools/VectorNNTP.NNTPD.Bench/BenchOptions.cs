@@ -138,9 +138,9 @@ internal sealed class BenchOptions
             measure = 30;
         }
 
-        if (timing && !isIhave)
+        if (timing && !isIhave && !isTakeThis)
         {
-            throw new ArgumentException("--timing is supported only with --benchmark IHAVE.");
+            throw new ArgumentException("--timing is supported only with --benchmark IHAVE or TAKETHIS.");
         }
 
         if (samplesSpecified && !timing)

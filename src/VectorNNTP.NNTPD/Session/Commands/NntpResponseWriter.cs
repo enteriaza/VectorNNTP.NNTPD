@@ -58,10 +58,14 @@ public sealed class NntpResponseWriter : IAsyncDisposable
 
     private readonly struct WriteRequest
     {
-        public WriteRequest(ReadOnlyMemory<byte> payload, TaskCompletionSource? completed)
+        public WriteRequest(
+            ReadOnlyMemory<byte> payload,
+            TaskCompletionSource? completed,
+            bool flushAfter = false)
         {
             Payload = payload;
             Completed = completed;
+            FlushAfter = flushAfter;
         }
 
         /// <summary>
@@ -71,6 +75,12 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         public ReadOnlyMemory<byte> Payload { get; }
 
         public TaskCompletionSource? Completed { get; }
+
+        /// <summary>
+        /// When <see langword="true"/>, the pump flushes after this fire-and-forget line
+        /// instead of holding it in a TAKETHIS coalesce batch.
+        /// </summary>
+        public bool FlushAfter { get; }
     }
 
     /// <summary>Initializes a new instance of the <see cref="NntpResponseWriter"/> class.</summary>
@@ -158,6 +168,20 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     /// </remarks>
     public ValueTask EnqueueLineAsync(ReadOnlyMemory<byte> wireLine, CancellationToken cancellationToken = default) =>
         EnqueueAsync(new WriteRequest(wireLine, completed: null), cancellationToken);
+
+    /// <summary>
+    /// Enqueues a pre-encoded wire line and flushes it without waiting for a coalesce batch.
+    /// Returns when the Channel accepts the line (may wait if the writer is saturated).
+    /// </summary>
+    /// <remarks>
+    /// Used by TAKETHIS so 239/439 are not held for <see cref="CoalesceResponseBatchSize"/>
+    /// siblings. Channel order and pump serialization are unchanged. CHECK still uses
+    /// <see cref="EnqueueLineAsync(ReadOnlyMemory{byte}, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask EnqueueLineImmediateAsync(
+        ReadOnlyMemory<byte> wireLine,
+        CancellationToken cancellationToken = default) =>
+        EnqueueAsync(new WriteRequest(wireLine, completed: null, flushAfter: true), cancellationToken);
 
     /// <summary>
     /// Flushes any held fire-and-forget lines without writing additional response bytes.
@@ -535,10 +559,18 @@ public sealed class NntpResponseWriter : IAsyncDisposable
                     batch[count++] = request;
                     coalesceCount++;
 
+                    if (request.FlushAfter)
+                    {
+                        await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);
+                        count = 0;
+                        coalesceCount = 0;
+                        continue;
+                    }
+
                     while (coalesceCount < CoalesceResponseBatchSize &&
                            _channel.Reader.TryRead(out var queued))
                     {
-                        if (queued.Completed is not null)
+                        if (queued.Completed is not null || queued.FlushAfter)
                         {
                             batch[count++] = queued;
                             await FlushHeldAsync(batch, count, cancellationToken).ConfigureAwait(false);

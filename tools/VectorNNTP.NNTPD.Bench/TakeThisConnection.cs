@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 
@@ -20,6 +22,9 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     private readonly int _pipelineDepth;
     private readonly TimeSpan _duration;
     private readonly TimeSpan _warmup;
+    private readonly bool _collectTiming;
+    private readonly ConcurrentQueue<(long SendStart, long SendEnd, int OutstandingAtSend)> _sendMarks = new();
+    private readonly ConcurrentBag<TakeThisClientTimingSample> _timingSamples = [];
 
     private Socket? _socket;
     private NetworkStream? _stream;
@@ -34,7 +39,8 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         byte[] article,
         int pipelineDepth,
         TimeSpan duration,
-        TimeSpan warmup)
+        TimeSpan warmup,
+        bool collectTiming = false)
     {
         _id = id;
         _host = host;
@@ -43,6 +49,7 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         _pipelineDepth = pipelineDepth;
         _duration = duration;
         _warmup = warmup;
+        _collectTiming = collectTiming;
     }
 
     public long Sent { get; private set; }
@@ -57,6 +64,7 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     public int MaxOutstanding => _maxOutstanding;
     public int WireCommandBytes { get; private set; }
     public Exception? Fault { get; private set; }
+    public TakeThisClientTimingSample[]? TimingSamples { get; private set; }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -71,6 +79,10 @@ internal sealed class TakeThisConnection : IAsyncDisposable
             }
 
             await RunWindowAsync(_duration, record: true, cancellationToken).ConfigureAwait(false);
+            if (_collectTiming)
+            {
+                TimingSamples = _timingSamples.ToArray();
+            }
         }
         catch (Exception ex) when (ex is SocketException or IOException or EndOfStreamException or ObjectDisposedException)
         {
@@ -122,6 +134,13 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         Temporary400 = 0;
         BytesSent = 0;
         _maxOutstanding = 0;
+        while (_sendMarks.TryDequeue(out _))
+        {
+        }
+
+        while (_timingSamples.TryTake(out _))
+        {
+        }
     }
 
     public async Task RunWindowAsync(TimeSpan duration, bool record, CancellationToken cancellationToken)
@@ -144,6 +163,7 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         var receiveTask = ReceiveLoopAsync(
             gate,
             () => Interlocked.Decrement(ref outstanding),
+            () => Volatile.Read(ref outstanding),
             record,
             receiveCts.Token);
 
@@ -171,11 +191,20 @@ internal sealed class TakeThisConnection : IAsyncDisposable
 
                 var inFlight = Interlocked.Increment(ref outstanding);
                 UpdateMaxOutstanding(inFlight);
+                var sendStart = 0L;
+                if (record && _collectTiming)
+                {
+                    sendStart = Stopwatch.GetTimestamp();
+                }
 
                 try
                 {
                     await SendCommandAndArticleAsync(command, sendBuffers, sendWindowCts.Token)
                         .ConfigureAwait(false);
+                    if (record && _collectTiming)
+                    {
+                        _sendMarks.Enqueue((sendStart, Stopwatch.GetTimestamp(), inFlight));
+                    }
                 }
                 catch (OperationCanceledException) when (sendWindowCts.IsCancellationRequested)
                 {
@@ -224,6 +253,9 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         }
     }
 
+    private static long ToMicroseconds(long start, long end) =>
+        (long)Stopwatch.GetElapsedTime(start, end).TotalMicroseconds;
+
     private void UpdateMaxOutstanding(int inFlight)
     {
         var current = _maxOutstanding;
@@ -242,6 +274,7 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     private async Task ReceiveLoopAsync(
         SemaphoreSlim gate,
         Action completeOutstanding,
+        Func<int> readOutstanding,
         bool record,
         CancellationToken cancellationToken)
     {
@@ -269,6 +302,16 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                     if (record)
                     {
                         Accepted239++;
+                        if (_collectTiming && _sendMarks.TryDequeue(out var mark))
+                        {
+                            var t239 = Stopwatch.GetTimestamp();
+                            _timingSamples.Add(new TakeThisClientTimingSample(
+                                ToMicroseconds(mark.SendStart, mark.SendEnd),
+                                ToMicroseconds(mark.SendEnd, t239),
+                                ToMicroseconds(mark.SendStart, t239),
+                                mark.OutstandingAtSend,
+                                readOutstanding()));
+                        }
                     }
 
                     completeOutstanding();

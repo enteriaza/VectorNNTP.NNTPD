@@ -82,18 +82,37 @@ Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`,
 ### Article ingestion (TAKETHIS)
 
 ```text
-TAKETHIS
-   ↓
-read/unstuff multiline article (session receive path)
-   ↓
-byte-budgeted in-memory ingestion queue (`Nntpd:TransitQueueMemoryLimit`, default 1 GiB)
-   ↓
-background IncomingSpoolWriterService
-   ↓
-spool/incoming
+ONE session RX owner (sole Connection.Input PipeReader consumer)
+TAKETHIS message-id
+   │
+   ├── HistoryDB PeekAsync (starts at command line; no miss reservation)
+   │
+   └── IHaveArticleReader on the RX task
+           frame CRLF.CRLF; one owned stuffed-wire buffer; terminator omitted
+           OwnedWireBuffer.Take() — Pipe memory is not retained
+           attach owned buffer to TakeThisPipeline slot
+           RETURN TO RX LOOP (do not wait for Peek / enqueue / 239)
+                   │
+                   ↓
+            next TAKETHIS command / article (bounded by Depth)
+
+Detached slot (off the RX stack; at most Depth in flight)
+    await HistoryDB Peek if still pending
+           │
+           ↓
+    enqueue InboundArticle (Producer = TakeThis) or 439 / 400
+           │
+           ↓
+    Remember on miss
+           │
+           ↓
+    239/439 in command order (immediate TX flush, no TAKETHIS coalesce batch)
+           │
+           ↓
+    IncomingSpoolWriterService (one production consumer)
 ```
 
-`239`/`439` status lines are enqueued on the session's ordered response writer without waiting for network delivery, so pipelined TAKETHIS can continue receiving the next article. Disk I/O is never on the TAKETHIS receive critical path.
+STREAM TAKETHIS is pipelined per session with a bounded window (`TakeThisPipeline.Depth` = 16). One physical RX task owns `Connection.Input`: it parses commands in order, frames each article, and detaches one owned stuffed-wire buffer per TAKETHIS. Pipeline workers never call `ReadAsync` on that pipe. After detach, Peek / queue / Remember / ordered 239 run independently; a fast Peek must not emit 239 on the RX task. Depth bounds how many owned article buffers may be retained; when the window is full the RX loop stops admitting and the input Pipe (64 KiB pause) applies TCP backpressure. 239 is never emitted before the complete article and the HistoryDB result, and never reordered. TAKETHIS does not destuff; MODE READER fallback still destuffs. Disk I/O is never on the TAKETHIS receive critical path.
 
 The ingestion queue is multi-reader (`DequeueAsync` is safe for concurrent callers). Production drains it with one `IncomingSpoolWriterService` consumer.
 

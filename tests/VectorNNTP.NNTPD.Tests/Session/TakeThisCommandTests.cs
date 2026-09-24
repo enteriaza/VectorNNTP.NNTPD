@@ -46,6 +46,8 @@ public sealed class TakeThisCommandTests
         var article = await queue.DequeueAsync(CancellationToken.None);
         Assert.NotNull(article);
         Assert.Equal(id, article!.MessageId);
+        Assert.Equal(InboundArticleProducer.TakeThis, article.Producer);
+        Assert.Null(article.Structured);
         Assert.Equal("Subject: hi\r\n\r\nbody\r\n", Encoding.ASCII.GetString(article.Payload.Span));
 
         await duplex.WriteClientLineAsync("QUIT");
@@ -780,7 +782,8 @@ public sealed class TakeThisCommandTests
         public NntpSession CreateSession(
             IArticleIngestionQueue queue,
             ITransitPeerAuthorization? transitPeers = null,
-            System.Net.IPAddress? clientAddress = null)
+            System.Net.IPAddress? clientAddress = null,
+            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -791,7 +794,8 @@ public sealed class TakeThisCommandTests
                 connection,
                 NullLogger<NntpSession>.Instance,
                 articleIngestion: queue,
-                transitPeerAuthorization: transitPeers);
+                transitPeerAuthorization: transitPeers,
+                historyDb: historyDb);
         }
 
         public async Task WriteClientLineAsync(string line)

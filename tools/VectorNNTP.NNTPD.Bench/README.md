@@ -109,6 +109,11 @@ measure remains documented separately in `PERFORMANCE.md`.
 `--timing` samples client-visible phases with `Stopwatch.GetTimestamp`. It does
 not change the default duration throughput path. Default sample count is 4000.
 
+TAKETHIS `--timing` keeps the pipelined client (same `--pipeline-depth`) and
+records send→239 phases per completed `239`. Server pipeline-slot stages are
+recorded only when `VECTORNNTP_TAKETHIS_TIMING` is set on the NNTPD process
+(off by default; dump on session close under `.artifacts/takethis-timing/`).
+
 ```powershell
 dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
   --benchmark IHAVE --timing --samples 4000 `

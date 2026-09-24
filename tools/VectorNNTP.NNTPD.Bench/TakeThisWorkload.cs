@@ -50,6 +50,11 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         Console.WriteLine("TLS/compression:     not used (plain TCP)");
         Console.WriteLine();
 
+        if (options.Timing)
+        {
+            return await RunTimingAsync(options, connections, article).ConfigureAwait(false);
+        }
+
         TakeThisRunResult? last = null;
         for (var run = 1; run <= options.Runs; run++)
         {
@@ -66,10 +71,80 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         return last is { ConnectionErrors: > 0 } or { ProtocolErrors: > 0 } ? 1 : 0;
     }
 
-    private static async Task<TakeThisRunResult> RunOnceAsync(
+    private static async Task<int> RunTimingAsync(
         BenchOptions options,
         int connections,
         byte[] article)
+    {
+        Console.WriteLine("Mode:                DIAGNOSTIC TIMING (client phases + server stage probe)");
+        Console.WriteLine("Clock:               Stopwatch.GetTimestamp (monotonic)");
+        Console.WriteLine("Server probe:        VECTORNNTP_TAKETHIS_TIMING (off-by-default; session dump on close)");
+        Console.WriteLine("239 meaning:         article received + HistoryDB peek + enqueue accepted");
+        Console.WriteLine();
+
+        var artifactsDir = Path.Combine(
+            FindRepoArtifactsRoot(),
+            "takethis-timing");
+        Directory.CreateDirectory(artifactsDir);
+
+        var failed = false;
+        for (var run = 1; run <= options.Runs; run++)
+        {
+            if (options.Runs > 1)
+            {
+                Console.WriteLine($"=== TAKETHIS timing × {connections} conn × run {run}/{options.Runs} ===");
+            }
+
+            var result = await RunOnceAsync(options, connections, article, collectTiming: true)
+                .ConfigureAwait(false);
+            PrintResult(result);
+            Console.WriteLine();
+
+            var samples = result.TimingSamples;
+            if (samples is null || samples.Count == 0)
+            {
+                Console.WriteLine("TAKETHIS timing failed: no completed client samples.");
+                failed = true;
+                continue;
+            }
+
+            var report = TakeThisTimingReport.Format(options, samples, result, run, artifactsDir);
+            Console.WriteLine(report);
+            TakeThisTimingReport.WriteArtifacts(artifactsDir, run, report, samples);
+            Console.WriteLine($"Wrote {Path.Combine(artifactsDir, $"client-run{run}.txt")}");
+            if (result.ConnectionErrors > 0 || result.ProtocolErrors > 0)
+            {
+                failed = true;
+            }
+        }
+
+        Console.WriteLine("Server stage dumps (if VECTORNNTP_TAKETHIS_TIMING was set) are written");
+        Console.WriteLine($"on session close under {artifactsDir}");
+        return failed ? 1 : 0;
+    }
+
+    private static string FindRepoArtifactsRoot()
+    {
+        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (dir is not null)
+        {
+            var artifacts = Path.Combine(dir.FullName, ".artifacts");
+            if (Directory.Exists(artifacts) || File.Exists(Path.Combine(dir.FullName, "VectorNNTP.NNTPD.sln")))
+            {
+                return Path.Combine(dir.FullName, ".artifacts");
+            }
+
+            dir = dir.Parent;
+        }
+
+        return Path.Combine(Directory.GetCurrentDirectory(), ".artifacts");
+    }
+
+    private static async Task<TakeThisRunResult> RunOnceAsync(
+        BenchOptions options,
+        int connections,
+        byte[] article,
+        bool collectTiming = false)
     {
         ProcessSampler? sampler = null;
         if (options.ServerPid is int pid)
@@ -94,7 +169,8 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
                 article: article,
                 pipelineDepth: options.PipelineDepth,
                 duration: duration,
-                warmup: warmup);
+                warmup: warmup,
+                collectTiming: collectTiming);
             tasks[i] = workers[i].RunAsync(CancellationToken.None);
         }
 
@@ -111,6 +187,7 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         long bytes = 0;
         var maxOutstanding = 0;
         Exception? fault = null;
+        TakeThisClientTimingSample[]? timing = null;
 
         foreach (var worker in workers)
         {
@@ -127,6 +204,21 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
             }
 
             fault ??= worker.Fault;
+            if (worker.TimingSamples is { Length: > 0 } workerSamples)
+            {
+                if (timing is null)
+                {
+                    timing = workerSamples;
+                }
+                else
+                {
+                    var merged = new TakeThisClientTimingSample[timing.Length + workerSamples.Length];
+                    timing.CopyTo(merged, 0);
+                    workerSamples.CopyTo(merged, timing.Length);
+                    timing = merged;
+                }
+            }
+
             await worker.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -153,6 +245,7 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
             ServerCpuPercent = sample?.CpuPercent,
             ServerCpuTimeSec = sample?.CpuTimeSeconds,
             Fault = fault,
+            TimingSamples = timing,
         };
     }
 
@@ -214,4 +307,5 @@ internal sealed class TakeThisRunResult
     public double? ServerCpuPercent { get; init; }
     public double? ServerCpuTimeSec { get; init; }
     public Exception? Fault { get; init; }
+    public IReadOnlyList<TakeThisClientTimingSample>? TimingSamples { get; init; }
 }

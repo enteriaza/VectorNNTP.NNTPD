@@ -7,9 +7,12 @@ namespace VectorNNTP.NNTPD.Session;
 /// Default / transit STREAM RX: continuous command/article units from the connection input pipe.
 /// </summary>
 /// <remarks>
-/// TAKETHIS article bytes are pre-read only when <see cref="NntpAuthorization.AuthorizedTransit"/>
-/// is already true so 480/502 gates do not consume a following QUIT. Authorization still runs in
-/// the dispatcher before the handler uses <c>PreReadArticle</c>.
+/// Authorized TAKETHIS is admitted into <see cref="TakeThisPipeline"/>: HistoryDB peek starts
+/// at the command line, then this RX task frames one stuffed-wire copy with
+/// <see cref="IHaveArticleReader"/>, attaches the owned buffer to a slot, and returns so
+/// the next command can be parsed. Pipeline workers never read <c>Connection.Input</c>.
+/// Unauthorized TAKETHIS is returned as a command line so 480/502 gates do not consume a
+/// following QUIT.
 /// </remarks>
 internal sealed class NntpStreamDataPlaneRx
 {
@@ -37,12 +40,17 @@ internal sealed class NntpStreamDataPlaneRx
     {
         ArgumentNullException.ThrowIfNull(response);
         await _session.WaitForCheckCapacityAsync(cancellationToken).ConfigureAwait(false);
-        var consumeTakeThisArticle = _session.Authorization.AuthorizedTransit;
+        await _session.WaitForTakeThisCapacityAsync(cancellationToken).ConfigureAwait(false);
+
+        // Command line only. Authorized TAKETHIS starts HistoryDB peek, frames the
+        // article on this RX task, hands the owned buffer to the pipeline, and returns.
+        // Unauthorized TAKETHIS stays a command so 480/502 gates do not consume a
+        // following QUIT.
         var unit = await NntpContinuousRxReader
             .ReadUnitAsync(
                 _session.Connection.Input,
                 _parser,
-                consumeTakeThisArticle,
+                consumeTakeThisArticle: false,
                 _session.ArticleIngestion.MaxArticleBytes,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -52,14 +60,16 @@ internal sealed class NntpStreamDataPlaneRx
             return false;
         }
 
-        if (unit is { Kind: NntpContinuousRxKind.TakeThis, Article.Status: NntpMultilineReadStatus.Incomplete })
+        if (unit.Command.IsValid
+            && unit.Command.Verb == NntpVerb.TakeThis
+            && _session.Authorization.AuthorizedTransit)
         {
-            return false;
-        }
-
-        if (unit.Kind == NntpContinuousRxKind.NeedMore)
-        {
-            return false;
+            ArgumentNullException.ThrowIfNull(_session.TakeThisWindow);
+            await _session.Pipeline!.DrainAsync(cancellationToken).ConfigureAwait(false);
+            await _session.TakeThisWindow
+                .AdmitAuthorizedAsync(unit.Command, _parser.CurrentCommandLine, cancellationToken)
+                .ConfigureAwait(false);
+            return true;
         }
 
         var preRead = unit.Kind == NntpContinuousRxKind.TakeThis ? unit.Article : (NntpMultilineReadResult?)null;

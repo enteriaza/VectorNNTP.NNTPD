@@ -75,9 +75,27 @@ public sealed class IhaveCommandRegistrationTests
     }
 
     [Fact]
-    public void Parse_Timing_WithoutIhave_Throws()
+    public void Parse_Timing_AllowsTakeThis()
     {
-        Assert.Throws<ArgumentException>(() => BenchOptions.Parse(["--benchmark", "TAKETHIS", "--timing"]));
+        var options = BenchOptions.Parse(
+        [
+            "--benchmark", "TAKETHIS",
+            "--timing",
+            "--samples", "1000",
+            "--host", "127.0.0.1",
+            "--port", "1199",
+        ]);
+
+        Assert.True(options.Timing);
+        Assert.Equal(1000, options.TimingSamples);
+        Assert.Equal(5, options.WarmupSeconds);
+        Assert.Equal("TAKETHIS", options.Benchmark);
+    }
+
+    [Fact]
+    public void Parse_Timing_WithoutIhaveOrTakeThis_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => BenchOptions.Parse(["--benchmark", "CHECK", "--timing"]));
     }
 
     [Fact]

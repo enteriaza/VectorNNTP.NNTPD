@@ -1,4 +1,5 @@
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
@@ -13,57 +14,138 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// (permanent reject). Temporary infrastructure failure uses <c>400</c> and closes the connection.
 /// </para>
 /// <para>
-/// Critical path: parse → consume article (STREAM: framed wire copy; READER fallback:
-/// <see cref="NntpMultilineDataReader"/> destuff) → enqueue → enqueue 239/439 → return.
-/// Disk persistence and outbound network delivery of the status line are not awaited
-/// (<see cref="NntpResponseWriter.EnqueueLineAsync(ReadOnlyMemory{byte}, CancellationToken)"/>).
+/// STREAM path: the session RX task starts HistoryDB peek at the Message-ID, frames
+/// the article with <see cref="IHaveArticleReader"/> (one owned stuffed-wire buffer,
+/// terminator omitted, no destuff), attaches that buffer to
+/// <see cref="TakeThisPipeline"/>, and returns. Peek / enqueue / Remember / ordered
+/// 239/439 run on pipeline completion workers, not on the RX stack. Depth bounds
+/// how many owned articles stay in flight. TAKETHIS responses flush immediately
+/// (no coalesce batch).
+/// </para>
+/// <para>
+/// MODE READER fallback still destuffs via <see cref="NntpMultilineDataReader"/> and
+/// overlaps HistoryDB peek with that receive.
 /// </para>
 /// </remarks>
 internal static class TakeThis
 {
     private static ILogger Logger => NntpCommandLoggers.For(typeof(TakeThis));
 
-    /// <summary>Handles <c>TAKETHIS</c> (RFC 4644 §2.5).</summary>
+    /// <summary>Handles <c>TAKETHIS</c> (RFC 4644 §2.5) on the serial (non-pipeline) path.</summary>
     public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
         NntpCommandExecution.RunAsync(Logger, context, "TAKETHIS", ExecuteAsync, cancellationToken);
 
+    /// <summary>HistoryDB peek without miss reservation (same contract as IHAVE).</summary>
+    internal static ValueTask<HistoryLookupResult> PeekAsync(
+        NntpSession session,
+        ReadOnlyMemory<byte> messageId,
+        CancellationToken cancellationToken)
+    {
+        if (session.HistoryDb is not { } history)
+        {
+            return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unseen);
+        }
+
+        return history.PeekAsync(messageId, cancellationToken);
+    }
+
+    internal static void WriteCompletion(
+        ILogger logger,
+        NntpSession session,
+        long startedTimestamp,
+        string? detail = null) =>
+        NntpCommandExecution.WriteCompletion(
+            logger,
+            session,
+            "TAKETHIS",
+            System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp),
+            detail);
+
+    internal static async ValueTask FailTemporaryAsync(
+        NntpSession session,
+        NntpResponseWriter response,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await response
+                .WriteLineAsync(NntpResponses.ServiceTemporarilyUnavailable, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (
+            cancellationToken.IsCancellationRequested
+            || session.Connection.ConnectionClosed.IsCancellationRequested
+            || ex is ObjectDisposedException or InvalidOperationException)
+        {
+        }
+
+        session.RequestClose();
+        CommandLogMessages.TakeThisTemporaryFailure(
+            Logger,
+            NntpCommandLogFormat.Client(session));
+    }
+
     private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        // Syntax already validated by NntpCommandParser. String is the ingest boundary only.
-        var messageId = System.Text.Encoding.ASCII.GetString(context.ArgumentSpan);
+        var messageIdBytes = context.ArgumentSpan.ToArray();
+        var lookup = PeekAsync(context.Session, messageIdBytes, cancellationToken);
         var queue = context.Session.ArticleIngestion;
 
-        // Always consume the following multiline block so pipelined bytes stay synchronized,
-        // even when the message-id is malformed — unless the session scanner already did.
-        NntpMultilineReadResult article;
+        NntpMultilineReadStatus status;
+        ReadOnlyMemory<byte> payload;
         try
         {
             if (context.PreReadArticle is { } preRead)
             {
-                article = preRead;
+                status = preRead.Status;
+                payload = preRead.Payload;
+            }
+            else if (context.Session.ReceiveStrategy == NntpReceiveStrategy.StreamDataPlane)
+            {
+                var read = await IHaveArticleReader
+                    .ReadAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
+                    .ConfigureAwait(false);
+                status = read.Status;
+                payload = read.Payload;
             }
             else
             {
-                article = await NntpMultilineDataReader
+                var article = await NntpMultilineDataReader
                     .ReadArticleAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
                     .ConfigureAwait(false);
+                status = article.Status;
+                payload = article.Payload;
             }
         }
         catch (OperationCanceledException) when (
             cancellationToken.IsCancellationRequested
             || context.Connection.ConnectionClosed.IsCancellationRequested)
         {
-            // Peer gone mid-article — do not enqueue a partial article; do not respond.
             return;
         }
 
-        if (article.Status == NntpMultilineReadStatus.Incomplete)
+        if (status == NntpMultilineReadStatus.Incomplete)
         {
-            // Connection ended before terminator; no response, no enqueue.
             return;
         }
 
-        if (article.Status == NntpMultilineReadStatus.TooLarge)
+        HistoryLookupResult peek;
+        try
+        {
+            peek = await lookup.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested
+            || context.Connection.ConnectionClosed.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception)
+        {
+            peek = HistoryLookupResult.Unavailable;
+        }
+
+        if (status == NntpMultilineReadStatus.TooLarge)
         {
             await EnqueueTransferReplyAsync(
                     context,
@@ -74,17 +156,32 @@ internal static class TakeThis
             return;
         }
 
-        if (!queue.IsAccepting)
+        if (peek == HistoryLookupResult.Unavailable || !queue.IsAccepting)
         {
-            await FailTemporaryAsync(context, cancellationToken).ConfigureAwait(false);
+            await FailTemporaryAsync(context.Session, context.Response, cancellationToken).ConfigureAwait(false);
+            context.CompletionDetail = "temporary failure";
             return;
         }
 
+        if (peek == HistoryLookupResult.Seen)
+        {
+            await EnqueueTransferReplyAsync(
+                    context,
+                    NntpResponses.ArticleTransferredOkPrefix,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = "accepted duplicate";
+            return;
+        }
+
+        var messageId = System.Text.Encoding.ASCII.GetString(messageIdBytes);
         var inbound = new InboundArticle(
             messageId,
-            article.Payload,
+            payload,
             context.Session.ClientIdentity,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            structured: null,
+            InboundArticleProducer.TakeThis);
 
         ArticleEnqueueResult enqueue;
         try
@@ -100,7 +197,8 @@ internal static class TakeThis
 
         if (enqueue == ArticleEnqueueResult.Unavailable)
         {
-            await FailTemporaryAsync(context, cancellationToken).ConfigureAwait(false);
+            await FailTemporaryAsync(context.Session, context.Response, cancellationToken).ConfigureAwait(false);
+            context.CompletionDetail = "temporary failure";
             return;
         }
 
@@ -115,7 +213,7 @@ internal static class TakeThis
             return;
         }
 
-        // 239 means accepted into the ingestion pipeline — not yet persisted to disk.
+        context.Session.HistoryDb?.Remember(messageIdBytes);
         await EnqueueTransferReplyAsync(
                 context,
                 NntpResponses.ArticleTransferredOkPrefix,
@@ -124,10 +222,6 @@ internal static class TakeThis
         context.CompletionDetail = "accepted";
     }
 
-    /// <summary>
-    /// Copies prefix + session-scratch Message-ID + CRLF into one owned buffer, then enqueues
-    /// it. Scratch must not be given to the TX pump: the next command overwrites it.
-    /// </summary>
     private static ValueTask EnqueueTransferReplyAsync(
         NntpCommandContext context,
         ReadOnlyMemory<byte> prefix,
@@ -137,32 +231,6 @@ internal static class TakeThis
             prefix.Span,
             context.ArgumentSpan,
             NntpResponses.Crlf.Span);
-        return context.Response.EnqueueLineAsync(owned, cancellationToken);
-    }
-
-    private static async ValueTask FailTemporaryAsync(
-        NntpCommandContext context,
-        CancellationToken cancellationToken)
-    {
-        // RFC 4644 §2.5: temporary error that does not reject the article → 400 + close.
-        try
-        {
-            await context.Response
-                .WriteLineAsync(NntpResponses.ServiceTemporarilyUnavailable, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (
-            cancellationToken.IsCancellationRequested
-            || context.Connection.ConnectionClosed.IsCancellationRequested
-            || ex is ObjectDisposedException or InvalidOperationException)
-        {
-            // Peer already gone / pipe completed.
-        }
-
-        context.Session.RequestClose();
-        context.CompletionDetail = "temporary failure";
-        CommandLogMessages.TakeThisTemporaryFailure(
-            Logger,
-            NntpCommandLogFormat.Client(context.Session));
+        return context.Response.EnqueueLineImmediateAsync(owned, cancellationToken);
     }
 }

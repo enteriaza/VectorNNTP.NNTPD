@@ -1,7 +1,7 @@
 namespace VectorNNTP.NNTPD.History;
 
 /// <summary>
-/// Shared HistoryDB used by CHECK (mutating lookup) and IHAVE (peek + remember).
+/// Shared HistoryDB used by CHECK (mutating lookup), IHAVE, and TAKETHIS (peek + remember).
 /// </summary>
 public interface IHistoryDb
 {
@@ -15,7 +15,9 @@ public interface IHistoryDb
 
     /// <summary>
     /// Looks up <paramref name="messageId"/> without recording a miss.
-    /// Used by IHAVE admission so a failed transfer does not reserve the identifier.
+    /// Used by IHAVE admission and TAKETHIS so a failed transfer does not reserve
+    /// the identifier. TAKETHIS starts this lookup as soon as the Message-ID is parsed
+    /// so it overlaps article receive.
     /// </summary>
     ValueTask<HistoryLookupResult> PeekAsync(
         ReadOnlyMemory<byte> messageId,
@@ -23,7 +25,7 @@ public interface IHistoryDb
 
     /// <summary>
     /// Records <paramref name="messageId"/> locally and queues a Redis write after a
-    /// successful IHAVE accept. Does not perform a Redis EXISTS.
+    /// successful IHAVE or TAKETHIS accept. Does not perform a Redis EXISTS.
     /// </summary>
     void Remember(ReadOnlyMemory<byte> messageId);
 

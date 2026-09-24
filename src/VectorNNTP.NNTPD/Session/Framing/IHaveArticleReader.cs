@@ -8,11 +8,16 @@ namespace VectorNNTP.NNTPD.Session.Framing;
 /// IHAVE article receive: locate <c>CRLF . CRLF</c> and copy stuffed wire octets into one owned buffer.
 /// </summary>
 /// <remarks>
-/// IHAVE is not pipelined (RFC 3977 §6.3.2). This reader does not destuff, classify, or build
-/// <see cref="VectorNNTP.NNTPD.ArticleIngestion.Article"/>. The queued payload is the exact
-/// received article bytes with leading-dot stuffing preserved and the terminator omitted.
-/// Pipe sequences are not retained after <c>AdvanceTo</c>. Interpretation happens downstream
-/// in <see cref="VectorNNTP.NNTPD.ArticleIngestion.IhaveArticleInterpreter"/>.
+/// IHAVE is not pipelined (RFC 3977 §6.3.2). TAKETHIS STREAM receive reuses this reader
+/// on the session RX task so the queued payload is one owned stuffed-wire copy
+/// (<c>OwnedWireBuffer.Take()</c>). After that take, Pipe sequences are not retained
+/// and the buffer is handed to <see cref="VectorNNTP.NNTPD.Session.TakeThisPipeline"/>.
+/// This reader does not destuff, classify, or build
+/// <see cref="VectorNNTP.NNTPD.ArticleIngestion.Article"/>. The queued payload is the
+/// exact received article bytes with leading-dot stuffing preserved and the terminator
+/// omitted. IHAVE interpretation happens downstream in
+/// <see cref="VectorNNTP.NNTPD.ArticleIngestion.IhaveArticleInterpreter"/>. Pipeline
+/// workers never call this reader.
 /// </remarks>
 public static class IHaveArticleReader
 {

@@ -33,6 +33,7 @@ public sealed class NntpSession
     private string? _pendingAuthUsername;
     private NntpSessionMode _mode;
     private int _closeRequested;
+    private readonly CancellationTokenSource _closeCts = new();
 
     /// <summary>Initializes a new instance of the <see cref="NntpSession"/> class.</summary>
     public NntpSession(
@@ -77,11 +78,14 @@ public sealed class NntpSession
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
 
-    /// <summary>Gets the HistoryDB used by CHECK, or <see langword="null"/> when unset (tests).</summary>
+    /// <summary>Gets the HistoryDB used by CHECK, IHAVE, and TAKETHIS, or <see langword="null"/> when unset (tests).</summary>
     public IHistoryDb? HistoryDb { get; }
 
     /// <summary>Gets the per-session CHECK pipeline once <see cref="RunAsync"/> has started.</summary>
     internal CheckPipeline? Pipeline { get; private set; }
+
+    /// <summary>Gets the per-session TAKETHIS pipeline once <see cref="RunAsync"/> has started.</summary>
+    internal TakeThisPipeline? TakeThisWindow { get; private set; }
 
     /// <summary>
     /// Gets the bounded STREAM article TX scheduler (depth gate above
@@ -195,8 +199,22 @@ public sealed class NntpSession
         _authorization = _connectionAuthorization;
     }
 
-    /// <summary>Requests the command loop to exit after the current response (e.g. QUIT).</summary>
-    public void RequestClose() => Interlocked.Exchange(ref _closeRequested, 1);
+    /// <summary>
+    /// Requests the command loop to exit after the current response (e.g. QUIT / TAKETHIS 400).
+    /// Cancels a pending RX <c>ReadAsync</c> so a close requested off the RX stack still ends
+    /// the session.
+    /// </summary>
+    public void RequestClose()
+    {
+        Interlocked.Exchange(ref _closeRequested, 1);
+        try
+        {
+            _closeCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
     /// <summary>
     /// Sends the initial greeting and runs the command loop until QUIT, EOF, or cancellation.
@@ -205,13 +223,15 @@ public sealed class NntpSession
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
-            Connection.ConnectionClosed);
+            Connection.ConnectionClosed,
+            _closeCts.Token);
         var token = linked.Token;
 
         try
         {
             var response = _response ??= new NntpResponseWriter(Connection.Output);
             Pipeline = new CheckPipeline(this, response);
+            TakeThisWindow = new TakeThisPipeline(this, response);
             await SendGreetingAsync(response, token).ConfigureAwait(false);
 
             var readerRx = new NntpReaderCommandRx(this, _dispatcher, _logger);
@@ -227,8 +247,10 @@ public sealed class NntpSession
                     break;
                 }
 
-                // Held 239/439 lines flush when the inbound pipe has nothing ready. Continuous
-                // STREAM leftover stays unconsumed so the pump can reach the measured batch of 8.
+                // Coalesced fire-and-forget lines (CHECK EnqueueLineAsync) flush when the
+                // inbound pipe has nothing ready. TAKETHIS uses EnqueueLineImmediateAsync
+                // and does not wait for this idle flush. STREAM leftover stays unconsumed
+                // so CHECK can still reach its coalesce batch.
                 if (response.HasCoalescedUnflushed && !HasUnconsumedInput(Connection.Input))
                 {
                     await response.FlushCoalescedAsync(token).ConfigureAwait(false);
@@ -245,6 +267,18 @@ public sealed class NntpSession
         }
         finally
         {
+            if (TakeThisWindow is not null)
+            {
+                try
+                {
+                    await TakeThisWindow.ShutdownAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort; peeks use the session token.
+                }
+            }
+
             if (Pipeline is not null)
             {
                 try
@@ -286,6 +320,8 @@ public sealed class NntpSession
             {
                 // Best-effort.
             }
+
+            _closeCts.Dispose();
         }
     }
 
@@ -331,8 +367,8 @@ public sealed class NntpSession
     }
 
     /// <summary>
-    /// Dispatches one parsed unit: authorized CHECK enters the pipeline; every other command
-    /// drains outstanding CHECK responses first and then runs serially.
+    /// Dispatches one parsed unit: authorized CHECK enters the CHECK pipeline; every other
+    /// command drains outstanding CHECK and TAKETHIS windows first and then runs serially.
     /// </summary>
     internal async ValueTask ProcessParsedCommandAsync(
         NntpCommandDispatcher dispatcher,
@@ -344,11 +380,13 @@ public sealed class NntpSession
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(Pipeline);
+        ArgumentNullException.ThrowIfNull(TakeThisWindow);
 
         if (command.IsValid
             && command.Verb == NntpVerb.Check
             && Authorization.AuthorizedTransit)
         {
+            await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
             if (command.Verb != NntpVerb.BenchIt
                 && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
                 && logger.IsEnabled(LogLevel.Information))
@@ -363,6 +401,7 @@ public sealed class NntpSession
             return;
         }
 
+        await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
         await Pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
         await DispatchCommandAsync(dispatcher, response, logger, command, line, preReadArticle, cancellationToken)
             .ConfigureAwait(false);
@@ -374,6 +413,15 @@ public sealed class NntpSession
         ArgumentNullException.ThrowIfNull(Pipeline);
         return Pipeline.IsFull
             ? Pipeline.WaitForCapacityAsync(cancellationToken)
+            : ValueTask.CompletedTask;
+    }
+
+    /// <summary>Waits until the TAKETHIS window can accept another command (RX backpressure).</summary>
+    internal ValueTask WaitForTakeThisCapacityAsync(CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(TakeThisWindow);
+        return TakeThisWindow.IsFull
+            ? TakeThisWindow.WaitForCapacityAsync(cancellationToken)
             : ValueTask.CompletedTask;
     }
 
