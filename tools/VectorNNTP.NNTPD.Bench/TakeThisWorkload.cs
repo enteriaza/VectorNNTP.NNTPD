@@ -41,6 +41,10 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         Console.WriteLine($"Warmup:              {options.WarmupSeconds:F3}s");
         Console.WriteLine($"Runs:                {options.Runs}");
         Console.WriteLine($"Pipeline depth:      {options.PipelineDepth} outstanding TAKETHIS / connection");
+        Console.WriteLine(
+            options.SenderDepth == 1
+                ? "Sender depth:        1 (canonical: one SendAsync article at a time)"
+                : $"Sender depth:        {options.SenderDepth} (CONTROL EXPERIMENT, not canonical)");
         Console.WriteLine($"Article-size arg:    {options.ArticleSize:N0} bytes (target body)");
         Console.WriteLine($"Article body:        {bodyBytes:N0} bytes");
         Console.WriteLine($"Article on wire:     {article.Length:N0} bytes (headers + body + terminator)");
@@ -170,7 +174,8 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
                 pipelineDepth: options.PipelineDepth,
                 duration: duration,
                 warmup: warmup,
-                collectTiming: collectTiming);
+                collectTiming: collectTiming,
+                senderDepth: options.SenderDepth);
             tasks[i] = workers[i].RunAsync(CancellationToken.None);
         }
 
@@ -186,6 +191,13 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         long temporary = 0;
         long bytes = 0;
         var maxOutstanding = 0;
+        var maxActiveSends = 0;
+        var maxAwaiting239 = 0;
+        long sendCalls = 0;
+        long sendBytesReturned = 0;
+        var minSendBytes = int.MaxValue;
+        var maxSendBytes = 0;
+        var measureElapsed = 0.0;
         Exception? fault = null;
         TakeThisClientTimingSample[]? timing = null;
 
@@ -201,6 +213,33 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
             if (worker.MaxOutstanding > maxOutstanding)
             {
                 maxOutstanding = worker.MaxOutstanding;
+            }
+
+            if (worker.MaxActiveSends > maxActiveSends)
+            {
+                maxActiveSends = worker.MaxActiveSends;
+            }
+
+            if (worker.MaxAwaiting239 > maxAwaiting239)
+            {
+                maxAwaiting239 = worker.MaxAwaiting239;
+            }
+
+            sendCalls += worker.SendCalls;
+            sendBytesReturned += worker.SendBytesReturned;
+            if (worker.MinSendBytes > 0 && worker.MinSendBytes < minSendBytes)
+            {
+                minSendBytes = worker.MinSendBytes;
+            }
+
+            if (worker.MaxSendBytes > maxSendBytes)
+            {
+                maxSendBytes = worker.MaxSendBytes;
+            }
+
+            if (worker.MeasureElapsedSeconds > measureElapsed)
+            {
+                measureElapsed = worker.MeasureElapsedSeconds;
             }
 
             fault ??= worker.Fault;
@@ -239,6 +278,14 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
             Temporary400 = temporary,
             BytesSent = bytes,
             MaxOutstanding = maxOutstanding,
+            MaxActiveSends = maxActiveSends,
+            MaxAwaiting239 = maxAwaiting239,
+            SendCalls = sendCalls,
+            SendBytesReturned = sendBytesReturned,
+            MinSendBytes = minSendBytes == int.MaxValue ? 0 : minSendBytes,
+            MaxSendBytes = maxSendBytes,
+            MeasureElapsedSeconds = measureElapsed,
+            SenderDepth = options.SenderDepth,
             ArticlesPerSec = sent / elapsed,
             LogicalGbitPerSec = logicalBytes * 8.0 / elapsed / 1_000_000_000.0,
             WireGbitPerSec = bytes * 8.0 / elapsed / 1_000_000_000.0,
@@ -266,6 +313,15 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         Console.WriteLine($"Protocol errors:     {r.ProtocolErrors:N0}");
         Console.WriteLine($"Connection errors:   {r.ConnectionErrors:N0}");
         Console.WriteLine($"Max outstanding:     {r.MaxOutstanding} (limit {r.PipelineDepth}/connection)");
+        Console.WriteLine($"Max active sends:    {r.MaxActiveSends} (sender-depth {r.SenderDepth})");
+        Console.WriteLine($"Max awaiting 239:    {r.MaxAwaiting239}");
+        if (r.SendCalls > 0)
+        {
+            Console.WriteLine($"SendAsync calls:     {r.SendCalls:N0}");
+            Console.WriteLine(
+                $"Bytes/SendAsync:     avg {(double)r.SendBytesReturned / r.SendCalls:N0}  min {r.MinSendBytes:N0}  max {r.MaxSendBytes:N0}");
+        }
+
         Console.WriteLine();
         Console.WriteLine($"TAKETHIS/sec:        {r.ArticlesPerSec:N1}");
         Console.WriteLine($"Logical payload:     {r.LogicalGbitPerSec:F3} Gbit/s (article bytes)");
@@ -301,6 +357,14 @@ internal sealed class TakeThisRunResult
     public long Temporary400 { get; init; }
     public long BytesSent { get; init; }
     public int MaxOutstanding { get; init; }
+    public int MaxActiveSends { get; init; }
+    public int MaxAwaiting239 { get; init; }
+    public long SendCalls { get; init; }
+    public long SendBytesReturned { get; init; }
+    public int MinSendBytes { get; init; }
+    public int MaxSendBytes { get; init; }
+    public double MeasureElapsedSeconds { get; init; }
+    public int SenderDepth { get; init; }
     public double ArticlesPerSec { get; init; }
     public double LogicalGbitPerSec { get; init; }
     public double WireGbitPerSec { get; init; }

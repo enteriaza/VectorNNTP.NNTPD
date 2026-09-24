@@ -62,6 +62,10 @@ public sealed class NntpCommandParserTests
     [InlineData("AUTHINFO SASL", NntpVerb.AuthInfo, NntpVerb.Sasl)]
     [InlineData("authinfo user alice", NntpVerb.AuthInfo, NntpVerb.User)]
     [InlineData("BENCHIT", NntpVerb.BenchIt, NntpVerb.None)]
+    [InlineData("SPEEDTEST GIGANEWS", NntpVerb.SpeedTest, NntpVerb.None)]
+    [InlineData("SPEEDTEST usenet-ninja", NntpVerb.SpeedTest, NntpVerb.None)]
+    [InlineData("speedtest GIGANEWS", NntpVerb.SpeedTest, NntpVerb.None)]
+    [InlineData("SpEeDtEsT GIGANEWS", NntpVerb.SpeedTest, NntpVerb.None)]
     public void Parse_SupportedCommands_AreValid(string text, NntpVerb verb, NntpVerb qualifier)
     {
         var (command, _) = NntpCommandTestParse.Parse(text);
@@ -118,6 +122,10 @@ public sealed class NntpCommandParserTests
     [InlineData("QUIT extra", NntpParseStatus.ExtraArgument)]
     [InlineData("HELP MORE", NntpParseStatus.ExtraArgument)]
     [InlineData("COMPRESS DEFLATE EXTRA", NntpParseStatus.ExtraArgument)]
+    [InlineData("SPEEDTEST", NntpParseStatus.MissingArgument)]
+    [InlineData("SPEEDTEST ", NntpParseStatus.MissingArgument)]
+    [InlineData("SPEEDTEST GIGANEWS extra", NntpParseStatus.ExtraArgument)]
+    [InlineData("SPEEDTEST Usenet Ninja", NntpParseStatus.ExtraArgument)]
     public void Parse_InvalidCommands_HaveExpectedStatus(string text, NntpParseStatus status)
     {
         var command = NntpCommandTestParse.ParseCommand(text);
@@ -191,6 +199,8 @@ public sealed class NntpCommandParserTests
     [InlineData("COMPRESS deflate", "501 Syntactically incorrect compression algorithm")]
     [InlineData("QUIT extra", "501 Syntax error")]
     [InlineData("HELP MORE", "501 Syntax error")]
+    [InlineData("SPEEDTEST", "501 Syntax error")]
+    [InlineData("SPEEDTEST GIGANEWS extra", "501 Syntax error")]
     public async Task InvalidCommand_IsRejectedWithProtocolError_AndDoesNotReachHandler(string commandLine, string response)
     {
         await using var duplex = await ParserDuplex.CreateAsync();

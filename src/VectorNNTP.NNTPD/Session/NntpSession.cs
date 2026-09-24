@@ -8,6 +8,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Session.SpeedTest;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -46,7 +47,8 @@ public sealed class NntpSession
         IArticleIngestionQueue? articleIngestion = null,
         ITransitPeerAuthorization? transitPeerAuthorization = null,
         int streamOutstandingArticleDepth = NntpStreamArticleTxScheduler.DefaultDepth,
-        IHistoryDb? historyDb = null)
+        IHistoryDb? historyDb = null,
+        ISpeedTestCoordinator? speedTest = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -63,6 +65,7 @@ public sealed class NntpSession
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
         HistoryDb = historyDb;
+        SpeedTest = speedTest;
         StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
         _dispatcher = new NntpCommandDispatcher(loggerFactory);
     }
@@ -80,6 +83,11 @@ public sealed class NntpSession
 
     /// <summary>Gets the HistoryDB used by CHECK, IHAVE, and TAKETHIS, or <see langword="null"/> when unset (tests).</summary>
     public IHistoryDb? HistoryDb { get; }
+
+    /// <summary>
+    /// Gets the SPEEDTEST coordinator, or <see langword="null"/> when the diagnostic is not registered.
+    /// </summary>
+    public ISpeedTestCoordinator? SpeedTest { get; }
 
     /// <summary>Gets the per-session CHECK pipeline once <see cref="RunAsync"/> has started.</summary>
     internal CheckPipeline? Pipeline { get; private set; }

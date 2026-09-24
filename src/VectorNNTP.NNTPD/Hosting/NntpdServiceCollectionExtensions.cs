@@ -15,6 +15,7 @@ using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Hosting;
@@ -54,6 +55,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
         services.TryAddSingleton<ITransitPeerAuthorization, TransitPeerAuthorization>();
         services.TryAddSingleton<TransitConfigurationHotReload>();
+        services.TryAddSingleton<ISpeedTestCoordinator, SpeedTestCoordinator>();
 
         services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
         {
@@ -97,6 +99,7 @@ public static class NntpdServiceCollectionExtensions
                 options.Systemd ??= new SystemdOptions();
                 options.ArticleIngestion ??= new ArticleIngestionOptions();
                 options.Transit ??= new TransitOptions();
+                options.SpeedTest ??= new SpeedTestOptions();
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
                 options.Transit ??= new TransitOptions();

@@ -109,11 +109,12 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
                 continue;
             }
 
-            await RefreshHostnameAsync(name, peerNames, cancellationToken).ConfigureAwait(false);
+            await RefreshHostnameAsync(snapshot, name, peerNames, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task RefreshHostnameAsync(
+        TransitConfigurationSnapshot snapshot,
         string hostname,
         IReadOnlyList<string> peerNames,
         CancellationToken cancellationToken)
@@ -146,6 +147,7 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
             case TransitDnsOutcome.Empty:
                 _hosts[hostname] = new HostState(new HashSet<IPAddress>(), next);
                 LogDnsFailure(
+                    snapshot,
                     peerNames,
                     hostname,
                     failureReason ?? "NXDOMAIN or NOERROR with no A/AAAA records");
@@ -160,16 +162,21 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
                     _hosts[hostname] = new HostState(new HashSet<IPAddress>(), next);
                 }
 
-                LogDnsFailure(peerNames, hostname, failureReason ?? "transient DNS failure");
+                LogDnsFailure(snapshot, peerNames, hostname, failureReason ?? "transient DNS failure");
                 break;
         }
     }
 
-    private void LogDnsFailure(IReadOnlyList<string> peerNames, string hostname, string reason)
+    private void LogDnsFailure(
+        TransitConfigurationSnapshot snapshot,
+        IReadOnlyList<string> peerIds,
+        string hostname,
+        string reason)
     {
-        foreach (var peerName in peerNames)
+        foreach (var peerId in peerIds)
         {
-            TransitLogMessages.DnsResolutionFailed(_logger, peerName, hostname, reason);
+            var display = snapshot.Peers.TryGetValue(peerId, out var peer) ? peer.PeerName : peerId;
+            TransitLogMessages.DnsResolutionFailed(_logger, peerId, display, hostname, reason);
         }
     }
 
@@ -196,9 +203,9 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
                     names[hostname] = peers;
                 }
 
-                if (!peers.Contains(peer.Name, StringComparer.Ordinal))
+                if (!peers.Contains(peer.Identifier, StringComparer.Ordinal))
                 {
-                    peers.Add(peer.Name);
+                    peers.Add(peer.Identifier);
                 }
             }
         }

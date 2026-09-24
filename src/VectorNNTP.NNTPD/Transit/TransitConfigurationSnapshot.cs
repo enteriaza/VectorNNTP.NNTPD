@@ -20,7 +20,7 @@ public sealed class TransitConfigurationSnapshot
         Peers = peers;
     }
 
-    /// <summary>Gets peers keyed by configured name (case-sensitive).</summary>
+    /// <summary>Gets peers keyed by configured identifier (ordinal, case-sensitive).</summary>
     public IReadOnlyDictionary<string, TransitPeerPolicy> Peers { get; }
 
     /// <summary>Gets whether any peers are configured.</summary>
@@ -31,15 +31,15 @@ public sealed class TransitConfigurationSnapshot
     {
         ArgumentNullException.ThrowIfNull(options);
         var peers = new Dictionary<string, TransitPeerPolicy>(options.Count, StringComparer.Ordinal);
-        foreach (var (name, peer) in options)
+        foreach (var (identifier, peer) in options)
         {
-            peers[name] = CreatePeer(name, peer);
+            peers[identifier] = CreatePeer(identifier, peer);
         }
 
         return new TransitConfigurationSnapshot(peers);
     }
 
-    internal static TransitPeerPolicy CreatePeer(string name, TransitPeerOptions options)
+    internal static TransitPeerPolicy CreatePeer(string identifier, TransitPeerOptions options)
     {
         var literals = new List<IpPrefix>();
         var hostnames = new List<string>();
@@ -91,8 +91,15 @@ public sealed class TransitConfigurationSnapshot
             throw new InvalidOperationException("MessageTypes must be validated before snapshot creation.");
         }
 
+        var peerName = options.PeerName ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(peerName))
+        {
+            throw new InvalidOperationException("PeerName must be validated before snapshot creation.");
+        }
+
         return new TransitPeerPolicy(
-            name,
+            identifier,
+            peerName,
             options.MaxIncomingConnections!.Value,
             options.MaxOutgoingConnections!.Value,
             literals,

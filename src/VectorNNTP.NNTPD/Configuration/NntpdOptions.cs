@@ -327,6 +327,16 @@ public sealed class NntpdOptions
     public TransitOptions Transit { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets SPEEDTEST diagnostic limits.
+    /// </summary>
+    /// <remarks>
+    /// Optional. Defaults cap duration, bytes, and concurrency for the VectorNNTP
+    /// <c>SPEEDTEST</c> extension. Not part of the article data plane.
+    /// </remarks>
+    [Required]
+    public SpeedTestOptions SpeedTest { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets how long a HistoryDB marker is retained in local memory and Redis.
     /// </summary>
     /// <remarks>

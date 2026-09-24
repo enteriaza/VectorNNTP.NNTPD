@@ -32,7 +32,11 @@ public sealed class TakeThisTimingTests
         {
             Assert.True(s.TransactionUs >= s.CommandAndArticleSendUs);
             Assert.True(s.TransactionUs > 0);
+            Assert.True(s.SendCalls >= 1);
+            Assert.True(s.TotalSendBytes > 0);
+            Assert.Equal(1, s.ActiveSendsAtStart);
         });
+        Assert.Equal(1, timed.MaxActiveSends);
 
         await using var durationServer = new FakeTakeThisServer(FakeTakeThisBehavior.AcceptAll);
         var duration = new TakeThisConnection(

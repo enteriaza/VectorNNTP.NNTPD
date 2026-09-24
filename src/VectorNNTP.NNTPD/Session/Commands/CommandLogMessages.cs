@@ -86,4 +86,44 @@ internal static partial class CommandLogMessages
         string Client,
         string? Type,
         SocketError? Socket);
+
+    [LoggerMessage(
+        EventId = 1611,
+        Level = LogLevel.Information,
+        Message = "[{Client}] SPEEDTEST started peer={PeerId} peerName={PeerName}")]
+    public static partial void SpeedTestStarted(ILogger logger, string Client, string PeerId, string PeerName);
+
+    [LoggerMessage(
+        EventId = 1612,
+        Level = LogLevel.Information,
+        Message = "[{Client}] SPEEDTEST completed peer={PeerId} peerName={PeerName} bytes={Bytes} durationMs={DurationMs:F3}")]
+    public static partial void SpeedTestCompleted(
+        ILogger logger,
+        string Client,
+        string PeerId,
+        string PeerName,
+        long Bytes,
+        double DurationMs);
+
+    [LoggerMessage(
+        EventId = 1613,
+        Level = LogLevel.Information,
+        Message = "[{Client}] SPEEDTEST rejected peer={PeerId} peerName={PeerName} reason={Reason}")]
+    public static partial void SpeedTestRejected(
+        ILogger logger,
+        string Client,
+        string PeerId,
+        string PeerName,
+        string Reason);
+
+    [LoggerMessage(
+        EventId = 1614,
+        Level = LogLevel.Information,
+        Message = "[{Client}] SPEEDTEST cancelled peer={PeerId} peerName={PeerName} reason={Reason}")]
+    public static partial void SpeedTestCancelled(
+        ILogger logger,
+        string Client,
+        string PeerId,
+        string PeerName,
+        string Reason);
 }

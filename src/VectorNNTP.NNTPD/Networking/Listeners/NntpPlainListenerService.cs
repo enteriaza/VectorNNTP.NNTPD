@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
@@ -29,6 +30,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
     private readonly IHistoryDb? _historyDb;
+    private readonly ISpeedTestCoordinator? _speedTest;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
     private readonly ILoggerFactory _loggerFactory;
@@ -51,7 +53,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger,
         ITransitInboundConnectionLimiter? inboundConnectionLimiter = null,
-        IHistoryDb? historyDb = null)
+        IHistoryDb? historyDb = null,
+        ISpeedTestCoordinator? speedTest = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -69,6 +72,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _transitPeerAuthorization = transitPeerAuthorization;
         _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
         _historyDb = historyDb;
+        _speedTest = speedTest;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -225,7 +229,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 articleIngestion: _articleIngestion,
                 transitPeerAuthorization: _transitPeerAuthorization,
                 streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth,
-                historyDb: _historyDb);
+                historyDb: _historyDb,
+                speedTest: _speedTest);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))

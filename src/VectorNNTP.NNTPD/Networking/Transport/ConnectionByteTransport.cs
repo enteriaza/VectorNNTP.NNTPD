@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Security;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
@@ -83,6 +84,9 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     /// </summary>
     internal Func<ValueTask>? BeforeStreamWriteProbe { get; set; }
 
+    /// <summary>DIAGNOSTIC-ONLY session attached when <see cref="TransportIoProbe"/> is enabled.</summary>
+    internal TransportIoSession? Io { get; set; }
+
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
         while (true)
@@ -113,7 +117,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(readToken, cancellationToken);
             try
             {
-                return await stream.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+                return await ReadStreamAsync(stream, buffer, linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -158,7 +162,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                     await writeProbe().ConfigureAwait(false);
                 }
 
-                await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+                await WriteStreamAsync(stream, buffer, cancellationToken).ConfigureAwait(false);
                 return;
             }
             finally
@@ -198,7 +202,7 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
 
             try
             {
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await FlushStreamAsync(stream, cancellationToken).ConfigureAwait(false);
                 return;
             }
             finally
@@ -587,6 +591,73 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
 
         readIdle?.TrySetResult();
         idle?.TrySetResult();
+    }
+
+    private async ValueTask<int> ReadStreamAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        var io = Io;
+        if (io is null)
+        {
+            return await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var vt = stream.ReadAsync(buffer, cancellationToken);
+        if (vt.IsCompletedSuccessfully)
+        {
+            var n = vt.Result;
+            io.RecordReceive(buffer.Length, n, started, started, sync: true);
+            return n;
+        }
+
+        var awaitStart = Stopwatch.GetTimestamp();
+        var received = await vt.ConfigureAwait(false);
+        io.RecordReceive(buffer.Length, received, started, awaitStart, sync: false);
+        return received;
+    }
+
+    private async ValueTask WriteStreamAsync(Stream stream, ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
+    {
+        var io = Io;
+        if (io is null)
+        {
+            await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var vt = stream.WriteAsync(buffer, cancellationToken);
+        if (vt.IsCompletedSuccessfully)
+        {
+            io.RecordSend(buffer.Length, buffer.Length, started, started, sync: true);
+            return;
+        }
+
+        var awaitStart = Stopwatch.GetTimestamp();
+        await vt.ConfigureAwait(false);
+        io.RecordSend(buffer.Length, buffer.Length, started, awaitStart, sync: false);
+    }
+
+    private async ValueTask FlushStreamAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var io = Io;
+        if (io is null)
+        {
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var vt = stream.FlushAsync(cancellationToken);
+        if (vt.IsCompletedSuccessfully)
+        {
+            io.RecordFlush(started, started, sync: true);
+            return;
+        }
+
+        var awaitStart = Stopwatch.GetTimestamp();
+        await vt.ConfigureAwait(false);
+        io.RecordFlush(started, awaitStart, sync: false);
     }
 
     private async Task WaitUntilReadableAsync(CancellationToken cancellationToken)

@@ -65,6 +65,7 @@ internal static class Help
         "OVER [range / message-id]",
         "POST",
         "QUIT",
+        "SPEEDTEST <peer>",
         "STARTTLS",
         "STAT [message-id / article-number]",
         "TAKETHIS message-id",

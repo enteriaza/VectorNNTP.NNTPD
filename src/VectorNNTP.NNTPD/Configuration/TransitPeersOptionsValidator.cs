@@ -32,21 +32,21 @@ public sealed class TransitPeersOptionsValidator : IValidateOptions<TransitPeers
         var list = new List<string>();
         var parsed = new List<(string Name, TransitPeerOptions Options, List<TransitAllowFromEntry> AllowFrom)>();
 
-        foreach (var (peerName, peer) in options)
+        foreach (var (identifier, peer) in options)
         {
-            if (!TryValidatePeerName(peerName, out var nameError))
+            if (!TryValidateIdentifier(identifier, out var identifierError))
             {
-                list.Add(nameError);
+                list.Add(identifierError);
                 continue;
             }
 
             if (peer is null)
             {
-                list.Add(Format(peerName, null, "peer configuration must not be null."));
+                list.Add(Format(identifier, null, "peer configuration must not be null."));
                 continue;
             }
 
-            ValidatePeer(peerName, peer, list, parsed);
+            ValidatePeer(identifier, peer, list, parsed);
         }
 
         if (list.Count == 0)
@@ -64,6 +64,11 @@ public sealed class TransitPeersOptionsValidator : IValidateOptions<TransitPeers
         List<string> failures,
         List<(string Name, TransitPeerOptions Options, List<TransitAllowFromEntry> AllowFrom)> parsed)
     {
+        if (!TryValidatePeerName(peer.PeerName, out var peerNameError))
+        {
+            failures.Add(Format(peerName, nameof(TransitPeerOptions.PeerName), peerNameError));
+        }
+
         ValidateConnectionLimit(peerName, nameof(TransitPeerOptions.MaxIncomingConnections), peer.MaxIncomingConnections, failures);
         ValidateConnectionLimit(peerName, nameof(TransitPeerOptions.MaxOutgoingConnections), peer.MaxOutgoingConnections, failures);
         ValidateMaxSize(peerName, peer.MaxSize, failures);
@@ -111,18 +116,88 @@ public sealed class TransitPeersOptionsValidator : IValidateOptions<TransitPeers
         parsed.Add((peerName, peer, allowFrom));
     }
 
-    /// <summary>Maximum peer-name length in characters (human-readable labels).</summary>
+    /// <summary>
+    /// Maximum Transit identifier length in characters (and SPEEDTEST token octets).
+    /// </summary>
+    public const int MaxPeerIdentifierLength = 256;
+
+    /// <summary>Maximum PeerName length in characters (human-readable labels).</summary>
     public const int MaxPeerNameLength = 256;
 
     /// <summary>Maximum PathToken length in characters.</summary>
     public const int MaxPathTokenLength = 255;
+
+    /// <summary>
+    /// Transit identifier grammar: 1–256 visible ASCII characters (<c>0x21–0x7E</c>).
+    /// </summary>
+    /// <remarks>
+    /// No space, TAB, or other whitespace; no control characters; no Unicode.
+    /// Not normalized. The exact configured string is the identity (ordinal).
+    /// Safe as a single NNTP command token: <c>SPEEDTEST identifier</c>.
+    /// </remarks>
+    public static bool IsPeerIdentifier(ReadOnlySpan<byte> identifier)
+    {
+        if (identifier.Length is < 1 or > MaxPeerIdentifierLength)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < identifier.Length; i++)
+        {
+            if (identifier[i] is < 0x21 or > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc cref="IsPeerIdentifier(ReadOnlySpan{byte})"/>
+    public static bool IsPeerIdentifier(ReadOnlySpan<char> identifier)
+    {
+        if (identifier.Length is < 1 or > MaxPeerIdentifierLength)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < identifier.Length; i++)
+        {
+            if (identifier[i] is < (char)0x21 or > (char)0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryValidateIdentifier(string? identifier, out string error)
+    {
+        error = string.Empty;
+        if (string.IsNullOrEmpty(identifier))
+        {
+            error = "Transit peer identifier must be non-empty.";
+            return false;
+        }
+
+        if (!IsPeerIdentifier(identifier.AsSpan()))
+        {
+            error = string.Create(
+                CultureInfo.InvariantCulture,
+                $"Transit peer identifier '{identifier}' must be 1-{MaxPeerIdentifierLength} visible ASCII characters (0x21-0x7E) with no whitespace or control characters.");
+            return false;
+        }
+
+        return true;
+    }
 
     private static bool TryValidatePeerName(string? peerName, out string error)
     {
         error = string.Empty;
         if (string.IsNullOrWhiteSpace(peerName))
         {
-            error = "Transit peer name must be non-empty and not whitespace-only.";
+            error = "must be non-empty and not whitespace-only.";
             return false;
         }
 
@@ -130,7 +205,7 @@ public sealed class TransitPeersOptionsValidator : IValidateOptions<TransitPeers
         {
             error = string.Create(
                 CultureInfo.InvariantCulture,
-                $"Transit peer name '{peerName}' exceeds the maximum length of {MaxPeerNameLength} characters.");
+                $"exceeds the maximum length of {MaxPeerNameLength} characters.");
             return false;
         }
 
@@ -138,9 +213,7 @@ public sealed class TransitPeersOptionsValidator : IValidateOptions<TransitPeers
         {
             if (char.IsControl(ch))
             {
-                error = string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"Transit peer name '{peerName}' contains a control character.");
+                error = "must not contain a control character.";
                 return false;
             }
         }

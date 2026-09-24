@@ -17,6 +17,7 @@ public sealed class TransitPeersOptionsTests
             {
               "Transit": {
                 "news-example": {
+                  "PeerName": "News Example",
                   "MaxIncomingConnections": 10,
                   "MaxOutgoingConnections": 2,
                   "AllowFrom": [ "news.example.net", "192.0.2.0/24", "2001:db8:1234::/48" ],
@@ -31,6 +32,7 @@ public sealed class TransitPeersOptionsTests
                   "MessageTypes": [ "default" ]
                 },
                 "second": {
+                  "PeerName": "Second Peer",
                   "MaxIncomingConnections": 1,
                   "MaxOutgoingConnections": 0,
                   "AllowFrom": [ "198.51.100.10" ]
@@ -44,6 +46,8 @@ public sealed class TransitPeersOptionsTests
         Assert.True(options.ContainsKey("news-example"));
         Assert.True(options.ContainsKey("second"));
         var first = options["news-example"];
+        Assert.Equal("News Example", first.PeerName);
+        Assert.Equal("Second Peer", options["second"].PeerName);
         Assert.Equal(10, first.MaxIncomingConnections);
         Assert.Equal(2, first.MaxOutgoingConnections);
         Assert.Equal(["news.example.net", "192.0.2.0/24", "2001:db8:1234::/48"], first.AllowFrom);
@@ -76,60 +80,141 @@ public sealed class TransitPeersOptionsTests
     }
 
     [Theory]
+    [InlineData("usenet-ninja")]
+    [InlineData("giganews")]
+    [InlineData("blueworld-hosting")]
+    [InlineData("news-example")]
+    [InlineData("GIGANEWS")]
+    [InlineData("peer.example.com")]
+    [InlineData("192.0.2.1")]
+    public void Validate_AcceptsProtocolSafeIdentifiers(string identifier)
+    {
+        var options = new TransitPeersOptions { [identifier] = TransitTestPeers.Peer() };
+        var result = new TransitPeersOptionsValidator().Validate(null, options);
+        Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+        Assert.True(options.ContainsKey(identifier));
+    }
+
+    [Theory]
     [InlineData("Giganews, Inc.")]
     [InlineData("Blueworld Hosting")]
-    [InlineData("news-example")]
+    [InlineData("Usenet Ninja")]
     [InlineData("peer/with slash")]
-    [InlineData("-leading")]
-    [InlineData("Café — ニュース通信社")]
-    public void Validate_AcceptsHumanReadablePeerNames(string name)
+    [InlineData("peer name")]
+    [InlineData("   ")]
+    [InlineData("peer\nname")]
+    [InlineData("Café")]
+    public void Validate_RejectsInvalidIdentifiers(string identifier)
     {
-        var options = new TransitPeersOptions { [name] = TransitTestPeers.Peer() };
+        var options = new TransitPeersOptions { [identifier] = TransitTestPeers.Peer() };
         var result = new TransitPeersOptionsValidator().Validate(null, options);
-        Assert.True(result.Succeeded);
-        Assert.True(options.ContainsKey(name));
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("identifier", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void Validate_RejectsWhitespaceOnlyPeerName()
+    public void Validate_RejectsOverlongIdentifier()
     {
-        var options = new TransitPeersOptions { ["   "] = TransitTestPeers.Peer() };
+        var identifier = new string('a', TransitPeersOptionsValidator.MaxPeerIdentifierLength + 1);
+        var options = new TransitPeersOptions { [identifier] = TransitTestPeers.Peer() };
         var result = new TransitPeersOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("peer name", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Failures!, static f => f.Contains("identifier", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_IdentifierMatch_IsExactOrdinal()
+    {
+        var options = new TransitPeersOptions
+        {
+            ["GIGANEWS"] = TransitTestPeers.Peer(peerName: "Giganews, Inc."),
+        };
+        Assert.True(new TransitPeersOptionsValidator().Validate(null, options).Succeeded);
+        var snapshot = TransitConfigurationSnapshot.Create(options);
+        Assert.True(snapshot.Peers.ContainsKey("GIGANEWS"));
+        Assert.False(snapshot.Peers.ContainsKey("giganews"));
+        Assert.Equal("GIGANEWS", snapshot.Peers["GIGANEWS"].Identifier);
+        Assert.Equal("Giganews, Inc.", snapshot.Peers["GIGANEWS"].PeerName);
+    }
+
+    [Theory]
+    [InlineData("Giganews, Inc.")]
+    [InlineData("Blueworld Hosting")]
+    [InlineData("Usenet Ninja")]
+    [InlineData("Café — ニュース通信社")]
+    public void Validate_AcceptsPeerNameWithSpacesAndPunctuation(string peerName)
+    {
+        var options = new TransitPeersOptions
+        {
+            ["usenet-ninja"] = TransitTestPeers.Peer(peerName: peerName),
+        };
+        var result = new TransitPeersOptionsValidator().Validate(null, options);
+        Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+        var snapshot = TransitConfigurationSnapshot.Create(options);
+        Assert.Equal(peerName, snapshot.Peers["usenet-ninja"].PeerName);
+        Assert.Equal("usenet-ninja", snapshot.Peers["usenet-ninja"].Identifier);
+    }
+
+    [Fact]
+    public void Validate_RejectsMissingPeerName()
+    {
+        var options = TransitTestPeers.Dictionary("alpha", new TransitPeerOptions
+        {
+            MaxIncomingConnections = 1,
+            MaxOutgoingConnections = 0,
+            AllowFrom = ["192.0.2.1"],
+        });
+        var result = new TransitPeersOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("PeerName", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Validate_RejectsEmptyOrWhitespacePeerName(string peerName)
+    {
+        var options = TransitTestPeers.Dictionary("alpha", TransitTestPeers.Peer(peerName: peerName));
+        var result = new TransitPeersOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("PeerName", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Validate_RejectsControlCharacterPeerName()
     {
-        var options = new TransitPeersOptions { ["peer\nname"] = TransitTestPeers.Peer() };
+        var options = TransitTestPeers.Dictionary("alpha", TransitTestPeers.Peer(peerName: "peer\nname"));
         var result = new TransitPeersOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("PeerName", StringComparison.Ordinal));
         Assert.Contains(result.Failures!, static f => f.Contains("control character", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Validate_RejectsOverlongPeerName()
     {
-        var name = new string('a', TransitPeersOptionsValidator.MaxPeerNameLength + 1);
-        var options = new TransitPeersOptions { [name] = TransitTestPeers.Peer() };
+        var peerName = new string('a', TransitPeersOptionsValidator.MaxPeerNameLength + 1);
+        var options = TransitTestPeers.Dictionary("alpha", TransitTestPeers.Peer(peerName: peerName));
         var result = new TransitPeersOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("PeerName", StringComparison.Ordinal));
         Assert.Contains(result.Failures!, static f => f.Contains("maximum length", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Bind_PreservesExactHumanReadablePeerNames()
+    public void Bind_PreservesIdentifierAndExactPeerName()
     {
         const string json = """
             {
               "Transit": {
-                "Giganews, Inc.": {
+                "giganews": {
+                  "PeerName": "Giganews, Inc.",
                   "MaxIncomingConnections": 50,
                   "MaxOutgoingConnections": 50,
                   "PathToken": "giganews.example"
                 },
-                "Blueworld Hosting": {
+                "blueworld-hosting": {
+                  "PeerName": "Blueworld Hosting",
                   "MaxIncomingConnections": 10,
                   "MaxOutgoingConnections": 10,
                   "PathToken": "blueworld.example"
@@ -140,10 +225,14 @@ public sealed class TransitPeersOptionsTests
 
         var options = Bind(json);
         Assert.True(new TransitPeersOptionsValidator().Validate(null, options).Succeeded);
-        Assert.True(options.ContainsKey("Giganews, Inc."));
-        Assert.True(options.ContainsKey("Blueworld Hosting"));
-        Assert.Equal("giganews.example", options["Giganews, Inc."].PathToken);
-        Assert.Equal("blueworld.example", options["Blueworld Hosting"].PathToken);
+        Assert.True(options.ContainsKey("giganews"));
+        Assert.True(options.ContainsKey("blueworld-hosting"));
+        Assert.False(options.ContainsKey("Giganews, Inc."));
+        Assert.False(options.ContainsKey("Blueworld Hosting"));
+        Assert.Equal("Giganews, Inc.", options["giganews"].PeerName);
+        Assert.Equal("Blueworld Hosting", options["blueworld-hosting"].PeerName);
+        Assert.Equal("giganews.example", options["giganews"].PathToken);
+        Assert.Equal("blueworld.example", options["blueworld-hosting"].PathToken);
     }
 
     [Fact]
@@ -199,7 +288,9 @@ public sealed class TransitPeersOptionsTests
     [Fact]
     public void Validate_RejectsMissingConnectionLimits()
     {
-        var options = TransitTestPeers.Dictionary("alpha", new TransitPeerOptions { AllowFrom = ["192.0.2.1"] });
+        var options = TransitTestPeers.Dictionary(
+            "alpha",
+            new TransitPeerOptions { PeerName = "Alpha", AllowFrom = ["192.0.2.1"] });
         var result = new TransitPeersOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures!, static f => f.Contains("MaxIncomingConnections", StringComparison.Ordinal));
@@ -320,23 +411,29 @@ public sealed class TransitPeersOptionsTests
         var options = new TransitPeersOptions();
         config.GetSection("Transit").Bind(options);
 
-        Assert.True(options.ContainsKey("Giganews, Inc."));
-        Assert.True(options.ContainsKey("Blueworld Hosting"));
-        Assert.False(options.ContainsKey("giganews-inc"));
-        Assert.False(options.ContainsKey("blueworld-hosting"));
+        Assert.True(options.ContainsKey("giganews"));
+        Assert.True(options.ContainsKey("blueworld-hosting"));
+        Assert.True(options.ContainsKey("usenet-ninja"));
+        Assert.False(options.ContainsKey("Giganews, Inc."));
+        Assert.False(options.ContainsKey("Blueworld Hosting"));
+        Assert.False(options.ContainsKey("Usenet Ninja"));
 
         var result = new TransitPeersOptionsValidator().Validate(null, options);
         Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
 
         var snapshot = TransitConfigurationSnapshot.Create(options);
-        Assert.Equal("nntp.giganews.com", snapshot.Peers["Giganews, Inc."].PathToken);
-        Assert.Equal("usenet.blueworldhosting.com", snapshot.Peers["Blueworld Hosting"].PathToken);
-        Assert.Equal(5_242_880, snapshot.Peers["Giganews, Inc."].MaxSize);
-        Assert.Equal(1_048_576, snapshot.Peers["Blueworld Hosting"].MaxSize);
-        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["Giganews, Inc."].MessageTypes);
-        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["Blueworld Hosting"].MessageTypes);
-        Assert.False(snapshot.Peers["Giganews, Inc."].HasPeerCredentials);
-        Assert.False(snapshot.Peers["Blueworld Hosting"].HasPeerCredentials);
+        Assert.Equal("Giganews, Inc.", snapshot.Peers["giganews"].PeerName);
+        Assert.Equal("Blueworld Hosting", snapshot.Peers["blueworld-hosting"].PeerName);
+        Assert.Equal("Usenet Ninja", snapshot.Peers["usenet-ninja"].PeerName);
+        Assert.Equal("giganews", snapshot.Peers["giganews"].Identifier);
+        Assert.Equal("nntp.giganews.com", snapshot.Peers["giganews"].PathToken);
+        Assert.Equal("usenet.blueworldhosting.com", snapshot.Peers["blueworld-hosting"].PathToken);
+        Assert.Equal(5_242_880, snapshot.Peers["giganews"].MaxSize);
+        Assert.Equal(1_048_576, snapshot.Peers["blueworld-hosting"].MaxSize);
+        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["giganews"].MessageTypes);
+        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["blueworld-hosting"].MessageTypes);
+        Assert.False(snapshot.Peers["giganews"].HasPeerCredentials);
+        Assert.False(snapshot.Peers["blueworld-hosting"].HasPeerCredentials);
 
         var builder = Host.CreateEmptyApplicationBuilder(
             new HostApplicationBuilderSettings
@@ -353,8 +450,9 @@ public sealed class TransitPeersOptionsTests
         try
         {
             var bound = host.Services.GetRequiredService<IOptions<TransitPeersOptions>>().Value;
-            Assert.True(bound.ContainsKey("Giganews, Inc."));
-            Assert.True(bound.ContainsKey("Blueworld Hosting"));
+            Assert.True(bound.ContainsKey("giganews"));
+            Assert.True(bound.ContainsKey("blueworld-hosting"));
+            Assert.True(bound.ContainsKey("usenet-ninja"));
         }
         finally
         {

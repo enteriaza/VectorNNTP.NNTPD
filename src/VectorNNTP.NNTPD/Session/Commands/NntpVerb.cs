@@ -89,6 +89,9 @@ public enum NntpVerb : byte
     /// <summary>Internal BENCHIT facility.</summary>
     BenchIt,
 
+    /// <summary>VectorNNTP SPEEDTEST diagnostic extension.</summary>
+    SpeedTest,
+
     /// <summary>MODE READER qualifier.</summary>
     Reader,
 

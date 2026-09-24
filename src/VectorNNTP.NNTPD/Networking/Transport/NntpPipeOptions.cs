@@ -20,14 +20,37 @@ public static class NntpPipeOptions
     /// <summary>Minimum pooled segment size for pipe buffers.</summary>
     public const int MinimumSegmentSize = 4 * 1024;
 
-    /// <summary>Creates reader/writer options for one side of a duplex connection transport.</summary>
+    /// <summary>Creates reader/writer options for the input (RX) side of a duplex connection transport.</summary>
     public static PipeOptions Create() =>
+        CreateCore(PauseWriterThreshold, ResumeWriterThreshold, PipeScheduler.ThreadPool, PipeScheduler.ThreadPool);
+
+    /// <summary>
+    /// TX output-pipe options. Same thresholds as <see cref="Create"/> unless
+    /// <see cref="TxPipePauseExperiment"/> is configured. Reader and writer schedulers
+    /// are <see cref="PipeScheduler.Inline"/>. Input/RX pipes must keep using
+    /// <see cref="Create"/>.
+    /// </summary>
+    internal static PipeOptions CreateOutput()
+    {
+        if (TxPipePauseExperiment.TryGetEffective(out var pause, out var resume))
+        {
+            return CreateCore(pause, resume, PipeScheduler.Inline, PipeScheduler.Inline);
+        }
+
+        return CreateCore(PauseWriterThreshold, ResumeWriterThreshold, PipeScheduler.Inline, PipeScheduler.Inline);
+    }
+
+    private static PipeOptions CreateCore(
+        long pauseWriterThreshold,
+        long resumeWriterThreshold,
+        PipeScheduler readerScheduler,
+        PipeScheduler writerScheduler) =>
         new(
             pool: null,
-            readerScheduler: PipeScheduler.ThreadPool,
-            writerScheduler: PipeScheduler.ThreadPool,
-            pauseWriterThreshold: PauseWriterThreshold,
-            resumeWriterThreshold: ResumeWriterThreshold,
+            readerScheduler: readerScheduler,
+            writerScheduler: writerScheduler,
+            pauseWriterThreshold: pauseWriterThreshold,
+            resumeWriterThreshold: resumeWriterThreshold,
             minimumSegmentSize: MinimumSegmentSize,
             useSynchronizationContext: false);
 }

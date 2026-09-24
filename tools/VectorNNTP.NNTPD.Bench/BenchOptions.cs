@@ -27,6 +27,33 @@ internal sealed class BenchOptions
     public bool Timing { get; init; }
     public int TimingSamples { get; init; } = DefaultTimingSamples;
 
+    /// <summary>
+    /// How many article <c>SendAsync</c> operations may be in flight on one connection.
+    /// Default 1 is the canonical serial sender. Values &gt; 1 are a temporary control
+    /// experiment and are not the established benchmark.
+    /// </summary>
+    public int SenderDepth { get; init; } = 1;
+
+    /// <summary>
+    /// Configured Transit identifier for <c>--benchmark SPEEDTEST</c>.
+    /// Not PeerName, a hostname, IP, or port.
+    /// </summary>
+    public string SpeedTestPeer { get; init; } = string.Empty;
+
+    /// <summary>
+    /// SPEEDTEST payload receive mode. Default <see cref="SpeedTestReceiveMode.Byte"/>
+    /// is the framed socket drain. <see cref="SpeedTestReceiveMode.Line"/> is the
+    /// diagnostic <c>StreamReader</c> path. <see cref="SpeedTestReceiveMode.Raw"/> is
+    /// the count-based drain.
+    /// </summary>
+    public SpeedTestReceiveMode SpeedTestReceive { get; init; } = SpeedTestReceiveMode.Byte;
+
+    /// <summary>
+    /// Expected SPEEDTEST payload bytes for <see cref="SpeedTestReceiveMode.Raw"/>.
+    /// Matches the server default (64 MiB). Unused by the line receiver.
+    /// </summary>
+    public long SpeedTestBytes { get; init; } = VectorNNTP.NNTPD.Configuration.SpeedTestOptions.DefaultMaxBytes;
+
     public static BenchOptions Parse(string[] args)
     {
         var benchmark = DefaultBenchmark;
@@ -47,6 +74,10 @@ internal sealed class BenchOptions
         var pipelineDepth = DefaultPipelineDepth;
         var timing = false;
         var timingSamples = DefaultTimingSamples;
+        var senderDepth = 1;
+        var speedTestPeer = string.Empty;
+        var speedTestReceive = SpeedTestReceiveMode.Byte;
+        var speedTestBytes = VectorNNTP.NNTPD.Configuration.SpeedTestOptions.DefaultMaxBytes;
         var samplesSpecified = false;
         var warmupSpecified = false;
         var runsSpecified = false;
@@ -116,6 +147,18 @@ internal sealed class BenchOptions
                     timingSamples = int.Parse(RequireValue(args, ref i));
                     samplesSpecified = true;
                     break;
+                case "--sender-depth":
+                    senderDepth = int.Parse(RequireValue(args, ref i));
+                    break;
+                case "--speedtest-peer":
+                    speedTestPeer = RequireValue(args, ref i);
+                    break;
+                case "--speedtest-receive":
+                    speedTestReceive = ParseSpeedTestReceive(RequireValue(args, ref i));
+                    break;
+                case "--speedtest-bytes":
+                    speedTestBytes = long.Parse(RequireValue(args, ref i));
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument: {args[i]}");
             }
@@ -123,6 +166,7 @@ internal sealed class BenchOptions
 
         var isTakeThis = string.Equals(benchmark, "TAKETHIS", StringComparison.OrdinalIgnoreCase);
         var isIhave = string.Equals(benchmark, "IHAVE", StringComparison.OrdinalIgnoreCase);
+        var isSpeedTest = string.Equals(benchmark, "SPEEDTEST", StringComparison.OrdinalIgnoreCase);
         if ((isTakeThis || isIhave) && !warmupSpecified)
         {
             warmup = 0;
@@ -136,6 +180,21 @@ internal sealed class BenchOptions
         if ((isTakeThis || isIhave) && !measureSpecified)
         {
             measure = 30;
+        }
+
+        if (isSpeedTest && !warmupSpecified)
+        {
+            warmup = 0;
+        }
+
+        if (isSpeedTest && !runsSpecified)
+        {
+            runs = 1;
+        }
+
+        if (isSpeedTest && string.IsNullOrWhiteSpace(speedTestPeer))
+        {
+            throw new ArgumentException("SPEEDTEST requires --speedtest-peer <configured Transit peer name>.");
         }
 
         if (timing && !isIhave && !isTakeThis)
@@ -193,6 +252,16 @@ internal sealed class BenchOptions
             throw new ArgumentException("Timing samples must be greater than zero.");
         }
 
+        if (senderDepth <= 0)
+        {
+            throw new ArgumentException("Sender depth must be greater than zero.");
+        }
+
+        if (speedTestBytes <= 0)
+        {
+            throw new ArgumentException("SPEEDTEST expected payload bytes must be greater than zero.");
+        }
+
         return new BenchOptions
         {
             Benchmark = benchmark,
@@ -213,7 +282,31 @@ internal sealed class BenchOptions
             PipelineDepth = pipelineDepth,
             Timing = timing,
             TimingSamples = timingSamples,
+            SenderDepth = senderDepth,
+            SpeedTestPeer = speedTestPeer,
+            SpeedTestReceive = speedTestReceive,
+            SpeedTestBytes = speedTestBytes,
         };
+    }
+
+    private static SpeedTestReceiveMode ParseSpeedTestReceive(string value)
+    {
+        if (value.Equals("byte", StringComparison.OrdinalIgnoreCase))
+        {
+            return SpeedTestReceiveMode.Byte;
+        }
+
+        if (value.Equals("line", StringComparison.OrdinalIgnoreCase))
+        {
+            return SpeedTestReceiveMode.Line;
+        }
+
+        if (value.Equals("raw", StringComparison.OrdinalIgnoreCase))
+        {
+            return SpeedTestReceiveMode.Raw;
+        }
+
+        throw new ArgumentException("SPEEDTEST receive mode must be 'byte', 'line', or 'raw'.");
     }
 
     private static string RequireValue(string[] args, ref int index)

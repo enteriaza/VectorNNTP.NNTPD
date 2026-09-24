@@ -14,7 +14,8 @@ public sealed class TransitPeerPolicy
     public const int MaxConnectionLimit = 4096;
 
     internal TransitPeerPolicy(
-        string name,
+        string identifier,
+        string peerName,
         int maxIncomingConnections,
         int maxOutgoingConnections,
         IReadOnlyList<IpPrefix> literalPrefixes,
@@ -29,7 +30,8 @@ public sealed class TransitPeerPolicy
         long maxSize,
         TransitMessageTypes messageTypes)
     {
-        Name = name;
+        Identifier = identifier;
+        PeerName = peerName;
         MaxIncomingConnections = maxIncomingConnections;
         MaxOutgoingConnections = maxOutgoingConnections;
         LiteralPrefixes = literalPrefixes;
@@ -45,8 +47,17 @@ public sealed class TransitPeerPolicy
         MessageTypes = messageTypes;
     }
 
-    /// <summary>Gets the configured peer name (dictionary key).</summary>
-    public string Name { get; }
+    /// <summary>
+    /// Gets the stable protocol/machine identifier (Transit dictionary key).
+    /// </summary>
+    /// <remarks>Exact configured string. Not derived from <see cref="PeerName"/>.</remarks>
+    public string Identifier { get; }
+
+    /// <summary>
+    /// Gets the human-readable administrative display name.
+    /// </summary>
+    /// <remarks>Exact configured <c>PeerName</c>. Not a protocol argument.</remarks>
+    public string PeerName { get; }
 
     /// <summary>Gets the inbound connection limit for this peer.</summary>
     public int MaxIncomingConnections { get; }
@@ -96,7 +107,7 @@ public sealed class TransitPeerPolicy
     public TransitMessageTypes MessageTypes { get; }
 
     /// <inheritdoc />
-    public override string ToString() => Name;
+    public override string ToString() => Identifier;
 
     /// <summary>Returns whether <paramref name="username"/> and <paramref name="password"/> match this peer.</summary>
     public bool CredentialsMatch(string username, string password)

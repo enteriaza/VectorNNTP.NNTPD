@@ -124,6 +124,7 @@ public sealed class HelpCommandTests
         Assert.Contains("CHECK message-id", Help.SyntaxLines);
         Assert.Contains("IHAVE message-id", Help.SyntaxLines);
         Assert.Contains("TAKETHIS message-id", Help.SyntaxLines);
+        Assert.Contains("SPEEDTEST <peer>", Help.SyntaxLines);
         Assert.Contains("LISTGROUP [newsgroup [range]]", Help.SyntaxLines);
         Assert.Contains("XOVER [range]", Help.SyntaxLines);
 

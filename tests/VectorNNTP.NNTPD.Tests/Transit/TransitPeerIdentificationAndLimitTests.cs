@@ -29,6 +29,8 @@ public sealed class TransitPeerIdentificationAndLimitTests
         Assert.True(authz.AuthorizedTransit);
         Assert.Equal(TransitTestPeers.DefaultPeerName, authz.TransitPeerName);
         Assert.NotNull(authz.TransitPeerPolicy);
+        Assert.Equal(TransitTestPeers.DefaultPeerName, authz.TransitPeerPolicy.Identifier);
+        Assert.Equal(TransitTestPeers.DefaultPeerDisplayName, authz.TransitPeerPolicy.PeerName);
         Assert.Equal(3, authz.TransitPeerPolicy.MaxIncomingConnections);
         Assert.True(authz.TransitPeerPolicy.HasPeerCredentials);
         Assert.Equal(TransitSslMode.Tls, authz.TransitPeerPolicy.Ssl);

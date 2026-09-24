@@ -293,6 +293,8 @@ capacity was not measured and must not be extrapolated.
 
 ### TAKETHIS results
 
+#### A. Historical baseline
+
 Complete table (both runs preserved). Every cell is from the live production-host run on
 `198.18.0.66:1199`. All runs completed with a 100% `239` response ratio and zero `439`, protocol,
 connection, and temporary-`400` errors.
@@ -307,7 +309,53 @@ Observed max outstanding TAKETHIS commands per connection was 11–14 (limit 256
 
 Raw harness output: `.artifacts/takethis-performance-md/takethis-results.txt`.
 
+After the Transit queue became byte-budgeted, a 1-connection TAKETHIS regression
+(`--connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 --pipeline-depth 256`,
+PID 23056) measured 1645.0 / 1705.1 TAKETHIS/s (10.108 / 10.477 Gbit/s), 100% `239`.
+That is a historical regression check, not a claimed TAKETHIS optimization. Raw output:
+`.artifacts/takethis-performance-md/takethis-1conn-byte-budget.txt`.
+
+#### B. Completed TAKETHIS implementation (1 connection)
+
+This is the production path after the RX handoff: one session RX task owns `Connection.Input`;
+it parses TAKETHIS, starts HistoryDB Peek, frames the article with `IHaveArticleReader` into one
+owned stuffed-wire buffer (terminator omitted), attaches that buffer to `TakeThisPipeline`
+(depth 16), and returns. Peek / enqueue / Remember / ordered `239` run on pipeline completion
+workers. TAKETHIS responses use `EnqueueLineImmediateAsync` (no TAKETHIS coalesce batch). Protocol
+semantics are unchanged.
+
+1-connection cell only (same methodology as above; 10- and 50-connection cells were not re-run).
+Host `198.18.0.66:1199`, NNTPD PID **26364**, timing probe **off**, real HistoryDB/Redis, unique
+command Message-IDs (`<bench-CC-SSSSSSSSSSSS@vectornntp.local>`). Command:
+
+```text
+dotnet run -c Release --project tools/VectorNNTP.NNTPD.Bench -- `
+  --benchmark TAKETHIS --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --pipeline-depth 256 --server-pid 26364
+```
+
+| Mode  | Conn |      TAKETHIS/s |     Logical Gbps |       Wire Gbps |            Sent |             239 | 439 | Err |     CPU % |
+| ----- | ---: | --------------: | ---------------: | --------------: | --------------: | --------------: | --: | --: | --------: |
+| plain |    1 |  836.8 /  665.3 |    5.142 / 4.088 |   5.142 / 4.088 |   54478 / 43277 |   54478 / 43277 |   0 |   0 |   6.2 / 3.7 |
+
+Max outstanding: 29 / 31 (client pipeline limit 256). Response ratio 100% `239`. Zero `439`,
+temporary `400`, protocol, and connection errors.
+
+This is **not** a throughput improvement over section A. The measured 1-connection rate is lower
+than the historical 1073–1076 TAKETHIS/s cell and lower than the later 1645.0 / 1705.1
+byte-budget check. Those earlier cells were different architecture and HistoryDB occupancy; they
+are not a like-for-like optimization delta.
+
+The remaining receive-interval cost is transport / input-Pipe refill under the production
+`NntpPipeOptions.PauseWriterThreshold` of 64 KiB (resume 32 KiB). That is the session Pipe default
+for all commands, not a TAKETHIS implementation defect. HistoryDB Peek, enqueue, Remember, and
+`239` enqueue were measured on the completed path at approximately microsecond-to-sub-millisecond
+scale; they do not dominate this 768 KiB article workload.
+
 ### TAKETHIS interpretation
+
+Historical (section A):
 
 - Measured single-connection TAKETHIS throughput: approximately 1073–1076 articles/s
   (approximately 6.59–6.61 Gbit/s logical) on this host and workload.
@@ -318,15 +366,17 @@ Raw harness output: `.artifacts/takethis-performance-md/takethis-results.txt`.
 - The 10→50 connection result plateaus rather than scaling linearly.
 - Server-process CPU as reported by the harness remains approximately 6% at 1 connection and
   approximately 30–31% at 10 and 50 connections.
-- These figures are measurements of this STREAM/TAKETHIS ingest path on this host. They are not a
-  transport ceiling, not a product SLA, and not a claim that VectorNNTP supports a universal Gbit/s
-  rate.
 
-After the Transit queue became byte-budgeted, a 1-connection TAKETHIS regression
-(`--connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 --pipeline-depth 256`,
-PID 23056) measured 1645.0 / 1705.1 TAKETHIS/s (10.108 / 10.477 Gbit/s), 100% `239`.
-That is a regression check, not a claimed TAKETHIS optimization. Raw output:
-`.artifacts/takethis-performance-md/takethis-1conn-byte-budget.txt`.
+Completed implementation (section B, 1 connection, PID 26364):
+
+- Measured 836.8 / 665.3 TAKETHIS/s (5.142 / 4.088 Gbit/s wire) with 100% `239`.
+- Client max outstanding 29–31; server window remains `TakeThisPipeline.Depth` = 16.
+- Run 2 reused the same command Message-ID sequence on a new connection (established client
+  methodology), so HistoryDB occupancy differs between the two runs. Both runs are reported.
+
+These figures are measurements of this STREAM/TAKETHIS ingest path on this host. They are not a
+transport ceiling, not a product SLA, and not a claim that VectorNNTP supports a universal Gbit/s
+rate.
 
 ## CHECK
 

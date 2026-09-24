@@ -54,6 +54,37 @@ public sealed class BenchmarkSelectorTests
         Assert.Contains("TAKETHIS", ex.Message, StringComparison.Ordinal);
         Assert.Contains("CHECK", ex.Message, StringComparison.Ordinal);
         Assert.Contains("IHAVE", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("SPEEDTEST", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("SPEEDTEST")]
+    [InlineData("speedtest")]
+    public void Resolve_SpeedTest_IsCaseInsensitive(string name)
+    {
+        Assert.Equal("SPEEDTEST", BenchmarkWorkloadCatalog.Resolve(name).Name);
+    }
+
+    [Fact]
+    public void Parse_SpeedTest_RequiresPeer_AndDoesNotChangeTakeThisDefaults()
+    {
+        var missing = Assert.Throws<ArgumentException>(
+            () => BenchOptions.Parse(["--benchmark", "SPEEDTEST"]));
+        Assert.Contains("--speedtest-peer", missing.Message, StringComparison.Ordinal);
+
+        var options = BenchOptions.Parse(
+            ["--benchmark", "SPEEDTEST", "--speedtest-peer", "GIGANEWS"]);
+        Assert.Equal("SPEEDTEST", options.Benchmark);
+        Assert.Equal("GIGANEWS", options.SpeedTestPeer);
+        Assert.Equal(SpeedTestReceiveMode.Byte, options.SpeedTestReceive);
+        Assert.Equal(0, options.WarmupSeconds);
+        Assert.Equal(1, options.Runs);
+
+        var takeThis = BenchOptions.Parse(["--benchmark", "TAKETHIS"]);
+        Assert.Equal(0, takeThis.WarmupSeconds);
+        Assert.Equal(1, takeThis.Runs);
+        Assert.Equal(30, takeThis.MeasureSeconds);
+        Assert.Equal(string.Empty, takeThis.SpeedTestPeer);
     }
 
     [Fact]
@@ -85,6 +116,7 @@ public sealed class BenchmarkSelectorTests
             "--duration", "30",
             "--article-size", "768000",
             "--pipeline-depth", "64",
+            "--sender-depth", "16",
         ]);
 
         Assert.Equal("TAKETHIS", options.Benchmark);
@@ -94,6 +126,7 @@ public sealed class BenchmarkSelectorTests
         Assert.Equal(30, options.MeasureSeconds);
         Assert.Equal(768000, options.ArticleSize);
         Assert.Equal(64, options.PipelineDepth);
+        Assert.Equal(16, options.SenderDepth);
         Assert.Equal(0, options.WarmupSeconds);
         Assert.Equal(1, options.Runs);
     }

@@ -90,6 +90,38 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(a.Sent + b.Sent, server.ArticlesReceived);
     }
 
+    [Fact]
+    public async Task SenderDepth_DoesNotExceedPipelineWhenRepliesHeld()
+    {
+        const int pipeline = 6;
+        const int sender = 3;
+        await using var server = new FakeTakeThisServer(new FakeTakeThisBehavior
+        {
+            HoldUntil = 10_000,
+            ReplyFor = FakeTakeThisBehavior.AcceptAll.ReplyFor,
+        });
+
+        var worker = new TakeThisConnection(
+            id: 0,
+            host: "127.0.0.1",
+            port: server.Port,
+            article: TakeThisArticlePayload.Build(256),
+            pipelineDepth: pipeline,
+            duration: TimeSpan.FromSeconds(0.6),
+            warmup: TimeSpan.Zero,
+            senderDepth: sender);
+        using (var cts = new CancellationTokenSource(Safety))
+        {
+            await worker.RunAsync(cts.Token);
+        }
+
+        await worker.DisposeAsync();
+        Assert.Equal(pipeline, worker.Sent);
+        Assert.True(worker.MaxOutstanding <= pipeline);
+        Assert.True(worker.MaxActiveSends <= sender);
+        Assert.Equal(0, worker.Accepted239);
+    }
+
     private static TakeThisConnection CreateWorker(int port, int depth, TimeSpan duration) =>
         new(
             id: 0,

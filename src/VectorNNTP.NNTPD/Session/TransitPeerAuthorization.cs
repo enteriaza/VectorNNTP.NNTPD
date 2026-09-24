@@ -59,7 +59,7 @@ public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
             SessionLogMessages.TransitPeersConfigured(
                 logger,
                 store.Current.Peers.Count,
-                string.Join(", ", store.Current.Peers.Keys));
+                string.Join(", ", store.Current.Peers.Values.Select(static p => p.Identifier + " (" + p.PeerName + ")")));
         }
     }
 
@@ -119,7 +119,7 @@ public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
             }
 
             matches ??= [];
-            matches.Add(peer.Name);
+            matches.Add(peer.Identifier + " (" + peer.PeerName + ")");
             matched = peer;
         }
 

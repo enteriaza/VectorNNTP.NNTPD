@@ -1,16 +1,18 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Top-level <c>Transit</c> configuration: named peers as dictionary keys.
+/// Top-level <c>Transit</c> configuration: peer identifiers as dictionary keys.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Binds the exact JSON shape <c>Transit:{peer-name}:{fields}</c>. There is no nested
+/// Binds the exact JSON shape <c>Transit:{identifier}:{fields}</c>. There is no nested
 /// <c>Transit:Peers</c> layer. Distinct from <see cref="TransitOptions"/> under
 /// <c>Nntpd:Transit</c> (STREAM TX depth only).
 /// </para>
 /// <para>
-/// An empty dictionary is valid (no configured peers). Peer names are not normalized.
+/// The dictionary key is the stable protocol/machine identifier (single NNTP token,
+/// exact ordinal match, not normalized). <see cref="TransitPeerOptions.PeerName"/> is
+/// the human-readable display name. An empty dictionary is valid (no configured peers).
 /// </para>
 /// </remarks>
 public sealed class TransitPeersOptions : Dictionary<string, TransitPeerOptions>

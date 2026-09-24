@@ -246,8 +246,8 @@ public sealed class TransitAllowFromAndDnsTests
         };
         var cache = new TransitDnsAddressCache(resolver, logger);
         var snapshot = TransitTestPeers.Snapshot(
-            "Giganews, Inc.",
-            TransitTestPeers.Peer(allowFrom: ["news.example.net"]));
+            "giganews",
+            TransitTestPeers.Peer(allowFrom: ["news.example.net"], peerName: "Giganews, Inc."));
         await cache.RefreshAllAsync(snapshot, CancellationToken.None);
         await cache.RefreshAllAsync(snapshot, CancellationToken.None);
 

@@ -55,6 +55,8 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     private long _pipeFlushCount;
     private long _ownedPayloadBytesEnqueued;
     private int _coalescedUnflushed;
+    private int _directExclusive;
+    private long _directPipeFlushCount;
 
     private readonly struct WriteRequest
     {
@@ -95,18 +97,34 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(output);
         ArgumentOutOfRangeException.ThrowIfLessThan(channelCapacity, 1);
         _output = output;
-        _channel = Channel.CreateBounded<WriteRequest>(new BoundedChannelOptions(channelCapacity)
+        var channelOptions = new BoundedChannelOptions(channelCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
             FullMode = BoundedChannelFullMode.Wait,
-            AllowSynchronousContinuations = false,
-        });
+            AllowSynchronousContinuations = true,
+        };
+        ChannelAllowsSynchronousContinuations = channelOptions.AllowSynchronousContinuations;
+        _channel = Channel.CreateBounded<WriteRequest>(channelOptions);
         _pump = Task.Run(() => PumpAsync(_pumpCts.Token), CancellationToken.None);
     }
 
+    /// <summary>
+    /// Gets the TX response Channel AllowSynchronousContinuations value applied at construction.
+    /// </summary>
+    internal bool ChannelAllowsSynchronousContinuations { get; }
+
     /// <summary>Gets the number of Channel items accepted (diagnostics / tests).</summary>
     internal long ChannelEnqueueCount => Volatile.Read(ref _channelEnqueueCount);
+
+    /// <summary>Gets the existing TX <see cref="PipeWriter"/> this writer pumps into. Not a second pipe.</summary>
+    internal PipeWriter UnderlyingOutput => _output;
+
+    /// <summary>Gets whether SPEEDTEST currently holds exclusive TX PipeWriter ownership.</summary>
+    internal bool DirectPipeExclusive => Volatile.Read(ref _directExclusive) == 1;
+
+    /// <summary>Gets <see cref="PipeWriter.FlushAsync"/> calls made on the SPEEDTEST direct-pipe lease.</summary>
+    internal long DirectPipeFlushCount => Volatile.Read(ref _directPipeFlushCount);
 
     /// <summary>Gets the number of <see cref="PipeWriter.FlushAsync"/> calls from the TX pump.</summary>
     internal long PipeFlushCount => Volatile.Read(ref _pipeFlushCount);
@@ -494,9 +512,65 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         await completed.Task.ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// DIAGNOSTIC-ONLY. Parks Channel/pump production and returns a lease that writes the
+    /// existing TX <see cref="PipeWriter"/>. SPEEDTEST is the only caller.
+    /// </summary>
+    internal async ValueTask<DirectTxPipeLease> AcquireDirectTxPipeAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        await FlushCoalescedAsync(cancellationToken).ConfigureAwait(false);
+        if (Interlocked.CompareExchange(ref _directExclusive, 1, 0) != 0)
+        {
+            throw new InvalidOperationException(
+                "TX PipeWriter is already exclusively leased; ResponseWriter and SPEEDTEST cannot produce concurrently.");
+        }
+
+        return new DirectTxPipeLease(this);
+    }
+
+    internal void ReleaseDirectTxPipe() => Volatile.Write(ref _directExclusive, 0);
+
+    internal async ValueTask WriteDirectToOutputAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (Volatile.Read(ref _directExclusive) != 1)
+        {
+            throw new InvalidOperationException("Direct TX PipeWriter write requires an exclusive SPEEDTEST lease.");
+        }
+
+        var remaining = payload;
+        while (!remaining.IsEmpty)
+        {
+            var memory = _output.GetMemory(Math.Min(remaining.Length, 64 * 1024));
+            var toCopy = Math.Min(memory.Length, remaining.Length);
+            remaining.Span[..toCopy].CopyTo(memory.Span);
+            _output.Advance(toCopy);
+            remaining = remaining[toCopy..];
+
+            if (_output.UnflushedBytes >= 64 * 1024)
+            {
+                await FlushOutputAsync(cancellationToken).ConfigureAwait(false);
+                Interlocked.Increment(ref _directPipeFlushCount);
+            }
+        }
+
+        if (_output.UnflushedBytes > 0)
+        {
+            await FlushOutputAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _directPipeFlushCount);
+        }
+    }
+
     private async ValueTask EnqueueAsync(WriteRequest request, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (Volatile.Read(ref _directExclusive) == 1)
+        {
+            throw new InvalidOperationException(
+                "TX PipeWriter is exclusively leased to SPEEDTEST; ResponseWriter Channel cannot write concurrently.");
+        }
+
         try
         {
             await _channel.Writer.WriteAsync(request, cancellationToken).ConfigureAwait(false);

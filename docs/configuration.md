@@ -35,7 +35,11 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
-| `Transit:{peer-name}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; see below). |
+| `SpeedTest:MaxDurationSeconds` | int | `10` | no | Maximum SPEEDTEST payload duration (`1–60`) |
+| `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
+| `SpeedTest:MaxConcurrent` | int | `2` | no | Maximum concurrent SPEEDTEST operations on this host (`1–8`) |
+| `SpeedTest:MaxConcurrentPerPeer` | int | `1` | no | Maximum concurrent SPEEDTEST operations per Transit identifier (`1–4`) |
+| `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -165,7 +169,7 @@ Example:
 
 ## Transit named peers (top-level `Transit`)
 
-Trusted feed peers are configured in a **top-level** `Transit` dictionary. Peer names are the keys. There is no nested `Transit:Peers` layer.
+Trusted feed peers are configured in a **top-level** `Transit` dictionary. Dictionary keys are protocol-safe **identifiers**. There is no nested `Transit:Peers` layer.
 
 This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy.
 
@@ -180,14 +184,54 @@ This is **peer authorization**, not ordinary user authentication. A unique IP-AC
 
 `Nntpd:Transit:StreamOutstandingArticleDepth` is unrelated peer policy: it only bounds concurrent outbound STREAM article TX operations (valid `4–16`).
 
-### Peer name
+## SPEEDTEST diagnostic (`Nntpd:SpeedTest`)
 
-The JSON key is the peer name. Names are **human-readable labels** and are **not** normalized (no case-folding). Spaces, commas, punctuation, and printable Unicode are allowed (`Giganews, Inc.`, `Blueworld Hosting`). A name must be non-empty, not whitespace-only, at most 256 characters, and must not contain control characters. The configured string is preserved exactly.
+`SPEEDTEST <identifier>` is a VectorNNTP extension. `<identifier>` is the configured Transit dictionary key, never `PeerName` and never a client-supplied host or port. Limits apply only to this diagnostic and do not change TAKETHIS/IHAVE/CHECK/STREAM.
+
+Example:
+
+```json
+"Nntpd": {
+  "SpeedTest": {
+    "MaxDurationSeconds": 10,
+    "MaxBytes": 67108864,
+    "MaxConcurrent": 2,
+    "MaxConcurrentPerPeer": 1
+  }
+}
+```
+
+Outbound peer connections from `ConnectTo` are not opened by SPEEDTEST. See `docs/architecture.md` (SPEEDTEST diagnostic).
+
+### Identifier and PeerName
+
+The JSON key is the **identifier**: a stable protocol/machine identity used by `SPEEDTEST <identifier>` and authorization. Identifiers are **not** normalized (no case-folding, hyphenation, or lowercasing). Two identifiers that differ only by case remain distinct.
+
+Identifier grammar: **1–256 visible ASCII characters** (`0x21–0x7E`). No space, TAB, other whitespace, or control characters. No Unicode. The exact configured string is the identity.
+
+`PeerName` is the required human-readable administrative name. It is **not** derived from the identifier and is **not** a SPEEDTEST command argument. Spaces, commas, punctuation, and printable Unicode are allowed (`Giganews, Inc.`, `Blueworld Hosting`). A PeerName must be non-empty, not whitespace-only, at most 256 characters, and must not contain control characters. The configured string is preserved exactly.
+
+Example:
+
+```json
+"Transit": {
+  "usenet-ninja": {
+    "PeerName": "Usenet Ninja",
+    "MaxIncomingConnections": 10,
+    "MaxOutgoingConnections": 10,
+    "AllowFrom": [ "198.18.0.0/15" ]
+  }
+}
+```
+
+Command: `SPEEDTEST usenet-ninja`  
+Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 
 ### Peer fields
 
 | Field | Type | Default | Required? | Description |
 |-------|------|---------|-----------|-------------|
+| `PeerName` | string | _(none)_ | **yes** | Human-readable administrative display name. Preserved exactly. Not a protocol identifier. |
 | `MaxIncomingConnections` | int | _(none)_ | **yes** | Max simultaneous inbound connections associated with this peer (`0–4096`). Counted only after peer identification. `0` admits no new inbound connections. Lowering the limit does not disconnect existing sessions. |
 | `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
 | `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
@@ -240,7 +284,7 @@ DNS resolution (refresh layer only):
 - Transient failures (timeout, SERVFAIL, transport error) keep the last valid set.
 - NXDOMAIN / NOERROR with no A/AAAA clears the set.
 - Temporary DNS failure must not erase a previously valid set.
-- Every failed resolution attempt logs WARNING with the peer name, hostname, and reason. Repeated failures are not suppressed. Passwords are never logged.
+- Every failed resolution attempt logs WARNING with the peer identifier, PeerName, hostname, and reason. Repeated failures are not suppressed. Passwords are never logged.
 
 Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source when the TCP peer is a trusted `ProxyHosts` entry). **Not** the same as `ProxyHosts`.
 

@@ -166,6 +166,25 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> CapabilityStreaming =
         Multiline("STREAMING\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> CapabilitySpeedTest =
+        Multiline("SPEEDTEST\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestUnknownPeer =
+        Line("502 UNKNOWN SPEEDTEST PEER\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestPeerMismatch =
+        Line("502 SPEEDTEST PEER MISMATCH\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestBusy =
+        Line("400 SPEEDTEST BUSY\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestNotSupported =
+        Line("503 SPEEDTEST NOT SUPPORTED\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestReadyPrefix = Prefix("290 SPEEDTEST "u8);
+
+    internal static readonly ReadOnlyMemory<byte> SpeedTestReadySuffix = Suffix(" TX\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> MultilineTerminator =
         Line(".\r\n"u8);
 

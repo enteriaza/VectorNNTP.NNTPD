@@ -75,6 +75,42 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void SpeedTest_DefaultsAreDiagnosticSized()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(SpeedTestOptions.DefaultMaxDurationSeconds, options.SpeedTest.MaxDurationSeconds);
+        Assert.Equal(SpeedTestOptions.DefaultMaxBytes, options.SpeedTest.MaxBytes);
+        Assert.Equal(SpeedTestOptions.DefaultMaxConcurrent, options.SpeedTest.MaxConcurrent);
+        Assert.Equal(SpeedTestOptions.DefaultMaxConcurrentPerPeer, options.SpeedTest.MaxConcurrentPerPeer);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0, 4096, 2, 1)]
+    [InlineData(61, 4096, 2, 1)]
+    [InlineData(10, 512, 2, 1)]
+    [InlineData(10, 4096, 0, 1)]
+    [InlineData(10, 4096, 9, 1)]
+    [InlineData(10, 4096, 2, 0)]
+    [InlineData(10, 4096, 2, 5)]
+    public void SpeedTest_InvalidLimits_FailValidation(
+        int duration,
+        long maxBytes,
+        int concurrent,
+        int perPeer)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.SpeedTest = new SpeedTestOptions
+        {
+            MaxDurationSeconds = duration,
+            MaxBytes = maxBytes,
+            MaxConcurrent = concurrent,
+            MaxConcurrentPerPeer = perPeer,
+        };
+        Assert.True(CreateValidator().Validate(null, options).Failed);
+    }
+
+    [Fact]
     public void TransitQueueMemoryLimit_DefaultsToOneGibibyte()
     {
         Assert.Equal(1_073_741_824L, NntpdOptions.DefaultTransitQueueMemoryLimit);

@@ -9,7 +9,7 @@ namespace VectorNNTP.NNTPD.Session;
 /// Authentication and authorization are distinct: a session may be authenticated without
 /// reader, transit, posting, or streaming privileges. Production default for new sessions is
 /// unauthenticated with <see cref="StreamingPermitted"/> false. A Transit AllowFrom match
-/// retains <see cref="TransitPeerName"/> and <see cref="TransitPeerPolicy"/>.
+/// retains <see cref="TransitPeerName"/> (the Transit identifier) and <see cref="TransitPeerPolicy"/>.
 /// </remarks>
 public sealed class NntpAuthorization
 {
@@ -62,7 +62,7 @@ public sealed class NntpAuthorization
             authorizedTransit: true,
             postingPermitted: false,
             streamingPermitted: true,
-            transitPeerName: policy.Name,
+            transitPeerName: policy.Identifier,
             transitPeerPolicy: policy);
     }
 
@@ -81,7 +81,10 @@ public sealed class NntpAuthorization
     /// <summary>Gets a value indicating whether streaming feed mode may be entered.</summary>
     public bool StreamingPermitted { get; }
 
-    /// <summary>Gets the configured Transit peer name when this session was identified as a peer.</summary>
+    /// <summary>
+    /// Gets the Transit identifier when this session was identified as a named peer.
+    /// </summary>
+    /// <remarks>This is the dictionary-key identifier, not <see cref="TransitPeerPolicy.PeerName"/>.</remarks>
     public string? TransitPeerName { get; }
 
     /// <summary>Gets the identified Transit peer policy, or <see langword="null"/> when not a named peer.</summary>

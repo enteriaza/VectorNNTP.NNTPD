@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Security;
@@ -80,9 +82,15 @@ public sealed class NntpConnection : INntpConnection
         _mode = isTls ? ModeTls : ModePlain;
         _clientIdentity = clientIdentity;
         _logger = logger;
-        var options = NntpPipeOptions.Create();
-        _inputPipe = new Pipe(options);
-        _outputPipe = new Pipe(options);
+        var inputOptions = NntpPipeOptions.Create();
+        var outputOptions = NntpPipeOptions.CreateOutput();
+        _inputPipe = new Pipe(inputOptions);
+        _outputPipe = new Pipe(outputOptions);
+        if (transport.Io is { } io)
+        {
+            io.TxPipePauseBytes = outputOptions.PauseWriterThreshold;
+            io.TxPipeResumeBytes = outputOptions.ResumeWriterThreshold;
+        }
     }
 
     /// <inheritdoc />
@@ -183,7 +191,10 @@ public sealed class NntpConnection : INntpConnection
 
         ConfigureAcceptedSocket(socket);
         var network = new NetworkStream(socket, ownsSocket: false);
-        var transport = new ConnectionByteTransport(network, isTls: false);
+        var transport = new ConnectionByteTransport(network, isTls: false)
+        {
+            Io = TransportIoProbe.CreateSession(),
+        };
         var connection = new NntpConnection(
             socket,
             transport,
@@ -243,7 +254,10 @@ public sealed class NntpConnection : INntpConnection
         }
 
         TlsNegotiationLogging.Capture(sslStream, out var tlsVersion, out var cipher);
-        var transport = new ConnectionByteTransport(sslStream, isTls: true);
+        var transport = new ConnectionByteTransport(sslStream, isTls: true)
+        {
+            Io = TransportIoProbe.CreateSession(),
+        };
         var connection = new NntpConnection(socket, transport, remote, local, isTls: true, clientIdentity, logger)
         {
             _certificateLease = lease,
@@ -614,7 +628,27 @@ public sealed class NntpConnection : INntpConnection
             await CompleteOutputReaderBestEffortAsync(exception).ConfigureAwait(false);
         }
 
+        WriteTransportIoDump();
         await CloseTransportSocketAsync().ConfigureAwait(false);
+    }
+
+    private void WriteTransportIoDump()
+    {
+        var io = _transport?.Io;
+        if (io is null || !TransportIoProbe.IsEnabled || TransportIoProbe.OutputDirectory is not { } dir)
+        {
+            return;
+        }
+
+        try
+        {
+            var label = RemoteEndPoint?.ToString() ?? "connection";
+            io.Write(dir, label);
+        }
+        catch
+        {
+            // Diagnostic dump must not affect teardown.
+        }
     }
 
     /// <summary>
@@ -761,6 +795,57 @@ public sealed class NntpConnection : INntpConnection
 
     private void SignalOutboundBusy() => Volatile.Write(ref _sendPumpAwaitingOutput, 0);
 
+    private static async ValueTask<FlushResult> FlushInputAsync(
+        PipeWriter writer,
+        CancellationToken token,
+        TransportIoSession? io)
+    {
+        if (io is null)
+        {
+            return await writer.FlushAsync(token).ConfigureAwait(false);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var vt = writer.FlushAsync(token);
+        if (vt.IsCompletedSuccessfully)
+        {
+            io.RecordRxPipeFlush(started, started, sync: true);
+            return vt.Result;
+        }
+
+        var awaitStart = Stopwatch.GetTimestamp();
+        var result = await vt.ConfigureAwait(false);
+        io.RecordRxPipeFlush(started, awaitStart, sync: false);
+        return result;
+    }
+
+    private static async ValueTask<ReadResult> ReadOutputAsync(
+        PipeReader reader,
+        CancellationToken token,
+        TransportIoSession? io)
+    {
+        if (io is null)
+        {
+            return await reader.ReadAsync(token).ConfigureAwait(false);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var vt = reader.ReadAsync(token);
+        if (vt.IsCompletedSuccessfully)
+        {
+            var completed = vt.Result;
+            io.RecordTxPipeWait(started, started, sync: true);
+            io.RecordTxReadShape(completed.Buffer);
+            return completed;
+        }
+
+        var awaitStart = Stopwatch.GetTimestamp();
+        var result = await vt.ConfigureAwait(false);
+        io.RecordTxPipeWait(started, awaitStart, sync: false);
+        io.RecordTxReadShape(result.Buffer);
+        return result;
+    }
+
     private async Task ReceiveAsync()
     {
         var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
@@ -773,7 +858,7 @@ public sealed class NntpConnection : INntpConnection
             var memory = writer.GetMemory(prefix.Length);
             prefix.CopyTo(memory);
             writer.Advance(prefix.Length);
-            var prefixFlush = await writer.FlushAsync(token).ConfigureAwait(false);
+            var prefixFlush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
             if (prefixFlush.IsCompleted || prefixFlush.IsCanceled)
             {
                 await writer.CompleteAsync().ConfigureAwait(false);
@@ -798,7 +883,7 @@ public sealed class NntpConnection : INntpConnection
             }
 
             writer.Advance(bytes);
-            var flush = await writer.FlushAsync(token).ConfigureAwait(false);
+            var flush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
             if (flush.IsCompleted || flush.IsCanceled)
             {
                 break;
@@ -814,40 +899,183 @@ public sealed class NntpConnection : INntpConnection
         var reader = _outputPipe.Reader;
         var token = _connectionCts.Token;
         var socket = _socket;
+        var io = transport.Io;
+        io?.RecordSendLoopStart();
+        var iterationEndTs = 0L;
+        TxWriteCoalescer? coalescer = null;
 
         while (!token.IsCancellationRequested)
         {
             SignalOutboundIdle();
-            var result = await reader.ReadAsync(token).ConfigureAwait(false);
+            var readIssuedTs = 0L;
+            if (io is not null)
+            {
+                readIssuedTs = Stopwatch.GetTimestamp();
+                if (iterationEndTs != 0)
+                {
+                    io.RecordAdvanceToNextRead(iterationEndTs, readIssuedTs);
+                }
+            }
+
+            var result = await ReadOutputAsync(reader, token, io).ConfigureAwait(false);
+            var readDoneTs = io is not null ? Stopwatch.GetTimestamp() : 0L;
             SignalOutboundBusy();
             var buffer = result.Buffer;
             var consumed = buffer.Start;
+            var firstWriteTs = 0L;
+            var lastWriteEndTs = 0L;
             try
             {
                 if (buffer.IsEmpty && result.IsCompleted)
                 {
+                    if (coalescer is { PendingCount: > 0 })
+                    {
+                        lastWriteEndTs = await WriteCoalescedPendingAsync(
+                            transport,
+                            coalescer,
+                            io,
+                            readDoneTs,
+                            firstWriteTs,
+                            lastWriteEndTs,
+                            token).ConfigureAwait(false);
+                    }
+
                     break;
                 }
 
-                foreach (var segment in buffer)
+                if (TxWriteGranularityExperiment.TryResolveTarget(transport, out var targetBytes))
                 {
-                    if (segment.Length == 0)
+                    if (io is not null)
                     {
-                        continue;
+                        io.WriteGranularityTargetBytes = targetBytes;
                     }
 
-                    await transport.WriteAsync(segment, token).ConfigureAwait(false);
-                }
+                    if (coalescer is null || coalescer.TargetBytes != targetBytes)
+                    {
+                        if (coalescer is { PendingCount: > 0 })
+                        {
+                            lastWriteEndTs = await WriteCoalescedPendingAsync(
+                                transport,
+                                coalescer,
+                                io,
+                                readDoneTs,
+                                firstWriteTs,
+                                lastWriteEndTs,
+                                token).ConfigureAwait(false);
+                            firstWriteTs = lastWriteEndTs;
+                        }
 
-                // Required for DEFLATE: sync-flush compressed bytes to the peer without ending the stream.
-                // No-op / cheap for NetworkStream and SslStream over NetworkStream.
-                await transport.FlushAsync(token).ConfigureAwait(false);
+                        coalescer = new TxWriteCoalescer(targetBytes);
+                    }
+
+                    lastWriteEndTs = await CopyAndWriteAggregatesAsync(
+                        transport,
+                        coalescer,
+                        buffer,
+                        io,
+                        readDoneTs,
+                        firstWriteTs,
+                        lastWriteEndTs,
+                        token).ConfigureAwait(false);
+                }
+                else
+                {
+                    if (coalescer is { PendingCount: > 0 })
+                    {
+                        lastWriteEndTs = await WriteCoalescedPendingAsync(
+                            transport,
+                            coalescer,
+                            io,
+                            readDoneTs,
+                            firstWriteTs,
+                            lastWriteEndTs,
+                            token).ConfigureAwait(false);
+                        coalescer.Clear();
+                        coalescer = null;
+                    }
+
+                    foreach (var segment in buffer)
+                    {
+                        if (segment.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        var writeStartTs = io is not null ? Stopwatch.GetTimestamp() : 0L;
+                        if (io is not null)
+                        {
+                            if (firstWriteTs == 0)
+                            {
+                                firstWriteTs = writeStartTs;
+                                io.RecordReadToFirstWrite(readDoneTs, firstWriteTs);
+                            }
+                            else
+                            {
+                                io.RecordBetweenWrites(lastWriteEndTs, writeStartTs);
+                            }
+                        }
+
+                        await transport.WriteAsync(segment, token).ConfigureAwait(false);
+                        if (io is not null)
+                        {
+                            lastWriteEndTs = Stopwatch.GetTimestamp();
+                            io.RecordTransportWrite(writeStartTs, lastWriteEndTs);
+                        }
+                    }
+
+                    // Required for DEFLATE: sync-flush compressed bytes to the peer without ending the stream.
+                    // No-op / cheap for NetworkStream and SslStream over NetworkStream.
+                    await transport.FlushAsync(token).ConfigureAwait(false);
+                }
 
                 consumed = buffer.End;
             }
             finally
             {
+                var advanceStartTs = io is not null ? Stopwatch.GetTimestamp() : 0L;
+                if (io is not null && lastWriteEndTs != 0)
+                {
+                    io.RecordLastWriteToAdvance(lastWriteEndTs, advanceStartTs);
+                }
+
                 reader.AdvanceTo(consumed);
+                if (io is not null)
+                {
+                    var advanceEndTs = Stopwatch.GetTimestamp();
+                    io.RecordAdvanceTo(advanceStartTs, advanceEndTs);
+                    iterationEndTs = advanceEndTs;
+                }
+            }
+
+            if (coalescer is not null && !token.IsCancellationRequested)
+            {
+                var drained = await DrainImmediateReadsAsync(
+                    reader,
+                    transport,
+                    coalescer,
+                    io,
+                    readDoneTs,
+                    firstWriteTs,
+                    lastWriteEndTs,
+                    token).ConfigureAwait(false);
+                lastWriteEndTs = drained.LastWriteEndTs;
+
+                if (coalescer.PendingCount > 0)
+                {
+                    lastWriteEndTs = await WriteCoalescedPendingAsync(
+                        transport,
+                        coalescer,
+                        io,
+                        readDoneTs,
+                        firstWriteTs,
+                        lastWriteEndTs,
+                        token).ConfigureAwait(false);
+                }
+
+                if (drained.Completed)
+                {
+                    break;
+                }
             }
 
             if (result.IsCompleted)
@@ -856,6 +1084,7 @@ public sealed class NntpConnection : INntpConnection
             }
         }
 
+        io?.RecordSendLoopEnd();
         await reader.CompleteAsync().ConfigureAwait(false);
         Interlocked.Exchange(ref _outputReaderCompleted, 1);
 
@@ -873,6 +1102,146 @@ public sealed class NntpConnection : INntpConnection
             {
             }
         }
+    }
+
+    private static async ValueTask<(long LastWriteEndTs, bool Completed)> DrainImmediateReadsAsync(
+        PipeReader reader,
+        ConnectionByteTransport transport,
+        TxWriteCoalescer coalescer,
+        TransportIoSession? io,
+        long readDoneTs,
+        long firstWriteTs,
+        long lastWriteEndTs,
+        CancellationToken token)
+    {
+        var completed = false;
+        while (reader.TryRead(out var extra))
+        {
+            var extraConsumed = extra.Buffer.Start;
+            try
+            {
+                if (extra.Buffer.IsEmpty)
+                {
+                    completed = extra.IsCompleted;
+                    break;
+                }
+
+                io?.RecordTxReadShape(extra.Buffer);
+                lastWriteEndTs = await CopyAndWriteAggregatesAsync(
+                    transport,
+                    coalescer,
+                    extra.Buffer,
+                    io,
+                    readDoneTs,
+                    firstWriteTs,
+                    lastWriteEndTs,
+                    token).ConfigureAwait(false);
+                extraConsumed = extra.Buffer.End;
+                completed = extra.IsCompleted;
+            }
+            finally
+            {
+                reader.AdvanceTo(extraConsumed);
+            }
+
+            if (completed)
+            {
+                break;
+            }
+        }
+
+        return (lastWriteEndTs, completed);
+    }
+
+    private static async ValueTask<long> CopyAndWriteAggregatesAsync(
+        ConnectionByteTransport transport,
+        TxWriteCoalescer coalescer,
+        ReadOnlySequence<byte> buffer,
+        TransportIoSession? io,
+        long readDoneTs,
+        long firstWriteTs,
+        long lastWriteEndTs,
+        CancellationToken token)
+    {
+        foreach (var segment in buffer)
+        {
+            if (segment.Length == 0)
+            {
+                continue;
+            }
+
+            var offset = 0;
+            while (offset < segment.Length)
+            {
+                if (coalescer.RemainingCapacity == 0)
+                {
+                    lastWriteEndTs = await WriteCoalescedPendingAsync(
+                        transport,
+                        coalescer,
+                        io,
+                        readDoneTs,
+                        firstWriteTs,
+                        lastWriteEndTs,
+                        token).ConfigureAwait(false);
+                    firstWriteTs = firstWriteTs == 0 ? lastWriteEndTs : firstWriteTs;
+                }
+
+                offset += coalescer.Copy(segment.Span[offset..], io);
+            }
+        }
+
+        if (coalescer.IsFull)
+        {
+            lastWriteEndTs = await WriteCoalescedPendingAsync(
+                transport,
+                coalescer,
+                io,
+                readDoneTs,
+                firstWriteTs,
+                lastWriteEndTs,
+                token).ConfigureAwait(false);
+        }
+
+        return lastWriteEndTs;
+    }
+
+    private static async ValueTask<long> WriteCoalescedPendingAsync(
+        ConnectionByteTransport transport,
+        TxWriteCoalescer coalescer,
+        TransportIoSession? io,
+        long readDoneTs,
+        long firstWriteTs,
+        long lastWriteEndTs,
+        CancellationToken token)
+    {
+        if (coalescer.PendingCount == 0)
+        {
+            return lastWriteEndTs;
+        }
+
+        var writeStartTs = io is not null ? Stopwatch.GetTimestamp() : 0L;
+        if (io is not null)
+        {
+            if (firstWriteTs == 0 && lastWriteEndTs == 0)
+            {
+                io.RecordReadToFirstWrite(readDoneTs, writeStartTs);
+            }
+            else
+            {
+                io.RecordBetweenWrites(lastWriteEndTs, writeStartTs);
+            }
+        }
+
+        await transport.WriteAsync(coalescer.PendingMemory, token).ConfigureAwait(false);
+        var writeEndTs = io is not null ? Stopwatch.GetTimestamp() : 0L;
+        if (io is not null)
+        {
+            io.RecordTransportWrite(writeStartTs, writeEndTs);
+        }
+
+        await transport.FlushAsync(token).ConfigureAwait(false);
+        coalescer.Clear();
+        return writeEndTs;
     }
 
     private async Task CloseTransportSocketAsync()

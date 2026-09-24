@@ -24,6 +24,7 @@ public sealed class TransitHotReloadTests
         var manager = new ConfigurationManager();
         manager.AddInMemoryCollection(new Dictionary<string, string?>
         {
+            ["Transit:alpha:PeerName"] = "Alpha",
             ["Transit:alpha:MaxIncomingConnections"] = "4",
             ["Transit:alpha:MaxOutgoingConnections"] = "1",
             ["Transit:alpha:AllowFrom:0"] = "192.0.2.10",
@@ -50,6 +51,7 @@ public sealed class TransitHotReloadTests
 
         manager["Transit:alpha:MaxIncomingConnections"] = "2";
         manager["Transit:alpha:AllowFrom:0"] = "198.51.100.10";
+        manager["Transit:beta:PeerName"] = "Beta";
         manager["Transit:beta:MaxIncomingConnections"] = "1";
         manager["Transit:beta:MaxOutgoingConnections"] = "0";
         manager["Transit:beta:AllowFrom:0"] = "203.0.113.5";
@@ -77,6 +79,7 @@ public sealed class TransitHotReloadTests
         var manager = new ConfigurationManager();
         manager.AddInMemoryCollection(new Dictionary<string, string?>
         {
+            ["Transit:test-peer:PeerName"] = TransitTestPeers.DefaultPeerDisplayName,
             ["Transit:test-peer:MaxIncomingConnections"] = "10",
             ["Transit:test-peer:MaxOutgoingConnections"] = "0",
             ["Transit:test-peer:AllowFrom:0"] = "192.0.2.10",
@@ -119,6 +122,7 @@ public sealed class TransitHotReloadTests
         var manager = new ConfigurationManager();
         manager.AddInMemoryCollection(new Dictionary<string, string?>
         {
+            ["Transit:test-peer:PeerName"] = TransitTestPeers.DefaultPeerDisplayName,
             ["Transit:test-peer:MaxIncomingConnections"] = "10",
             ["Transit:test-peer:MaxOutgoingConnections"] = "0",
             ["Transit:test-peer:AllowFrom:0"] = "192.0.2.10",

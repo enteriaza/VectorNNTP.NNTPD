@@ -23,8 +23,16 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     private readonly TimeSpan _duration;
     private readonly TimeSpan _warmup;
     private readonly bool _collectTiming;
-    private readonly ConcurrentQueue<(long SendStart, long SendEnd, int OutstandingAtSend)> _sendMarks = new();
+    private readonly int _senderDepth;
+    private readonly ConcurrentDictionary<long, SendMark> _sendMarks = new();
     private readonly ConcurrentBag<TakeThisClientTimingSample> _timingSamples = [];
+    private int _activeSends;
+    private int _maxActiveSends;
+    private int _maxAwaiting239;
+    private long _sendCalls;
+    private long _sendBytesReturned;
+    private int _minSendBytes = int.MaxValue;
+    private int _maxSendBytes;
 
     private Socket? _socket;
     private NetworkStream? _stream;
@@ -40,8 +48,10 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         int pipelineDepth,
         TimeSpan duration,
         TimeSpan warmup,
-        bool collectTiming = false)
+        bool collectTiming = false,
+        int senderDepth = 1)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(senderDepth, 1);
         _id = id;
         _host = host;
         _port = port;
@@ -50,18 +60,32 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         _duration = duration;
         _warmup = warmup;
         _collectTiming = collectTiming;
+        _senderDepth = senderDepth;
     }
 
-    public long Sent { get; private set; }
-    public long Accepted239 { get; private set; }
-    public long Rejected439 { get; private set; }
+    private long _sent;
+    private long _accepted239;
+    private long _rejected439;
+    private long _bytesSent;
+
+    public long Sent => Volatile.Read(ref _sent);
+    public long Accepted239 => Volatile.Read(ref _accepted239);
+    public long Rejected439 => Volatile.Read(ref _rejected439);
     public long ProtocolErrors { get; private set; }
     public long ConnectionErrors { get; private set; }
     public long Temporary400 { get; private set; }
-    public long BytesSent { get; private set; }
+    public long BytesSent => Volatile.Read(ref _bytesSent);
     private int _maxOutstanding;
 
     public int MaxOutstanding => _maxOutstanding;
+    public int MaxActiveSends => _maxActiveSends;
+    public int MaxAwaiting239 => _maxAwaiting239;
+    public int SenderDepth => _senderDepth;
+    public long SendCalls => _sendCalls;
+    public long SendBytesReturned => _sendBytesReturned;
+    public int MinSendBytes => _minSendBytes == int.MaxValue ? 0 : _minSendBytes;
+    public int MaxSendBytes => _maxSendBytes;
+    public double MeasureElapsedSeconds { get; private set; }
     public int WireCommandBytes { get; private set; }
     public Exception? Fault { get; private set; }
     public TakeThisClientTimingSample[]? TimingSamples { get; private set; }
@@ -78,7 +102,10 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                 ResetMeasureCounters();
             }
 
+            var measureSw = Stopwatch.StartNew();
             await RunWindowAsync(_duration, record: true, cancellationToken).ConfigureAwait(false);
+            measureSw.Stop();
+            MeasureElapsedSeconds = measureSw.Elapsed.TotalSeconds;
             if (_collectTiming)
             {
                 TimingSamples = _timingSamples.ToArray();
@@ -128,15 +155,19 @@ internal sealed class TakeThisConnection : IAsyncDisposable
 
     public void ResetMeasureCounters()
     {
-        Sent = 0;
-        Accepted239 = 0;
-        Rejected439 = 0;
+        Volatile.Write(ref _sent, 0);
+        Volatile.Write(ref _accepted239, 0);
+        Volatile.Write(ref _rejected439, 0);
         Temporary400 = 0;
-        BytesSent = 0;
+        Volatile.Write(ref _bytesSent, 0);
         _maxOutstanding = 0;
-        while (_sendMarks.TryDequeue(out _))
-        {
-        }
+        _maxActiveSends = 0;
+        _maxAwaiting239 = 0;
+        _sendCalls = 0;
+        _sendBytesReturned = 0;
+        _minSendBytes = int.MaxValue;
+        _maxSendBytes = 0;
+        _sendMarks.Clear();
 
         while (_timingSamples.TryTake(out _))
         {
@@ -150,20 +181,24 @@ internal sealed class TakeThisConnection : IAsyncDisposable
             throw new InvalidOperationException($"Connection {_id} is not connected.");
         }
 
-        var command = new TakeThisCommandBuffer(_id);
-        var sendBuffers = TakeThisWireSend.CreateBuffers(command.Segment, _article);
-        WireCommandBytes = command.Length;
+        var sharedCommand = new TakeThisCommandBuffer(_id);
+        var sharedBuffers = TakeThisWireSend.CreateBuffers(sharedCommand.Segment, _article);
+        WireCommandBytes = sharedCommand.Length;
         using var sendWindowCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         sendWindowCts.CancelAfter(duration);
         using var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var gate = new SemaphoreSlim(_pipelineDepth, _pipelineDepth);
+        var sendGate = _senderDepth == 1 ? null : new SemaphoreSlim(_senderDepth, _senderDepth);
         var outstanding = 0;
+        int ReadOutstanding() => Volatile.Read(ref outstanding);
+        void CompleteOutstanding() => Interlocked.Decrement(ref outstanding);
         var sequence = 0L;
+        var pendingSends = new ConcurrentBag<Task>();
 
         var receiveTask = ReceiveLoopAsync(
             gate,
-            () => Interlocked.Decrement(ref outstanding),
-            () => Volatile.Read(ref outstanding),
+            CompleteOutstanding,
+            ReadOutstanding,
             record,
             receiveCts.Token);
 
@@ -186,43 +221,89 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                     break;
                 }
 
-                sequence++;
-                command.SetSequence(sequence);
-
-                var inFlight = Interlocked.Increment(ref outstanding);
-                UpdateMaxOutstanding(inFlight);
-                var sendStart = 0L;
-                if (record && _collectTiming)
+                if (sendGate is not null)
                 {
-                    sendStart = Stopwatch.GetTimestamp();
-                }
-
-                try
-                {
-                    await SendCommandAndArticleAsync(command, sendBuffers, sendWindowCts.Token)
-                        .ConfigureAwait(false);
-                    if (record && _collectTiming)
+                    try
                     {
-                        _sendMarks.Enqueue((sendStart, Stopwatch.GetTimestamp(), inFlight));
+                        await sendGate.WaitAsync(sendWindowCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (sendWindowCts.IsCancellationRequested)
+                    {
+                        gate.Release();
+                        break;
                     }
                 }
-                catch (OperationCanceledException) when (sendWindowCts.IsCancellationRequested)
+
+                var seq = Interlocked.Increment(ref sequence);
+                TakeThisCommandBuffer command;
+                ArraySegment<byte>[] sendBuffers;
+                if (sendGate is null)
                 {
-                    Interlocked.Decrement(ref outstanding);
-                    ReleaseGate(gate);
-                    break;
+                    command = sharedCommand;
+                    command.SetSequence(seq);
+                    sendBuffers = sharedBuffers;
                 }
-                catch
+                else
                 {
-                    Interlocked.Decrement(ref outstanding);
-                    ReleaseGate(gate);
-                    throw;
+                    command = new TakeThisCommandBuffer(_id);
+                    command.SetSequence(seq);
+                    sendBuffers = TakeThisWireSend.CreateBuffers(command.Segment, _article);
                 }
 
-                if (record)
+                var inFlight = Interlocked.Increment(ref outstanding);
+                UpdateMax(ref _maxOutstanding, inFlight);
+
+                if (sendGate is null)
                 {
-                    Sent++;
-                    BytesSent += command.Length + _article.Length;
+                    try
+                    {
+                        await SendOneAsync(
+                                seq,
+                                command,
+                                sendBuffers,
+                                inFlight,
+                                ReadOutstanding,
+                                record,
+                                sendWindowCts.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (sendWindowCts.IsCancellationRequested)
+                    {
+                        CompleteOutstanding();
+                        ReleaseGate(gate);
+                        break;
+                    }
+                    catch
+                    {
+                        CompleteOutstanding();
+                        ReleaseGate(gate);
+                        throw;
+                    }
+                }
+                else
+                {
+                    pendingSends.Add(SendConcurrentAsync(
+                        seq,
+                        command,
+                        sendBuffers,
+                        inFlight,
+                        ReadOutstanding,
+                        record,
+                        CompleteOutstanding,
+                        gate,
+                        sendGate,
+                        sendWindowCts.Token));
+                }
+            }
+
+            if (!pendingSends.IsEmpty)
+            {
+                try
+                {
+                    await Task.WhenAll(pendingSends).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
                 }
             }
 
@@ -256,12 +337,12 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     private static long ToMicroseconds(long start, long end) =>
         (long)Stopwatch.GetElapsedTime(start, end).TotalMicroseconds;
 
-    private void UpdateMaxOutstanding(int inFlight)
+    private static void UpdateMax(ref int target, int candidate)
     {
-        var current = _maxOutstanding;
-        while (inFlight > current)
+        var current = target;
+        while (candidate > current)
         {
-            var original = Interlocked.CompareExchange(ref _maxOutstanding, inFlight, current);
+            var original = Interlocked.CompareExchange(ref target, candidate, current);
             if (original == current)
             {
                 break;
@@ -301,8 +382,8 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                 {
                     if (record)
                     {
-                        Accepted239++;
-                        if (_collectTiming && _sendMarks.TryDequeue(out var mark))
+                        Interlocked.Increment(ref _accepted239);
+                        if (_collectTiming && TryTakeSendMark(line, out var mark))
                         {
                             var t239 = Stopwatch.GetTimestamp();
                             _timingSamples.Add(new TakeThisClientTimingSample(
@@ -310,7 +391,16 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                                 ToMicroseconds(mark.SendEnd, t239),
                                 ToMicroseconds(mark.SendStart, t239),
                                 mark.OutstandingAtSend,
-                                readOutstanding()));
+                                readOutstanding())
+                            {
+                                SendCalls = mark.SendCalls,
+                                FirstSendBytes = mark.FirstSendBytes,
+                                MinSendBytes = mark.MinSendBytes,
+                                MaxSendBytes = mark.MaxSendBytes,
+                                TotalSendBytes = mark.TotalSendBytes,
+                                ActiveSendsAtStart = mark.ActiveSendsAtStart,
+                                Awaiting239AtSendStart = mark.Awaiting239AtSendStart,
+                            });
                         }
                     }
 
@@ -321,7 +411,7 @@ internal sealed class TakeThisConnection : IAsyncDisposable
                 {
                     if (record)
                     {
-                        Rejected439++;
+                        Interlocked.Increment(ref _rejected439);
                     }
 
                     completeOutstanding();
@@ -360,25 +450,215 @@ internal sealed class TakeThisConnection : IAsyncDisposable
         }
     }
 
-    private async Task SendCommandAndArticleAsync(
+    private async Task SendConcurrentAsync(
+        long sequence,
+        TakeThisCommandBuffer command,
+        ArraySegment<byte>[] sendBuffers,
+        int inFlight,
+        Func<int> readOutstanding,
+        bool record,
+        Action completeOutstanding,
+        SemaphoreSlim pipelineGate,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SendOneAsync(sequence, command, sendBuffers, inFlight, readOutstanding, record, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            completeOutstanding();
+            ReleaseGate(pipelineGate);
+        }
+        catch (Exception ex)
+        {
+            completeOutstanding();
+            ReleaseGate(pipelineGate);
+            Fault ??= ex;
+            ConnectionErrors++;
+        }
+        finally
+        {
+            ReleaseGate(sendGate);
+        }
+    }
+
+    private async Task SendOneAsync(
+        long sequence,
+        TakeThisCommandBuffer command,
+        ArraySegment<byte>[] sendBuffers,
+        int inFlight,
+        Func<int> readOutstanding,
+        bool record,
+        CancellationToken cancellationToken)
+    {
+        var sendStart = 0L;
+        if (record && _collectTiming)
+        {
+            sendStart = Stopwatch.GetTimestamp();
+        }
+
+        var stats = await SendCommandAndArticleAsync(command, sendBuffers, cancellationToken)
+            .ConfigureAwait(false);
+        var sendEnd = record && _collectTiming ? Stopwatch.GetTimestamp() : 0L;
+        if (record)
+        {
+            Interlocked.Increment(ref _sent);
+            Interlocked.Add(ref _bytesSent, command.Length + _article.Length);
+            var awaiting = Math.Max(0, readOutstanding() - Volatile.Read(ref _activeSends));
+            UpdateMax(ref _maxAwaiting239, awaiting);
+            if (_collectTiming)
+            {
+                _sendMarks[sequence] = new SendMark(
+                    sendStart,
+                    sendEnd,
+                    inFlight,
+                    stats.SendCalls,
+                    stats.FirstSendBytes,
+                    stats.MinSendBytes,
+                    stats.MaxSendBytes,
+                    stats.TotalSendBytes,
+                    stats.ActiveSendsAtStart,
+                    Math.Max(0, inFlight - stats.ActiveSendsAtStart));
+            }
+        }
+    }
+
+    private async Task<SendStats> SendCommandAndArticleAsync(
         TakeThisCommandBuffer command,
         ArraySegment<byte>[] sendBuffers,
         CancellationToken cancellationToken)
     {
         TakeThisWireSend.Bind(sendBuffers, command.Segment, _article);
         var remaining = command.Length + _article.Length;
-        while (remaining > 0)
+        var calls = 0;
+        var first = 0;
+        var min = int.MaxValue;
+        var max = 0;
+        var total = 0;
+        var activeAtStart = Interlocked.Increment(ref _activeSends);
+        UpdateMax(ref _maxActiveSends, activeAtStart);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var sent = await _socket!.SendAsync(sendBuffers, SocketFlags.None).ConfigureAwait(false);
-            if (sent <= 0)
+            while (remaining > 0)
             {
-                throw new EndOfStreamException($"Connection {_id}: vectored send returned {sent}.");
+                cancellationToken.ThrowIfCancellationRequested();
+                var sent = await _socket!.SendAsync(sendBuffers, SocketFlags.None).ConfigureAwait(false);
+                if (sent <= 0)
+                {
+                    throw new EndOfStreamException($"Connection {_id}: vectored send returned {sent}.");
+                }
+
+                calls++;
+                if (calls == 1)
+                {
+                    first = sent;
+                }
+
+                if (sent < min)
+                {
+                    min = sent;
+                }
+
+                if (sent > max)
+                {
+                    max = sent;
+                }
+
+                total += sent;
+                Interlocked.Increment(ref _sendCalls);
+                Interlocked.Add(ref _sendBytesReturned, sent);
+                UpdateMax(ref _maxSendBytes, sent);
+                UpdateMin(ref _minSendBytes, sent);
+                remaining = TakeThisWireSend.Advance(sendBuffers, sent);
+            }
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeSends);
+        }
+
+        return new SendStats(calls, first, min == int.MaxValue ? 0 : min, max, total, activeAtStart);
+    }
+
+    private bool TryTakeSendMark(string line, out SendMark mark)
+    {
+        if (TryParseSequence(line, out var sequence) && _sendMarks.TryRemove(sequence, out mark))
+        {
+            return true;
+        }
+
+        mark = default;
+        return false;
+    }
+
+    private static bool TryParseSequence(string line, out long sequence)
+    {
+        sequence = 0;
+        var start = line.IndexOf("<bench-", StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return false;
+        }
+
+        var digits = start + "<bench-00-".Length;
+        if (digits + TakeThisCommandBuffer.SequenceWidth > line.Length)
+        {
+            return false;
+        }
+
+        var value = 0L;
+        for (var i = 0; i < TakeThisCommandBuffer.SequenceWidth; i++)
+        {
+            var ch = line[digits + i];
+            if (ch is < '0' or > '9')
+            {
+                return false;
             }
 
-            remaining = TakeThisWireSend.Advance(sendBuffers, sent);
+            value = (value * 10) + (ch - '0');
+        }
+
+        sequence = value;
+        return true;
+    }
+
+    private static void UpdateMin(ref int target, int candidate)
+    {
+        var current = target;
+        while (candidate < current)
+        {
+            var original = Interlocked.CompareExchange(ref target, candidate, current);
+            if (original == current)
+            {
+                break;
+            }
+
+            current = original;
         }
     }
+
+    private readonly record struct SendMark(
+        long SendStart,
+        long SendEnd,
+        int OutstandingAtSend,
+        int SendCalls,
+        int FirstSendBytes,
+        int MinSendBytes,
+        int MaxSendBytes,
+        int TotalSendBytes,
+        int ActiveSendsAtStart,
+        int Awaiting239AtSendStart);
+
+    private readonly record struct SendStats(
+        int SendCalls,
+        int FirstSendBytes,
+        int MinSendBytes,
+        int MaxSendBytes,
+        int TotalSendBytes,
+        int ActiveSendsAtStart);
 
     private async Task WriteFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
     {

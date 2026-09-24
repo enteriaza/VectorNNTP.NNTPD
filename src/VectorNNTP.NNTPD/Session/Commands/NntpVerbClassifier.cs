@@ -103,6 +103,7 @@ internal static class NntpVerbClassifier
         {
             (byte)'L' => NntpAscii.EqualsFolded(verb, "LISTGROUP"u8) ? NntpVerb.ListGroup : NntpVerb.Unknown,
             (byte)'N' => NntpAscii.EqualsFolded(verb, "NEWGROUPS"u8) ? NntpVerb.Newgroups : NntpVerb.Unknown,
+            (byte)'S' => NntpAscii.EqualsFolded(verb, "SPEEDTEST"u8) ? NntpVerb.SpeedTest : NntpVerb.Unknown,
             _ => NntpVerb.Unknown,
         };
     }

@@ -4,7 +4,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// CAPABILITIES command as defined by RFC 3977, Section 5.2.
 /// </summary>
 /// <remarks>
-/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, STREAMING, and related labels).
+/// Returns the server's capability list (VERSION, READER, AUTHINFO, STARTTLS, COMPRESS, STREAMING, SPEEDTEST, and related labels).
 /// Advertisement for AUTHINFO and MODE-READER follows RFC 4643 rules after authentication.
 /// COMPRESS / STARTTLS / MODE-READER / AUTHINFO arguments follow RFC 8054 once a compression layer is active.
 /// STREAMING (RFC 4644) is advertised when TAKETHIS/CHECK streaming transfer is implemented.
@@ -13,7 +13,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 internal static class Capabilities
 {
-    private const int MaxCapabilityParts = 12;
+    private const int MaxCapabilityParts = 13;
 
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Capabilities));
 
@@ -92,6 +92,9 @@ internal static class Capabilities
 
         // RFC 4644 §2.2: STREAMING capability for CHECK/TAKETHIS (MODE STREAM is legacy discovery).
         parts[n++] = NntpResponses.CapabilityStreaming;
+
+        // VectorNNTP private SPEEDTEST diagnostic (current-session TX; no outbound initiator).
+        parts[n++] = NntpResponses.CapabilitySpeedTest;
         parts[n++] = NntpResponses.MultilineTerminator;
         return n;
     }

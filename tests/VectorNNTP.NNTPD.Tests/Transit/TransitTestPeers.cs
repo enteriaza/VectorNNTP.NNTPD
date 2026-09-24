@@ -7,8 +7,11 @@ namespace VectorNNTP.NNTPD.Tests.Transit;
 
 internal static class TransitTestPeers
 {
-    /// <summary>Canonical integration-test peer name for the source-IP → AllowFrom path.</summary>
+    /// <summary>Canonical integration-test Transit identifier for the source-IP → AllowFrom path.</summary>
     public const string DefaultPeerName = "test-peer";
+
+    /// <summary>Canonical integration-test display name (not a protocol argument).</summary>
+    public const string DefaultPeerDisplayName = "Test Peer";
 
     public static TransitPeerOptions Peer(
         int maxIncoming = 8,
@@ -22,9 +25,11 @@ internal static class TransitTestPeers
         bool deferOnDuplicate = true,
         string pathToken = "",
         long maxSize = TransitPeerOptions.DefaultMaxSize,
-        string[]? messageTypes = null) =>
+        string[]? messageTypes = null,
+        string peerName = DefaultPeerDisplayName) =>
         new()
         {
+            PeerName = peerName,
             MaxIncomingConnections = maxIncoming,
             MaxOutgoingConnections = maxOutgoing,
             AllowFrom = allowFrom ?? [],

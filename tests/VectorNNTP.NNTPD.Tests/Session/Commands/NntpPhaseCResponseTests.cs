@@ -124,6 +124,7 @@ public sealed class NntpPhaseCResponseTests
             NntpResponses.CapabilityCompressDeflate,
             NntpResponses.CapabilityIhave,
             NntpResponses.CapabilityStreaming,
+            NntpResponses.CapabilitySpeedTest,
             NntpResponses.MultilineTerminator);
 
         await using var duplex = await PhaseCDuplex.CreateAsync();
@@ -136,6 +137,7 @@ public sealed class NntpPhaseCResponseTests
         Assert.Equal(Encoding.ASCII.GetString(expected), await read);
         Assert.Equal(1, response.ChannelEnqueueCount);
         Assert.Contains("VERSION 2", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
+        Assert.Contains("SPEEDTEST", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
         Assert.True(expected.AsSpan().EndsWith(".\r\n"u8));
     }
 
@@ -151,6 +153,7 @@ public sealed class NntpPhaseCResponseTests
             NntpResponses.CapabilityCompressDeflate,
             NntpResponses.CapabilityIhave,
             NntpResponses.CapabilityStreaming,
+            NntpResponses.CapabilitySpeedTest,
             NntpResponses.MultilineTerminator);
 
         await using var duplex = await PhaseCDuplex.CreateAsync();

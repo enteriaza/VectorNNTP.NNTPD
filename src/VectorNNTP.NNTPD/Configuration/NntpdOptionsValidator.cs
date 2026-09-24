@@ -45,10 +45,42 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateArticleIngestion(options, failures);
         ValidateTransitQueueMemoryLimit(options, failures);
         ValidateTransit(options, failures);
+        ValidateSpeedTest(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
+    }
+
+    private static void ValidateSpeedTest(NntpdOptions options, List<string> failures)
+    {
+        var speed = options.SpeedTest ?? new SpeedTestOptions();
+        if (speed.MaxDurationSeconds is < SpeedTestOptions.MinDurationSeconds
+            or > SpeedTestOptions.MaxDurationSecondsLimit)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.SpeedTest)}.{nameof(SpeedTestOptions.MaxDurationSeconds)} must be between {SpeedTestOptions.MinDurationSeconds} and {SpeedTestOptions.MaxDurationSecondsLimit}.");
+        }
+
+        if (speed.MaxBytes is < SpeedTestOptions.MinBytes or > SpeedTestOptions.MaxBytesLimit)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.SpeedTest)}.{nameof(SpeedTestOptions.MaxBytes)} must be between {SpeedTestOptions.MinBytes} and {SpeedTestOptions.MaxBytesLimit}.");
+        }
+
+        if (speed.MaxConcurrent is < SpeedTestOptions.MinConcurrent
+            or > SpeedTestOptions.MaxConcurrentLimit)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.SpeedTest)}.{nameof(SpeedTestOptions.MaxConcurrent)} must be between {SpeedTestOptions.MinConcurrent} and {SpeedTestOptions.MaxConcurrentLimit}.");
+        }
+
+        if (speed.MaxConcurrentPerPeer is < SpeedTestOptions.MinConcurrentPerPeer
+            or > SpeedTestOptions.MaxConcurrentPerPeerLimit)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.SpeedTest)}.{nameof(SpeedTestOptions.MaxConcurrentPerPeer)} must be between {SpeedTestOptions.MinConcurrentPerPeer} and {SpeedTestOptions.MaxConcurrentPerPeerLimit}.");
+        }
     }
 
     private static void ValidateTransit(NntpdOptions options, List<string> failures)

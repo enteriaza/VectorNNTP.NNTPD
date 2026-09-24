@@ -1,3 +1,5 @@
+using VectorNNTP.NNTPD.Configuration;
+
 namespace VectorNNTP.NNTPD.Session.Commands;
 
 /// <summary>
@@ -114,6 +116,21 @@ public static class NntpCommandParser
                     ? NntpParseStatus.Ok
                     : NntpParseStatus.InvalidArgument;
 
+            case NntpVerb.SpeedTest:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.MissingArgument;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return IsSpeedTestPeerSyntax(argument)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
             case NntpVerb.Quit:
             case NntpVerb.Help:
                 return tokenCount == 0 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
@@ -140,6 +157,14 @@ public static class NntpCommandParser
                 return NntpParseStatus.Ok;
         }
     }
+
+    /// <summary>
+    /// SPEEDTEST identifier: one NNTP token matching the Transit identifier grammar
+    /// (1–256 visible ASCII octets, no whitespace or controls). Exact ordinal match
+    /// is applied later against the snapshot. Not a quoted string or multi-token name.
+    /// </summary>
+    internal static bool IsSpeedTestPeerSyntax(ReadOnlySpan<byte> peer) =>
+        TransitPeersOptionsValidator.IsPeerIdentifier(peer);
 
     /// <summary>RFC 8054 §5.3 algorithm syntax (case-sensitive).</summary>
     internal static bool IsCompressAlgorithmSyntax(ReadOnlySpan<byte> algorithm)

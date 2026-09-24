@@ -24,8 +24,13 @@ internal static partial class TransitLogMessages
     [LoggerMessage(
         EventId = 1705,
         Level = LogLevel.Warning,
-        Message = "Transit peer {PeerName} AllowFrom DNS resolution failed for {Hostname}: {Reason}")]
-    public static partial void DnsResolutionFailed(ILogger logger, string PeerName, string Hostname, string Reason);
+        Message = "Transit peer {PeerId} ({PeerName}) AllowFrom DNS resolution failed for {Hostname}: {Reason}")]
+    public static partial void DnsResolutionFailed(
+        ILogger logger,
+        string PeerId,
+        string PeerName,
+        string Hostname,
+        string Reason);
 
     [LoggerMessage(
         EventId = 1706,

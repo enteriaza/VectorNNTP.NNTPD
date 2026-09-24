@@ -51,6 +51,7 @@ public sealed class NntpCommandInventoryTests
     [InlineData("IHAVE <msg@example.com>")]
     [InlineData("CHECK <msg@example.com>")]
     [InlineData("TAKETHIS <msg@example.com>")]
+    [InlineData("SPEEDTEST GIGANEWS")]
     public void Parser_AcceptsInventoryCommands(string commandLine)
     {
         var parsed = NntpCommandTestParse.ParseCommand(commandLine);

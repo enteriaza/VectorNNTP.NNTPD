@@ -251,6 +251,7 @@ public sealed class NntpCommandDispatcher
             NntpVerb.Newgroups => typeof(NewGroups),
             NntpVerb.Newnews => typeof(NewNews),
             NntpVerb.BenchIt => typeof(BenchIt),
+            NntpVerb.SpeedTest => typeof(SpeedTest),
             _ => typeof(NntpCommandExecution),
         };
 
@@ -270,6 +271,7 @@ public sealed class NntpCommandDispatcher
             (NntpVerb.StartTls, _) => StartTls.HandleAsync(context, context.Session.CertificateProvider, cancellationToken),
             (NntpVerb.Compress, _) => Compress.HandleAsync(context, cancellationToken),
             (NntpVerb.BenchIt, _) => BenchIt.HandleAsync(context, cancellationToken),
+            (NntpVerb.SpeedTest, _) => SpeedTest.HandleAsync(context, cancellationToken),
             (NntpVerb.AuthInfo, NntpVerb.User) => AuthInfo.HandleUserAsync(
                 context, context.Session.AuthenticationProvider, cancellationToken),
             (NntpVerb.AuthInfo, NntpVerb.Pass) => AuthInfo.HandlePassAsync(

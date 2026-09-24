@@ -41,6 +41,7 @@ public static class DefaultNntpCommandCatalog
         "OVER",
         "POST",
         "QUIT",
+        "SPEEDTEST",
         "STARTTLS",
         "STAT",
         "TAKETHIS",
@@ -67,7 +68,8 @@ public static class DefaultNntpCommandCatalog
                 or NntpVerb.AuthInfo => NntpCommandAccess.Public,
             NntpVerb.Mode when qualifier == NntpVerb.Reader => NntpCommandAccess.Public,
             NntpVerb.Mode when qualifier == NntpVerb.Stream => NntpCommandAccess.RequiresStreaming,
-            NntpVerb.Check or NntpVerb.TakeThis or NntpVerb.Ihave => NntpCommandAccess.RequiresTransit,
+            NntpVerb.Check or NntpVerb.TakeThis or NntpVerb.Ihave or NntpVerb.SpeedTest
+                => NntpCommandAccess.RequiresTransit,
             NntpVerb.Post => NntpCommandAccess.RequiresAuthentication
                 | NntpCommandAccess.RequiresReader
                 | NntpCommandAccess.RequiresPosting,
@@ -116,6 +118,7 @@ public static class DefaultNntpCommandCatalog
             (NntpVerb.Over, _) => "OVER",
             (NntpVerb.Post, _) => "POST",
             (NntpVerb.Quit, _) => "QUIT",
+            (NntpVerb.SpeedTest, _) => "SPEEDTEST",
             (NntpVerb.StartTls, _) => "STARTTLS",
             (NntpVerb.Stat, _) => "STAT",
             (NntpVerb.TakeThis, _) => "TAKETHIS",

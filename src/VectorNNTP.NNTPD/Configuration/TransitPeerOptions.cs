@@ -4,11 +4,24 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// Bindable configuration for one named Transit peer (dictionary value under top-level <c>Transit</c>).
 /// </summary>
 /// <remarks>
-/// The peer name is the dictionary key, not a property on this type. Do not log
-/// <see cref="Password"/>.
+/// The dictionary key is the protocol-safe <c>Identifier</c>, not the display name.
+/// <see cref="PeerName"/> is the required human-readable administrative name.
+/// Do not log <see cref="Password"/>.
 /// </remarks>
 public sealed class TransitPeerOptions
 {
+    /// <summary>
+    /// Gets or sets the human-readable administrative display name for this peer.
+    /// </summary>
+    /// <remarks>
+    /// Required. Preserved exactly as configured (no trimming, case-folding, or hyphenation).
+    /// Not a protocol argument and not derived from the dictionary-key identifier.
+    /// May contain spaces and punctuation. Must be non-empty, not whitespace-only,
+    /// at most <see cref="TransitPeersOptionsValidator.MaxPeerNameLength"/> characters,
+    /// and must not contain control characters.
+    /// </remarks>
+    public string PeerName { get; set; } = string.Empty;
+
     /// <summary>
     /// Gets or sets the maximum simultaneous inbound connections associated with this peer.
     /// </summary>

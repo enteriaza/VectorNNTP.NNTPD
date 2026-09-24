@@ -12,6 +12,16 @@ namespace VectorNNTP.NNTPD.Tests.Session.Commands;
 public sealed class NntpResponseWriterCoalescingTests
 {
     [Fact]
+    public async Task TxChannel_AllowsSynchronousContinuations()
+    {
+        var pipe = new Pipe();
+        await using var writer = new NntpResponseWriter(pipe.Writer);
+        Assert.True(writer.ChannelAllowsSynchronousContinuations);
+        await pipe.Writer.CompleteAsync();
+        await pipe.Reader.CompleteAsync();
+    }
+
+    [Fact]
     public async Task SingleWriteLine_DeliversExactBytes()
     {
         await using var harness = await CoalesceHarness.CreateAsync();

@@ -9,6 +9,7 @@ BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is an in-process sessio
 | `TAKETHIS` | RFC 4644 STREAM ingest client. Pre-built ~768 KiB article. Real TCP. |
 | `CHECK` | Frozen depth-16 CHECK pipeline. Session/application (Pipes + fake Redis). Not TCP throughput. |
 | `IHAVE` | RFC 3977 serialized IHAVE command. Real TCP to production NNTPD. Production HistoryDB. Real `.artifacts/Articles` corpus, restuffed on the wire. |
+| `SPEEDTEST` | VectorNNTP `SPEEDTEST <peer>` diagnostic. Real TCP. Independent of TAKETHIS/IHAVE/CHECK methodology. |
 
 `BENCHIT` is an internal, unadvertised server command retained for transport baselines and
 regressions. See repository root [`PERFORMANCE.md`](../../PERFORMANCE.md).
@@ -124,6 +125,23 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
 Writes `.artifacts/ihave-command-bench/timing.txt` and `timing.csv`.
 `235` is queue admission, not worker destuff. HistoryDB Peek is inside
 `IHAVE sent → 335` and is not isolated from the 335 RTT.
+
+## Run SPEEDTEST
+
+Exercises the advertised VectorNNTP `SPEEDTEST` extension on the current TCP session.
+`--speedtest-peer` is a configured Transit identifier (dictionary key), not `PeerName` and not a host or IP.
+The server measures TX of a synthetic payload; outbound Transit initiation is not implemented.
+
+This workload does not change TAKETHIS, IHAVE, or CHECK defaults or results.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark SPEEDTEST `
+  --host 198.18.0.66 --port 1199 `
+  --speedtest-peer usenet-ninja
+```
+
+Default payload receive (`--speedtest-receive byte`) is a reusable-buffer `Socket.ReceiveAsync` drain that scans for the multiline terminator in bytes. Diagnostic `--speedtest-receive line` keeps the `StreamReader.ReadLineAsync` path. Opt-in `--speedtest-receive raw` drains `--speedtest-bytes` (default 64 MiB) without terminator scan. None of these change NNTPD.
 
 ## iperf3 baseline
 
