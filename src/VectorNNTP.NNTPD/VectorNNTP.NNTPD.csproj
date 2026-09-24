@@ -11,14 +11,17 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
+    <InternalsVisibleTo Include="VectorNNTP.NNTPD.CheckHistoryDbBench" />
     <!-- Bench-only visibility for Phase 3D data-plane timing around PrepareArticleChunks / EnqueueOwnedPayloadAsync. -->
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.CommandResponsePathBench" />
     <InternalsVisibleTo Include="DynamicResponseAllocBench" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Blake3" Version="2.2.1" />
     <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
+    <PackageReference Include="StackExchange.Redis" Version="2.8.58" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />

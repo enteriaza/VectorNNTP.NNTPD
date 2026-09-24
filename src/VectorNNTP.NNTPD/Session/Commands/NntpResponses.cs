@@ -174,6 +174,14 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> CheckSuffix =
         Suffix(" send article to be transferred\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> CheckNotWantedPrefix = Prefix("438 "u8);
+
+    internal static readonly ReadOnlyMemory<byte> CheckNotWantedSuffix = Suffix("\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CheckTryLaterPrefix = Prefix("431 "u8);
+
+    internal static readonly ReadOnlyMemory<byte> CheckTryLaterSuffix = Suffix("\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> ArticleTransferredOkPrefix = Prefix("239 "u8);
 
     internal static readonly ReadOnlyMemory<byte> TransferRejectedPrefix = Prefix("439 "u8);

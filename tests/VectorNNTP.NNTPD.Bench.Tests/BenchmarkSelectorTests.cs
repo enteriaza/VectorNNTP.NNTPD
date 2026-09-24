@@ -28,6 +28,15 @@ public sealed class BenchmarkSelectorTests
         Assert.Equal("TAKETHIS", BenchmarkWorkloadCatalog.Resolve(name).Name);
     }
 
+    [Theory]
+    [InlineData("CHECK")]
+    [InlineData("check")]
+    [InlineData("Check")]
+    public void Resolve_Check_IsCaseInsensitive(string name)
+    {
+        Assert.Equal("CHECK", BenchmarkWorkloadCatalog.Resolve(name).Name);
+    }
+
     [Fact]
     public void Resolve_Unknown_Throws()
     {
@@ -35,6 +44,7 @@ public sealed class BenchmarkSelectorTests
         Assert.Contains("Unknown benchmark", ex.Message, StringComparison.Ordinal);
         Assert.Contains("BENCHIT", ex.Message, StringComparison.Ordinal);
         Assert.Contains("TAKETHIS", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("CHECK", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

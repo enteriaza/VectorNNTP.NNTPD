@@ -21,7 +21,10 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] STARTTLS
 [x] COMPRESS DEFLATE
 [x] TAKETHIS
+[x] CHECK
 ```
+
+CHECK (RFC 4644 §2.4) uses HistoryDB (`438` local/Redis hit, `238` double miss, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
 
 ## Placeholder (registered, not implemented)
 
@@ -42,7 +45,6 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [ ] HDR
 [ ] POST
 [ ] IHAVE
-[ ] CHECK
 ```
 
 ## File map
@@ -70,6 +72,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 | `Post.cs` | POST |
 | `IHave.cs` | IHAVE |
 | `Check.cs` | CHECK |
+| `Session/CheckPipeline.cs` | Per-session CHECK overlap window (not a command) |
 | `TakeThis.cs` | TAKETHIS |
 
 Article ingestion (TAKETHIS → bounded queue → `spool/incoming`) lives under `ArticleIngestion/`.

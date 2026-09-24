@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.History;
+using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
@@ -103,6 +105,12 @@ public static class NntpdServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
 
         services
+            .AddOptions<RedisOptions>()
+            .BindConfiguration(RedisOptions.SectionName)
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<RedisOptions>, RedisOptionsValidator>();
+
+        services
             .AddOptions<TransitPeersOptions>()
             .BindConfiguration(TransitPeersOptions.SectionName);
         // Validation is applied when building the immutable snapshot (startup throw /
@@ -115,10 +123,29 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → incoming spool writer → Transit AllowFrom DNS refresh →
+        // Cloudflare DNS → Redis → HistoryDB writer → HistoryDB maintenance →
+        // incoming spool writer → Transit AllowFrom DNS refresh →
         // plain NNTP listener → ACME → TLS NNTP listener.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
+
+        services.TryAddSingleton<IRedisConnectionFactory, StackExchangeRedisConnectionFactory>();
+        services.TryAddSingleton<RedisService>();
+        services.TryAddSingleton<IRedisService>(static sp => sp.GetRequiredService<RedisService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, RedisService>(static sp =>
+                sp.GetRequiredService<RedisService>()));
+
+        services.TryAddSingleton<HistoryDb>();
+        services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());
+        services.TryAddSingleton<HistoryWriteService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, HistoryWriteService>(static sp =>
+                sp.GetRequiredService<HistoryWriteService>()));
+        services.TryAddSingleton<HistoryMaintenanceService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, HistoryMaintenanceService>(static sp =>
+                sp.GetRequiredService<HistoryMaintenanceService>()));
 
         services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();

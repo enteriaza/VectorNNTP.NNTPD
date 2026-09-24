@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
@@ -90,11 +91,14 @@ internal static class TestHostFactory
                 // Replace appsettings BindAddress entirely (in-memory must clear leftover indices).
                 [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
+                ["Redis:Host:0"] = "127.0.0.1",
+                ["Redis:Port"] = "6379",
             });
 
         var localAssignee = assignee ?? new FakeLocalIpAddressAssignee(TestIpv4, TestIpv6);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(localAssignee);
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
+        builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
         IsolateTransit(builder.Services);
 
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.

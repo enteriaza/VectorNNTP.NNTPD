@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive) plus the top-level `Transit` peer dictionary. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, and the top-level `Transit` peer dictionary. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.**
 
@@ -29,6 +29,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ServerId` | int | _(none)_ | **yes** | Server identity `1–99`; no silent default |
 | `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
+| `HistoryTime` | `TimeSpan` | `02:00:00` | no | HistoryDB retention for local memory and Redis key TTL (`1s`–`7d`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Bounded in-memory ingestion queue size (`1–100000`) |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
@@ -36,6 +37,30 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `Transit:{peer-name}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; see below). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
+
+CHECK in-flight depth is **not configurable**. Per-session overlap is the architectural constant `CheckPipeline.Depth` = 16 (see `docs/architecture.md`). A leftover `Nntpd:CheckPipelineDepth` key is ignored.
+
+## Redis
+
+Top-level `Redis` section (not nested under `Nntpd`). Redis is a required application dependency: missing hosts or an unsuccessful startup connect/PING fail the host before `Running`.
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `Host` | string array | _(none)_ | **yes** | Redis hostnames or IP addresses used as StackExchange.Redis endpoints/seeds for one shared topology |
+| `Port` | int | `6379` | no | TCP port applied to every configured host (`1–65535`) |
+
+There is no `MaxConnections` setting and no application-level connection pool. One long-lived `ConnectionMultiplexer` is shared by all Redis consumers.
+
+Multiple hosts are multiplexer seeds, not independently round-robined servers. They must belong to a topology that actually shares HistoryDB data.
+
+Example:
+
+```json
+"Redis": {
+  "Host": [ "redis-01.example.net", "redis-02.example.net" ],
+  "Port": 6379
+}
+```
 
 ## Bind addresses
 
@@ -152,7 +177,7 @@ The JSON key is the peer name. Names are **human-readable labels** and are **not
 | `Password` | string | `""` | no | Peer AUTHINFO password. Never log this value. Must be set together with `Username`, or both blank. |
 | `Ssl` | string | `""` | no | Blank = no TLS; `TLS` = native TLS; `STARTTLS` = upgrade. Case-insensitive; invalid values fail validation. |
 | `Patterns` | string | `*` | no | One newsfeeds(5) / `uwildmat_poison` subscription expression (comma-separated string, not a JSON array, regex, or .NET glob). |
-| `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE duplicate handling (`431`/`436` vs `438`/`435`). No duplicate database is implemented yet. |
+| `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE in-flight duplicate handling (`431`/`436` vs `438`/`435`). CHECK HistoryDB itself is implemented separately. |
 | `PathToken` | string | `""` | no | Exact token reserved for outbound Path-header loop prevention. Not a DNS name or IP; not case-folded. Empty is allowed. **Not consumed** by article-routing code yet. Max 255 characters; no control characters. |
 | `MaxSize` | long | `10485760` | no | Peer incoming-article size policy in bytes (`1–2147483647`). Stored only; not wired into TAKETHIS ingestion. Distinct from `Nntpd:ArticleIngestion:MaxArticleBytes`. |
 | `MessageTypes` | string array | `["default"]` (when omitted or empty) | no | Diablo article-type names (see below). Not regex, MIME types, or newsgroup Patterns. Classification is not implemented. |

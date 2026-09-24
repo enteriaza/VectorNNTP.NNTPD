@@ -36,6 +36,7 @@ internal sealed class NntpStreamDataPlaneRx
     public async ValueTask<bool> ProcessOneAsync(NntpResponseWriter response, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(response);
+        await _session.WaitForCheckCapacityAsync(cancellationToken).ConfigureAwait(false);
         var consumeTakeThisArticle = _session.Authorization.AuthorizedTransit;
         var unit = await NntpContinuousRxReader
             .ReadUnitAsync(
@@ -63,7 +64,7 @@ internal sealed class NntpStreamDataPlaneRx
 
         var preRead = unit.Kind == NntpContinuousRxKind.TakeThis ? unit.Article : (NntpMultilineReadResult?)null;
         await _session
-            .DispatchCommandAsync(
+            .ProcessParsedCommandAsync(
                 _dispatcher,
                 response,
                 _logger,

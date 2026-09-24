@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>VectorNNTP.NNTPD.Bench</RootNamespace>
     <AssemblyName>VectorNNTP.NNTPD.Bench</AssemblyName>
-    <Description>TCP transport benchmark client for VectorNNTP.NNTPD (real sockets only).</Description>
+    <Description>Benchmark runner for VectorNNTP.NNTPD (BENCHIT/TAKETHIS real TCP; CHECK session/application).</Description>
     <IsPackable>false</IsPackable>
     <!-- Tool project: avoid XML-doc noise from Directory.Build.props. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -15,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\VectorNNTP.NNTPD\VectorNNTP.NNTPD.csproj" />
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Bench.Tests" />
   </ItemGroup>
 

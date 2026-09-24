@@ -5,7 +5,7 @@ namespace VectorNNTP.NNTPD.Bench;
 /// </summary>
 internal interface IBenchmarkWorkload
 {
-    /// <summary>Stable CLI name (for example <c>BENCHIT</c> or <c>TAKETHIS</c>).</summary>
+    /// <summary>Stable CLI name (for example <c>BENCHIT</c>, <c>TAKETHIS</c>, or <c>CHECK</c>).</summary>
     string Name { get; }
 
     /// <summary>Run the workload with the shared parsed options.</summary>

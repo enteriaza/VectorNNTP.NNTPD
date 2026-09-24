@@ -130,6 +130,16 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add($"{nameof(NntpdOptions.CloudFlareOperationTimeout)} must not exceed 1 hour.");
         }
+
+        if (options.HistoryTime < TimeSpan.FromSeconds(1))
+        {
+            failures.Add($"{nameof(NntpdOptions.HistoryTime)} must be at least 1 second.");
+        }
+
+        if (options.HistoryTime > TimeSpan.FromDays(7))
+        {
+            failures.Add($"{nameof(NntpdOptions.HistoryTime)} must not exceed 7 days.");
+        }
     }
 
     private static void ValidateSystemd(NntpdOptions options, List<string> failures)

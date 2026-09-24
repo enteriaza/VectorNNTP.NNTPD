@@ -56,6 +56,9 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - AcmeCertificateService (TLS/ACME when BindPortTls > 0)   │
 │  - NntpTlsListenerService (implicit TLS accept/transport)   │
 │  - Optional: PlaceholderApplicationService (tests only)     │
+│  - RedisService (shared ConnectionMultiplexer)              │
+│  - HistoryWriteService (async HistoryDB Redis persistence)  │
+│  - HistoryMaintenanceService (local HistoryDB expiry)       │
 │  - NNTP session: greeting, command dispatch, authz gates    │
 │  - Later: full command handlers / storage / feeds             │
 └─────────────────────────────────────────────────────────────┘
@@ -74,7 +77,7 @@ Session concepts (distinct):
 - **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`, plus optional `TransitPeerName` / `TransitPeerPolicy`). Defaults: unauthenticated; streaming and posting denied. Connection-time identification uses the top-level `Transit` dictionary (peer names as keys). The effective client IP is matched against that peer's `AllowFrom` ACL (literal IPs/CIDRs plus currently resolved DNS addresses). A unique match grants `AuthorizedTransit` + `StreamingPermitted` without authentication and retains the named peer policy (credentials, Patterns, limits, `DeferOnDuplicate`, TLS mode). This is peer privilege, not user identity. `MODE STREAM` requires `StreamingPermitted`; `IHAVE`/`CHECK`/`TAKETHIS` require `AuthorizedTransit` (not AUTHINFO). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
 - **Dispatch:** `NntpCommandParser` classifies and validates syntax on **bytes** and produces a validated `NntpCommand`; invalid syntax is rejected immediately. `NntpCommandDispatcher` then applies authentication → authorization → mode → enum/switch handler. Protocol representation is defined in [Byte-Oriented Protocol Data Plane](#byte-oriented-protocol-data-plane).
 
-Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions (peer ACL or authenticated transit): multiline article receive → bounded in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` requires `StreamingPermitted` and returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/`IHAVE`/`CHECK` remain registered placeholders (`500` / `501` after authz gates). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
+Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions (peer ACL or authenticated transit): multiline article receive → bounded in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` requires `StreamingPermitted` and returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/`IHAVE` remain registered placeholders (`500` / `501` after authz gates). `CHECK` uses HistoryDB (local memory then Redis). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
 
 ### Article ingestion (TAKETHIS)
 
@@ -323,6 +326,33 @@ API client and reconciler types live under `Cloudflare/`; bind expansion under `
 
 If `IApplicationService.Execution` faults or completes while `Running`, the manager raises `UnexpectedServiceTermination`. Health becomes unhealthy (watchdog stops). The hosted service requests host stop when `StopHostOnUnexpectedServiceTermination` is enabled, with `BackgroundServiceExceptionBehavior.StopHost`.
 
+## Redis and HistoryDB
+
+`RedisService` is generic infrastructure. It owns Redis configuration, one shared StackExchange.Redis `ConnectionMultiplexer`, startup connectivity (`Connect` + `PING`), and generic key operations. It does not contain HistoryDB or CHECK policy.
+
+Startup order places `RedisService` after Cloudflare DNS reconciliation and before listeners. If the initial connection cannot be established, startup fails. The multiplexer is long-lived; consumers do not connect per request. Multiple `Redis:Host` entries are multiplexer endpoints/seeds for one topology, not independently round-robined HistoryDB servers.
+
+`HistoryDB` is a Redis consumer:
+
+```text
+Message-ID bytes → BLAKE3 (32 bytes) → Redis key = "nntpd:hist:" || digest
+```
+
+The digest is not hex-encoded. Redis keys stay binary. Local memory and Redis both expire markers after `Nntpd:HistoryTime` (default two hours). Redis uses native key TTL.
+
+Local HistoryDB is a hard-capped `ConcurrentDictionary` (1,048,576 entries). CHECK never walks the dictionary: hits are one-key lookups, inserts use an `Interlocked` counter, and expired entries are removed on that key's lookup or by `HistoryMaintenanceService` off the request path. When the cap is reached, new digests are not inserted (no false `438`); Redis remains authoritative until maintenance frees a slot.
+
+CHECK lookup order (RFC 4644 §2.4):
+
+1. Local HistoryDB hit → `438` immediately (no Redis).
+2. Local miss, Redis hit → `438`; warm local memory. No Redis write.
+3. Double miss → `238`; insert local immediately; enqueue a bounded background Redis `SET` with TTL. The CHECK response does not wait for Redis persistence.
+4. Redis infrastructure failure (timeout, disconnect, error) → `431`. A Redis error is not a HistoryDB miss and must not become a false `238`. After a failure, `RedisService` enters a short cooldown: further CHECK misses return `431` without calling Redis until one recovery probe succeeds.
+
+CHECK execution is a **per-session bounded pipeline** (`CheckPipeline.Depth`, architectural constant **16**, not configurable). Consecutive authorized CHECK commands may overlap Redis lookups so remote RTT is not paid serially. A slot is occupied from admission until the existing response writer accepts the line (`EnqueueLineAsync`); lookup completion alone does not free the slot. Every CHECK response passes through one emit gate and is enqueued **in send order**; the writer itself is FIFO-of-enqueue and does not reorder. When the window is full the session stops reading the next command so the input Pipe (64 KiB pause) applies TCP backpressure — including when Redis is fast and the client/TX is slow. CHECK commands are not dropped. Any non-CHECK command (including TAKETHIS, QUIT, STARTTLS, COMPRESS, AUTHINFO, MODE) drains outstanding CHECK responses first, then runs on the existing serial dispatcher. General NNTP command execution remains serial. HistoryDB and Redis remain process-wide and concurrency-safe; CHECK pipelining does not add a second multiplexer or per-request connection.
+
+Background Redis writes use a bounded channel (`HistoryWriteQueue`, drop-on-full) drained by `HistoryWriteService`. A full queue logs a warning and drops the write; local history remains. Unrelated Message-IDs stay concurrent; there is no global CHECK lock.
+
 ## Logging
 
 `ConfigureNntpdLogging()` clears MEL providers, removes the default `ILoggerFactory`, and registers Serilog via `AddSerilog` (`writeToProviders: false`). Framework and application logs share one Serilog pipeline. Details: [logging.md](logging.md). Application call sites follow [Source-Generated Structured Logging](#source-generated-structured-logging).
@@ -387,9 +417,9 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`).
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
 
-Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, and `ServerId` (`1–99`, no default). Validation runs via `ValidateOnStart` / `IValidateOptions<NntpdOptions>` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses before other application services start; failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
+Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), and `Redis:Host`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs; either failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
 ## Testing strategy
 
@@ -401,4 +431,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP article/group data plane, posting, `IHAVE`/`CHECK`, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), and the session authorization gates are in place.
+NNTP article/group data plane, posting, `IHAVE`, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), and the session authorization gates are in place.

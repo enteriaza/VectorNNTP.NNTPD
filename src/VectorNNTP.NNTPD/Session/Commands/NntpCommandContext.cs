@@ -36,6 +36,8 @@ public sealed class NntpCommandContext
 
     /// <summary>
     /// Gets the current command-line buffer. Valid until the next command is parsed.
+    /// Pipelined CHECK copies the Message-ID before the next parse; do not retain this
+    /// memory across a later command.
     /// </summary>
     public ReadOnlyMemory<byte> Line { get; }
 
@@ -59,4 +61,10 @@ public sealed class NntpCommandContext
 
     /// <summary>Gets the argument bytes from the current command buffer.</summary>
     public ReadOnlySpan<byte> ArgumentSpan => Command.ArgumentSpan(Line.Span);
+
+    /// <summary>
+    /// Gets the argument bytes as memory. Safe across <c>await</c> only while this command's
+    /// parser scratch remains the current line; CHECK pipeline slots copy the Message-ID first.
+    /// </summary>
+    public ReadOnlyMemory<byte> ArgumentMemory => Command.ArgumentMemory(Line);
 }

@@ -1,11 +1,13 @@
 # VectorNNTP.NNTPD.Bench
 
-Real-TCP benchmark runner for VectorNNTP.NNTPD. Select the workload with `--benchmark`.
+Benchmark runner for VectorNNTP.NNTPD. Select the workload with `--benchmark`.
+BENCHIT and TAKETHIS are real-TCP clients. CHECK is an in-process session/application measure.
 
 | Workload | Purpose |
 |----------|---------|
-| `BENCHIT` (default) | Internal transport/TX baseline. Unadvertised server command. |
-| `TAKETHIS` | RFC 4644 STREAM ingest client. Pre-built ~768 KiB article. |
+| `BENCHIT` (default) | Internal transport/TX baseline. Unadvertised server command. Real TCP. |
+| `TAKETHIS` | RFC 4644 STREAM ingest client. Pre-built ~768 KiB article. Real TCP. |
+| `CHECK` | Frozen depth-16 CHECK pipeline. Session/application (Pipes + fake Redis). Not TCP throughput. |
 
 `BENCHIT` is an internal, unadvertised server command retained for transport baselines and
 regressions. See repository root [`PERFORMANCE.md`](../../PERFORMANCE.md).
@@ -55,6 +57,19 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
 
 `--duration` is an alias for `--measure-seconds`. `--port` is an alias for `--plain-port`.
 
+## Run CHECK
+
+In-process session/application benchmark of the production CHECK pipeline
+(`CheckPipeline.Depth` = 16). Uses `NntpSession`, duplex Pipes, and a fake delayed Redis.
+This is **not** a TCP socket throughput measurement. Depth is not a CLI parameter.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --benchmark CHECK
+```
+
+Workloads and iteration counts match the validation session bench: 2000 CHECKs at 0 ms Redis
+delay, 200 CHECKs at 1/2/5 ms. The run fails if responses are out of command order.
+
 ## iperf3 baseline
 
 ```powershell
@@ -67,7 +82,8 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --iperf-only --h
 
 ## Notes
 
-- Uses actual TCP sockets only (no in-process transport doubles).
-- Modes: plain, deflate, tls (implicit TLS port), tls+deflate.
-- Concurrency: 1 / 10 / 50. Warm-up 5s, measure 60s per scenario (defaults).
+- BENCHIT and TAKETHIS use actual TCP sockets (no in-process transport doubles).
+- CHECK uses `NntpSession` + duplex Pipes + fake Redis. It is not a TCP throughput measurement.
+- BENCHIT modes: plain, deflate, tls (implicit TLS port), tls+deflate.
+- BENCHIT/TAKETHIS concurrency: 1 / 10 / 50. Warm-up 5s, measure 60s per scenario (defaults).
 - `BENCHIT` is not advertised in CAPABILITIES or HELP.

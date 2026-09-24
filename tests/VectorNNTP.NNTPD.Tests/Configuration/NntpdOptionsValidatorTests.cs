@@ -5,6 +5,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Redis;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
@@ -15,6 +17,55 @@ public sealed class NntpdOptionsValidatorTests
 {
     private static NntpdOptionsValidator CreateValidator(ILocalIpAddressAssignee? assignee = null) =>
         new(assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
+
+    [Fact]
+    public void Validate_Succeeds_ForDefaultHistoryTime()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(TimeSpan.FromHours(2), options.HistoryTime);
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForConfiguredHistoryTime()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.HistoryTime = TimeSpan.FromHours(6);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void CheckPipelineDepth_IsNotAnOptionsProperty()
+    {
+        Assert.Null(typeof(NntpdOptions).GetProperty("CheckPipelineDepth"));
+        Assert.Equal(16, VectorNNTP.NNTPD.Session.CheckPipeline.Depth);
+    }
+
+    [Fact]
+    public void BindConfiguration_IgnoresCheckPipelineDepthKey()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:ServerId"] = "1",
+                ["Nntpd:BindAddress:0"] = "127.0.0.1",
+                ["Nntpd:CheckPipelineDepth"] = "64",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Null(typeof(NntpdOptions).GetProperty("CheckPipelineDepth"));
+        Assert.Equal(16, VectorNNTP.NNTPD.Session.CheckPipeline.Depth);
+    }
+
+    [Fact]
+    public void Validate_Fails_ForHistoryTimeBelowOneSecond()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.HistoryTime = TimeSpan.Zero;
+        Assert.True(CreateValidator().Validate(null, options).Failed);
+    }
 
     [Fact]
     public void Validate_Succeeds_ForValidDefaults()
@@ -817,11 +868,17 @@ public sealed class NntpdConfigurationTests
         builder.Configuration.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
+        builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindPortTls = 0;
             options.AcmeEmail = string.Empty;
         });
+        builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Redis:Host:0"] = "127.0.0.1",
+            });
         builder.ConfigureNntpdLogging(static lc => lc.MinimumLevel.Fatal());
         builder.Services.AddNntpdHosting(includePlaceholderService: false);
         return builder.Build();
@@ -839,6 +896,7 @@ public sealed class NntpdConfigurationTests
                     TestHostFactory.TestCloudFlareApiKey,
                 [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
+                ["Redis:Host:0"] = "127.0.0.1",
             });
 
         if (configuration is not null)
@@ -849,6 +907,7 @@ public sealed class NntpdConfigurationTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(
             assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
+        builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindAddress = ["*"];

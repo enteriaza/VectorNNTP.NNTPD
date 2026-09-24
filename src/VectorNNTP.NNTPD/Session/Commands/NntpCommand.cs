@@ -56,4 +56,17 @@ public readonly struct NntpCommand
 
         return line.Slice(ArgumentStart, ArgumentLength);
     }
+
+    /// <summary>Returns the argument bytes from a still-valid command buffer.</summary>
+    public ReadOnlyMemory<byte> ArgumentMemory(ReadOnlyMemory<byte> line)
+    {
+        if (ArgumentLength <= 0
+            || ArgumentStart < 0
+            || ArgumentStart + ArgumentLength > line.Length)
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        return line.Slice(ArgumentStart, ArgumentLength);
+    }
 }

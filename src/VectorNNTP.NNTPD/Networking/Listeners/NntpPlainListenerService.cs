@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -27,6 +28,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly ITlsCertificateContextProvider _certificateProvider;
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
+    private readonly IHistoryDb? _historyDb;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
     private readonly ILoggerFactory _loggerFactory;
@@ -48,7 +50,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ITransitPeerAuthorization transitPeerAuthorization,
         ILoggerFactory loggerFactory,
         ILogger<NntpPlainListenerService> logger,
-        ITransitInboundConnectionLimiter? inboundConnectionLimiter = null)
+        ITransitInboundConnectionLimiter? inboundConnectionLimiter = null,
+        IHistoryDb? historyDb = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -65,6 +68,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _articleIngestion = articleIngestion;
         _transitPeerAuthorization = transitPeerAuthorization;
         _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
+        _historyDb = historyDb;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -220,7 +224,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 loggerFactory: _loggerFactory,
                 articleIngestion: _articleIngestion,
                 transitPeerAuthorization: _transitPeerAuthorization,
-                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth);
+                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth,
+                historyDb: _historyDb);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))

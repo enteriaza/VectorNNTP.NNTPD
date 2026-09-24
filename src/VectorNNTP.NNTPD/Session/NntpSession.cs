@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -43,7 +44,8 @@ public sealed class NntpSession
         ILoggerFactory? loggerFactory = null,
         IArticleIngestionQueue? articleIngestion = null,
         ITransitPeerAuthorization? transitPeerAuthorization = null,
-        int streamOutstandingArticleDepth = NntpStreamArticleTxScheduler.DefaultDepth)
+        int streamOutstandingArticleDepth = NntpStreamArticleTxScheduler.DefaultDepth,
+        IHistoryDb? historyDb = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -59,6 +61,7 @@ public sealed class NntpSession
         AllowCleartextAuth = allowCleartextAuth;
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
+        HistoryDb = historyDb;
         StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
         _dispatcher = new NntpCommandDispatcher(loggerFactory);
     }
@@ -73,6 +76,12 @@ public sealed class NntpSession
     /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, later <c>POST</c>).
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
+
+    /// <summary>Gets the HistoryDB used by CHECK, or <see langword="null"/> when unset (tests).</summary>
+    public IHistoryDb? HistoryDb { get; }
+
+    /// <summary>Gets the per-session CHECK pipeline once <see cref="RunAsync"/> has started.</summary>
+    internal CheckPipeline? Pipeline { get; private set; }
 
     /// <summary>
     /// Gets the bounded STREAM article TX scheduler (depth gate above
@@ -202,6 +211,7 @@ public sealed class NntpSession
         try
         {
             var response = _response ??= new NntpResponseWriter(Connection.Output);
+            Pipeline = new CheckPipeline(this, response);
             await SendGreetingAsync(response, token).ConfigureAwait(false);
 
             var readerRx = new NntpReaderCommandRx(this, _dispatcher, _logger);
@@ -235,6 +245,18 @@ public sealed class NntpSession
         }
         finally
         {
+            if (Pipeline is not null)
+            {
+                try
+                {
+                    await Pipeline.ShutdownAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Best-effort; lookups use the session token.
+                }
+            }
+
             if (_response is not null)
             {
                 try
@@ -306,6 +328,53 @@ public sealed class NntpSession
         await dispatcher
             .DispatchAsync(this, command, line, response, cancellationToken, preReadArticle)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Dispatches one parsed unit: authorized CHECK enters the pipeline; every other command
+    /// drains outstanding CHECK responses first and then runs serially.
+    /// </summary>
+    internal async ValueTask ProcessParsedCommandAsync(
+        NntpCommandDispatcher dispatcher,
+        NntpResponseWriter response,
+        ILogger logger,
+        NntpCommand command,
+        ReadOnlyMemory<byte> line,
+        NntpMultilineReadResult? preReadArticle,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(Pipeline);
+
+        if (command.IsValid
+            && command.Verb == NntpVerb.Check
+            && Authorization.AuthorizedTransit)
+        {
+            if (command.Verb != NntpVerb.BenchIt
+                && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
+                && logger.IsEnabled(LogLevel.Information))
+            {
+                CommandLogMessages.CommandRx(
+                    logger,
+                    NntpCommandLogFormat.Client(this),
+                    NntpCommandLogFormat.RedactRxCommand(command, line.Span));
+            }
+
+            await Pipeline.SubmitAsync(command, line, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await Pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
+        await DispatchCommandAsync(dispatcher, response, logger, command, line, preReadArticle, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Waits until the CHECK window can accept another command (RX backpressure).</summary>
+    internal ValueTask WaitForCheckCapacityAsync(CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(Pipeline);
+        return Pipeline.IsFull
+            ? Pipeline.WaitForCapacityAsync(cancellationToken)
+            : ValueTask.CompletedTask;
     }
 
     /// <summary>Logs a parser rejection without converting the full command line to a string.</summary>

@@ -16,6 +16,10 @@ This document also records a later **TAKETHIS** STREAM ingest benchmark on the s
 .NET client in `tools/VectorNNTP.NNTPD.Bench`. BENCHIT and TAKETHIS exercise different portions of
 the server and are not substitutes for each other.
 
+A later **CHECK** measurement is also recorded here. It is a session/application benchmark
+(`NntpSession` + Pipes + fake Redis) of the frozen depth-16 CHECK pipeline. It is **not** a TCP
+socket throughput measurement and is not a substitute for BENCHIT or TAKETHIS.
+
 ## Test Environment
 
 | Item | Value |
@@ -314,6 +318,86 @@ Raw harness output: `.artifacts/takethis-performance-md/takethis-results.txt`.
   transport ceiling, not a product SLA, and not a claim that VectorNNTP supports a universal Gbit/s
   rate.
 
+## CHECK
+
+Production CHECK pipeline depth: **16 (fixed)**. Depth is not configurable and is not a benchmark
+parameter.
+
+`CHECK` is a **session/application** benchmark. It exercises the production `NntpSession` CHECK
+path (`CheckPipeline`, HistoryDB, response writer) over in-process duplex Pipes with a bench-only
+fake Redis. It does **not** open a TCP socket and must not be read as Internet-scale or TCP CHECK
+throughput.
+
+The authoritative client is `tools/VectorNNTP.NNTPD.Bench --benchmark CHECK`. Workload parameters
+match the frozen validation session bench (`.artifacts/check-historydb-bench/PipelineSessionBench.cs`).
+
+### CHECK methodology
+
+- Benchmark type: session/application (`NntpSession` + Pipes + fake Redis).
+- Not measured: TCP socket throughput, TLS, DEFLATE, multi-session concurrency.
+- Sessions: one in-process session per workload row.
+- Fake Redis: `CheckDelayedRedis` (`Task.Delay` for 1/2/5 ms; optional first-call failure).
+- Local HistoryDB: production `HistoryDb` constructed with the public constructor.
+- CHECK count: 2000 when Redis delay is 0 ms; 200 when delay is 1, 2, or 5 ms.
+- Warm-up: none. `GC.Collect` + `GC.WaitForPendingFinalizers` + `GC.Collect` before each measure
+  (same as the validation session bench). Allocation B/op is **not** reported: session setup and
+  GC around this harness are not a trustworthy per-CHECK allocation measure.
+- Redis delays: 0 / 1 / 2 / 5 ms. Delayed rows are 1 / 2 / 5 ms only for redis-hit, redis-miss,
+  and local-hit. Cooldown is 0 ms.
+- Concurrency: production CHECK overlap only (`CheckPipeline.Depth` = 16). No extra `Task.Run`.
+- Ordering: hard fail if a response Message-ID is not in command send order. A successful run
+  therefore reports `Ordered = True` for every row.
+- Peak in-flight: `CheckPipeline.PeakOccupied`. The run fails if the peak exceeds 16.
+
+Workload semantics:
+
+| Workload | Local HistoryDB | Redis EXISTS | Expected response |
+| --- | --- | --- | --- |
+| redis-hit | miss | true | `438` |
+| redis-miss | miss | false | `238` |
+| local-hit | hit | must not be consulted | `438` |
+| cooldown | miss | first EXISTS throws; remaining CHECKs see cooldown | `431` |
+
+### CHECK results
+
+Single Release run on the test host (`Windows 10.0.26200`, Intel Core i9-12900KF). Every row
+completed with `Ordered = True`. Allocation figures are omitted.
+
+| Workload | Redis Delay | CHECKs | CHECK/s | Peak In-Flight | Redis EXISTS | Responses | Ordered |
+|---|---:|---:|---:|---:|---:|---|---|
+| redis-hit | 0 ms | 2000 | 50691 | 1 | 2000 | 438×2000 | True |
+| redis-hit | 1 ms | 200 | 1025 | 16 | 200 | 438×200 | True |
+| redis-hit | 2 ms | 200 | 990 | 16 | 200 | 438×200 | True |
+| redis-hit | 5 ms | 200 | 986 | 16 | 200 | 438×200 | True |
+| redis-miss | 1 ms | 200 | 986 | 16 | 200 | 238×200 | True |
+| redis-miss | 2 ms | 200 | 984 | 16 | 200 | 238×200 | True |
+| redis-miss | 5 ms | 200 | 983 | 16 | 200 | 238×200 | True |
+| local-hit | 0 ms | 2000 | 115079 | 1 | 0 | 438×2000 | True |
+| local-hit | 1 ms | 200 | 161577 | 1 | 0 | 438×200 | True |
+| local-hit | 2 ms | 200 | 264620 | 1 | 0 | 438×200 | True |
+| local-hit | 5 ms | 200 | 157704 | 1 | 0 | 438×200 | True |
+| cooldown | 0 ms | 2000 | 226817 | 1 | 1 | 431×2000 | True |
+
+Elapsed wall times recorded by the harness (same run): redis-hit 0 ms = 39.5 ms; redis-hit
+1/2/5 ms = 195.2 / 202.0 / 202.8 ms; redis-miss 1/2/5 ms = 202.9 / 203.2 / 203.4 ms;
+local-hit 0 ms = 17.4 ms; local-hit 1/2/5 ms = 1.2 / 0.8 / 1.3 ms; cooldown = 8.8 ms.
+
+### CHECK interpretation
+
+- CHECK execution is bounded to 16 outstanding operations per session. Delayed Redis workloads
+  reached peak in-flight 16. Zero-delay and local-hit workloads completed with peak in-flight 1
+  because Redis returned before the next CHECK was admitted.
+- Delayed redis-hit and redis-miss throughput on this Windows host was approximately 983–1025
+  CHECK/s for 200 commands. The 1 / 2 / 5 ms `Task.Delay` rows did not produce distinct elapsed
+  times. These are measured session/application numbers with a fake delayed Redis, not TCP
+  throughput.
+- local-hit did not consult Redis (`EXISTS = 0`). The 1 / 2 / 5 ms local-hit rows still ignore
+  Redis; their CHECK/s variation is from a ~1 ms elapsed window over 200 commands and is not a
+  Redis-latency result.
+- cooldown: first Redis EXISTS failed; the remaining CHECKs returned `431`; EXISTS count stayed at
+  1. Redis was not hammered after cooldown.
+- Do not extrapolate these figures to production network throughput.
+
 ## Workload comparison
 
 BENCHIT and TAKETHIS are different workloads. Neither replaces the other.
@@ -382,6 +466,12 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
 
 `--duration` is an alias for `--measure-seconds`. `--port` is an alias for `--plain-port`.
 
+CHECK does not use the TCP host/port flags. It runs in-process:
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --benchmark CHECK
+```
+
 ## Limitations
 
 - Static in-memory article.
@@ -402,6 +492,11 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
 - Logical Gbit/s should not be interpreted as network wire throughput when compression is active.
 - Results are specific to the test host, network path, runtime, OS, and benchmark implementation.
 - Benchmark client and server share the same physical host, so isolated server-only capacity was not measured.
+- CHECK is a session/application measure (`NntpSession` + Pipes + fake Redis). It is not TCP CHECK
+  throughput and is not comparable to BENCHIT req/s or TAKETHIS/sec.
+- CHECK Redis latency is `Task.Delay` in a bench-only fake. On this Windows host the 1 / 2 / 5 ms
+  delayed rows completed in essentially the same elapsed time.
+- CHECK allocation B/op is not reported.
 
 ## Future Performance Work
 
@@ -441,3 +536,6 @@ establish that the socket/transport architecture is fundamentally sound.
   completed on 2026-09-23 against production `VectorNNTP.NNTPD` on `198.18.0.66:1199`
 - TAKETHIS harness exit code 0 on every cell; 100% `239`; zero `439` / protocol / connection errors
 - TAKETHIS raw output retained at: `.artifacts/takethis-performance-md/takethis-results.txt`
+- CHECK session/application benchmark (`--benchmark CHECK`, Release) completed on 2026-09-24;
+  every workload reported `ordered=True`; peak in-flight 16 on delayed Redis rows; local-hit
+  EXISTS 0; cooldown EXISTS 1

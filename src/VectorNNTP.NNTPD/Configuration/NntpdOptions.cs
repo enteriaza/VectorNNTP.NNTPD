@@ -327,6 +327,15 @@ public sealed class NntpdOptions
     public TransitOptions Transit { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets how long a HistoryDB marker is retained in local memory and Redis.
+    /// </summary>
+    /// <remarks>
+    /// Default is two hours. Redis uses native key TTL. The in-memory store expires the same
+    /// digest after this period. HistoryDB policy lives here, not on <see cref="RedisOptions"/>.
+    /// </remarks>
+    public TimeSpan HistoryTime { get; set; } = TimeSpan.FromHours(2);
+
+    /// <summary>
     /// Gets or sets article ingestion / incoming spool options.
     /// </summary>
     /// <remarks>

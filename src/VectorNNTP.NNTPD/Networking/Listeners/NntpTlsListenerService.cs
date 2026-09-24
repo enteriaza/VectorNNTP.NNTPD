@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -29,6 +30,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ITrustedProxyHosts _trustedProxyHosts;
     private readonly INntpAuthenticationProvider _authenticationProvider;
     private readonly IArticleIngestionQueue _articleIngestion;
+    private readonly IHistoryDb? _historyDb;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
     private readonly ILoggerFactory _loggerFactory;
@@ -50,7 +52,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ITransitPeerAuthorization transitPeerAuthorization,
         ILoggerFactory loggerFactory,
         ILogger<NntpTlsListenerService> logger,
-        ITransitInboundConnectionLimiter? inboundConnectionLimiter = null)
+        ITransitInboundConnectionLimiter? inboundConnectionLimiter = null,
+        IHistoryDb? historyDb = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -67,6 +70,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _articleIngestion = articleIngestion;
         _transitPeerAuthorization = transitPeerAuthorization;
         _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
+        _historyDb = historyDb;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -239,7 +243,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 loggerFactory: _loggerFactory,
                 articleIngestion: _articleIngestion,
                 transitPeerAuthorization: _transitPeerAuthorization,
-                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth);
+                streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth,
+                historyDb: _historyDb);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

@@ -33,6 +33,7 @@ internal sealed class NntpReaderCommandRx
     public async ValueTask<bool> ProcessOneAsync(NntpResponseWriter response, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(response);
+        await _session.WaitForCheckCapacityAsync(cancellationToken).ConfigureAwait(false);
         var length = await NntpCommandLineReader
             .ReadLineBytesAsync(_session.Connection.Input, _commandScratch, cancellationToken)
             .ConfigureAwait(false);
@@ -44,7 +45,7 @@ internal sealed class NntpReaderCommandRx
         var line = _commandScratch.AsMemory(0, length);
         var command = NntpCommandParser.Parse(line.Span);
         await _session
-            .DispatchCommandAsync(
+            .ProcessParsedCommandAsync(
                 _dispatcher,
                 response,
                 _logger,
