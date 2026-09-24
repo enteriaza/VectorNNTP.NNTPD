@@ -77,7 +77,7 @@ Session concepts (distinct):
 - **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`, plus optional `TransitPeerName` / `TransitPeerPolicy`). Defaults: unauthenticated; streaming and posting denied. Connection-time identification uses the top-level `Transit` dictionary (peer names as keys). The effective client IP is matched against that peer's `AllowFrom` ACL (literal IPs/CIDRs plus currently resolved DNS addresses). A unique match grants `AuthorizedTransit` + `StreamingPermitted` without authentication and retains the named peer policy (credentials, Patterns, limits, `DeferOnDuplicate`, TLS mode). This is peer privilege, not user identity. `MODE STREAM` requires `StreamingPermitted`; `IHAVE`/`CHECK`/`TAKETHIS` require `AuthorizedTransit` (not AUTHINFO). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
 - **Dispatch:** `NntpCommandParser` classifies and validates syntax on **bytes** and produces a validated `NntpCommand`; invalid syntax is rejected immediately. `NntpCommandDispatcher` then applies authentication → authorization → mode → enum/switch handler. Protocol representation is defined in [Byte-Oriented Protocol Data Plane](#byte-oriented-protocol-data-plane).
 
-Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions (peer ACL or authenticated transit): multiline article receive → bounded in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` requires `StreamingPermitted` and returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting remain registered placeholders (`500` / `501` after authz gates). `IHAVE` (RFC 3977 §6.3.2) is implemented as a serial transit ingest proof of concept. `CHECK` uses HistoryDB (local memory then Redis). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
+Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions (peer ACL or authenticated transit): multiline article receive → byte-budgeted in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` requires `StreamingPermitted` and returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting remain registered placeholders (`500` / `501` after authz gates). `IHAVE` (RFC 3977 §6.3.2) is implemented as a serial transit ingest proof of concept. `CHECK` uses HistoryDB (local memory then Redis). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
 
 ### Article ingestion (TAKETHIS)
 
@@ -86,7 +86,7 @@ TAKETHIS
    ↓
 read/unstuff multiline article (session receive path)
    ↓
-bounded in-memory ingestion queue
+byte-budgeted in-memory ingestion queue (`Nntpd:TransitQueueMemoryLimit`, default 1 GiB)
    ↓
 background IncomingSpoolWriterService
    ↓
@@ -108,13 +108,15 @@ input Pipe
   ↓
 IHAVE command (HistoryDB PeekAsync)
   ↓
+non-blocking Transit queue probe (no size reservation)
+  ↓
 335 / 435 / 436
   ↓
 raw article reader (CRLF . CRLF framing)
   ↓
 one owned NNTP wire buffer (dot-stuffing preserved; terminator omitted)
   ↓
-same ingestion queue as TAKETHIS (InboundArticle.Producer = IHave)
+non-blocking TryAdmit (never waits for queue memory)
   ↓
 235 / 436 / 437
   ↓
@@ -129,7 +131,7 @@ IhaveArticleInterpreter (destuff exactly once → Article)
 - **Article.Size:** destuffed complete article (headers + blank line + body). Terminator excluded. Same meaning as `MaxArticleBytes` (“after dot-unstuffing”).
 - **Body representation:** destuffed received bytes. yEnc/BASE64/uuencode are **not** decoded.
 - **HistoryDB:** IHAVE uses `PeekAsync` (no miss reservation) then `Remember` after a successful enqueue. CHECK still uses `LookupAsync`.
-- **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis`. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue.
+- **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis` and may wait for byte-budget capacity. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after receive. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
 
 AUTHINFO flow:
 

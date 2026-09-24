@@ -21,6 +21,7 @@ internal sealed class IhaveConnection : IAsyncDisposable
     private readonly TimeSpan _duration;
     private readonly TimeSpan _warmup;
     private readonly bool _uniqueMessageIds;
+    private readonly int? _timingSamples;
 
     private Socket? _socket;
     private NetworkStream? _stream;
@@ -37,9 +38,15 @@ internal sealed class IhaveConnection : IAsyncDisposable
         IhavePreparedArticles articles,
         TimeSpan duration,
         TimeSpan warmup,
-        bool uniqueMessageIds = true)
+        bool uniqueMessageIds = true,
+        int? timingSamples = null)
     {
         ArgumentNullException.ThrowIfNull(articles);
+        if (timingSamples is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timingSamples));
+        }
+
         _id = id;
         _host = host;
         _port = port;
@@ -47,6 +54,7 @@ internal sealed class IhaveConnection : IAsyncDisposable
         _duration = duration;
         _warmup = warmup;
         _uniqueMessageIds = uniqueMessageIds;
+        _timingSamples = timingSamples;
     }
 
     public long Sent { get; private set; }
@@ -61,6 +69,7 @@ internal sealed class IhaveConnection : IAsyncDisposable
     public int WireCommandBytes { get; private set; }
     public int MaxOutstanding { get; private set; }
     public Exception? Fault { get; private set; }
+    public IhaveTimingSample[]? TimingSamples { get; private set; }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -74,7 +83,14 @@ internal sealed class IhaveConnection : IAsyncDisposable
                 ResetMeasureCounters();
             }
 
-            await RunWindowAsync(_duration, record: true, cancellationToken).ConfigureAwait(false);
+            if (_timingSamples is int sampleCount)
+            {
+                await RunSamplesAsync(sampleCount, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await RunWindowAsync(_duration, record: true, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is SocketException or IOException or EndOfStreamException or ObjectDisposedException)
         {
@@ -167,6 +183,69 @@ internal sealed class IhaveConnection : IAsyncDisposable
             }
         }
     }
+
+    public async Task RunSamplesAsync(int sampleCount, CancellationToken cancellationToken)
+    {
+        if (_socket is null || _stream is null)
+        {
+            throw new InvalidOperationException($"Connection {_id} is not connected.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleCount);
+        var command = new IhaveCommandBuffer(_id);
+        WireCommandBytes = command.Length;
+        var samples = new IhaveTimingSample[sampleCount];
+
+        for (var i = 0; i < sampleCount; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _sequence++;
+            command.SetSequence(_uniqueMessageIds ? _sequence : 1);
+            var article = _articles.Next(ref _articleIndex);
+
+            var t0 = Stopwatch.GetTimestamp();
+            await SendAllAsync(command.Segment, cancellationToken).ConfigureAwait(false);
+            var tCommand = Stopwatch.GetTimestamp();
+            var offer = await ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            var t335 = Stopwatch.GetTimestamp();
+            if (!IsStatus(offer, "335 "))
+            {
+                RecordUnexpectedOffer(offer, record: true);
+                TimingSamples = samples[..i];
+                return;
+            }
+
+            await SendAllAsync(article, cancellationToken).ConfigureAwait(false);
+            var tArticle = Stopwatch.GetTimestamp();
+            var result = await ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            var t235 = Stopwatch.GetTimestamp();
+            if (!IsStatus(result, "235 "))
+            {
+                RecordUnexpectedResult(result, record: true);
+                TimingSamples = samples[..i];
+                return;
+            }
+
+            samples[i] = new IhaveTimingSample(
+                article.Length,
+                ToMicroseconds(t0, tCommand),
+                ToMicroseconds(tCommand, t335),
+                ToMicroseconds(t335, tArticle),
+                ToMicroseconds(tArticle, t235),
+                ToMicroseconds(t0, t235));
+
+            Sent++;
+            Accepted235++;
+            ArticleBytesSent += article.Length;
+            BytesSent += command.Length + article.Length;
+            MaxOutstanding = 1;
+        }
+
+        TimingSamples = samples;
+    }
+
+    private static long ToMicroseconds(long start, long end) =>
+        (long)Stopwatch.GetElapsedTime(start, end).TotalMicroseconds;
 
     private void RecordUnexpectedOffer(string? offer, bool record)
     {

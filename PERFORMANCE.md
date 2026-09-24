@@ -322,6 +322,12 @@ Raw harness output: `.artifacts/takethis-performance-md/takethis-results.txt`.
   transport ceiling, not a product SLA, and not a claim that VectorNNTP supports a universal Gbit/s
   rate.
 
+After the Transit queue became byte-budgeted, a 1-connection TAKETHIS regression
+(`--connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 --pipeline-depth 256`,
+PID 23056) measured 1645.0 / 1705.1 TAKETHIS/s (10.108 / 10.477 Gbit/s), 100% `239`.
+That is a regression check, not a claimed TAKETHIS optimization. Raw output:
+`.artifacts/takethis-performance-md/takethis-1conn-byte-budget.txt`.
+
 ## CHECK
 
 Production CHECK pipeline depth: **16 (fixed)**. Depth is not configurable and is not a benchmark
@@ -483,10 +489,66 @@ Command line: 54 bytes. Average prepared article on the wire: 728,764 bytes.
 
 Raw harness output: `.artifacts/ihave-command-bench/results.txt`.
 
+### Transit article-queue memory (`TransitQueueMemoryLimit`)
+
+Transit article buffering is **byte-budgeted** rather than fixed at 256 articles.
+
+| Setting | Default | This host during the after-run |
+| --- | ---: | ---: |
+| `Nntpd:TransitQueueMemoryLimit` | `1073741824` (1 GiB) | `4294967296` (4 GiB, `appsettings.json`) |
+
+The budget is the sum of owned queued article payload lengths
+(`InboundArticle.Payload.Length`). It is not process-wide memory. The historical
+256-article count bound was only a memory-safety choke and is no longer an
+admission limit. A larger queue is intended to absorb bursts between ingress and
+downstream workers; it is not a throughput optimization by itself.
+
+### IHAVE after byte-budgeted queue
+
+Same command, same corpus, same host, after replacing the 256-article cap with
+the byte budget. Server PID 23056. 100% `235`, zero rejects/errors.
+
+| Mode  | Conn | Serialization |      IHAVE/s |     Logical Gbps |       Wire Gbps |            Sent |             235 | 435 | Err |     CPU % |
+| ----- | ---: | ------------ | -----------: | ---------------: | --------------: | --------------: | --------------: | --: | --: | --------: |
+| plain |    1 | serialized   | 740.8 / 765.3 |    4.319 / 4.462 |   4.319 / 4.462 |   48179 / 49748 |   48179 / 49748 |   0 |   0 |   9.2–9.6 |
+
+Raw harness output: `.artifacts/ihave-command-bench/results-byte-budget.txt`.
+
+This is **not** an optimization victory. Serialized 1-connection IHAVE/s did not
+improve versus the 256-entry baseline above (771.9 / 777.3). The result is
+reported as measured.
+
+### IHAVE non-blocking queue admission (final)
+
+IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure. It does
+not wait for queue memory. Temporary inability to accept is `436`.
+
+- Before `335`: `TryProbeCapacity` (any remaining payload byte; no MaxSize
+  reservation).
+- After receive: `TryAdmit` (atomic reserve of the actual owned payload length).
+- Article larger than the entire budget remains `437`.
+
+Same command, same corpus, same host. Server PID 9520. 100% `235`, zero
+`435` / `436` / `437` / errors.
+
+| Mode  | Conn | Serialization |      IHAVE/s |     Logical Gbps |       Wire Gbps |            Sent |             235 | 435 | Err |     CPU % |
+| ----- | ---: | ------------ | -----------: | ---------------: | --------------: | --------------: | --------------: | --: | --: | --------: |
+| plain |    1 | serialized   | 772.8 / 778.2 |    4.506 / 4.537 |   4.506 / 4.537 |   50262 / 50590 |   50262 / 50590 |   0 |   0 |  9.4–10.1 |
+
+Raw harness output: `.artifacts/ihave-command-bench/results-nonblocking-admission.txt`.
+
+This is a regression/validation run, not an IHAVE optimization. IHAVE is
+complete at this admission contract.
+
 ### IHAVE interpretation
 
-- Measured single-connection serialized IHAVE throughput: approximately 772–777 articles/s
+- Baseline (256-article queue): approximately 772–777 articles/s
   (approximately 4.50–4.53 Gbit/s logical) on this host and workload.
+- After byte-budgeted queue: approximately 741–765 articles/s
+  (approximately 4.32–4.46 Gbit/s logical). Not higher than the baseline.
+- After non-blocking IHAVE admission: approximately 773–778 articles/s
+  (approximately 4.51–4.54 Gbit/s logical). In the same range as the original
+  256-entry command-bench baseline.
 - Every accepted IHAVE completed the production HistoryDB peek, raw article receive, queue
   admission, and `235` response. Duplicate Message-IDs were not used.
 - Max outstanding was 1 (serialized). IHAVE was not pipelined.
@@ -494,6 +556,85 @@ Raw harness output: `.artifacts/ihave-command-bench/results.txt`.
 - These figures are measurements of this serialized IHAVE command path on this host. They are
   not a transport ceiling, not a product SLA, and not interchangeable with TAKETHIS/sec or
   the forensic IHAVE Pipe-reader MB/s numbers.
+
+### IHAVE Serialized Command Timing — Diagnostic
+
+This section is **not** the authoritative IHAVE throughput result. It does not replace
+the 771.9 / 777.3 IHAVE/s table above. `--benchmark IHAVE --timing` samples client-visible
+phases with `Stopwatch.GetTimestamp`. Production IHAVE / HistoryDB / Redis were not
+instrumented. `--timing` is off by default and is not used by the duration throughput path.
+
+Configuration (2026-09-24, same host as the command benchmark):
+
+- `--benchmark IHAVE --timing --samples 4000 --host 198.18.0.66 --port 1199 --connections 1 --warmup-seconds 5 --server-pid 29136`
+- Real TCP to production `VectorNNTP.NNTPD`; production HistoryDB + Redis `198.18.0.70:6379`
+- Same prepared `.artifacts/Articles` prefix (368 articles, restuffed wire in memory)
+- Serialized; 5 s warmup not sampled; 4000 completed `235` samples; 0 unexpected rejects
+- Clock: `Stopwatch.GetTimestamp` (monotonic)
+- Raw output: `.artifacts/ihave-command-bench/timing.txt`, `timing.csv`
+
+**What `235` means:** `IHave.ExecuteAsync` writes `235` after `HistoryDb.PeekAsync`, the
+`335` write, `IHaveArticleReader.ReadAsync` (frame + own stuffed wire), `EnqueueAsync`,
+and `Remember`. `IhaveArticleInterpreter` destuff/`Article` construction runs later in
+`IncomingSpoolWriterService` and is **not** on the `235` path.
+
+Phase timings (microseconds), last clean 4000-sample run:
+
+| Phase | Mean | P50 | P90 | P95 | P99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| command send | 18.8 | 16.0 | 34.0 | 40.0 | 51.0 |
+| IHAVE sent → 335 | 273.1 | 228.0 | 359.0 | 425.0 | 590.0 |
+| 335 → article sent | 153.4 | 147.0 | 174.0 | 206.0 | 289.0 |
+| article sent → 235 | 1086.6 | 567.0 | 1086.4 | 2915.6 | 14979.1 |
+| transaction (IHAVE→235) | 1533.3 | 991.5 | 1657.5 | 4284.4 | 15518.2 |
+
+Average sampled article: 728,575 wire bytes. Mean client article send: 38.0 Gbit/s
+(729 KiB in 153 µs). That is not the 1.29 ms budget.
+
+An earlier 4000-sample repeat in the same session (also 100% `235`) measured mean
+transaction 1233.3 µs (P50 921.0). Tails on `article sent → 235` were already present
+(P99 ≈ 12 ms).
+
+Interpretation (measured, not predicted):
+
+- **Most of the serialized transaction is `article sent → 235`**, not HistoryDB.
+  That interval is server receive/frame/own + `EnqueueAsync` + `Remember` + `235` write
+  + one RTT. P50 is ~0.5–0.6 ms; the mean is pulled up by a long tail (P99 12–15 ms),
+  consistent with occasional queue wait (`EnqueueAsync` waits when the 256-deep queue is
+  full). Worker destuff is after `235` but can still delay the next `EnqueueAsync`.
+- **`IHAVE sent → 335` is ~0.23–0.27 ms mean** (P99 < 0.6 ms). That is the entire
+  command parse/dispatch + HistoryDB `PeekAsync` (local miss then Redis `EXISTS`) +
+  `335` write + RTT. Isolated Redis latency was **not** measured; there is no
+  production HistoryDB timing seam. On this host Redis PING at server start was 0 ms.
+  Calling this path “1 ms Redis” is not supported by the client-visible offer time.
+- Client article transfer is ~0.15 ms mean and is not the dominant term.
+- Command send is ~0.02 ms.
+
+Reconciliation with ~777 IHAVE/s:
+
+- Published 777.3 IHAVE/s uses wall elapsed including 5 s warmup (65.0 s), so
+  1e6/777.3 = **1286.5 µs**. Measure-window-only for that run is 50183/60 =
+  **836.4 IHAVE/s** → **1196 µs**.
+- Diagnostic mean 1233 µs (earlier repeat) implies 811 IHAVE/s; P50 921 µs implies
+  1086 IHAVE/s. Those sit next to the measure-window 836/s figure. The published
+  777/s is lower because warmup is in the denominator.
+- The last timing run’s mean 1533 µs (652 IHAVE/s) is slower than the duration
+  table; its P99 tail is heavier. That is reported, not discarded.
+
+Limitations:
+
+- Client-side only. HistoryDB Peek vs `335` write vs RTT are not split.
+- Redis `EXISTS` distribution was not recorded inside `HistoryDb`.
+- No HistoryDB-bypass control: the live host has no bench-only seam, and
+  `history is null` is a production unconfigured path, not a diagnostic switch.
+- Sampling 4000 timed transactions adds `Stopwatch` reads on that mode only.
+- After this diagnostic work, a duration IHAVE rerun (same flags, **no** `--timing`)
+  measured 739.9 / 675.6 IHAVE/s. The default path still has no per-article timers.
+  That after-result is a check, not a replacement of the published table.
+
+Candidate follow-up (not implemented): measure `EnqueueAsync` wait vs reader time
+vs worker destuff rate; optional off-by-default HistoryDB/Redis probe if a later
+task needs a true EXISTS distribution.
 
 ## IHAVE RAW receive microbenchmark (forensic)
 
@@ -682,6 +823,15 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
 
 `--benchmark IHAVE` is the real serialized command path. It is not the forensic Pipe-reader
 microbenchmark.
+
+Diagnostic timing (does not replace the duration table):
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark IHAVE --timing --samples 4000 `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --server-pid <pid>
+```
 
 ## Limitations
 

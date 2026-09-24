@@ -227,14 +227,17 @@ public sealed class TakeThisCommandTests
     [Fact]
     public async Task TakeThis_QueueFull_AppliesBackpressureThenAccepts()
     {
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 1 });
+        const string firstPayload = "Subject: 1\r\n\r\na\r\n";
+        var queue = new ArticleIngestionQueue(
+            new ArticleIngestionOptions(),
+            Encoding.ASCII.GetByteCount(firstPayload));
         await using var duplex = await TakeThisDuplex.CreateAsync();
         var session = duplex.CreateSession(queue);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
-        await duplex.WriteClientAsync(BuildTakeThis("<q1@ex.com>", "Subject: 1\r\n\r\na\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<q1@ex.com>", firstPayload));
         Assert.Equal("239 <q1@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
 

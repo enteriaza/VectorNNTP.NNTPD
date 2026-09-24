@@ -30,8 +30,9 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
 | `HistoryTime` | `TimeSpan` | `02:00:00` | no | HistoryDB retention for local memory and Redis key TTL (`1s`–`7d`) |
+| `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
-| `ArticleIngestion:QueueCapacity` | int | `256` | no | Bounded in-memory ingestion queue size (`1–100000`) |
+| `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
 | `Transit:{peer-name}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; see below). |
@@ -39,6 +40,24 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
 CHECK in-flight depth is **not configurable**. Per-session overlap is the architectural constant `CheckPipeline.Depth` = 16 (see `docs/architecture.md`). A leftover `Nntpd:CheckPipelineDepth` key is ignored.
+
+## Transit article-queue memory (`TransitQueueMemoryLimit`)
+
+`Nntpd:TransitQueueMemoryLimit` is the Transit article-queue **payload** budget in bytes. Default is `1073741824` (exactly 1 GiB). Zero and negative values fail startup validation. The implementation accounts with a signed 64-bit integer, so the maximum representable value is `9223372036854775807`.
+
+The budget is the sum of owned queued article payload lengths (`InboundArticle.Payload.Length`): complete NNTP article bytes as queued. For IHAVE that is stuffed wire with the terminating `CRLF . CRLF` excluded. Object overhead is not counted. This is **not** total process memory.
+
+Larger values permit more burst absorption between network ingress and downstream workers. Memory is released as queued articles are consumed. An individual article larger than the configured budget is rejected (IHAVE `437`, TAKETHIS `439`) rather than waited for, so admission cannot deadlock.
+
+`ArticleIngestion:QueueCapacity` is a leftover article-count setting retained so existing configuration files still bind. It is **not** an admission bound. The historical 256-article cap was only a memory-safety choke and has been removed.
+
+Example:
+
+```json
+"Nntpd": {
+  "TransitQueueMemoryLimit": 1073741824
+}
+```
 
 ## Redis
 

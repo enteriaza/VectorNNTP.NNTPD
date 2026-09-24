@@ -75,6 +75,53 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void TransitQueueMemoryLimit_DefaultsToOneGibibyte()
+    {
+        Assert.Equal(1_073_741_824L, NntpdOptions.DefaultTransitQueueMemoryLimit);
+        Assert.Equal(NntpdOptions.DefaultTransitQueueMemoryLimit, new NntpdOptions().TransitQueueMemoryLimit);
+        Assert.Equal(NntpdOptions.DefaultTransitQueueMemoryLimit, TestHostFactory.CreateValidOptions().TransitQueueMemoryLimit);
+        Assert.True(CreateValidator().Validate(null, TestHostFactory.CreateValidOptions()).Succeeded);
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursTransitQueueMemoryLimit()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:TransitQueueMemoryLimit"] = "2097152",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(2_097_152L, options.TransitQueueMemoryLimit);
+        var valid = TestHostFactory.CreateValidOptions();
+        valid.TransitQueueMemoryLimit = options.TransitQueueMemoryLimit;
+        Assert.True(CreateValidator().Validate(null, valid).Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(long.MinValue)]
+    public void Validate_Fails_ForNonPositiveTransitQueueMemoryLimit(long limit)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.TransitQueueMemoryLimit = limit;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains("TransitQueueMemoryLimit", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForMinimumTransitQueueMemoryLimit()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.TransitQueueMemoryLimit = 1;
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
     public void Validate_Fails_ForEmptyApplicationName()
     {
         var options = TestHostFactory.CreateValidOptions();

@@ -43,6 +43,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateDnsSuffixAndServerId(options, failures);
         ValidateAcme(options, failures);
         ValidateArticleIngestion(options, failures);
+        ValidateTransitQueueMemoryLimit(options, failures);
         ValidateTransit(options, failures);
 
         return failures.Count > 0
@@ -81,6 +82,15 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         if (ingestion.MaxArticleBytes is < 1 or > 100 * 1024 * 1024)
         {
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxArticleBytes)} must be between 1 and 104857600.");
+        }
+    }
+
+    private static void ValidateTransitQueueMemoryLimit(NntpdOptions options, List<string> failures)
+    {
+        if (options.TransitQueueMemoryLimit < 1)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.TransitQueueMemoryLimit)} must be a positive byte count (1 through {long.MaxValue}).");
         }
     }
 

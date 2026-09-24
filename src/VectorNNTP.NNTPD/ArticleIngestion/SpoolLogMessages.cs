@@ -18,8 +18,8 @@ internal static partial class SpoolLogMessages
     [LoggerMessage(
         EventId = 2002,
         Level = LogLevel.Information,
-        Message = "Incoming spool writer started (capacity {Capacity}, max article {MaxBytes} bytes, dir {Dir})")]
-    public static partial void WriterStarted(ILogger logger, int Capacity, int MaxBytes, string Dir);
+        Message = "Incoming spool writer started (transit queue memory limit {MemoryLimit} bytes, max article {MaxBytes} bytes, dir {Dir})")]
+    public static partial void WriterStarted(ILogger logger, long MemoryLimit, int MaxBytes, string Dir);
 
     [LoggerMessage(
         EventId = 2003,

@@ -22,7 +22,7 @@ internal sealed class IhaveCommandBuffer
     private const int ConnectionIdOffset = 19;
     private const int SequenceOffset = 22;
 
-    private static long _nextInstance = 1;
+    private static long _nextInstance = DateTime.UtcNow.Ticks % 10_000_000_000L;
 
     private readonly byte[] _command;
 

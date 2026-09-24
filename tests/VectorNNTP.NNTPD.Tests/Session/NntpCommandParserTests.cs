@@ -1,6 +1,8 @@
 using System.IO.Pipelines;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -251,7 +253,7 @@ public sealed class NntpCommandParserTests
     public async Task Ihave_BasicEnvelope_ReachesHandler_NotAnIdInteriorIsNotRejectedByParser()
     {
         await using var duplex = await ParserDuplex.CreateAsync();
-        var session = duplex.CreateSession();
+        var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
         session.SetAuthorization(new NntpAuthorization(
             isAuthenticated: true,
             authorizedReader: false,
@@ -331,13 +333,16 @@ public sealed class NntpCommandParserTests
 
         public static Task<ParserDuplex> CreateAsync() => Task.FromResult(new ParserDuplex());
 
-        public NntpSession CreateSession()
+        public NntpSession CreateSession(IArticleIngestionQueue? queue = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
                 _serverToClient.Writer,
                 ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)));
-            return new NntpSession(connection, NullLogger<NntpSession>.Instance);
+            return new NntpSession(
+                connection,
+                NullLogger<NntpSession>.Instance,
+                articleIngestion: queue);
         }
 
         public async Task WriteClientAsync(string payload)

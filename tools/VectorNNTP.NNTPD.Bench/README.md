@@ -104,6 +104,22 @@ Use the flags above to match the BENCHIT/TAKETHIS methodology recorded in
 This is **not** the earlier IHAVE Pipe-reader microbenchmark. That forensic
 measure remains documented separately in `PERFORMANCE.md`.
 
+### IHAVE diagnostic timing
+
+`--timing` samples client-visible phases with `Stopwatch.GetTimestamp`. It does
+not change the default duration throughput path. Default sample count is 4000.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark IHAVE --timing --samples 4000 `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --server-pid <pid>
+```
+
+Writes `.artifacts/ihave-command-bench/timing.txt` and `timing.csv`.
+`235` is queue admission, not worker destuff. HistoryDB Peek is inside
+`IHAVE sent → 335` and is not isolated from the 335 RTT.
+
 ## iperf3 baseline
 
 ```powershell

@@ -336,11 +336,36 @@ public sealed class NntpdOptions
     public TimeSpan HistoryTime { get; set; } = TimeSpan.FromHours(2);
 
     /// <summary>
+    /// Default Transit article-queue memory budget: 1 GiB (1,073,741,824 bytes).
+    /// </summary>
+    public const long DefaultTransitQueueMemoryLimit = 1_073_741_824L;
+
+    /// <summary>
+    /// Gets or sets the Transit article-queue memory budget in bytes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bounds the sum of owned queued article payload lengths
+    /// (<c>InboundArticle.Payload.Length</c>): complete NNTP article bytes as
+    /// queued (IHAVE: stuffed wire, terminating <c>CRLF . CRLF</c> excluded).
+    /// It does not include object overhead and is not a process-wide memory cap.
+    /// Memory is released when queued articles are consumed.
+    /// </para>
+    /// <para>
+    /// Default is 1 GiB. Valid range is <c>1</c> through <see cref="long.MaxValue"/>
+    /// (signed 64-bit accounting). An individual article larger than this budget
+    /// is rejected rather than waited for, so admission cannot deadlock.
+    /// </para>
+    /// </remarks>
+    public long TransitQueueMemoryLimit { get; set; } = DefaultTransitQueueMemoryLimit;
+
+    /// <summary>
     /// Gets or sets article ingestion / incoming spool options.
     /// </summary>
     /// <remarks>
-    /// Defaults: queue capacity 256, max article 4 MiB, directory <c>spool/incoming</c>.
-    /// Used by <c>TAKETHIS</c> (and later <c>POST</c>).
+    /// Defaults: max article 4 MiB, directory <c>spool/incoming</c>.
+    /// Queue admission is bounded by <see cref="TransitQueueMemoryLimit"/>, not
+    /// an article-count cap. Used by <c>TAKETHIS</c> and <c>IHAVE</c>.
     /// </remarks>
     [Required]
     public ArticleIngestionOptions ArticleIngestion { get; set; } = new();

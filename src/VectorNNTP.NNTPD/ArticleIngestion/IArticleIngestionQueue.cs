@@ -1,16 +1,29 @@
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>
-/// Bounded in-memory ingestion boundary between NNTP receive handlers and the spool writer.
+/// Byte-budgeted in-memory ingestion boundary between NNTP receive handlers and the spool writer.
 /// </summary>
 /// <remarks>
-/// Enqueue completes when capacity is available (or fails when the queue is completed).
-/// Callers must not perform disk I/O; persistence is owned by the background spool writer.
+/// Enqueue completes when payload-byte capacity is available (or fails when the queue is
+/// completed, or when a single article exceeds the configured budget). Callers must not
+/// perform disk I/O; persistence is owned by the background spool writer.
 /// </remarks>
 public interface IArticleIngestionQueue
 {
-    /// <summary>Gets the configured maximum number of queued articles.</summary>
-    int Capacity { get; }
+    /// <summary>
+    /// Gets the configured Transit article-queue memory budget in bytes
+    /// (<c>Nntpd:TransitQueueMemoryLimit</c>).
+    /// </summary>
+    long MemoryLimitBytes { get; }
+
+    /// <summary>
+    /// Gets reserved queued article payload bytes
+    /// (sum of owned <see cref="InboundArticle.Payload"/> lengths).
+    /// </summary>
+    long QueuedBytes { get; }
+
+    /// <summary>Gets the high-water mark of <see cref="QueuedBytes"/> since construction.</summary>
+    long PeakQueuedBytes { get; }
 
     /// <summary>Gets the maximum accepted article payload size in bytes.</summary>
     int MaxArticleBytes { get; }
@@ -18,20 +31,48 @@ public interface IArticleIngestionQueue
     /// <summary>Gets the approximate number of articles currently queued.</summary>
     int Count { get; }
 
+    /// <summary>Gets the high-water mark of <see cref="Count"/> since construction.</summary>
+    int PeakCount { get; }
+
     /// <summary>Gets a value indicating whether the queue is still accepting articles.</summary>
     bool IsAccepting { get; }
 
     /// <summary>
-    /// Enqueues an accepted article, waiting for capacity when the queue is full.
+    /// Enqueues an accepted article, waiting for byte-budget capacity when the queue is full.
     /// </summary>
     /// <returns>
     /// <see cref="ArticleEnqueueResult.Accepted"/> when queued;
-    /// <see cref="ArticleEnqueueResult.Unavailable"/> when the queue is completed/shutting down.
+    /// <see cref="ArticleEnqueueResult.Rejected"/> when the article is larger than the budget;
+    /// <see cref="ArticleEnqueueResult.Unavailable"/> when the queue is completed/shutting down
+    /// or the wait is cancelled.
     /// </returns>
     ValueTask<ArticleEnqueueResult> EnqueueAsync(InboundArticle article, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Attempts to enqueue without waiting. Returns <see langword="false"/> when full or unavailable.
+    /// Returns whether the queue is accepting and has at least one free payload byte.
+    /// </summary>
+    /// <remarks>
+    /// Does not reserve bytes. IHAVE uses this before <c>335</c> because the article
+    /// size is unknown. A later <see cref="TryAdmit"/> still performs the atomic
+    /// reservation against the actual payload length.
+    /// </remarks>
+    bool TryProbeCapacity();
+
+    /// <summary>
+    /// Attempts to reserve the article's payload bytes and enqueue it without waiting.
+    /// </summary>
+    /// <returns>
+    /// <see cref="ArticleEnqueueResult.Accepted"/> when queued;
+    /// <see cref="ArticleEnqueueResult.Rejected"/> when the article is larger than the budget;
+    /// <see cref="ArticleEnqueueResult.Full"/> when the remaining budget cannot admit it now;
+    /// <see cref="ArticleEnqueueResult.Unavailable"/> when the queue is completed/shutting down.
+    /// </returns>
+    ArticleEnqueueResult TryAdmit(InboundArticle article);
+
+    /// <summary>
+    /// Attempts to enqueue without waiting. Returns <see langword="false"/> when the budget
+    /// cannot admit the article immediately, the article exceeds the budget, or the queue
+    /// is unavailable.
     /// </summary>
     bool TryEnqueue(InboundArticle article);
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -9,10 +8,12 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// IHAVE command as defined by RFC 3977, Section 6.3.2.
 /// </summary>
 /// <remarks>
-/// Not pipelined. Serial two-stage exchange: HistoryDB peek → 335/435/436 → raw article
-/// receive (frame terminator, own stuffed wire) → shared ingestion queue → 235/436/437.
-/// TAKETHIS is not used and is not modified. Destuff, classification, and
-/// <see cref="Article"/> construction occur in <see cref="IhaveArticleInterpreter"/>.
+/// Not pipelined. Serial two-stage exchange: HistoryDB peek → non-blocking
+/// Transit queue probe → 335/435/436 → raw article receive (frame terminator,
+/// own stuffed wire) → non-blocking <see cref="IArticleIngestionQueue.TryAdmit"/>
+/// → 235/436/437. IHAVE never waits for queue memory. TAKETHIS is not used and
+/// is not modified. Destuff, classification, and <see cref="Article"/>
+/// construction occur in <see cref="IhaveArticleInterpreter"/>.
 /// </remarks>
 internal static class IHave
 {
@@ -46,10 +47,19 @@ internal static class IHave
             return;
         }
 
+        var queue = context.Session.ArticleIngestion;
+        if (!queue.TryProbeCapacity())
+        {
+            IHaveAdmissionLog.BudgetExhausted(Logger, queue);
+            await context.Response.WriteLineAsync(NntpResponses.IhaveTryLater, cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = "queue full";
+            return;
+        }
+
         await context.Response.WriteLineAsync(NntpResponses.IhaveSendArticle, cancellationToken)
             .ConfigureAwait(false);
 
-        var queue = context.Session.ArticleIngestion;
         IHaveArticleReadResult read;
         try
         {
@@ -77,14 +87,6 @@ internal static class IHave
             return;
         }
 
-        if (!queue.IsAccepting)
-        {
-            await context.Response.WriteLineAsync(NntpResponses.IhaveTransferFailed, cancellationToken)
-                .ConfigureAwait(false);
-            context.CompletionDetail = "queue unavailable";
-            return;
-        }
-
         var messageIdText = System.Text.Encoding.ASCII.GetString(messageId.Span);
         var inbound = new InboundArticle(
             messageIdText,
@@ -94,27 +96,27 @@ internal static class IHave
             structured: null,
             InboundArticleProducer.IHave);
 
-        var injectStarted = Stopwatch.GetTimestamp();
-        ArticleEnqueueResult enqueue;
-        try
+        var enqueue = queue.TryAdmit(inbound);
+        if (enqueue == ArticleEnqueueResult.Rejected)
         {
-            enqueue = await queue.EnqueueAsync(inbound, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (
-            cancellationToken.IsCancellationRequested
-            || context.Connection.ConnectionClosed.IsCancellationRequested)
-        {
+            await context.Response.WriteLineAsync(NntpResponses.IhaveRejected, cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = "rejected exceeds queue budget";
             return;
         }
 
-        var injectMs = Stopwatch.GetElapsedTime(injectStarted).TotalMilliseconds;
-        _ = injectMs;
-
-        if (enqueue == ArticleEnqueueResult.Unavailable)
+        if (enqueue != ArticleEnqueueResult.Accepted)
         {
+            if (enqueue == ArticleEnqueueResult.Full)
+            {
+                IHaveAdmissionLog.BudgetExhausted(Logger, queue);
+            }
+
             await context.Response.WriteLineAsync(NntpResponses.IhaveTransferFailed, cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "queue unavailable";
+            context.CompletionDetail = enqueue == ArticleEnqueueResult.Full
+                ? "queue full"
+                : "queue unavailable";
             return;
         }
 

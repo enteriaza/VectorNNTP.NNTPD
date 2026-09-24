@@ -104,6 +104,17 @@ internal static class TakeThis
             return;
         }
 
+        if (enqueue == ArticleEnqueueResult.Rejected)
+        {
+            await EnqueueTransferReplyAsync(
+                    context,
+                    NntpResponses.TransferRejectedPrefix,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = "rejected exceeds queue budget";
+            return;
+        }
+
         // 239 means accepted into the ingestion pipeline — not yet persisted to disk.
         await EnqueueTransferReplyAsync(
                 context,

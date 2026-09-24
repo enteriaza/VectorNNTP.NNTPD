@@ -32,6 +32,7 @@ public sealed class IhaveCommandRegistrationTests
         Assert.Equal(30, options.MeasureSeconds);
         Assert.Equal(0, options.WarmupSeconds);
         Assert.Equal(1, options.Runs);
+        Assert.False(options.Timing);
         Assert.Equal("IHAVE", BenchmarkWorkloadCatalog.Resolve(options.Benchmark).Name);
     }
 
@@ -51,6 +52,38 @@ public sealed class IhaveCommandRegistrationTests
         Assert.Equal(60, options.MeasureSeconds);
         Assert.Equal(2, options.Runs);
         Assert.Equal(1, options.ConnectionsFilter);
+        Assert.False(options.Timing);
+        Assert.Equal(BenchOptions.DefaultTimingSamples, options.TimingSamples);
+    }
+
+    [Fact]
+    public void Parse_IhaveTiming_UsesSamplesAndWarmup()
+    {
+        var options = BenchOptions.Parse(
+        [
+            "--benchmark", "IHAVE",
+            "--timing",
+            "--samples", "2500",
+            "--host", "127.0.0.1",
+            "--port", "1199",
+        ]);
+
+        Assert.True(options.Timing);
+        Assert.Equal(2500, options.TimingSamples);
+        Assert.Equal(5, options.WarmupSeconds);
+        Assert.Equal(1, options.Runs);
+    }
+
+    [Fact]
+    public void Parse_Timing_WithoutIhave_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => BenchOptions.Parse(["--benchmark", "TAKETHIS", "--timing"]));
+    }
+
+    [Fact]
+    public void Parse_Samples_WithoutTiming_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => BenchOptions.Parse(["--benchmark", "IHAVE", "--samples", "10"]));
     }
 
     [Fact]

@@ -3,19 +3,23 @@ using System.ComponentModel.DataAnnotations;
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Bounded article ingestion queue and incoming-spool writer settings.
+/// Incoming-spool writer and per-article size settings for the Transit ingestion path.
 /// </summary>
 /// <remarks>
-/// Used by <c>TAKETHIS</c> (and later <c>POST</c>) as the
+/// Used by <c>TAKETHIS</c> and <c>IHAVE</c> as the
 /// <c>network → queue → background spool writer → spool/incoming</c> boundary.
 /// Disk persistence is never on the session receive critical path.
+/// Queue admission is bounded by <see cref="NntpdOptions.TransitQueueMemoryLimit"/>,
+/// not by <see cref="QueueCapacity"/>.
 /// </remarks>
 public sealed class ArticleIngestionOptions
 {
     /// <summary>Default relative directory for accepted incoming articles.</summary>
     public const string DefaultIncomingDirectory = "spool/incoming";
 
-    /// <summary>Default bounded queue capacity (articles).</summary>
+    /// <summary>
+    /// Legacy default article-count setting. Not an admission bound.
+    /// </summary>
     public const int DefaultQueueCapacity = 256;
 
     /// <summary>Default maximum article payload size in bytes (4 MiB).</summary>
@@ -30,11 +34,12 @@ public sealed class ArticleIngestionOptions
     public string IncomingDirectory { get; set; } = DefaultIncomingDirectory;
 
     /// <summary>
-    /// Gets or sets the maximum number of accepted articles waiting for spool persistence.
+    /// Gets or sets a leftover article-count setting retained for binding compatibility.
     /// </summary>
     /// <remarks>
-    /// When full, enqueue waits for capacity (backpressure) until shutdown completes the queue.
-    /// Valid range is <c>1–100000</c>. Default is <c>256</c>.
+    /// Not an admission bound. The historical 256-entry cap was a memory-safety
+    /// choke and has been replaced by <see cref="NntpdOptions.TransitQueueMemoryLimit"/>.
+    /// Valid range remains <c>1–100000</c> so existing configuration files still validate.
     /// </remarks>
     [Range(1, 100_000)]
     public int QueueCapacity { get; set; } = DefaultQueueCapacity;

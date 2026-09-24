@@ -54,6 +54,11 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
         Console.WriteLine("TLS/compression:     not used (plain TCP)");
         Console.WriteLine();
 
+        if (options.Timing)
+        {
+            return await RunTimingAsync(options, connections, articles).ConfigureAwait(false);
+        }
+
         IhaveRunResult? last = null;
         for (var run = 1; run <= options.Runs; run++)
         {
@@ -62,7 +67,7 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
                 Console.WriteLine($"=== IHAVE × {connections} conn × run {run}/{options.Runs} ===");
             }
 
-            last = await RunOnceAsync(options, connections, articles).ConfigureAwait(false);
+            last = await RunOnceAsync(options, connections, articles, timingSamples: null).ConfigureAwait(false);
             PrintResult(last);
             Console.WriteLine();
         }
@@ -70,10 +75,42 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
         return last is null || last.Failed ? 1 : 0;
     }
 
-    private static async Task<IhaveRunResult> RunOnceAsync(
+    private static async Task<int> RunTimingAsync(
         BenchOptions options,
         int connections,
         IhavePreparedArticles articles)
+    {
+        Console.WriteLine("Mode:                DIAGNOSTIC TIMING (sampled client phases)");
+        Console.WriteLine($"Samples:             {options.TimingSamples:N0} (after warmup; not a duration throughput run)");
+        Console.WriteLine("Clock:               Stopwatch.GetTimestamp (monotonic)");
+        Console.WriteLine("235 meaning:         queue EnqueueAsync accepted; worker destuff is after 235");
+        Console.WriteLine();
+
+        var last = await RunOnceAsync(options, connections, articles, options.TimingSamples).ConfigureAwait(false);
+        PrintResult(last);
+        Console.WriteLine();
+
+        var samples = last.TimingSamples;
+        if (samples is null || samples.Count == 0)
+        {
+            Console.WriteLine("IHAVE timing failed: no completed samples.");
+            return 1;
+        }
+
+        var artifactsDir = Path.Combine(IhaveReaderMeasure.FindArtifactsRoot(articles.Root), "ihave-command-bench");
+        var report = IhaveTimingReport.Format(options, articles, samples, last, artifactsDir);
+        Console.WriteLine(report);
+        IhaveTimingReport.WriteArtifacts(articles.Root, report, samples);
+        Console.WriteLine($"Wrote {Path.Combine(artifactsDir, "timing.txt")}");
+        Console.WriteLine($"Wrote {Path.Combine(artifactsDir, "timing.csv")}");
+        return last.Failed ? 1 : 0;
+    }
+
+    private static async Task<IhaveRunResult> RunOnceAsync(
+        BenchOptions options,
+        int connections,
+        IhavePreparedArticles articles,
+        int? timingSamples)
     {
         ProcessSampler? sampler = null;
         if (options.ServerPid is int pid)
@@ -97,7 +134,8 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
                 port: options.PlainPort,
                 articles: articles,
                 duration: duration,
-                warmup: warmup);
+                warmup: warmup,
+                timingSamples: timingSamples);
             tasks[i] = workers[i].RunAsync(CancellationToken.None);
         }
 
@@ -116,6 +154,7 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
         long articleBytes = 0;
         var maxOutstanding = 0;
         Exception? fault = null;
+        IhaveTimingSample[]? timing = null;
 
         foreach (var worker in workers)
         {
@@ -134,6 +173,21 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
             }
 
             fault ??= worker.Fault;
+            if (worker.TimingSamples is { Length: > 0 } workerSamples)
+            {
+                if (timing is null)
+                {
+                    timing = workerSamples;
+                }
+                else
+                {
+                    var merged = new IhaveTimingSample[timing.Length + workerSamples.Length];
+                    timing.CopyTo(merged, 0);
+                    workerSamples.CopyTo(merged, timing.Length);
+                    timing = merged;
+                }
+            }
+
             await worker.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -162,6 +216,7 @@ internal sealed class IhaveWorkload : IBenchmarkWorkload
             ServerCpuPercent = sample?.CpuPercent,
             ServerCpuTimeSec = sample?.CpuTimeSeconds,
             Fault = fault,
+            TimingSamples = timing,
         };
     }
 
@@ -228,6 +283,7 @@ internal sealed class IhaveRunResult
     public double? ServerCpuPercent { get; init; }
     public double? ServerCpuTimeSec { get; init; }
     public Exception? Fault { get; init; }
+    public IReadOnlyList<IhaveTimingSample>? TimingSamples { get; init; }
 
     public bool Failed =>
         Rejected435 > 0

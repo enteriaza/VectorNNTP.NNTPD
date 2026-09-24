@@ -89,7 +89,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     {
         SpoolLogMessages.WriterStarted(
             _logger,
-            _queue.Capacity,
+            _queue.MemoryLimitBytes,
             _queue.MaxArticleBytes,
             _options.Value.ArticleIngestion?.IncomingDirectory
             ?? ArticleIngestionOptions.DefaultIncomingDirectory);

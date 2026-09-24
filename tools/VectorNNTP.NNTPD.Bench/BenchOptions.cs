@@ -6,6 +6,7 @@ internal sealed class BenchOptions
     public const string DefaultBenchmark = "BENCHIT";
     public const int DefaultArticleSize = 750 * 1024;
     public const int DefaultPipelineDepth = 256;
+    public const int DefaultTimingSamples = 4000;
 
     public string Benchmark { get; init; } = DefaultBenchmark;
     public string Host { get; init; } = "198.18.0.66";
@@ -23,6 +24,8 @@ internal sealed class BenchOptions
     public int IperfPort { get; init; } = 5201;
     public int ArticleSize { get; init; } = DefaultArticleSize;
     public int PipelineDepth { get; init; } = DefaultPipelineDepth;
+    public bool Timing { get; init; }
+    public int TimingSamples { get; init; } = DefaultTimingSamples;
 
     public static BenchOptions Parse(string[] args)
     {
@@ -42,6 +45,9 @@ internal sealed class BenchOptions
         var iperfPort = 5201;
         var articleSize = DefaultArticleSize;
         var pipelineDepth = DefaultPipelineDepth;
+        var timing = false;
+        var timingSamples = DefaultTimingSamples;
+        var samplesSpecified = false;
         var warmupSpecified = false;
         var runsSpecified = false;
         var measureSpecified = false;
@@ -103,6 +109,13 @@ internal sealed class BenchOptions
                 case "--pipeline-depth":
                     pipelineDepth = int.Parse(RequireValue(args, ref i));
                     break;
+                case "--timing":
+                    timing = true;
+                    break;
+                case "--samples":
+                    timingSamples = int.Parse(RequireValue(args, ref i));
+                    samplesSpecified = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument: {args[i]}");
             }
@@ -123,6 +136,21 @@ internal sealed class BenchOptions
         if ((isTakeThis || isIhave) && !measureSpecified)
         {
             measure = 30;
+        }
+
+        if (timing && !isIhave)
+        {
+            throw new ArgumentException("--timing is supported only with --benchmark IHAVE.");
+        }
+
+        if (samplesSpecified && !timing)
+        {
+            throw new ArgumentException("--samples requires --timing.");
+        }
+
+        if (timing && !warmupSpecified)
+        {
+            warmup = 5;
         }
 
         if (string.IsNullOrWhiteSpace(benchmark))
@@ -160,6 +188,11 @@ internal sealed class BenchOptions
             throw new ArgumentException("Connections must be greater than zero.");
         }
 
+        if (timingSamples <= 0)
+        {
+            throw new ArgumentException("Timing samples must be greater than zero.");
+        }
+
         return new BenchOptions
         {
             Benchmark = benchmark,
@@ -178,6 +211,8 @@ internal sealed class BenchOptions
             IperfPort = iperfPort,
             ArticleSize = articleSize,
             PipelineDepth = pipelineDepth,
+            Timing = timing,
+            TimingSamples = timingSamples,
         };
     }
 
