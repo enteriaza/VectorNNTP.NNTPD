@@ -122,6 +122,7 @@ public sealed class NntpPhaseCResponseTests
             NntpResponses.CapabilityAuthinfoUser,
             NntpResponses.CapabilityStartTls,
             NntpResponses.CapabilityCompressDeflate,
+            NntpResponses.CapabilityIhave,
             NntpResponses.CapabilityStreaming,
             NntpResponses.MultilineTerminator);
 
@@ -148,6 +149,7 @@ public sealed class NntpPhaseCResponseTests
             NntpResponses.CapabilityReader,
             NntpResponses.CapabilityStartTls,
             NntpResponses.CapabilityCompressDeflate,
+            NntpResponses.CapabilityIhave,
             NntpResponses.CapabilityStreaming,
             NntpResponses.MultilineTerminator);
 

@@ -254,6 +254,35 @@ public sealed class HistoryDbTests
         Assert.Equal(1, redis.Database.SetCount);
     }
 
+    [Fact]
+    public async Task Peek_Miss_DoesNotRecordLocal()
+    {
+        var redis = new FakeRedisService();
+        var history = Create(redis);
+
+        var result = await history.PeekAsync(MessageId);
+
+        Assert.Equal(HistoryLookupResult.Unseen, result);
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(MessageId)));
+        Assert.Equal(1, redis.Database.KeyExistsCount);
+    }
+
+    [Fact]
+    public async Task Remember_RecordsLocalWithoutExists()
+    {
+        var redis = new FakeRedisService();
+        var history = Create(redis);
+        redis.Database.KeyExistsCount = 0;
+
+        history.Remember(MessageId);
+
+        Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId(MessageId)));
+        Assert.Equal(0, redis.Database.KeyExistsCount);
+        var peek = await history.PeekAsync(MessageId);
+        Assert.Equal(HistoryLookupResult.Seen, peek);
+        Assert.Equal(0, redis.Database.KeyExistsCount);
+    }
+
     private static HistoryDb Create(FakeRedisService redis) =>
         new(redis, TimeSpan.FromHours(2), NullLogger<HistoryDb>.Instance, TimeProvider.System, new HistoryWriteQueue());
 

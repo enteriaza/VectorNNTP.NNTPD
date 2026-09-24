@@ -39,6 +39,21 @@ public static class NntpReplyCodes
     /// <summary>Article exists / selected (STAT; RFC 3977 §6.2.4).</summary>
     public const int ArticleExists = 223;
 
+    /// <summary>Article transferred OK (IHAVE second stage; RFC 3977 §6.3.2).</summary>
+    public const int IhaveTransferredOk = 235;
+
+    /// <summary>Send article to be transferred (IHAVE first stage; RFC 3977 §6.3.2).</summary>
+    public const int IhaveSendArticle = 335;
+
+    /// <summary>Article not wanted (IHAVE first stage; RFC 3977 §6.3.2).</summary>
+    public const int IhaveNotWanted = 435;
+
+    /// <summary>Transfer not possible or failed; try again later (IHAVE; RFC 3977 §6.3.2).</summary>
+    public const int IhaveTryLater = 436;
+
+    /// <summary>Transfer rejected; do not retry (IHAVE second stage; RFC 3977 §6.3.2).</summary>
+    public const int IhaveRejected = 437;
+
     /// <summary>Send article to be transferred (CHECK; RFC 4644 §2.4).</summary>
     public const int SendArticleToBeTransferred = 238;
 

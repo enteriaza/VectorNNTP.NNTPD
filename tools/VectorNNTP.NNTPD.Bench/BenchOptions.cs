@@ -109,17 +109,18 @@ internal sealed class BenchOptions
         }
 
         var isTakeThis = string.Equals(benchmark, "TAKETHIS", StringComparison.OrdinalIgnoreCase);
-        if (isTakeThis && !warmupSpecified)
+        var isIhave = string.Equals(benchmark, "IHAVE", StringComparison.OrdinalIgnoreCase);
+        if ((isTakeThis || isIhave) && !warmupSpecified)
         {
             warmup = 0;
         }
 
-        if (isTakeThis && !runsSpecified)
+        if ((isTakeThis || isIhave) && !runsSpecified)
         {
             runs = 1;
         }
 
-        if (isTakeThis && !measureSpecified)
+        if ((isTakeThis || isIhave) && !measureSpecified)
         {
             measure = 30;
         }

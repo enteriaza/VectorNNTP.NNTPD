@@ -73,7 +73,7 @@ public sealed class NntpSession
     public ConnectionClientIdentity ClientIdentity { get; }
 
     /// <summary>
-    /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, later <c>POST</c>).
+    /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, <c>IHAVE</c>).
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
 

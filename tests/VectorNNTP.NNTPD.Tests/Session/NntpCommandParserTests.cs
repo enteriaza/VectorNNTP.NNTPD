@@ -263,8 +263,10 @@ public sealed class NntpCommandParserTests
 
         var parsed = NntpCommandTestParse.ParseCommand("IHAVE <x>");
         Assert.True(parsed.IsValid);
-        await NntpCommandTestParse.DispatchAsync(dispatcher, session, writer, "IHAVE <x>");
-        Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        var dispatch = NntpCommandTestParse.DispatchAsync(dispatcher, session, writer, "IHAVE <x>").AsTask();
+        Assert.Contains("335 Send article to be transferred", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        await duplex.WriteClientAsync(".\r\n");
+        await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -336,6 +338,12 @@ public sealed class NntpCommandParserTests
                 _serverToClient.Writer,
                 ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)));
             return new NntpSession(connection, NullLogger<NntpSession>.Instance);
+        }
+
+        public async Task WriteClientAsync(string payload)
+        {
+            await _clientToServer.Writer.WriteAsync(Encoding.ASCII.GetBytes(payload));
+            await _clientToServer.Writer.FlushAsync();
         }
 
         public async Task<string> ReadClientLineAsync()

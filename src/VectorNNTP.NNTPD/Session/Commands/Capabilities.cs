@@ -13,7 +13,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 internal static class Capabilities
 {
-    private const int MaxCapabilityParts = 11;
+    private const int MaxCapabilityParts = 12;
 
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Capabilities));
 
@@ -86,6 +86,9 @@ internal static class Capabilities
         {
             parts[n++] = NntpResponses.CapabilityCompressDeflate;
         }
+
+        // RFC 3977 §3.3.2: advertise IHAVE when the command is implemented.
+        parts[n++] = NntpResponses.CapabilityIhave;
 
         // RFC 4644 §2.2: STREAMING capability for CHECK/TAKETHIS (MODE STREAM is legacy discovery).
         parts[n++] = NntpResponses.CapabilityStreaming;

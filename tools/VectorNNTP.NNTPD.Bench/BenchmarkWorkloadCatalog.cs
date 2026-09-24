@@ -11,6 +11,7 @@ internal static class BenchmarkWorkloadCatalog
         new BenchItWorkload(),
         new TakeThisWorkload(),
         new CheckWorkload(),
+        new IhaveWorkload(),
     ];
 
     /// <summary>Registered workloads in registration order.</summary>

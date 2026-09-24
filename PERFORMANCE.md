@@ -20,6 +20,10 @@ A later **CHECK** measurement is also recorded here. It is a session/application
 (`NntpSession` + Pipes + fake Redis) of the frozen depth-16 CHECK pipeline. It is **not** a TCP
 socket throughput measurement and is not a substitute for BENCHIT or TAKETHIS.
 
+A later **IHAVE** measurement is the real serialized IHAVE **command** benchmark: TCP to the
+production host, production HistoryDB/Redis, and the RFC 3977 two-stage exchange. It is **not**
+the IHAVE Pipe-reader microbenchmark documented separately below.
+
 ## Test Environment
 
 | Item | Value |
@@ -398,20 +402,213 @@ local-hit 0 ms = 17.4 ms; local-hit 1/2/5 ms = 1.2 / 0.8 / 1.3 ms; cooldown = 8.
   1. Redis was not hammered after cooldown.
 - Do not extrapolate these figures to production network throughput.
 
+## IHAVE
+
+`IHAVE` is the **real serialized IHAVE command benchmark**. It is **not** the
+IHAVE Pipe-reader / RAW article-receive microbenchmark.
+
+The authoritative client is `tools/VectorNNTP.NNTPD.Bench --benchmark IHAVE`.
+That flag now runs the command path:
+
+```
+IHAVE <unique-message-id>
+← 335
+<raw stuffed corpus article>
+<CRLF>.<CRLF>
+← 235
+```
+
+over real TCP to production `VectorNNTP.NNTPD`. HistoryDB is the production
+server path (local memory + Redis `198.18.0.70:6379`). IHAVE is not pipelined
+(RFC 3977 §6.3.2). Unexpected `435` / `436` / `437` fails the run.
+
+The earlier receive-only Pipe measure remains below as a forensic baseline. It
+is not selected by `--benchmark IHAVE`.
+
+Workload characteristics:
+
+- real TCP to the production `VectorNNTP.NNTPD` host (no in-process fake transport)
+- plain TCP only (no DEFLATE, no TLS)
+- serialized: one in-flight IHAVE per connection (wait for 335, send article, wait for 235)
+- production command parser / IHAVE handler / HistoryDB `PeekAsync` + `Remember`
+- production raw IHAVE receive (`IHaveArticleReader`), queue admission, downstream destuff
+- corpus: `.artifacts/Articles` (10,610 destuffed stored files, catalog order)
+- wire preparation: restuff leading dots and append `CRLF . CRLF` (no client destuff)
+- prepared in-memory prefix: 368 articles / 268,185,292 wire bytes (256 MiB budget), cycled
+- command Message-ID is unique per IHAVE (`<iIIIIIIIIII-CC-SSSSSSSSSSSS@vectornntp.local>`)
+- TAKETHIS / CHECK / STREAM are not used
+- no production-server bypass
+
+### IHAVE methodology
+
+Comparable timing to the BENCHIT / TAKETHIS 1-connection cell:
+
+- Warm-up: 5 seconds. Warm-up article counts are discarded. Sequence continues so HistoryDB
+  does not see a later duplicate.
+- Measurement: 60 seconds.
+- Two runs.
+- Concurrency: 1 connection (IHAVE is serialized). `--connections` is honoured if supplied;
+  each connection remains serialized.
+- Same host and plain port as BENCHIT/TAKETHIS: `198.18.0.66:1199`.
+- HistoryDB / Redis: production `HistoryDb` on the running server (`Redis:Host` `198.18.0.70`,
+  port 6379; server log at start: `Redis connection established (PING 0 ms)`).
+- `--server-pid` samples the VectorNNTP.NNTPD process (same sampler as BENCHIT/TAKETHIS).
+- The IHAVE client does not record per-article latency; p50/p95/p99 are not reported.
+
+Throughput definitions (as reported by the harness, same convention as TAKETHIS):
+
+- **IHAVE/sec** = `235` accepted during the measurement window ÷ wall-clock elapsed of the run.
+  The harness elapsed includes connect, warmup, and measure (observed 65.0 seconds). Warm-up
+  sends are excluded from the count.
+- **Logical payload Gbit/s** = article bytes sent ÷ elapsed (command line excluded).
+- **Wire Gbit/s** = command + article bytes actually sent ÷ elapsed.
+
+IHAVE/sec is **not** the same unit as BENCHIT req/s or TAKETHIS/sec. Do not compare them as if
+they were the same work item.
+
+The same-host client/server CPU contention described under BENCHIT applies here as well.
+
+### IHAVE results
+
+Complete table (both runs preserved). Live production-host run on `198.18.0.66:1199` on
+2026-09-24. Both runs completed with 100% `235` and zero `435` / `436` / `437` / protocol /
+connection errors.
+
+| Mode  | Conn | Serialization |      IHAVE/s |     Logical Gbps |       Wire Gbps |            Sent |             235 | 435 | Err |     CPU % |
+| ----- | ---: | ------------ | -----------: | ---------------: | --------------: | --------------: | --------------: | --: | --: | --------: |
+| plain |    1 | serialized   | 771.9 / 777.3 |    4.500 / 4.532 |   4.501 / 4.532 |   50183 / 50524 |   50183 / 50524 |   0 |   0 |   9.2–9.8 |
+
+Prepared corpus prefix: 368 of 10,610 catalog articles (268,185,292 wire bytes), cycled.
+Command line: 54 bytes. Average prepared article on the wire: 728,764 bytes.
+
+Raw harness output: `.artifacts/ihave-command-bench/results.txt`.
+
+### IHAVE interpretation
+
+- Measured single-connection serialized IHAVE throughput: approximately 772–777 articles/s
+  (approximately 4.50–4.53 Gbit/s logical) on this host and workload.
+- Every accepted IHAVE completed the production HistoryDB peek, raw article receive, queue
+  admission, and `235` response. Duplicate Message-IDs were not used.
+- Max outstanding was 1 (serialized). IHAVE was not pipelined.
+- Server-process CPU as reported by the harness remains approximately 9–10% at 1 connection.
+- These figures are measurements of this serialized IHAVE command path on this host. They are
+  not a transport ceiling, not a product SLA, and not interchangeable with TAKETHIS/sec or
+  the forensic IHAVE Pipe-reader MB/s numbers.
+
+## IHAVE RAW receive microbenchmark (forensic)
+
+This section is a **forensic** session/application Pipe-reader measure of production
+`IHaveArticleReader` (frame `CRLF . CRLF`, own stuffed wire; destuff is
+downstream in `IhaveArticleInterpreter`). It is **not** the IHAVE command benchmark
+and is **not** selected by `--benchmark IHAVE`. It is **not** a TCP socket throughput
+measurement. One `PipeReader.ReadAsync` is not one socket read.
+
+The report remains at `.artifacts/ihave-corpus-bench/REPORT.md`.
+Input is the complete real corpus at `.artifacts/Articles` (10,610 destuffed
+stored articles; the harness restuffs leading dots and appends the NNTP
+terminator plus a leftover `DATE` command). File list:
+`.artifacts/ihave-corpus-bench/used-files.txt`. Raw report:
+`.artifacts/ihave-corpus-bench/REPORT.md`.
+
+TAKETHIS production code was not modified. The same corpus, chunk sizes, Pipe
+options, and leftover check were passed through the existing unmodified STREAM
+reader (`NntpContinuousRxReader.ReadUnitAsync`) for an observational compare
+only.
+
+### Forensic IHAVE reader methodology
+
+- Benchmark type: session/application (`IHaveArticleReader` + in-process Pipes).
+- Not measured: TCP, TLS, DEFLATE, HistoryDB, Redis, the response writer, queue persist.
+- Corpus: complete `.artifacts/Articles` (7,806,078,914 bytes). One pass per mode.
+- Mode A (prebuffered): entire framed article is written and flushed before the reader starts. Pipe `pauseWriterThreshold` = 8 MiB.
+- Mode B (streaming): a concurrent producer writes 4 / 16 / 64 / 256 KiB chunks. Pipe `pauseWriterThreshold` = `2 × chunk` so the producer cannot prebuffer the whole article.
+- ReadAsync / AdvanceTo counts come from a bench-only `PipeReader` wrapper. Production hot-path instrumentation was not added.
+- Safety: every article left `DATE\r\n` intact (0 leftover failures).
+
+### Forensic IHAVE reader corpus
+
+| Metric | Value |
+|---|---:|
+| articles | 10610 |
+| total bytes | 7806078914 |
+| average | 735728.5 |
+| median / p50 | 740474 |
+| p95 | 793113 |
+| p99 | 1082806 |
+| min | 647 |
+| max | 2164763 |
+
+95.13% of articles are 500 KiB–1 MiB. There are no articles above 5 MiB. The
+previous ~750 KiB estimate is close to this measured average (718.5 KiB) but
+must not replace the measured number.
+
+Classification (production `ArticleTypeClassifier`; flags overlap): yEnc
+10,574 (99.66%); MIME 33 (0.31%); BASE64 0; UUENCODE 0; binary 10,574;
+text (`Default`/`None`) 3; multipart 2. No article has `Content-Length`.
+10,574 articles have a `Bytes:` header; the production reader does not
+consult it. 7,943 yEnc articles expose `size=`; the mean declared yEnc size
+is 625,533,225 bytes (decoded/original size, not wire bytes).
+
+### Forensic IHAVE reader results
+
+Single Release run on the test host (`Windows 10.0.26200`, Intel Core
+i9-12900KF) after the production raw-wire receive change. Complete corpus,
+one iteration per row. Destuff/classification is not on this receive path.
+
+| Mode | Chunk | ReadAsync/art | AdvanceTo/art | bulk ops/art | bulk bytes/art | B/read | MB/s | art/s |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| A prebuffered | (all first) | 1.00 | 1.00 | 1.00 | 735729 | 735732 | 2589.8 | 3691.1 |
+| B streaming | 4 KiB | 90.90 | 90.90 | 1.00 | 735729 | 8093 | 1277.5 | 1820.7 |
+| B streaming | 16 KiB | 22.93 | 22.93 | 1.00 | 735729 | 32080 | 1709.1 | 2435.8 |
+| B streaming | 64 KiB | 6.10 | 6.10 | 1.00 | 735729 | 120649 | 2029.4 | 2892.3 |
+| B streaming | 256 KiB | 1.99 | 1.99 | 1.00 | 735729 | 369345 | 2388.5 | 3404.2 |
+
+Leftover failures: 0. Prebuffered receive is 2.48× the previous destuff-on-ingress
+result (1042.5 MB/s) on this same harness.
+
+Observational TAKETHIS STREAM (unmodified; framed wire copy, no destuff), same
+corpus and arrival:
+
+| Mode | Chunk | ReadAsync/art | MB/s | art/s |
+|---|---|---:|---:|---:|
+| A prebuffered | (all first) | 1.00 | 2128.7 | 3033.8 |
+| B streaming | 4 KiB | 90.87 | 1173.4 | 1672.4 |
+| B streaming | 16 KiB | 22.93 | 1428.5 | 2035.9 |
+| B streaming | 64 KiB | 6.08 | 1778.5 | 2534.7 |
+| B streaming | 256 KiB | 1.99 | 1762.0 | 2511.2 |
+
+### Forensic IHAVE reader interpretation
+
+- Prebuffered IHAVE uses one `ReadAsync` because the whole article is already
+  in the Pipe when the reader starts. That is not evidence of streaming or
+  socket performance.
+- Streaming IHAVE `ReadAsync` counts track the arrival quantum (about
+  `2 × chunk` bytes per read because `pauseWriterThreshold` is `2 × chunk`),
+  not a constant “one read per article”.
+- Production IHAVE receive copies stuffed wire and stops at `CRLF . CRLF`.
+  Destuff and `Article` construction run in `IhaveArticleInterpreter` after
+  queue admission, not in this receive benchmark.
+- The terminator remained authoritative; leftover `DATE` was never consumed.
+- TAKETHIS STREAM used the same arrival model. On this after-run, prebuffered
+  IHAVE (2589.8 MB/s) exceeded observational STREAM (2128.7 MB/s). These are
+  Pipe figures, not TCP ingest rates.
+- Do not treat these Pipe MB/s figures as Internet or TCP ingest rates.
+
 ## Workload comparison
 
-BENCHIT and TAKETHIS are different workloads. Neither replaces the other.
+BENCHIT, TAKETHIS, CHECK, and IHAVE are different workloads. None replaces the others.
 
-| Aspect | BENCHIT | TAKETHIS |
-| --- | --- | --- |
-| What it measures | Production transport/TX path with a static multiline response | Real STREAM/TAKETHIS receive, framing, response, and ingestion processing, plus the relevant transport path |
-| Direction of bulk data | Server → client | Client → server |
-| Command | Internal unadvertised `BENCHIT` | RFC 4644 `MODE STREAM` + `TAKETHIS` |
-| Pipelining | Non-pipelined request/response | Bounded pipeline (256 / connection) |
-| Article accounting | `768000`-byte response payload | `768054`-byte framed article |
-| Reported work unit | completed requests / s | articles sent / s |
-| Modes in this document | plain, DEFLATE, TLS, TLS+DEFLATE | plain TCP only |
-| Latency | p50 / p95 / p99 recorded | not recorded by this client |
+| Aspect | BENCHIT | TAKETHIS | IHAVE command |
+| --- | --- | --- | --- |
+| What it measures | Production transport/TX path with a static multiline response | Real STREAM/TAKETHIS receive, framing, response, and ingestion processing, plus the relevant transport path | Real serialized IHAVE command: HistoryDB peek, 335, raw article receive, queue, 235 |
+| Direction of bulk data | Server → client | Client → server | Client → server |
+| Command | Internal unadvertised `BENCHIT` | RFC 4644 `MODE STREAM` + `TAKETHIS` | RFC 3977 `IHAVE` |
+| Pipelining | Non-pipelined request/response | Bounded pipeline (256 / connection) | Not pipelined (one in flight / connection) |
+| Article accounting | `768000`-byte response payload | `768054`-byte framed article | cycling `.artifacts/Articles` wire (mean 728,764 bytes in the prepared prefix) |
+| Reported work unit | completed requests / s | articles sent / s | `235` accepted / s |
+| Modes in this document | plain, DEFLATE, TLS, TLS+DEFLATE | plain TCP only | plain TCP only |
+| HistoryDB | not used | not the admission path | production HistoryDB + Redis |
+| Latency | p50 / p95 / p99 recorded | not recorded by this client | not recorded by this client |
 
 On this host, the existing BENCHIT plain 10-connection measurement is approximately 124.9 Gbit/s
 logical. The TAKETHIS 10-connection measurement is approximately 26.9 Gbit/s logical. Those numbers
@@ -472,6 +669,20 @@ CHECK does not use the TCP host/port flags. It runs in-process:
 dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --benchmark CHECK
 ```
 
+IHAVE CLI defaults differ from this document (warmup 0 s, one run, 30 s measure) unless the
+flags below are supplied. Use these flags to reproduce the command-benchmark table.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark IHAVE `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --server-pid <pid>
+```
+
+`--benchmark IHAVE` is the real serialized command path. It is not the forensic Pipe-reader
+microbenchmark.
+
 ## Limitations
 
 - Static in-memory article.
@@ -497,6 +708,13 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --benchmark CHEC
 - CHECK Redis latency is `Task.Delay` in a bench-only fake. On this Windows host the 1 / 2 / 5 ms
   delayed rows completed in essentially the same elapsed time.
 - CHECK allocation B/op is not reported.
+- IHAVE command/sec is not interchangeable with BENCHIT req/s or TAKETHIS/sec.
+- The IHAVE command benchmark cycles a prepared prefix of `.artifacts/Articles` (368 of
+  10,610 files, 256 MiB budget) because holding the full 7.8 GiB corpus in the client is
+  not practical. Catalog order is preserved. Command Message-IDs are unique so HistoryDB
+  does not reject later iterations.
+- The forensic IHAVE Pipe-reader MB/s figures are not TCP ingest rates and are not the
+  `--benchmark IHAVE` command result.
 
 ## Future Performance Work
 
@@ -539,3 +757,10 @@ establish that the socket/transport architecture is fundamentally sound.
 - CHECK session/application benchmark (`--benchmark CHECK`, Release) completed on 2026-09-24;
   every workload reported `ordered=True`; peak in-flight 16 on delayed Redis rows; local-hit
   EXISTS 0; cooldown EXISTS 1
+- IHAVE real serialized command benchmark (`--benchmark IHAVE`, Release) completed on
+  2026-09-24 against production `VectorNNTP.NNTPD` on `198.18.0.66:1199` with production
+  HistoryDB/Redis (`198.18.0.70:6379`); 1 connection; 5 s warmup; 60 s measure; 2 runs;
+  100% `235`; zero `435` / `436` / `437` / protocol / connection errors; raw output at
+  `.artifacts/ihave-command-bench/results.txt`
+- Forensic IHAVE Pipe-reader measure remains at `.artifacts/ihave-corpus-bench/REPORT.md`
+  and is not selected by `--benchmark IHAVE`

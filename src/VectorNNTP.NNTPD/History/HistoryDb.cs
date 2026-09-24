@@ -80,12 +80,43 @@ public sealed class HistoryDb : IHistoryDb
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unavailable);
         }
 
-        return LookupRedisAsync(digest, isRecoveryProbe, cancellationToken);
+        return LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: true, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<HistoryLookupResult> PeekAsync(
+        ReadOnlyMemory<byte> messageId,
+        CancellationToken cancellationToken = default)
+    {
+        var digest = HistoryDigest.FromMessageId(messageId.Span);
+        if (_local.Contains(digest))
+        {
+            return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Seen);
+        }
+
+        if (!_redis.TryBeginOperation(out var isRecoveryProbe))
+        {
+            return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unavailable);
+        }
+
+        return LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: false, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public void Remember(ReadOnlyMemory<byte> messageId)
+    {
+        var digest = HistoryDigest.FromMessageId(messageId.Span);
+        _local.Add(digest);
+        if (!_writes.TryEnqueue(digest))
+        {
+            HistoryLogMessages.WriteQueueFull(_logger);
+        }
     }
 
     private async ValueTask<HistoryLookupResult> LookupRedisAsync(
         HistoryDigest digest,
         bool isRecoveryProbe,
+        bool recordOnMiss,
         CancellationToken cancellationToken)
     {
         try
@@ -100,10 +131,13 @@ public sealed class HistoryDb : IHistoryDb
                 return HistoryLookupResult.Seen;
             }
 
-            _local.Add(digest);
-            if (!_writes.TryEnqueue(digest))
+            if (recordOnMiss)
             {
-                HistoryLogMessages.WriteQueueFull(_logger);
+                _local.Add(digest);
+                if (!_writes.TryEnqueue(digest))
+                {
+                    HistoryLogMessages.WriteQueueFull(_logger);
+                }
             }
 
             return HistoryLookupResult.Unseen;

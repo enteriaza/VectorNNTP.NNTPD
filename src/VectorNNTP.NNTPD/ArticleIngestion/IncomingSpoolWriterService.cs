@@ -10,7 +10,8 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// Start order: after listeners may accept connections is acceptable; the queue is a singleton
 /// that buffers until this service is running. Stop completes the queue writer and drains
-/// already-accepted articles before exiting.
+/// already-accepted articles before exiting. IHAVE items are destuffed once via
+/// <see cref="IhaveArticleInterpreter"/> before persist. TAKETHIS payloads are unchanged.
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
 {
@@ -114,6 +115,11 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
             try
             {
+                if (article.Producer == InboundArticleProducer.IHave)
+                {
+                    article = IhaveArticleInterpreter.Interpret(article, _queue.MaxArticleBytes);
+                }
+
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)

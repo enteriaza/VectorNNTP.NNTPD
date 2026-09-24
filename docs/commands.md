@@ -22,6 +22,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] COMPRESS DEFLATE
 [x] TAKETHIS
 [x] CHECK
+[x] IHAVE
 ```
 
 CHECK (RFC 4644 §2.4) uses HistoryDB (`438` local/Redis hit, `238` double miss, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
@@ -44,7 +45,6 @@ CHECK (RFC 4644 §2.4) uses HistoryDB (`438` local/Redis hit, `238` double miss,
 [ ] OVER
 [ ] HDR
 [ ] POST
-[ ] IHAVE
 ```
 
 ## File map
@@ -75,6 +75,8 @@ CHECK (RFC 4644 §2.4) uses HistoryDB (`438` local/Redis hit, `238` double miss,
 | `Session/CheckPipeline.cs` | Per-session CHECK overlap window (not a command) |
 | `TakeThis.cs` | TAKETHIS |
 
-Article ingestion (TAKETHIS → bounded queue → `spool/incoming`) lives under `ArticleIngestion/`.
+IHAVE (RFC 3977 §6.3.2) is a serial, non-pipelined transit ingest: HistoryDB peek → `335`/`435`/`436` → raw article receive (frame `CRLF . CRLF`, own stuffed wire, no destuff) → the same bounded ingestion queue as TAKETHIS → `235`/`436`/`437`. Downstream `IhaveArticleInterpreter` destuffs IHAVE payloads exactly once and builds `Article`. TAKETHIS production receive/framing is unchanged. See `docs/architecture.md` (IHAVE article ingestion).
+
+Article ingestion (TAKETHIS and IHAVE → bounded queue → `spool/incoming`) lives under `ArticleIngestion/`.
 
 Registration lives in `DefaultNntpCommandCatalog.cs` (descriptors + authorization metadata only).

@@ -182,6 +182,27 @@ internal static class NntpResponses
 
     internal static readonly ReadOnlyMemory<byte> CheckTryLaterSuffix = Suffix("\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> IhaveSendArticle =
+        Line("335 Send article to be transferred\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> IhaveTransferredOk =
+        Line("235 Article transferred OK\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> IhaveNotWanted =
+        Line("435 Article not wanted\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> IhaveTryLater =
+        Line("436 Transfer not possible; try again later\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> IhaveTransferFailed =
+        Line("436 Transfer failed; try again later\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> IhaveRejected =
+        Line("437 Transfer rejected; do not retry\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CapabilityIhave =
+        Multiline("IHAVE\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> ArticleTransferredOkPrefix = Prefix("239 "u8);
 
     internal static readonly ReadOnlyMemory<byte> TransferRejectedPrefix = Prefix("439 "u8);

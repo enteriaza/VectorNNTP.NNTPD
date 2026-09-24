@@ -1,13 +1,14 @@
 # VectorNNTP.NNTPD.Bench
 
 Benchmark runner for VectorNNTP.NNTPD. Select the workload with `--benchmark`.
-BENCHIT and TAKETHIS are real-TCP clients. CHECK is an in-process session/application measure.
+BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is an in-process session/application measure.
 
 | Workload | Purpose |
 |----------|---------|
 | `BENCHIT` (default) | Internal transport/TX baseline. Unadvertised server command. Real TCP. |
 | `TAKETHIS` | RFC 4644 STREAM ingest client. Pre-built ~768 KiB article. Real TCP. |
 | `CHECK` | Frozen depth-16 CHECK pipeline. Session/application (Pipes + fake Redis). Not TCP throughput. |
+| `IHAVE` | RFC 3977 serialized IHAVE command. Real TCP to production NNTPD. Production HistoryDB. Real `.artifacts/Articles` corpus, restuffed on the wire. |
 
 `BENCHIT` is an internal, unadvertised server command retained for transport baselines and
 regressions. See repository root [`PERFORMANCE.md`](../../PERFORMANCE.md).
@@ -70,6 +71,39 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --benchmark CHEC
 Workloads and iteration counts match the validation session bench: 2000 CHECKs at 0 ms Redis
 delay, 200 CHECKs at 1/2/5 ms. The run fails if responses are out of command order.
 
+## Run IHAVE
+
+Real serialized IHAVE command benchmark. The client connects over TCP to the
+running production `VectorNNTP.NNTPD` host and performs:
+
+```
+IHAVE <unique-message-id>
+← 335
+<raw stuffed corpus article>
+<CRLF>.<CRLF>
+← 235
+```
+
+HistoryDB is the production server path (local memory + Redis). The client does
+not pipeline. Unexpected `435` / `436` / `437` fails the run. Corpus files are
+the destuffed `.artifacts/Articles` catalog, restuffed for the wire. Unique
+command Message-IDs keep HistoryDB from treating a later iteration as a duplicate.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark IHAVE `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --server-pid <pid>
+```
+
+CLI defaults match TAKETHIS when flags are omitted (warmup 0 s, one run, 30 s).
+Use the flags above to match the BENCHIT/TAKETHIS methodology recorded in
+[`PERFORMANCE.md`](../../PERFORMANCE.md).
+
+This is **not** the earlier IHAVE Pipe-reader microbenchmark. That forensic
+measure remains documented separately in `PERFORMANCE.md`.
+
 ## iperf3 baseline
 
 ```powershell
@@ -82,8 +116,9 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- --iperf-only --h
 
 ## Notes
 
-- BENCHIT and TAKETHIS use actual TCP sockets (no in-process transport doubles).
+- BENCHIT, TAKETHIS, and IHAVE use actual TCP sockets (no in-process transport doubles).
 - CHECK uses `NntpSession` + duplex Pipes + fake Redis. It is not a TCP throughput measurement.
+- IHAVE is serialized (one in-flight IHAVE per connection). `--pipeline-depth` is unused.
 - BENCHIT modes: plain, deflate, tls (implicit TLS port), tls+deflate.
 - BENCHIT/TAKETHIS concurrency: 1 / 10 / 50. Warm-up 5s, measure 60s per scenario (defaults).
 - `BENCHIT` is not advertised in CAPABILITIES or HELP.

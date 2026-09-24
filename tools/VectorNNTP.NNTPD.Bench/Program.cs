@@ -4,9 +4,11 @@ namespace VectorNNTP.NNTPD.Bench;
 
 /// <summary>
 /// Benchmark runner for VectorNNTP.NNTPD. Workload is selected with
-/// <c>--benchmark BENCHIT|TAKETHIS|CHECK</c> (default BENCHIT).
-/// BENCHIT and TAKETHIS are real-TCP clients. CHECK is a session/application
-/// measure (Pipes + fake Redis) of the frozen depth-16 CHECK pipeline.
+/// <c>--benchmark BENCHIT|TAKETHIS|CHECK|IHAVE</c> (default BENCHIT).
+/// BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is a
+/// session/application measure (Pipes). IHAVE is the serialized production
+/// command path (HistoryDB + raw article receive), not the Pipe-reader
+/// microbenchmark.
 /// </summary>
 internal static class Program
 {

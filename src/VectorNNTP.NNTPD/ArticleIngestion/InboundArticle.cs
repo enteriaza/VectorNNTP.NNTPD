@@ -7,9 +7,15 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </summary>
 /// <remarks>
 /// Owned by the ingestion queue until a spool writer successfully persists or discards it.
-/// Payload is the complete article without the terminating <c>.</c> line.
+/// <para>
+/// IHAVE <see cref="Payload"/> is complete NNTP wire-format article bytes: leading-dot
+/// stuffing is preserved; the terminating <c>CRLF . CRLF</c> is not included. Downstream
+/// <see cref="IhaveArticleInterpreter"/> destuffs exactly once.
+/// </para>
+/// <para>
 /// STREAM TAKETHIS supplies framed wire bytes (no destuff). MODE READER multiline
-/// fallback destuffs per RFC 3977 §3.1.1.
+/// fallback destuffs per RFC 3977 §3.1.1. TAKETHIS enqueue is unchanged.
+/// </para>
 /// </remarks>
 public sealed class InboundArticle
 {
@@ -18,7 +24,9 @@ public sealed class InboundArticle
         string messageId,
         ReadOnlyMemory<byte> payload,
         ConnectionClientIdentity clientIdentity,
-        DateTimeOffset receivedAtUtc)
+        DateTimeOffset receivedAtUtc,
+        Article? structured = null,
+        InboundArticleProducer producer = InboundArticleProducer.TakeThis)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentNullException.ThrowIfNull(clientIdentity);
@@ -27,12 +35,14 @@ public sealed class InboundArticle
         Payload = payload;
         ClientIdentity = clientIdentity;
         ReceivedAtUtc = receivedAtUtc;
+        Structured = structured;
+        Producer = producer;
     }
 
-    /// <summary>Gets the message-id supplied with the transfer command (e.g. TAKETHIS).</summary>
+    /// <summary>Gets the message-id supplied with the transfer command (e.g. TAKETHIS or IHAVE).</summary>
     public string MessageId { get; }
 
-    /// <summary>Gets the complete article bytes (see type remarks for STREAM vs READER).</summary>
+    /// <summary>Gets the complete article bytes (see type remarks for IHAVE vs TAKETHIS).</summary>
     public ReadOnlyMemory<byte> Payload { get; }
 
     /// <summary>Gets the effective client identity at acceptance time.</summary>
@@ -40,4 +50,13 @@ public sealed class InboundArticle
 
     /// <summary>Gets the UTC timestamp when the article was accepted into the queue.</summary>
     public DateTimeOffset ReceivedAtUtc { get; }
+
+    /// <summary>
+    /// Gets the destuffed <see cref="Article"/> after IHAVE worker interpretation;
+    /// <see langword="null"/> on the IHAVE receive/queue path and for TAKETHIS.
+    /// </summary>
+    public Article? Structured { get; }
+
+    /// <summary>Gets which command produced this item.</summary>
+    public InboundArticleProducer Producer { get; }
 }

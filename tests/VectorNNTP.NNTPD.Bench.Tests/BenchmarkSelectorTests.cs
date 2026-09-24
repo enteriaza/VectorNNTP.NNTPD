@@ -37,6 +37,14 @@ public sealed class BenchmarkSelectorTests
         Assert.Equal("CHECK", BenchmarkWorkloadCatalog.Resolve(name).Name);
     }
 
+    [Theory]
+    [InlineData("IHAVE")]
+    [InlineData("ihave")]
+    public void Resolve_Ihave_IsCaseInsensitive(string name)
+    {
+        Assert.Equal("IHAVE", BenchmarkWorkloadCatalog.Resolve(name).Name);
+    }
+
     [Fact]
     public void Resolve_Unknown_Throws()
     {
@@ -45,6 +53,18 @@ public sealed class BenchmarkSelectorTests
         Assert.Contains("BENCHIT", ex.Message, StringComparison.Ordinal);
         Assert.Contains("TAKETHIS", ex.Message, StringComparison.Ordinal);
         Assert.Contains("CHECK", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("IHAVE", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Parse_Ihave_SharedDefaultsMatchTakeThis()
+    {
+        var options = BenchOptions.Parse(["--benchmark", "IHAVE"]);
+        Assert.Equal("IHAVE", options.Benchmark);
+        Assert.Equal(0, options.WarmupSeconds);
+        Assert.Equal(30, options.MeasureSeconds);
+        Assert.Equal(1, options.Runs);
+        Assert.Equal("IHAVE", BenchmarkWorkloadCatalog.Resolve(options.Benchmark).Name);
     }
 
     [Fact]

@@ -273,7 +273,9 @@ public sealed class TransitAuthinfoAndCommandTests
         Assert.Equal("238 <x@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("IHAVE <x@ex.com>");
-        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientBytesAsync("Subject: i\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("TAKETHIS <x@ex.com>");
         await duplex.WriteClientBytesAsync("Subject: t\r\n\r\nbody\r\n.\r\n"u8.ToArray());
