@@ -3,6 +3,8 @@
 Project-local Agent Skills for Cursor (including JetBrains Rider). Location: `.cursor/skills/<skill-name>/SKILL.md`.
 
 - Core engineering rules: [`.cursor/rules/vectornntp-core.mdc`](../rules/vectornntp-core.mdc)
+- Protocol data plane (byte-oriented): [`docs/architecture.md`](../../docs/architecture.md#byte-oriented-protocol-data-plane)
+- Source-generated structured logging: [`docs/architecture.md`](../../docs/architecture.md#source-generated-structured-logging)
 - Artifact placement: [`.cursor/rules/repository-artifacts.mdc`](../rules/repository-artifacts.mdc) — experiments and generated reports go under `.artifacts/`, not `docs/` or `tools/`
 - Historical index: [`.artifacts/ARTIFACT-INDEX.md`](../../.artifacts/ARTIFACT-INDEX.md)
 - Project entry point: [`AGENTS.md`](../../AGENTS.md) (routing only; honor by Rider ACP is **not** assumed)

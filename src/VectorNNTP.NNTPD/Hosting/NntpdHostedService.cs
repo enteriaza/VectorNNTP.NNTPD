@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -45,15 +46,11 @@ public sealed class NntpdHostedService : BackgroundService
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
-        _logger.LogInformation(
-            "Host starting application {ApplicationName}",
-            _options.Value.ApplicationName);
+        HostingLogMessages.HostStartingApplication(_logger, _options.Value.ApplicationName);
 
         await _lifecycle.StartAsync(cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation(
-            "Application entered Running state after {ElapsedMs} ms. Host startup continuing",
-            sw.ElapsedMilliseconds);
+        HostingLogMessages.ApplicationEnteredRunning(_logger, sw.ElapsedMilliseconds);
 
         await base.StartAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -67,13 +64,11 @@ public sealed class NntpdHostedService : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            _logger.LogInformation("Hosted service execution canceled due to host shutdown");
+            HostingLogMessages.HostedServiceExecutionCanceled(_logger);
         }
         catch (InvalidOperationException ex)
         {
-            _logger.LogCritical(
-                ex,
-                "Background hosted service observed unexpected application-service termination");
+            HostingLogMessages.UnexpectedApplicationServiceTermination(_logger, ex);
             _hostLifetime.NotifyUnexpectedTermination();
             throw;
         }
@@ -82,9 +77,7 @@ public sealed class NntpdHostedService : BackgroundService
     /// <inheritdoc />
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation(
-            "Host stopping application {ApplicationName}",
-            _options.Value.ApplicationName);
+        HostingLogMessages.HostStoppingApplication(_logger, _options.Value.ApplicationName);
 
         try
         {

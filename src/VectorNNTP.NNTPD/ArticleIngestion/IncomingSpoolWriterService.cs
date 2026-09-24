@@ -76,20 +76,18 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning(
-                "Incoming spool writer stop canceled with {Queued} article(s) still buffered",
-                _queue.Count);
+            SpoolLogMessages.StopCanceledWithBufferedArticles(_logger, _queue.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Incoming spool writer stopped with an error");
+            SpoolLogMessages.WriterStoppedWithError(_logger, ex);
         }
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation(
-            "Incoming spool writer started (capacity {Capacity}, max article {MaxBytes} bytes, dir {Dir})",
+        SpoolLogMessages.WriterStarted(
+            _logger,
             _queue.Capacity,
             _queue.MaxArticleBytes,
             _options.Value.ArticleIngestion?.IncomingDirectory
@@ -121,9 +119,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             catch (Exception ex)
             {
                 // Already accepted (239). Log and continue — do not poison the drain loop.
-                _logger.LogError(
+                SpoolLogMessages.PersistFailed(
+                    _logger,
                     ex,
-                    "Failed to persist incoming article {MessageId} ({Bytes} bytes)",
                     article.MessageId,
                     article.Payload.Length);
             }
@@ -134,6 +132,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             }
         }
 
-        _logger.LogInformation("Incoming spool writer stopped");
+        SpoolLogMessages.WriterStopped(_logger);
     }
 }

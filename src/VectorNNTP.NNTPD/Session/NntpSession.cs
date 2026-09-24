@@ -231,7 +231,7 @@ public sealed class NntpSession
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "NNTP session ended with an error for {Client}", ClientAddress);
+            SessionLogMessages.SessionEndedWithError(_logger, ex, ClientAddress);
         }
         finally
         {
@@ -297,8 +297,8 @@ public sealed class NntpSession
             && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
             && logger.IsEnabled(LogLevel.Information))
         {
-            logger.LogInformation(
-                "[{Client}] RX: {Command}",
+            CommandLogMessages.CommandRx(
+                logger,
                 NntpCommandLogFormat.Client(this),
                 NntpCommandLogFormat.RedactRxCommand(command, line.Span));
         }
@@ -316,8 +316,8 @@ public sealed class NntpSession
             return;
         }
 
-        _logger.LogInformation(
-            "[{Client}] RX rejected: verb={Verb} qualifier={Qualifier} status={Status} [{Detail}]",
+        CommandLogMessages.CommandRejected(
+            _logger,
             NntpCommandLogFormat.Client(this),
             command.Verb,
             command.Qualifier,

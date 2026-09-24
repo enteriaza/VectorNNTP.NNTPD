@@ -72,7 +72,7 @@ Session concepts (distinct):
 - **Mode:** `Unspecified` | `Reader` | `Stream` (`MODE READER`; `MODE STREAM` is RFC 4644 legacy discovery and does **not** change mode)
 - **Authentication:** `NntpAuthenticationState` (identity after successful AUTHINFO); pending `AUTHINFO USER` username is separate and does not authenticate
 - **Authorization:** immutable `NntpAuthorization` (`IsAuthenticated`, `AuthorizedReader`, `AuthorizedTransit`, `PostingPermitted`, `StreamingPermitted`, plus optional `TransitPeerName` / `TransitPeerPolicy`). Defaults: unauthenticated; streaming and posting denied. Connection-time identification uses the top-level `Transit` dictionary (peer names as keys). The effective client IP is matched against that peer's `AllowFrom` ACL (literal IPs/CIDRs plus currently resolved DNS addresses). A unique match grants `AuthorizedTransit` + `StreamingPermitted` without authentication and retains the named peer policy (credentials, Patterns, limits, `DeferOnDuplicate`, TLS mode). This is peer privilege, not user identity. `MODE STREAM` requires `StreamingPermitted`; `IHAVE`/`CHECK`/`TAKETHIS` require `AuthorizedTransit` (not AUTHINFO). Authentication success applies **only** privileges returned by `INntpAuthenticationProvider` — it does not imply reader/transit/posting/streaming.
-- **Dispatch:** `NntpCommandParser` produces a validated `NntpCommand`; invalid syntax is rejected immediately. `NntpCommandDispatcher` then applies authentication → authorization → mode → enum/switch handler.
+- **Dispatch:** `NntpCommandParser` classifies and validates syntax on **bytes** and produces a validated `NntpCommand`; invalid syntax is rejected immediately. `NntpCommandDispatcher` then applies authentication → authorization → mode → enum/switch handler. Protocol representation is defined in [Byte-Oriented Protocol Data Plane](#byte-oriented-protocol-data-plane).
 
 Public/pre-auth commands: `CAPABILITIES`, `MODE READER`, `HELP`, `DATE`, `QUIT`, `STARTTLS`, `COMPRESS DEFLATE`. **AUTHINFO USER/PASS** are implemented (RFC 4643). **TAKETHIS** (RFC 4644) is implemented for transit-authorized sessions (peer ACL or authenticated transit): multiline article receive → bounded in-memory ingestion queue → background `IncomingSpoolWriterService` → `spool/incoming`. `239` means accepted into the ingestion pipeline (not disk persistence). CAPABILITIES advertises `STREAMING`. `MODE STREAM` requires `StreamingPermitted` and returns `203` without changing session state. Command implementations live in dedicated files under `Session/Commands/` (see `docs/commands.md`). Cleartext AUTHINFO is a **server policy** (`Nntpd:AllowCleartextAuth`, default `true`): TLS inactive + policy false → `483` and CAPABILITIES omits `AUTHINFO USER`. TLS connections always permit AUTHINFO USER/PASS. Default DI registration is `DenyAllNntpAuthenticationProvider` (rejects all credentials). `AUTHINFO SASL`, reader/article/posting/`IHAVE`/`CHECK` remain registered placeholders (`500` / `501` after authz gates). `COMPRESS DEFLATE` is implemented (RFC 8054): advertised until active; after activation AUTHINFO/STARTTLS/MODE READER are rejected with `502` and `COMPRESS` is no longer advertised.
 
@@ -169,6 +169,91 @@ Wire format notes:
 
 Activation reuses the same quiescence model as TLS upgrade (atomic admission + outstanding counts). Preconditions mirror TLS: drain application `Input`; flush any bytes that must remain uncompressed (the COMPRESS `206` response) before calling `UpgradeToDeflateAsync`. Post-quiescence failure is terminal with no uncompressed fallback. DEFLATE after TLS is supported; TLS after DEFLATE is rejected. TLS-level compression is not used.
 
+## Byte-Oriented Protocol Data Plane
+
+**Protocol data remains byte-oriented throughout the data plane.**
+
+NNTP is a byte-oriented wire protocol. A `string` is an application representation. Protocol data must not become a `string` by default, and must not make an unnecessary round trip such as `bytes → string → bytes` or `bytes → string → formatted string → bytes`.
+
+This is an **architectural representation rule** first. It is also a performance rule (fewer allocations, encodings, copies, and temporary objects). Measurements support decisions; they are not the reason protocol data is bytes.
+
+This rule does **not** forbid strings. Strings are permitted at explicit, justified boundaries. Protocol data does not become strings for convenience.
+
+### Both directions
+
+```text
+RX:  socket → bytes → parser → validated protocol representation → handler
+TX:  application/protocol representation → wire bytes → transport
+```
+
+Incoming bytes are not converted to strings unless an explicit application, API, or logging boundary requires it. Static outgoing protocol text is pre-encoded once and reused. Dynamic outgoing protocol fields remain bytes where practical. Do not construct a string merely to encode it back to bytes.
+
+### What stays bytes
+
+Protocol data stays bytes while it is still protocol data. Typical examples include command verbs and parse-time arguments, Message-ID wire octets, status/reply fields, static and dynamic response text, capability tokens, keywords, protocol literals, and article wire framing.
+
+### Legitimate string boundaries
+
+A conversion is acceptable when a genuine boundary requires a string, for example:
+
+- an application or framework API that actually requires `string`
+- an authentication/provider API that requires `string`
+- human-readable logging (see [Source-Generated Structured Logging](#source-generated-structured-logging))
+- configuration that is inherently textual
+- persistent domain data that is intentionally a `string`
+
+Convert **at that boundary**. Do not propagate the string back through the protocol data plane. Current legitimate examples include AUTHINFO credentials at the authentication provider, `InboundArticle.MessageId` at the ingest API, Serilog / `ILogger` message text, and `NntpdOptions` text. Those examples illustrate the boundary idea; they are not a closed allow-list.
+
+### RX
+
+```text
+intended:  Socket → bytes → parser → NntpCommand → dispatch → handler
+forbidden: bytes → string → Split → uppercase string → dictionary lookup
+```
+
+The parser classifies and validates syntax using bytes. A string may be created **after** the protocol boundary if the application layer genuinely requires one.
+
+### TX
+
+```text
+intended:  application semantics → protocol representation → wire bytes → transport
+avoid:     string construction → ASCII encoding → byte[]
+           when the source is already bytes
+```
+
+Static replies are immutable pre-encoded wire buffers. Dynamic fields are composed from pre-encoded prefixes/suffixes plus already-byte protocol data (for example Message-ID octets or a formatted DATE stamp written directly into a wire buffer). HELP, CAPABILITIES, CHECK, TAKETHIS, and DATE illustrate this direction; the rule is not tied to those handlers.
+
+### Hot-path justification
+
+**Any bytes↔string conversion in a hot path requires an explicit justification.**
+
+The justification must answer:
+
+- Why is a string required?
+- What API or boundary requires it?
+- Why can the operation not remain byte-oriented?
+- Is the conversion once, or per command/message?
+- Is it on a high-frequency path?
+- Does the string immediately become bytes again?
+
+“Because the API currently takes a string” is **not** automatically sufficient. Determine whether that API is itself an unnecessary protocol-layer boundary.
+
+A future reviewer must be able to see why a conversion exists. Silent `byte[] → string → byte[]` is a defect in representation, not a style preference.
+
+### Reviewer checklist
+
+When reviewing protocol or data-plane code:
+
+- [ ] Does protocol data remain bytes?
+- [ ] Is there a bytes→string conversion?
+- [ ] If yes, what explicit boundary requires it?
+- [ ] Is the conversion on a hot path?
+- [ ] Does the string immediately become bytes again?
+- [ ] Is static protocol text pre-encoded?
+- [ ] Are dynamic protocol fields kept byte-oriented where practical?
+- [ ] Is there an unnecessary allocation caused by representation conversion?
+- [ ] Is the conversion documented/obvious enough that a future reviewer understands why it exists?
+
 ## Cloudflare DNS reconciliation
 
 Startup order places `CloudflareDnsReconciliationService` first among application services. It resolves eligible bind addresses (including intentional private IPs), reconciles A/AAAA for the generated FQDN via the Cloudflare DNS API, verifies the remote set, and fails startup on any hard error (empty address set, API failure, verification mismatch, cancellation). Configuration validation still never calls Cloudflare.
@@ -240,7 +325,65 @@ If `IApplicationService.Execution` faults or completes while `Running`, the mana
 
 ## Logging
 
-`ConfigureNntpdLogging()` clears MEL providers, removes the default `ILoggerFactory`, and registers Serilog via `AddSerilog` (`writeToProviders: false`). Framework and application logs share one Serilog pipeline. Details: [logging.md](logging.md).
+`ConfigureNntpdLogging()` clears MEL providers, removes the default `ILoggerFactory`, and registers Serilog via `AddSerilog` (`writeToProviders: false`). Framework and application logs share one Serilog pipeline. Details: [logging.md](logging.md). Application call sites follow [Source-Generated Structured Logging](#source-generated-structured-logging).
+
+## Source-Generated Structured Logging
+
+Application logging should use compile-time / source-generated logging where practical. Prefer `LoggerMessageAttribute` plus partial logging methods over repeated runtime template parsing such as `_logger.LogInformation("Connection accepted from {Remote}", remote)`.
+
+Serilog remains the application's exclusive logging provider. Application and framework code continue to use `Microsoft.Extensions.Logging.ILogger` / `ILogger<T>` abstractions; those resolve to the Serilog pipeline (`ILogger` → `SerilogLoggerFactory` → configured sinks). Do not introduce Microsoft.Extensions.Logging as a second runtime provider, and do not replace Serilog.
+
+Logging is an explicit application boundary, not a reason to change protocol representation. Protocol data stays bytes in the data plane ([Byte-Oriented Protocol Data Plane](#byte-oriented-protocol-data-plane)).
+
+### Structured logging
+
+Preserve structured properties. Do not turn structured logging into preformatted strings.
+
+Avoid:
+
+```csharp
+_logger.LogInformation($"RX: {command}");
+```
+
+Prefer:
+
+```csharp
+CommandLogMessages.CommandRx(logger, client, command);
+```
+
+or, when a generated method is not appropriate, a structured template:
+
+```csharp
+_logger.LogInformation("RX: {Command}", command);
+```
+
+Do not preformat the message before passing it to structured logging.
+
+### Logging representation
+
+Protocol bytes should not be converted to strings solely because a log statement happens to need them if the logging mechanism can represent them without that conversion.
+
+The current `LoggerMessageAttribute` / `ILogger` source-generation APIs do **not** accept `ReadOnlySpan<byte>` (ref struct) or provide a byte-native structured payload that Serilog would render as human-readable protocol text. `byte[]` / `ReadOnlyMemory<byte>` `ToString()` is not a useful operational representation.
+
+When the logging API requires human-readable text, the conversion is a legitimate logging boundary and should happen **once, locally**, immediately before the generated log method. Do not convert protocol bytes earlier in the data plane merely to make logging convenient. Do not log raw byte arrays in a way that makes operational logs unreadable.
+
+If a validated string already exists because an application API required it, reuse that string; do not create an additional conversion merely for logging.
+
+### Hot path
+
+Any bytes↔string conversion introduced solely for logging in a hot path requires an explicit justification that identifies:
+
+- why logging needs the string
+- why the logging API cannot consume the original representation
+- whether the conversion occurs per command/message
+- whether logging is enabled at that level in production
+- whether the conversion can be moved outside the hot path or skipped when the level is disabled
+
+Check `ILogger.IsEnabled` before constructing expensive logging arguments (for example redacted command text from protocol bytes).
+
+### Event IDs
+
+Generated methods use stable component-scoped EventId ranges. Do not mechanically invent new ranges for every call when an existing convention already applies. Unused reserved methods keep their original EventIds; do not rewrite operational message text to reuse a reserved unused template.
 
 ## Configuration
 

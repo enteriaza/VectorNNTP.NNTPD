@@ -85,11 +85,7 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogDebug(
-                    ex,
-                    "Authoritative TXT lookup failed for {Name} via {Server}",
-                    name,
-                    server);
+                AcmeLogMessages.AuthoritativeTxtLookupFailed(_logger, ex, name, server);
             }
         }
 
@@ -143,7 +139,7 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogDebug(ex, "Failed resolving authoritative NS address for {NsName}", nsName);
+                AcmeLogMessages.AuthoritativeNsResolveFailed(_logger, ex, nsName);
             }
         }
 

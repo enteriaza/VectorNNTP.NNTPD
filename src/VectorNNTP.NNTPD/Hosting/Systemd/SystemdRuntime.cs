@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting.Systemd;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting.Systemd;
 
@@ -52,8 +53,8 @@ public sealed class SystemdRuntime : ISystemdRuntime
 
         if (IsLinux)
         {
-            _logger.LogInformation(
-                "systemd runtime detection: isSystemdService={IsSystemdService}, notifyEnabled={NotifyEnabled}, watchdogConfigured={WatchdogConfigured}, watchdogTimeout={WatchdogTimeout}, detail={Detail}",
+            SystemdLogMessages.RuntimeDetection(
+                _logger,
                 IsSystemdService,
                 IsNotifyEnabled,
                 IsWatchdogConfigured,
@@ -95,8 +96,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
         if (!ulong.TryParse(usecText, NumberStyles.None, CultureInfo.InvariantCulture, out var usec) || usec == 0)
         {
             reason = "WATCHDOG_USEC missing or invalid";
-            _logger.LogWarning(
-                "Ignoring malformed systemd watchdog configuration (WATCHDOG_USEC is not a positive integer)");
+            SystemdLogMessages.MalformedWatchdogUsec(_logger);
             return null;
         }
 
@@ -106,16 +106,14 @@ public sealed class SystemdRuntime : ISystemdRuntime
             if (!int.TryParse(watchdogPidText, NumberStyles.None, CultureInfo.InvariantCulture, out var watchdogPid))
             {
                 reason = "WATCHDOG_PID malformed";
-                _logger.LogWarning(
-                    "Ignoring systemd watchdog configuration because WATCHDOG_PID is malformed");
+                SystemdLogMessages.MalformedWatchdogPid(_logger);
                 return null;
             }
 
             if (watchdogPid != Environment.ProcessId)
             {
                 reason = "WATCHDOG_PID does not match current process";
-                _logger.LogInformation(
-                    "systemd watchdog is configured for a different PID; watchdog keep-alives will remain disabled");
+                SystemdLogMessages.WatchdogConfiguredForDifferentPid(_logger);
                 return null;
             }
         }
@@ -124,7 +122,7 @@ public sealed class SystemdRuntime : ISystemdRuntime
         if (usec > (ulong)(TimeSpan.MaxValue.Ticks / 10))
         {
             reason = "WATCHDOG_USEC out of range";
-            _logger.LogWarning("Ignoring systemd watchdog configuration because WATCHDOG_USEC is out of range");
+            SystemdLogMessages.WatchdogUsecOutOfRange(_logger);
             return null;
         }
 

@@ -56,8 +56,8 @@ public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
         _logger = logger;
         if (!store.Current.IsEmpty)
         {
-            logger.LogInformation(
-                "Trusted Transit peers configured ({Count}): {Peers}",
+            SessionLogMessages.TransitPeersConfigured(
+                logger,
                 store.Current.Peers.Count,
                 string.Join(", ", store.Current.Peers.Keys));
         }
@@ -125,10 +125,10 @@ public sealed class TransitPeerAuthorization : ITransitPeerAuthorization
 
         if (matches is { Count: > 1 })
         {
-            _logger?.LogWarning(
-                "Transit peer identification is ambiguous for {ClientAddress}; matching peers: {PeerNames}",
-                address,
-                string.Join(", ", matches));
+            if (_logger is not null)
+            {
+                SessionLogMessages.TransitPeerAmbiguous(_logger, address, string.Join(", ", matches));
+            }
             return NntpAuthorization.Unauthenticated;
         }
 

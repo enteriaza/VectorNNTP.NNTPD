@@ -20,6 +20,14 @@ internal static class NntpCommandLogFormat
     /// <summary>
     /// Logging-boundary representation of a command. AUTHINFO secrets are redacted.
     /// </summary>
+    /// <remarks>
+    /// <see cref="Microsoft.Extensions.Logging.LoggerMessageAttribute"/> /
+    /// <see cref="Microsoft.Extensions.Logging.ILogger"/> cannot accept
+    /// <see cref="ReadOnlySpan{T}"/> of bytes, and <c>byte[]</c> is not a useful operational
+    /// log representation. This ASCII conversion is the explicit logging string boundary.
+    /// Callers must check <see cref="Microsoft.Extensions.Logging.ILogger.IsEnabled"/> before
+    /// invoking this method.
+    /// </remarks>
     public static string RedactRxCommand(NntpCommand command, ReadOnlySpan<byte> line)
     {
         if (command.Verb == NntpVerb.AuthInfo && command.Qualifier == NntpVerb.Pass)

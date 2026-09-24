@@ -91,10 +91,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
             var desiredV4 = ToContentSet(desired.IPv4);
             var desiredV6 = ToContentSet(desired.IPv6);
 
-            _logger.LogInformation(
-                "Reconciling Cloudflare DNS for {Fqdn}: desired A={ACount}, AAAA={AaaaCount} " +
-                "(staged create-all-then-delete; managed TTL={ManagedTtl}, proxied=false; " +
-                "non-atomic; success requires verified exact match)",
+            CloudflareLogMessages.Reconciling(
+                _logger,
                 fqdn,
                 desiredV4.Count,
                 desiredV6.Count,
@@ -111,9 +109,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     await ReconcileAttemptAsync(zoneId, fqdn, desiredV4, desiredV6, attempt, operationToken)
                         .ConfigureAwait(false);
 
-                    _logger.LogInformation(
-                        "Cloudflare DNS reconciliation verified for {Fqdn} on attempt {Attempt}/{MaxAttempts} " +
-                        "(A={ACount}, AAAA={AaaaCount})",
+                    CloudflareLogMessages.ReconciliationVerified(
+                        _logger,
                         fqdn,
                         attempt,
                         MaxAttempts,
@@ -123,19 +120,14 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                 }
                 catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Cloudflare DNS reconciliation for {Fqdn} was canceled on attempt {Attempt}. " +
-                        "Remote DNS may be in an intermediate state; the next startup will re-read and converge",
-                        fqdn,
-                        attempt);
+                    CloudflareLogMessages.ReconciliationCanceled(_logger, fqdn, attempt);
                     throw;
                 }
                 catch (CloudflareDnsException ex) when (ex.IsPermanentFailure)
                 {
-                    _logger.LogError(
+                    CloudflareLogMessages.ReconciliationPermanentFailure(
+                        _logger,
                         ex,
-                        "Cloudflare DNS reconciliation for {Fqdn} failed permanently on attempt {Attempt} " +
-                        "(operation={Operation}, status={StatusCode}). Not retrying",
                         fqdn,
                         attempt,
                         ex.FailedOperation,
@@ -147,12 +139,9 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     lastFailure = ex;
                     var uncertain = ex is CloudflareDnsException { IsOutcomeUncertain: true };
 
-                    _logger.LogError(
+                    CloudflareLogMessages.ReconciliationAttemptFailed(
+                        _logger,
                         ex,
-                        "Cloudflare DNS reconciliation attempt {Attempt}/{MaxAttempts} for {Fqdn} failed " +
-                        "(uncertainOutcome={Uncertain}, operation={Operation}). " +
-                        "Partial A/AAAA mutations are not rolled back atomically; " +
-                        "a subsequent attempt will re-read Cloudflare and converge toward the desired set",
                         attempt,
                         MaxAttempts,
                         fqdn,
@@ -165,8 +154,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     }
 
                     var delay = GetAttemptBackoff(attempt);
-                    _logger.LogWarning(
-                        "Waiting {DelayMs} ms before Cloudflare DNS reconcile retry {NextAttempt}/{MaxAttempts} for {Fqdn}",
+                    CloudflareLogMessages.ReconciliationRetryWait(
+                        _logger,
                         delay.TotalMilliseconds,
                         attempt + 1,
                         MaxAttempts,
@@ -211,10 +200,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
             var timeout = operationTimeout ?? _options.Value.CloudFlareOperationTimeout;
             using var budget = CloudflareOperationBudget.Begin(timeout, cancellationToken, out var operationToken);
 
-            _logger.LogInformation(
-                "Removing all Cloudflare DNS records for exact FQDN {Fqdn} (all record types; " +
-                "parent/child hostnames are out of scope)",
-                fqdn);
+            CloudflareLogMessages.RemovingAllRecords(_logger, fqdn);
 
             Exception? lastFailure = null;
 
@@ -226,31 +212,19 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                 {
                     await RemoveAllAttemptAsync(zoneId, fqdn, attempt, operationToken).ConfigureAwait(false);
 
-                    _logger.LogInformation(
-                        "Cloudflare DNS cleanup verified for {Fqdn} on attempt {Attempt}/{MaxAttempts}: " +
-                        "no records remain for the exact name (API view). " +
-                        "Recursive resolvers may still serve cached answers until TTLs expire",
-                        fqdn,
-                        attempt,
-                        MaxAttempts);
+                    CloudflareLogMessages.CleanupVerified(_logger, fqdn, attempt, MaxAttempts);
                     return;
                 }
                 catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Cloudflare DNS cleanup for {Fqdn} was canceled on attempt {Attempt}. " +
-                        "Remote DNS may still contain records for this FQDN; cleanup is not claimed successful",
-                        fqdn,
-                        attempt);
+                    CloudflareLogMessages.CleanupCanceled(_logger, fqdn, attempt);
                     throw;
                 }
                 catch (CloudflareDnsException ex) when (ex.IsPermanentFailure)
                 {
-                    _logger.LogError(
+                    CloudflareLogMessages.CleanupPermanentFailure(
+                        _logger,
                         ex,
-                        "Cloudflare DNS cleanup for {Fqdn} failed permanently on attempt {Attempt} " +
-                        "(operation={Operation}, status={StatusCode}). Not retrying. " +
-                        "The FQDN is not claimed removed",
                         fqdn,
                         attempt,
                         ex.FailedOperation,
@@ -262,11 +236,9 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     lastFailure = ex;
                     var uncertain = ex is CloudflareDnsException { IsOutcomeUncertain: true };
 
-                    _logger.LogError(
+                    CloudflareLogMessages.CleanupAttemptFailed(
+                        _logger,
                         ex,
-                        "Cloudflare DNS cleanup attempt {Attempt}/{MaxAttempts} for {Fqdn} failed " +
-                        "(uncertainOutcome={Uncertain}, operation={Operation}). " +
-                        "Partial deletions are not treated as success; a subsequent attempt will re-read and continue",
                         attempt,
                         MaxAttempts,
                         fqdn,
@@ -279,8 +251,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     }
 
                     var delay = GetAttemptBackoff(attempt);
-                    _logger.LogWarning(
-                        "Waiting {DelayMs} ms before Cloudflare DNS cleanup retry {NextAttempt}/{MaxAttempts} for {Fqdn}",
+                    CloudflareLogMessages.CleanupRetryWait(
+                        _logger,
                         delay.TotalMilliseconds,
                         attempt + 1,
                         MaxAttempts,
@@ -316,11 +288,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     {
         var existing = await ListExactFqdnRecordsAsync(zoneId, fqdn, cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation(
-            "Cloudflare DNS cleanup attempt {Attempt}: {RecordCount} record(s) for exact FQDN {Fqdn}",
-            attempt,
-            existing.Count,
-            fqdn);
+        CloudflareLogMessages.CleanupAttempt(_logger, attempt, existing.Count, fqdn);
 
         foreach (var record in existing)
         {
@@ -337,11 +305,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                 };
             }
 
-            _logger.LogInformation(
-                "Deleting {Type} record {RecordId} for exact FQDN {Fqdn} during cleanup",
-                record.Type,
-                record.Id,
-                fqdn);
+            CloudflareLogMessages.DeletingRecordDuringCleanup(_logger, record.Type, record.Id, fqdn);
 
             await _client.DeleteRecordAsync(zoneId, record.Id, cancellationToken).ConfigureAwait(false);
         }
@@ -395,12 +359,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
             else
             {
                 // API name filters can be imperfect; never delete non-exact names.
-                _logger.LogWarning(
-                    "Skipping Cloudflare DNS record {RecordId} (type={Type}) during cleanup of {Fqdn}: " +
-                    "name is not an exact match after normalization",
-                    record.Id,
-                    record.Type,
-                    fqdn);
+                CloudflareLogMessages.SkippingNonExactCleanupRecord(_logger, record.Id, record.Type, fqdn);
             }
         }
 
@@ -457,9 +416,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         var planA = BuildPlan(existingA, CloudflareDnsRecordTypes.A, desiredV4);
         var planAaaa = BuildPlan(existingAaaa, CloudflareDnsRecordTypes.AAAA, desiredV6);
 
-        _logger.LogInformation(
-            "Cloudflare DNS attempt {Attempt}: A missing={AMissing} stale={AStale} dup={ADup}; " +
-            "AAAA missing={AaaaMissing} stale={AaaaStale} dup={AaaaDup}",
+        CloudflareLogMessages.ReconcileAttemptPlan(
+            _logger,
             attempt,
             planA.Missing.Count,
             planA.Stale.Count,
@@ -500,11 +458,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         foreach (var content in missingContents)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _logger.LogInformation(
-                "Creating {Type} record for {Fqdn} content {Content}",
-                type,
-                fqdn,
-                content);
+            CloudflareLogMessages.CreatingRecord(_logger, type, fqdn, content);
             await _client.CreateRecordAsync(
                     zoneId,
                     new CloudflareDnsRecordWriteRequest
@@ -543,8 +497,8 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
                     IsPermanentFailure = true,
                 };
 
-            _logger.LogInformation(
-                "Updating {Type} record {RecordId} for {Fqdn} to managed TTL={ManagedTtl} and proxied={Proxied}",
+            CloudflareLogMessages.UpdatingRecordManagedAttributes(
+                _logger,
                 type,
                 record.Id,
                 fqdn,
@@ -576,12 +530,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
         foreach (var record in records)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _logger.LogInformation(
-                "Deleting {Type} record {RecordId} for {Fqdn} content {Content}",
-                type,
-                record.Id,
-                fqdn,
-                record.Content);
+            CloudflareLogMessages.DeletingRecord(_logger, type, record.Id, fqdn, record.Content);
             await _client.DeleteRecordAsync(zoneId, record.Id, cancellationToken).ConfigureAwait(false);
         }
     }

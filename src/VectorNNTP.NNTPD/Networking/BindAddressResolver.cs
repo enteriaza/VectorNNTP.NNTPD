@@ -60,15 +60,14 @@ public sealed class BindAddressResolver : IBindAddressResolver
             if (!IPAddress.TryParse(trimmed, out var explicitAddress))
             {
                 // Configuration validation should already reject this; keep resolver defensive.
-                _logger.LogWarning(
-                    "Ignoring non-IP BindAddress entry during resolution (validation should have failed earlier)");
+                NetworkingLogMessages.IgnoringNonIpBindAddress(_logger);
                 continue;
             }
 
             if (!IpAddressEligibility.IsEligibleForDns(explicitAddress))
             {
-                _logger.LogInformation(
-                    "BindAddress entry {Address} is not eligible for DNS publication and will be omitted from the reconciled set",
+                NetworkingLogMessages.BindAddressNotEligibleForDns(
+                    _logger,
                     IpAddressEligibility.ToDnsContent(explicitAddress));
                 continue;
             }
@@ -77,8 +76,8 @@ public sealed class BindAddressResolver : IBindAddressResolver
         }
 
         var resolved = new ResolvedBindAddresses(collected);
-        _logger.LogInformation(
-            "Resolved {TotalCount} eligible bind address(es) for DNS ({IPv4Count} IPv4, {IPv6Count} IPv6)",
+        NetworkingLogMessages.BindAddressesResolved(
+            _logger,
             resolved.All.Count,
             resolved.IPv4.Count,
             resolved.IPv6.Count);

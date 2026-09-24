@@ -43,6 +43,8 @@ Improve real workload performance without sacrificing correctness or operational
 
 - NNTPD targets sustained high throughput; **do not claim** 40+ Gbps (or any target) without evidence from this environment.
 - Phase 0 host/lifecycle/logging must stay off the future packet hot path where architecture requires it (`docs/architecture.md`).
+- Protocol data stays bytes (`docs/architecture.md` § Byte-Oriented Protocol Data Plane). That is a **representation** rule first; allocation and encode savings are consequences. Do not treat “measure fewer allocations” as a license to keep `bytes → string → bytes` in the data plane.
+- Hot-path logging uses source-generated methods (`docs/architecture.md` § Source-Generated Structured Logging). Do not construct expensive logging arguments (including protocol-byte `GetString`) before `IsEnabled` is false.
 - No established allocation budget in-repo ⇒ do not invent one; measure first.
 - Do not import BackFiller benchmark baselines or RabbitMQ settlement rules.
 

@@ -84,9 +84,9 @@ internal static class StartTls
         }
         catch (Exception ex)
         {
-            Logger.LogError(
+            CommandLogMessages.StartTlsHandshakeFailed(
+                Logger,
                 ex,
-                "[{Client}] STARTTLS handshake failed",
                 NntpCommandLogFormat.Client(context.Session));
             context.Session.RequestClose();
             // Handshake failures complete the connection; do not rethrow into the dispatcher error path.

@@ -312,10 +312,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                 // do not claim definitive failure — propagate cancellation so the caller stops.
                 if (isMutation)
                 {
-                    _logger.LogWarning(
-                        "Cloudflare DNS {Method} {Path} canceled during a mutation; remote outcome is uncertain",
-                        method.Method,
-                        relativePath);
+                    CloudflareLogMessages.MutationCanceledUncertain(_logger, method.Method, relativePath);
                 }
 
                 throw;
@@ -341,8 +338,8 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                 if ((int)response.StatusCode == 429 && attempt < MaxRateLimitRetries)
                 {
                     rateLimitDelay = GetRetryDelay(response, attempt);
-                    _logger.LogWarning(
-                        "Cloudflare DNS rate limited (HTTP 429) for {Method} {Path}. Retrying after {DelayMs} ms (attempt {Attempt}/{MaxAttempts})",
+                    CloudflareLogMessages.RateLimited(
+                        _logger,
                         method.Method,
                         relativePath,
                         rateLimitDelay.Value.TotalMilliseconds,

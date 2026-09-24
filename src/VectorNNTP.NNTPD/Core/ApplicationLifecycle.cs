@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Core;
 
@@ -120,8 +121,8 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         {
             Transition(ApplicationState.Starting);
 
-            _logger.LogInformation(
-                "Application startup initiated for {ApplicationName}. Current state: {State}",
+            LifecycleLogMessages.StartupInitiatedWithState(
+                _logger,
                 _options.Value.ApplicationName,
                 State);
 
@@ -139,16 +140,14 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(
-                    "Application startup canceled after {ElapsedMs} ms. Transitioning to shutdown",
-                    sw.ElapsedMilliseconds);
+                LifecycleLogMessages.StartupCanceled(_logger, sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
                 throw;
             }
             catch (OperationCanceledException) when (startupCts.IsCancellationRequested)
             {
-                _logger.LogError(
-                    "Application startup timed out after {Timeout} ({ElapsedMs} ms)",
+                LifecycleLogMessages.StartupTimedOut(
+                    _logger,
                     _options.Value.StartupTimeout,
                     sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
@@ -157,18 +156,15 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Application startup failed after {ElapsedMs} ms. Rolling back and transitioning to Stopped",
-                    sw.ElapsedMilliseconds);
+                LifecycleLogMessages.StartupFailed(_logger, ex, sw.ElapsedMilliseconds);
                 await FailStartupCleanupAsync().ConfigureAwait(false);
                 throw;
             }
 
             Transition(ApplicationState.Running);
 
-            _logger.LogInformation(
-                "Application initialization completed for {ApplicationName} in {ElapsedMs} ms. State: {State}",
+            LifecycleLogMessages.InitializationCompleted(
+                _logger,
                 _options.Value.ApplicationName,
                 sw.ElapsedMilliseconds,
                 State);
@@ -202,8 +198,8 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
                 Interlocked.Exchange(ref _shutdownRequested, 1);
                 var from = _state;
                 _state = ApplicationState.Stopped;
-                _logger.LogInformation(
-                    "Application stop requested before startup. State transition: {From} -> {To}",
+                LifecycleLogMessages.StopRequestedBeforeStartup(
+                    _logger,
                     ApplicationState.Created,
                     ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
@@ -276,7 +272,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         catch (Exception ex)
         {
             shutdownFailure = ex;
-            _logger.LogError(ex, "ApplicationLifecycle disposal encountered a shutdown failure");
+            LifecycleLogMessages.DisposalShutdownFailure(_logger, ex);
         }
         finally
         {
@@ -354,8 +350,8 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
                 Transition(ApplicationState.Stopping);
             }
 
-            _logger.LogInformation(
-                "Application shutdown initiated for {ApplicationName}. State: {State}. Timeout: {Timeout}",
+            LifecycleLogMessages.ShutdownInitiatedWithDetails(
+                _logger,
                 _options.Value.ApplicationName,
                 State,
                 _options.Value.GracefulShutdownTimeout);
@@ -368,20 +364,14 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             }
             catch (TimeoutException ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Application shutdown timed out after {ElapsedMs} ms",
-                    sw.ElapsedMilliseconds);
+                LifecycleLogMessages.ShutdownTimedOutElapsed(_logger, ex, sw.ElapsedMilliseconds);
                 Transition(ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
                 throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Application shutdown failed after {ElapsedMs} ms. Forcing Stopped state",
-                    sw.ElapsedMilliseconds);
+                LifecycleLogMessages.ShutdownFailed(_logger, ex, sw.ElapsedMilliseconds);
                 Transition(ApplicationState.Stopped);
                 _stoppedTcs.TrySetResult();
                 throw;
@@ -389,8 +379,8 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
 
             Transition(ApplicationState.Stopped);
 
-            _logger.LogInformation(
-                "Application shutdown completed for {ApplicationName} in {ElapsedMs} ms. State: {State}",
+            LifecycleLogMessages.ShutdownCompletedWithState(
+                _logger,
                 _options.Value.ApplicationName,
                 sw.ElapsedMilliseconds,
                 State);
@@ -428,7 +418,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Additional cleanup after startup failure encountered an error");
+            LifecycleLogMessages.StartupFailureCleanupError(_logger, ex);
         }
 
         await Task.CompletedTask.ConfigureAwait(false);
@@ -457,10 +447,10 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             }
 
             _state = to;
-            _logger.LogInformation(
-                "Application lifecycle state transition: {FromState} -> {ToState}",
-                from,
-                to);
+            LifecycleLogMessages.LifecycleTransition(
+                _logger,
+                (ApplicationStateLog)from,
+                (ApplicationStateLog)to);
         }
 
         RaiseStateChanged(from, to);
@@ -474,11 +464,7 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "An ApplicationLifecycle.StateChanged handler failed for transition {FromState} -> {ToState}",
-                from,
-                to);
+            LifecycleLogMessages.StateChangedHandlerFailed(_logger, ex, from, to);
         }
     }
 
@@ -489,9 +475,9 @@ public sealed class ApplicationLifecycle : IAsyncDisposable
             return;
         }
 
-        _logger.LogCritical(
+        LifecycleLogMessages.UnexpectedServiceTerminationWhileRunning(
+            _logger,
             e.Exception,
-            "Unexpected termination of application service {ServiceName} while Running (completedNormally={CompletedNormally})",
             e.ServiceName,
             e.CompletedNormally);
 

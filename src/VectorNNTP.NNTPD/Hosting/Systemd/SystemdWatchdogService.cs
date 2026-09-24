@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting.Systemd;
 
@@ -59,7 +60,7 @@ public sealed class SystemdWatchdogService : BackgroundService
     {
         if (!ShouldActivate(out var reason))
         {
-            _logger.LogInformation("systemd watchdog remain disabled ({Reason})", reason);
+            SystemdLogMessages.WatchdogRemainDisabled(_logger, reason);
             return Task.CompletedTask;
         }
 
@@ -71,10 +72,7 @@ public sealed class SystemdWatchdogService : BackgroundService
             _options.Value.Systemd.WatchdogIntervalFraction);
 
         Interlocked.Exchange(ref _active, 1);
-        _logger.LogInformation(
-            "systemd watchdog activated. Deadline={WatchdogTimeout}, heartbeatInterval={HeartbeatInterval}",
-            timeout,
-            _interval);
+        SystemdLogMessages.WatchdogActivated(_logger, timeout, _interval);
 
         return base.StartAsync(cancellationToken);
     }
@@ -98,29 +96,29 @@ public sealed class SystemdWatchdogService : BackgroundService
             {
                 if (!_health.IsHealthyForWatchdog)
                 {
-                    _logger.LogDebug("Skipping systemd watchdog keep-alive because the application is unhealthy");
+                    SystemdLogMessages.WatchdogKeepAliveSkippedUnhealthy(_logger);
                     continue;
                 }
 
                 try
                 {
                     _notify.NotifyWatchdog();
-                    _logger.LogTrace("Sent systemd watchdog keep-alive");
+                    SystemdLogMessages.WatchdogKeepAliveSent(_logger);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "systemd watchdog notification failed");
+                    SystemdLogMessages.WatchdogNotificationFailed(_logger, ex);
                     throw;
                 }
             }
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
         {
-            _logger.LogInformation("systemd watchdog deactivated due to shutdown");
+            SystemdLogMessages.WatchdogDeactivated(_logger);
         }
         catch (Exception ex)
         {
-            _logger.LogCritical(ex, "systemd watchdog loop failed unexpectedly; requesting host stop");
+            SystemdLogMessages.WatchdogLoopFailed(_logger, ex);
             Interlocked.Exchange(ref _active, 0);
             _hostLifetime.StopApplication();
             throw;
@@ -135,7 +133,7 @@ public sealed class SystemdWatchdogService : BackgroundService
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         Interlocked.Exchange(ref _active, 0);
-        _logger.LogInformation("systemd watchdog stopping");
+        SystemdLogMessages.WatchdogStopping(_logger);
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 

@@ -55,17 +55,17 @@ internal static class Quit
         catch (Exception ex) when (NntpPeerDisconnect.IsPeerDisconnect(ex, context.Connection))
         {
             context.CompletionDetail = "peer disconnected";
-            Logger.LogDebug(
+            CommandLogMessages.QuitPeerDisconnected(
+                Logger,
                 ex,
-                "[{Client}] Peer disconnected during QUIT termination",
                 NntpCommandLogFormat.Client(context.Session));
         }
         catch (Exception ex)
         {
             // TEMP DIAG — remove after capture
-            Logger.LogError(
+            CommandLogMessages.QuitUncaught(
+                Logger,
                 ex,
-                "[{Client}] QUIT uncaught during termination: {Type} socket={Socket}",
                 NntpCommandLogFormat.Client(context.Session),
                 ex.GetType().FullName,
                 (ex as SocketException)?.SocketErrorCode

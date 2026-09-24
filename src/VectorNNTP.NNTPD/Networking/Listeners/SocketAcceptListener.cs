@@ -62,10 +62,7 @@ public sealed class SocketAcceptListener : IAsyncDisposable
         _listenSocket.Bind(_binding.EndPoint);
         _listenSocket.Listen(backlog);
         _acceptLoop = AcceptLoopAsync(_cts.Token);
-        _logger.LogInformation(
-            "NNTP listener started on {EndPoint} (dualMode={DualMode})",
-            LocalEndPoint,
-            _binding.DualMode);
+        NetworkingLogMessages.ListenerStarted(_logger, LocalEndPoint, _binding.DualMode);
     }
 
     /// <summary>Stops accepting and closes the listen socket.</summary>
@@ -106,11 +103,11 @@ public sealed class SocketAcceptListener : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Accept loop ended with an error during stop");
+                NetworkingLogMessages.AcceptLoopStopError(_logger, ex);
             }
         }
 
-        _logger.LogInformation("NNTP listener stopped ({Address}/{Port})", _binding.Address, _binding.Port);
+        NetworkingLogMessages.ListenerStopped(_logger, _binding.Address, _binding.Port);
     }
 
     /// <inheritdoc />
@@ -144,12 +141,12 @@ public sealed class SocketAcceptListener : IAsyncDisposable
             }
             catch (SocketException ex) when (cancellationToken.IsCancellationRequested || _stopped != 0)
             {
-                _logger.LogDebug(ex, "Accept interrupted during listener shutdown");
+                NetworkingLogMessages.AcceptInterruptedDuringShutdown(_logger, ex);
                 break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Accept failed on {EndPoint}; listener continues", _binding.EndPoint);
+                NetworkingLogMessages.AcceptFailed(_logger, ex, _binding.EndPoint);
                 continue;
             }
 
@@ -176,7 +173,7 @@ public sealed class SocketAcceptListener : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Accepted connection handler failed; listener continues");
+            NetworkingLogMessages.AcceptedHandlerFailed(_logger, ex);
             try
             {
                 accepted.Dispose();

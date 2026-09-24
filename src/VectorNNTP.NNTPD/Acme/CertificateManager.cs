@@ -91,21 +91,17 @@ public sealed class CertificateManager
             if (status is { Usable: true, Material: not null, DueForRenewal: false })
             {
                 _current = status.Material;
-                _logger.LogInformation(
-                    "Reusing existing server certificate; notAfter={NotAfter:o}",
-                    status.Material.NotAfter);
+                AcmeLogMessages.ReusingExistingCertificate(_logger, status.Material.NotAfter);
                 return status.Material;
             }
 
             if (status is { Usable: true, DueForRenewal: true })
             {
-                _logger.LogInformation("Existing certificate due for renewal; issuing replacement");
+                AcmeLogMessages.ExistingCertificateDueForRenewal(_logger);
             }
             else
             {
-                _logger.LogInformation(
-                    "No usable server certificate ({Reason}); requesting issuance",
-                    status.Reason);
+                AcmeLogMessages.NoUsableCertificate(_logger, status.Reason);
             }
 
             return await IssueAndPersistAsync(cancellationToken).ConfigureAwait(false);
@@ -141,9 +137,7 @@ public sealed class CertificateManager
             catch (Exception ex) when (prior is not null && ex is not OperationCanceledException)
             {
                 _current = prior;
-                _logger.LogWarning(
-                    "Certificate renewal failed ({Failure}); preserving existing certificate",
-                    AcmeFailureSanitizer.Sanitize(ex));
+                AcmeLogMessages.RenewalFailedPreservingExisting(_logger, AcmeFailureSanitizer.Sanitize(ex));
                 return false;
             }
         }
@@ -180,10 +174,7 @@ public sealed class CertificateManager
         _store.Save(status.Material);
         _current = status.Material;
         _generation++;
-        _logger.LogInformation(
-            "Server certificate ready generation={Generation} notAfter={NotAfter:o}",
-            _generation,
-            status.Material.NotAfter);
+        AcmeLogMessages.ServerCertificateReady(_logger, _generation, status.Material.NotAfter);
         return status.Material;
     }
 }

@@ -150,8 +150,8 @@ internal static class TakeThis
 
         context.Session.RequestClose();
         context.CompletionDetail = "temporary failure";
-        Logger.LogWarning(
-            "[{Client}] TAKETHIS temporary failure; closing connection",
+        CommandLogMessages.TakeThisTemporaryFailure(
+            Logger,
             NntpCommandLogFormat.Client(context.Session));
     }
 }

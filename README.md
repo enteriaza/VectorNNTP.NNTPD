@@ -176,4 +176,4 @@ sudo journalctl -u vectornntpd -f
 - Metrics servers / telemetry exporters
 - NNTP-specific health checks for watchdog
 
-See [docs/architecture.md](docs/architecture.md) for component responsibilities.
+See [docs/architecture.md](docs/architecture.md) for component responsibilities and the [byte-oriented protocol data-plane rule](docs/architecture.md#byte-oriented-protocol-data-plane).

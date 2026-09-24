@@ -125,7 +125,7 @@ public sealed class TransitDnsRefreshService : IApplicationService, IAsyncDispos
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Transit AllowFrom DNS refresh loop terminated unexpectedly");
+            TransitLogMessages.RefreshLoopTerminated(_logger, ex);
             throw;
         }
     }

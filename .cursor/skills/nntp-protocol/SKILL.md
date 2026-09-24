@@ -51,6 +51,12 @@ Do **not** treat every file as applicable to every feature. Check obsolescence/u
 9. Add conformance tests for valid paths **and** malformed/unexpected input.
 10. Do not claim full RFC conformance without evidence covering the claimed scope.
 
+## Representation
+
+Protocol data remains **byte-oriented** throughout the data plane. Authoritative rule: [docs/architecture.md](../../../docs/architecture.md#byte-oriented-protocol-data-plane).
+
+Do not convert wire bytes to `string` for parse/dispatch, and do not build responses by constructing strings only to encode them again. Convert at an explicit boundary (auth provider, ingest API, logging, configuration), not as the default protocol representation. Any hot-path bytes↔string conversion needs a written justification.
+
 ## Framing and I/O reminders (verify in RFC text)
 
 - Multiline termination and dot-stuffing rules from the applicable base/extension RFC
@@ -77,5 +83,6 @@ Do **not** treat every file as applicable to every feature. Check obsolescence/u
 - [ ] Updates/obsolescence/errata considered
 - [ ] Mandatory vs optional distinguished
 - [ ] Framing/state/sequencing handled where relevant
+- [ ] Protocol data remains bytes; any string conversion has an explicit boundary justification
 - [ ] Conformance + malformed-input tests added or justified
 - [ ] No unverified conformance claims

@@ -78,18 +78,25 @@ All platforms use the same Serilog pipeline. Windows Service and interactive `do
 
 ## Structured logging conventions
 
-Prefer message templates and named properties:
+Prefer compile-time / source-generated logging (`LoggerMessageAttribute` + partial methods) with named structured properties. The authoritative rule is [architecture.md — Source-Generated Structured Logging](architecture.md#source-generated-structured-logging).
+
+```csharp
+CommandLogMessages.CommandRx(logger, client, command);
+LifecycleLogMessages.StartupFailed(logger, exception, elapsedMs);
+```
+
+When a generated method is not appropriate, still use a message template and named properties rather than interpolation:
 
 ```csharp
 _logger.LogInformation(
     "Application entered {State} state after {ElapsedMs} ms",
     state,
     elapsedMs);
-
-_logger.LogError(ex, "Application service {ServiceName} failed during startup", service.Name);
 ```
 
-Avoid string interpolation for log messages. Never log secrets, tokens, or credentials.
+Avoid string interpolation or concatenation as the log message. Never log secrets, tokens, or credentials.
+
+Logging is a human-readable boundary. The current `ILogger` / `LoggerMessageAttribute` APIs require `string` (or other supported structured types) for operational text. Protocol bytes may be converted to a string **once, locally**, at that boundary when human-readable output is required. Do not treat logging as a reason to change protocol representation in the data plane.
 
 ## Shutdown flushing
 

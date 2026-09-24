@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Core;
 
@@ -96,9 +97,7 @@ public sealed class ApplicationServiceManager
                 }
             }
 
-            _logger.LogInformation(
-                "Starting {ServiceCount} application service(s) in registration order",
-                _services.Count);
+            ServiceManagerLogMessages.StartingServices(_logger, _services.Count);
 
             for (var i = 0; i < _services.Count; i++)
             {
@@ -106,11 +105,7 @@ public sealed class ApplicationServiceManager
                 var service = _services[i];
                 var sw = Stopwatch.StartNew();
 
-                _logger.LogInformation(
-                    "Starting application service {ServiceName} ({Index}/{Total})",
-                    service.Name,
-                    i + 1,
-                    _services.Count);
+                ServiceManagerLogMessages.StartingService(_logger, service.Name, i + 1, _services.Count);
 
                 try
                 {
@@ -118,8 +113,8 @@ public sealed class ApplicationServiceManager
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Startup of application service {ServiceName} was canceled after {ElapsedMs} ms. Rolling back {StartedCount} started service(s)",
+                    ServiceManagerLogMessages.ServiceStartupCanceled(
+                        _logger,
                         service.Name,
                         sw.ElapsedMilliseconds,
                         StartedServices.Count);
@@ -129,9 +124,9 @@ public sealed class ApplicationServiceManager
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(
+                    ServiceManagerLogMessages.ServiceStartupFailed(
+                        _logger,
                         ex,
-                        "Application service {ServiceName} failed during startup after {ElapsedMs} ms. Rolling back {StartedCount} started service(s)",
                         service.Name,
                         sw.ElapsedMilliseconds,
                         StartedServices.Count);
@@ -145,15 +140,12 @@ public sealed class ApplicationServiceManager
                     _started.Add(service);
                 }
 
-                _logger.LogInformation(
-                    "Application service {ServiceName} started in {ElapsedMs} ms",
-                    service.Name,
-                    sw.ElapsedMilliseconds);
+                ServiceManagerLogMessages.ServiceStarted(_logger, service.Name, sw.ElapsedMilliseconds);
             }
 
             BeginExecutionMonitoring();
 
-            _logger.LogInformation("All application services started successfully");
+            ServiceManagerLogMessages.AllServicesStarted(_logger);
         }
         finally
         {
@@ -214,15 +206,12 @@ public sealed class ApplicationServiceManager
 
             if (toStop.Length == 0)
             {
-                _logger.LogInformation("No started application services to stop");
+                ServiceManagerLogMessages.NoServicesToStop(_logger);
                 return;
             }
 
             var timeout = _options.Value.GracefulShutdownTimeout;
-            _logger.LogInformation(
-                "Stopping {ServiceCount} application service(s) in reverse startup order with overall timeout {Timeout}",
-                toStop.Length,
-                timeout);
+            ServiceManagerLogMessages.StoppingServices(_logger, toStop.Length, timeout);
 
             var budgetSw = Stopwatch.StartNew();
             var failures = new List<Exception>();
@@ -234,10 +223,7 @@ public sealed class ApplicationServiceManager
                 var service = toStop[i];
                 var sw = Stopwatch.StartNew();
 
-                _logger.LogInformation(
-                    "Stopping application service {ServiceName} ({Remaining} remaining including current)",
-                    service.Name,
-                    i + 1);
+                ServiceManagerLogMessages.StoppingService(_logger, service.Name, i + 1);
 
                 CancellationTokenSource? timeoutCts = null;
                 CancellationTokenSource? linkedCts = null;
@@ -282,8 +268,8 @@ public sealed class ApplicationServiceManager
                             if (!budgetExhausted)
                             {
                                 budgetExhausted = true;
-                                _logger.LogError(
-                                    "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName} (elapsed {ElapsedMs} ms; stop returned after budget)",
+                                ServiceManagerLogMessages.GracefulShutdownTimedOutAfterBudget(
+                                    _logger,
                                     timeout,
                                     service.Name,
                                     sw.ElapsedMilliseconds);
@@ -293,25 +279,22 @@ public sealed class ApplicationServiceManager
                             }
                             else
                             {
-                                _logger.LogWarning(
-                                    "Application service {ServiceName} stop completed after graceful shutdown budget was already exhausted ({ElapsedMs} ms)",
+                                ServiceManagerLogMessages.ServiceStopCompletedAfterBudget(
+                                    _logger,
                                     service.Name,
                                     sw.ElapsedMilliseconds);
                             }
                         }
                         else
                         {
-                            _logger.LogInformation(
-                                "Application service {ServiceName} stopped in {ElapsedMs} ms",
-                                service.Name,
-                                sw.ElapsedMilliseconds);
+                            ServiceManagerLogMessages.ServiceStopped(_logger, service.Name, sw.ElapsedMilliseconds);
                         }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         externallyCanceled = true;
-                        _logger.LogWarning(
-                            "Shutdown of application service {ServiceName} was canceled after {ElapsedMs} ms. Continuing best-effort abort of remaining services",
+                        ServiceManagerLogMessages.ServiceShutdownCanceled(
+                            _logger,
                             service.Name,
                             sw.ElapsedMilliseconds);
 
@@ -328,8 +311,8 @@ public sealed class ApplicationServiceManager
                         if (!budgetExhausted)
                         {
                             budgetExhausted = true;
-                            _logger.LogError(
-                                "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName} (elapsed {ElapsedMs} ms)",
+                            ServiceManagerLogMessages.GracefulShutdownTimedOut(
+                                _logger,
                                 timeout,
                                 service.Name,
                                 sw.ElapsedMilliseconds);
@@ -339,9 +322,7 @@ public sealed class ApplicationServiceManager
                         }
                         else
                         {
-                            _logger.LogWarning(
-                                "Application service {ServiceName} stop aborted after graceful shutdown budget was already exhausted",
-                                service.Name);
+                            ServiceManagerLogMessages.ServiceStopAbortedAfterBudget(_logger, service.Name);
                         }
 
                         // Drop tracking even when StopAsync did not complete cleanly so lifecycle
@@ -353,9 +334,9 @@ public sealed class ApplicationServiceManager
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(
+                        ServiceManagerLogMessages.ServiceShutdownFailed(
+                            _logger,
                             ex,
-                            "Application service {ServiceName} failed during shutdown after {ElapsedMs} ms",
                             service.Name,
                             sw.ElapsedMilliseconds);
                         failures.Add(ex);
@@ -388,7 +369,7 @@ public sealed class ApplicationServiceManager
                 throw new AggregateException("One or more application services failed during shutdown.", failures);
             }
 
-            _logger.LogInformation("All application services stopped successfully");
+            ServiceManagerLogMessages.AllServicesStopped(_logger);
         }
         finally
         {
@@ -416,9 +397,7 @@ public sealed class ApplicationServiceManager
             return;
         }
 
-        _logger.LogWarning(
-            "Rolling back {ServiceCount} partially started application service(s) in reverse order",
-            toStop.Length);
+        ServiceManagerLogMessages.RollingBackServices(_logger, toStop.Length);
 
         var timeout = _options.Value.GracefulShutdownTimeout;
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -430,14 +409,11 @@ public sealed class ApplicationServiceManager
             try
             {
                 await service.StopAsync(timeoutCts.Token).ConfigureAwait(false);
-                _logger.LogInformation("Rolled back application service {ServiceName}", service.Name);
+                ServiceManagerLogMessages.ServiceRolledBack(_logger, service.Name);
             }
             catch (Exception ex)
             {
-                _logger.LogError(
-                    ex,
-                    "Failed to roll back application service {ServiceName} after startup failure",
-                    service.Name);
+                ServiceManagerLogMessages.ServiceRollbackFailed(_logger, ex, service.Name);
             }
             finally
             {
@@ -508,10 +484,7 @@ public sealed class ApplicationServiceManager
             if (execution.IsFaulted)
             {
                 var ex = execution.Exception?.GetBaseException() ?? new InvalidOperationException("Service execution faulted.");
-                _logger.LogError(
-                    ex,
-                    "Application service {ServiceName} terminated unexpectedly with a fault",
-                    service.Name);
+                ServiceManagerLogMessages.ServiceTerminatedWithFault(_logger, ex, service.Name);
 
                 UnexpectedServiceTermination?.Invoke(
                     this,
@@ -521,9 +494,7 @@ public sealed class ApplicationServiceManager
 
             if (execution.IsCanceled)
             {
-                _logger.LogWarning(
-                    "Application service {ServiceName} execution was canceled unexpectedly while the application was running",
-                    service.Name);
+                ServiceManagerLogMessages.ServiceExecutionCanceledUnexpectedly(_logger, service.Name);
 
                 UnexpectedServiceTermination?.Invoke(
                     this,
@@ -534,9 +505,7 @@ public sealed class ApplicationServiceManager
                 return;
             }
 
-            _logger.LogWarning(
-                "Application service {ServiceName} execution completed unexpectedly while the application was running",
-                service.Name);
+            ServiceManagerLogMessages.ServiceExecutionCompletedUnexpectedly(_logger, service.Name);
 
             UnexpectedServiceTermination?.Invoke(
                 this,
@@ -577,7 +546,7 @@ public sealed class ApplicationServiceManager
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Execution monitor completed with an exception during shutdown");
+                ServiceManagerLogMessages.ExecutionMonitorExceptionDuringShutdown(_logger, ex);
             }
         }
 

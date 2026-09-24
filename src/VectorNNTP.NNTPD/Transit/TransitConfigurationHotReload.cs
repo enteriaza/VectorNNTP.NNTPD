@@ -43,9 +43,7 @@ public sealed class TransitConfigurationHotReload : IDisposable
             var first = result.Failures?.FirstOrDefault() ?? result.FailureMessage ?? "invalid Transit configuration";
             if (isReload)
             {
-                logger.LogError(
-                    "Ignoring invalid Transit configuration reload; last valid snapshot remains active. {Failure}",
-                    first);
+                TransitLogMessages.InvalidReloadIgnored(logger, first);
             }
             else
             {
@@ -61,9 +59,7 @@ public sealed class TransitConfigurationHotReload : IDisposable
         store.Replace(TransitConfigurationSnapshot.Create(options));
         if (isReload)
         {
-            logger.LogInformation(
-                "Transit peer configuration reloaded ({Count} peer(s))",
-                options.Count);
+            TransitLogMessages.ConfigurationReloaded(logger, options.Count);
         }
     }
 }

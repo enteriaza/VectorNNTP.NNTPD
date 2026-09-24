@@ -14,15 +14,15 @@ internal static class ConnectionAcceptanceLogging
 
         if (identity.UsedProxyHeader)
         {
-            logger.LogInformation(
-                "Proxy connection accepted from {TcpPeer}; proxy {Client}",
+            NetworkingLogMessages.ProxyConnectionAccepted(
+                logger,
                 FormatEndpoint(identity.TcpPeer),
                 FormatEndpoint(identity.Client));
         }
         else
         {
-            logger.LogInformation(
-                "Plain connection accepted from {TcpPeer}",
+            NetworkingLogMessages.PlainConnectionAccepted(
+                logger,
                 FormatEndpoint(identity.TcpPeer));
         }
     }
@@ -41,8 +41,8 @@ internal static class ConnectionAcceptanceLogging
 
         if (identity.UsedProxyHeader)
         {
-            logger.LogInformation(
-                "TLS/Proxy connection accepted from {TcpPeer}; proxy {Client} (TlsVersion={TlsVersion}, Cipher={Cipher})",
+            NetworkingLogMessages.TlsProxyConnectionAccepted(
+                logger,
                 FormatEndpoint(identity.TcpPeer),
                 FormatEndpoint(identity.Client),
                 tlsVersion,
@@ -50,8 +50,8 @@ internal static class ConnectionAcceptanceLogging
         }
         else
         {
-            logger.LogInformation(
-                "TLS connection accepted from {TcpPeer} (TlsVersion={TlsVersion}, Cipher={Cipher})",
+            NetworkingLogMessages.TlsConnectionAccepted(
+                logger,
                 FormatEndpoint(identity.TcpPeer),
                 tlsVersion,
                 cipher);

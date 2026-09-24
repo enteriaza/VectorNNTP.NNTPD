@@ -19,6 +19,7 @@ alwaysApply: true
 - Host: .NET Generic Host; options + `ValidateOnStart`; Serilog-exclusive logging
 - Lifecycle: `ApplicationLifecycle` + `ApplicationServiceManager` + `IApplicationService` (see `docs/architecture.md`)
 - Config contract: `docs/configuration.md` (authoritative over memory)
+- Protocol data plane: **bytes throughout** — see `docs/architecture.md` § Byte-Oriented Protocol Data Plane
 - NNTP standards library: `docs/standards/rfcs/` — read applicable RFC text before protocol work
 - Experimental/historical material: `.artifacts/` (index: `.artifacts/ARTIFACT-INDEX.md`; policy: `.artifacts/REPOSITORY-ARTIFACT-POLICY.md`). Does not override `src/` / `tests/` / accepted `docs/`.
 
@@ -27,6 +28,22 @@ alwaysApply: true
 - Never claim builds, tests, format checks, benchmarks, or runtime verification succeeded unless they ran and succeeded here.
 - Report limitations and unverified assumptions explicitly.
 - Do not invent project conventions; inspect the repository.
+
+## Byte-oriented protocol data plane
+
+**Protocol data remains byte-oriented throughout the data plane.** Full rule: [docs/architecture.md](../../docs/architecture.md#byte-oriented-protocol-data-plane).
+
+- Incoming bytes are not converted to strings unless an explicit application/API/logging boundary requires it.
+- Static outgoing protocol text is pre-encoded once and reused.
+- Dynamic outgoing protocol fields remain bytes where possible.
+- Do not construct a string merely to encode it back to bytes.
+- Any bytes↔string conversion in a hot path requires an explicit justification. “The API currently takes a string” is not automatically sufficient — decide whether that API is an unnecessary protocol-layer boundary.
+
+Strings are permitted at justified boundaries. They are not the default representation of protocol data.
+
+## Source-generated structured logging
+
+Prefer `LoggerMessageAttribute` + partial methods. Preserve structured properties; do not preformat log messages. Full rule: [docs/architecture.md](../../docs/architecture.md#source-generated-structured-logging).
 
 ## Skill selection
 

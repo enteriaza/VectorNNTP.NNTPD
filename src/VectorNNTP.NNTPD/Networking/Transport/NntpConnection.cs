@@ -252,7 +252,7 @@ public sealed class NntpConnection : INntpConnection
         };
 
         connection.StartPumps();
-        logger.LogDebug("TLS handshake completed for {Remote}.", remote);
+        TransportLogMessages.TlsHandshakeCompleted(logger, remote);
         return connection;
     }
 
@@ -378,7 +378,7 @@ public sealed class NntpConnection : INntpConnection
             Volatile.Write(ref _negotiatedCipher, cipher);
             transport.PublishTlsAndResume(sslStream);
             Volatile.Write(ref _mode, ModeTls);
-            _logger.LogDebug("In-place TLS upgrade completed for {Remote}.", RemoteEndPoint);
+            TransportLogMessages.InPlaceTlsUpgradeCompleted(_logger, RemoteEndPoint);
         }
         catch (Exception ex) when (failure is null && !preconditionFailed)
         {
@@ -494,7 +494,7 @@ public sealed class NntpConnection : INntpConnection
             var deflate = new NntpDeflateStream(deflateInner);
             transport.PublishDeflateAndResume(deflate);
             Volatile.Write(ref _compression, CompressionOn);
-            _logger.LogDebug("In-place DEFLATE compression activated for {Remote}.", RemoteEndPoint);
+            TransportLogMessages.InPlaceDeflateActivated(_logger, RemoteEndPoint);
         }
         catch (Exception ex) when (!preconditionFailed)
         {
@@ -707,7 +707,7 @@ public sealed class NntpConnection : INntpConnection
         catch (Exception ex)
         {
             error = ex;
-            _logger.LogDebug(ex, "NNTP connection {Pump} pump ended with an error", name);
+            TransportLogMessages.PumpEndedWithError(_logger, ex, name);
         }
         finally
         {

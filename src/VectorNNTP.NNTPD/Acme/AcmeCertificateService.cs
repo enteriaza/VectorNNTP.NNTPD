@@ -67,7 +67,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         var options = _options.Value;
         if (!options.IsTlsListenerEnabled)
         {
-            _logger.LogInformation("TLS disabled (BindPortTls=0); ACME certificate service idle");
+            AcmeLogMessages.TlsDisabledIdle(_logger);
             return;
         }
 
@@ -76,9 +76,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
                 "manager_missing",
                 "TLS is enabled but CertificateManager could not be created");
 
-        _logger.LogInformation(
-            "Ensuring ACME certificate for TLS (directory={Directory})",
-            options.AcmeDirectoryUrl);
+        AcmeLogMessages.EnsuringCertificate(_logger, options.AcmeDirectoryUrl);
 
         try
         {
@@ -91,9 +89,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogError(
-                "ACME certificate provisioning failed ({Failure})",
-                AcmeFailureSanitizer.Sanitize(ex));
+            AcmeLogMessages.ProvisioningFailed(_logger, AcmeFailureSanitizer.Sanitize(ex));
             throw;
         }
 
@@ -119,7 +115,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "ACME renewal loop ended with an error during stop");
+            AcmeLogMessages.RenewalLoopStopError(_logger, ex);
         }
     }
 
@@ -162,7 +158,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
                     var material = _manager.CurrentMaterial
                         ?? throw new AcmeCertificateException("no_certificate", "renewed without material");
                     _tlsCertificateContextProvider.PublishFromPfx(material.PfxBytes, password);
-                    _logger.LogInformation("ACME renewal completed successfully");
+                    AcmeLogMessages.RenewalCompleted(_logger);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -171,9 +167,7 @@ public sealed class AcmeCertificateService : IApplicationService, IAsyncDisposab
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(
-                    "ACME renewal check failed ({Failure}); will retry next interval",
-                    AcmeFailureSanitizer.Sanitize(ex));
+                AcmeLogMessages.RenewalCheckFailed(_logger, AcmeFailureSanitizer.Sanitize(ex));
             }
         }
     }

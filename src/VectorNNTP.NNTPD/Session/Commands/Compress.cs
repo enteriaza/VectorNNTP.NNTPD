@@ -63,9 +63,9 @@ internal static class Compress
         }
         catch (InvalidOperationException ex)
         {
-            Logger.LogWarning(
+            CommandLogMessages.CompressRefusedBeforeActivation(
+                Logger,
                 ex,
-                "[{Client}] COMPRESS DEFLATE refused before activation",
                 NntpCommandLogFormat.Client(context.Session));
             await context.Response
                 .WriteLineAsync(NntpResponses.UnableToActivateCompression, cancellationToken)
@@ -92,9 +92,9 @@ internal static class Compress
         {
             // 206 already committed the transition. Do not write another NNTP status — the peer
             // expects compressed traffic. Terminate so we never leave a half-compressed session.
-            Logger.LogError(
+            CommandLogMessages.CompressActivationFailed(
+                Logger,
                 ex,
-                "[{Client}] COMPRESS DEFLATE activation failed after 206",
                 NntpCommandLogFormat.Client(context.Session));
             if (!context.Connection.IsCompleted)
             {

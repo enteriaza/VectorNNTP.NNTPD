@@ -130,10 +130,10 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         try
         {
             await _dnsSolver.PlaceAsync(specs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME DNS-01 TXT records placed for {DomainCount} identifier(s)", specs.Count);
+            AcmeLogMessages.Dns01RecordsPlaced(_logger, specs.Count);
 
             await _dnsSolver.WaitPropagatedAsync(specs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME DNS-01 authoritative visibility confirmed");
+            AcmeLogMessages.Dns01VisibilityConfirmed(_logger);
 
             foreach (var challenge in challenges)
             {
@@ -141,12 +141,10 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                 _ = await challenge.Validate().ConfigureAwait(false);
             }
 
-            _logger.LogInformation(
-                "ACME DNS-01 challenges triggered; waiting for authorization (timeout={TimeoutSeconds}s)",
-                (int)_readinessTimeout.TotalSeconds);
+            AcmeLogMessages.Dns01ChallengesTriggered(_logger, (int)_readinessTimeout.TotalSeconds);
 
             await WaitForOrderReadyAsync(order, authzs, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("ACME order ready for finalization");
+            AcmeLogMessages.OrderReady(_logger);
 
             cancellationToken.ThrowIfCancellationRequested();
             CertificateChain certChain;
@@ -178,7 +176,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                     $"{AcmeProblemDiagnostics.FormatException(ex)} order_status={orderStatus}");
             }
 
-            _logger.LogInformation("ACME certificate finalized");
+            AcmeLogMessages.CertificateFinalized(_logger);
 
             await CleanupDnsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -284,7 +282,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                 .GetResult();
             var location = account.Location?.ToString()
                 ?? throw new AcmeAccountException("registration_failed", "empty account_uri");
-            _logger.LogInformation("ACME account registered (uri configured).");
+            AcmeLogMessages.AccountRegistered(_logger);
             return (location, string.Empty);
         }
         catch (AcmeAccountException)

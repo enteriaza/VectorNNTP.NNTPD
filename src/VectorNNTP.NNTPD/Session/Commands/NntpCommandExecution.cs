@@ -52,9 +52,9 @@ internal static class NntpCommandExecution
         catch (Exception ex)
         {
             detail = "failed";
-            logger.LogError(
+            CommandLogMessages.CommandFailed(
+                logger,
                 ex,
-                "[{Client}] {Command} failed",
                 NntpCommandLogFormat.Client(context.Session),
                 command);
             throw;
@@ -97,20 +97,11 @@ internal static class NntpCommandExecution
         var seconds = elapsed.TotalSeconds;
         if (detail is null)
         {
-            logger.LogInformation(
-                "[{Client}] TX: {Command} executed in {ElapsedSeconds:F3}s",
-                client,
-                command,
-                seconds);
+            CommandLogMessages.CommandTx(logger, client, command, seconds);
         }
         else
         {
-            logger.LogInformation(
-                "[{Client}] TX: {Command} executed in {ElapsedSeconds:F3}s [{Detail}]",
-                client,
-                command,
-                seconds,
-                detail);
+            CommandLogMessages.CommandTxWithDetail(logger, client, command, seconds, detail);
         }
     }
 }

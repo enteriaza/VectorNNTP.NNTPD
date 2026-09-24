@@ -179,9 +179,7 @@ public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvid
             previous?.Retire();
         }
 
-        _logger.LogInformation(
-            "TLS certificate context published (generation={Generation})",
-            holder.Generation);
+        NetworkingLogMessages.TlsCertificateContextPublished(_logger, holder.Generation);
 
         // Drop the publisher's publication reference outside the gate (may dispose if no leases remain).
         previous?.Release();

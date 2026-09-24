@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -52,9 +53,7 @@ public sealed class NntpdHostLifetime
 
             if (Interlocked.Exchange(ref _shutdownRequested, 1) == 0)
             {
-                _logger.LogInformation(
-                    "Application shutdown requested exactly once for {ApplicationName}",
-                    _options.Value.ApplicationName);
+                HostingLogMessages.ShutdownRequestedOnce(_logger, _options.Value.ApplicationName);
             }
 
             _shutdownTask = ShutdownCoreAsync(cancellationToken);
@@ -69,14 +68,13 @@ public sealed class NntpdHostLifetime
     {
         if (!_options.Value.StopHostOnUnexpectedServiceTermination)
         {
-            _logger.LogWarning(
-                "Unexpected service termination observed, but {Option} is disabled",
+            HostingLogMessages.UnexpectedTerminationOptionDisabled(
+                _logger,
                 nameof(NntpdOptions.StopHostOnUnexpectedServiceTermination));
             return;
         }
 
-        _logger.LogCritical(
-            "Requesting host stop due to unexpected application-service termination");
+        HostingLogMessages.RequestingHostStop(_logger);
 
         _hostApplicationLifetime.StopApplication();
     }
@@ -89,7 +87,7 @@ public sealed class NntpdHostLifetime
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Application shutdown completed with failure");
+            HostingLogMessages.ShutdownCompletedWithFailure(_logger, ex);
             throw;
         }
     }

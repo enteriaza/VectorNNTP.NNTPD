@@ -98,7 +98,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         var options = _options.Value;
         if (!options.IsTlsListenerEnabled)
         {
-            _logger.LogInformation("TLS disabled (BindPortTls=0); TLS NNTP listener idle");
+            NetworkingLogMessages.TlsListenerIdle(_logger);
             return Task.CompletedTask;
         }
 
@@ -127,10 +127,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         }
 
         _execution = WaitUntilStoppedAsync(_runCts.Token);
-        _logger.LogInformation(
-            "TLS NNTP listeners started ({ListenerCount}) on port {Port}",
-            _listeners.Count,
-            options.BindPortTls);
+        NetworkingLogMessages.TlsListenersStarted(_logger, _listeners.Count, options.BindPortTls);
         return Task.CompletedTask;
     }
 
@@ -154,7 +151,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error completing TLS connection during stop");
+                NetworkingLogMessages.TlsConnectionCompleteError(_logger, ex);
             }
         }
 
@@ -206,7 +203,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         {
             if (!ProxyPreambleResolver.TryGetTcpPeer(socket, out var tcpPeer))
             {
-                _logger.LogDebug("TLS accept discarded: remote endpoint unavailable");
+                NetworkingLogMessages.TlsAcceptDiscarded(_logger);
                 return;
             }
 
@@ -219,10 +216,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
             }
             catch (ProxyProtocolException ex)
             {
-                _logger.LogInformation(
-                    ex,
-                    "Rejected TLS connection from trusted proxy peer {TcpPeer}: invalid PROXY preamble",
-                    tcpPeer);
+                NetworkingLogMessages.TlsProxyPreambleRejected(_logger, ex, tcpPeer);
                 return;
             }
 
@@ -281,7 +275,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "TLS handshake or connection setup failed; listener continues");
+            NetworkingLogMessages.TlsHandshakeOrSetupFailed(_logger, ex);
         }
         finally
         {

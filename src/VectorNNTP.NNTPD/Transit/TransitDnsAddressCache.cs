@@ -141,11 +141,7 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
             case TransitDnsOutcome.Success:
                 var set = Deduplicate(result.Addresses);
                 _hosts[hostname] = new HostState(set, next);
-                _logger.LogInformation(
-                    "Transit AllowFrom DNS {Hostname} resolved to {Count} address(es); next refresh at {NextRefreshUtc}",
-                    hostname,
-                    set.Count,
-                    next);
+                TransitLogMessages.DnsResolved(_logger, hostname, set.Count, next);
                 break;
             case TransitDnsOutcome.Empty:
                 _hosts[hostname] = new HostState(new HashSet<IPAddress>(), next);
@@ -173,11 +169,7 @@ public sealed class TransitDnsAddressCache : ITransitDnsAddressCache
     {
         foreach (var peerName in peerNames)
         {
-            _logger.LogWarning(
-                "Transit peer {PeerName} AllowFrom DNS resolution failed for {Hostname}: {Reason}",
-                peerName,
-                hostname,
-                reason);
+            TransitLogMessages.DnsResolutionFailed(_logger, peerName, hostname, reason);
         }
     }
 
