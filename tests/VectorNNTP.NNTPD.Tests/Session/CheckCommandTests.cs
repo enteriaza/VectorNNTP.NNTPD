@@ -25,20 +25,19 @@ public sealed class CheckCommandTests
     [Fact]
     public void Catalog_CheckAndTakeThis_ShareRequiresTransit()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse("CHECK <msg@example.com>", out var check));
-        Assert.True(NntpCommandParser.TryParse("TAKETHIS <msg@example.com>", out var takeThis));
-        Assert.True(registry.TryResolve(check, out var checkDescriptor, out var checkArgs, out var checkStatus));
-        Assert.True(registry.TryResolve(takeThis, out var takeThisDescriptor, out _, out var takeThisStatus));
-        Assert.Equal(NntpCommandResolveStatus.Found, checkStatus);
-        Assert.Equal(NntpCommandResolveStatus.Found, takeThisStatus);
-        Assert.NotNull(checkDescriptor);
-        Assert.NotNull(takeThisDescriptor);
-        Assert.Equal("CHECK", checkDescriptor.RegistryKey);
-        Assert.Equal("TAKETHIS", takeThisDescriptor.RegistryKey);
-        Assert.Equal(NntpCommandAccess.RequiresTransit, checkDescriptor.Access);
-        Assert.Equal(takeThisDescriptor.Access, checkDescriptor.Access);
-        Assert.Equal(["<msg@example.com>"], checkArgs);
+        var (check, checkLine) = NntpCommandTestParse.Parse("CHECK <msg@example.com>");
+        var takeThis = NntpCommandTestParse.ParseCommand("TAKETHIS <msg@example.com>");
+        Assert.True(check.IsValid);
+        Assert.True(takeThis.IsValid);
+        Assert.Equal(NntpVerb.Check, check.Verb);
+        Assert.Equal(NntpVerb.TakeThis, takeThis.Verb);
+        Assert.Equal("CHECK", DefaultNntpCommandCatalog.DisplayName(check.Verb, check.Qualifier));
+        Assert.Equal("TAKETHIS", DefaultNntpCommandCatalog.DisplayName(takeThis.Verb, takeThis.Qualifier));
+        Assert.Equal(NntpCommandAccess.RequiresTransit, DefaultNntpCommandCatalog.GetAccess(check.Verb, check.Qualifier));
+        Assert.Equal(
+            DefaultNntpCommandCatalog.GetAccess(takeThis.Verb, takeThis.Qualifier),
+            DefaultNntpCommandCatalog.GetAccess(check.Verb, check.Qualifier));
+        Assert.Equal("<msg@example.com>", Encoding.ASCII.GetString(check.ArgumentSpan(checkLine)));
     }
 
     [Fact]
@@ -194,8 +193,13 @@ public sealed class CheckCommandTests
         await run;
     }
 
+    /// <summary>
+    /// Syntax is rejected before authorization gates. Old string parser treated
+    /// <c>CHECK</c> as a valid command and returned 480; the byte parser is the
+    /// syntactic boundary, so missing message-id is 501.
+    /// </summary>
     [Fact]
-    public async Task NonAuthorizedPeer_MissingMessageId_IsRejectedBeforeSyntax()
+    public async Task NonAuthorizedPeer_MissingMessageId_Returns501SyntaxError()
     {
         await using var duplex = await CheckDuplex.CreateAsync();
         var session = duplex.CreateSession();
@@ -203,7 +207,7 @@ public sealed class CheckCommandTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("CHECK");
-        Assert.Equal("480 Authentication required", await duplex.ReadClientLineAsync());
+        Assert.Equal("501 Syntax error", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();

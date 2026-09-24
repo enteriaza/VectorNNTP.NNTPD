@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.Session.Commands;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
+[Collection(nameof(NntpCommandLoggerCollection))]
 public sealed class NntpAuthinfoTests
 {
     [Fact]
@@ -344,7 +345,7 @@ public sealed class NntpAuthinfoTests
         var recording = new RecordingLoggerFactory();
         var provider = new ThrowingAuthenticationProvider();
         await using var duplex = await AuthinfoDuplex.CreateAsync(provider);
-        var session = duplex.CreateSession(provider, registry: null, allowCleartextAuth: true, loggerFactory: recording);
+        var session = duplex.CreateSession(provider, allowCleartextAuth: true, loggerFactory: recording);
 
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
@@ -510,7 +511,6 @@ public sealed class NntpAuthinfoTests
 
         public NntpSession CreateSession(
             INntpAuthenticationProvider? provider = null,
-            NntpCommandRegistry? registry = null,
             bool allowCleartextAuth = true,
             ILoggerFactory? loggerFactory = null)
         {
@@ -522,7 +522,6 @@ public sealed class NntpAuthinfoTests
             return new NntpSession(
                 connection,
                 loggerFactory?.CreateLogger<NntpSession>() ?? NullLogger<NntpSession>.Instance,
-                registry: registry,
                 authenticationProvider: provider ?? _provider,
                 allowCleartextAuth: allowCleartextAuth,
                 loggerFactory: loggerFactory);

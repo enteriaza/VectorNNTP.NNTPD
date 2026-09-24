@@ -1,12 +1,8 @@
-using VectorNNTP.NNTPD.Networking.Certificates;
-using VectorNNTP.NNTPD.Session.Authentication;
-
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>Builds the default NNTP command registry (complete inventory; handlers live in per-command files).</summary>
+/// <summary>Built-in NNTP command inventory, access flags, and display names.</summary>
 /// <remarks>
-/// See <c>docs/commands.md</c> for the implementation checklist. This type only wires descriptors;
-/// it does not contain command business logic.
+/// See <c>docs/commands.md</c> for the implementation checklist. Dispatch is enum/switch, not a dictionary.
 /// </remarks>
 public static class DefaultNntpCommandCatalog
 {
@@ -50,136 +46,81 @@ public static class DefaultNntpCommandCatalog
         "TAKETHIS",
     ];
 
-    /// <summary>Creates the default registry with the full command inventory.</summary>
-    public static NntpCommandRegistry Create(
-        ITlsCertificateContextProvider? certificateProvider = null,
-        INntpAuthenticationProvider? authenticationProvider = null,
-        ILoggerFactory? loggerFactory = null)
+    /// <summary>Registered keys including the internal BENCHIT facility.</summary>
+    public static IReadOnlyList<string> GetRegisteredKeys()
     {
-        authenticationProvider ??= DenyAllNntpAuthenticationProvider.Instance;
-        NntpCommandLoggers.Configure(loggerFactory);
-        var registry = new NntpCommandRegistry();
+        var keys = new List<string>(InventoryKeys.Count + 1);
+        keys.AddRange(InventoryKeys);
+        keys.Add("BENCHIT");
+        keys.Sort(StringComparer.Ordinal);
+        return keys;
+    }
 
-        var capabilitiesLog = NntpCommandLoggers.For(typeof(Capabilities));
-        var modeLog = NntpCommandLoggers.For(typeof(Mode));
-        var helpLog = NntpCommandLoggers.For(typeof(Help));
-        var dateLog = NntpCommandLoggers.For(typeof(Date));
-        var quitLog = NntpCommandLoggers.For(typeof(Quit));
-        var startTlsLog = NntpCommandLoggers.For(typeof(StartTls));
-        var compressLog = NntpCommandLoggers.For(typeof(Compress));
-        var authInfoLog = NntpCommandLoggers.For(typeof(AuthInfo));
-        var listLog = NntpCommandLoggers.For(typeof(List));
-        var groupLog = NntpCommandLoggers.For(typeof(Group));
-        var listGroupLog = NntpCommandLoggers.For(typeof(ListGroup));
-        var newGroupsLog = NntpCommandLoggers.For(typeof(NewGroups));
-        var newNewsLog = NntpCommandLoggers.For(typeof(NewNews));
-        var articleLog = NntpCommandLoggers.For(typeof(Article));
-        var lastLog = NntpCommandLoggers.For(typeof(Last));
-        var nextLog = NntpCommandLoggers.For(typeof(Next));
-        var overLog = NntpCommandLoggers.For(typeof(Over));
-        var hdrLog = NntpCommandLoggers.For(typeof(Hdr));
-        var postLog = NntpCommandLoggers.For(typeof(Post));
-        var iHaveLog = NntpCommandLoggers.For(typeof(IHave));
-        var checkLog = NntpCommandLoggers.For(typeof(Check));
-        var takeThisLog = NntpCommandLoggers.For(typeof(TakeThis));
-
-        // Core / session
-        registry.Register(new NntpCommandDescriptor(
-            "CAPABILITIES", NntpCommandAccess.Public, Capabilities.HandleAsync, logger: capabilitiesLog));
-        registry.Register(new NntpCommandDescriptor(
-            "MODE", NntpCommandAccess.Public, Mode.HandleReaderAsync, "READER", modeLog));
-        registry.Register(new NntpCommandDescriptor(
-            "MODE",
-            NntpCommandAccess.RequiresStreaming,
-            Mode.HandleStreamAsync,
-            "STREAM",
-            modeLog));
-        registry.Register(new NntpCommandDescriptor("HELP", NntpCommandAccess.Public, Help.HandleAsync, logger: helpLog));
-        registry.Register(new NntpCommandDescriptor("DATE", NntpCommandAccess.Public, Date.HandleAsync, logger: dateLog));
-        registry.Register(new NntpCommandDescriptor("QUIT", NntpCommandAccess.Public, Quit.HandleAsync, logger: quitLog));
-        registry.Register(new NntpCommandDescriptor(
-            "STARTTLS",
-            NntpCommandAccess.Public,
-            (ctx, ct) => StartTls.HandleAsync(ctx, certificateProvider, ct),
-            logger: startTlsLog));
-        // Verb-only so algorithm case/syntax is validated in Compress (RFC 8054 §5.3 case-sensitive).
-        registry.Register(new NntpCommandDescriptor(
-            "COMPRESS",
-            NntpCommandAccess.Public,
-            Compress.HandleAsync,
-            logger: compressLog));
-
-        // Internal BENCHIT benchmark facility — not in InventoryKeys / CAPABILITIES / HELP.
-        registry.Register(BenchIt.CreateDescriptor());
-
-        // Authentication
-        registry.Register(new NntpCommandDescriptor(
-            "AUTHINFO",
-            NntpCommandAccess.Public,
-            (ctx, ct) => AuthInfo.HandleUserAsync(ctx, authenticationProvider, ct),
-            "USER",
-            authInfoLog));
-        registry.Register(new NntpCommandDescriptor(
-            "AUTHINFO",
-            NntpCommandAccess.Public,
-            (ctx, ct) => AuthInfo.HandlePassAsync(ctx, authenticationProvider, ct),
-            "PASS",
-            authInfoLog));
-        registry.Register(new NntpCommandDescriptor(
-            "AUTHINFO",
-            NntpCommandAccess.Public,
-            AuthInfo.HandleSaslAsync,
-            "SASL",
-            authInfoLog));
-
-        // Reader / group
+    /// <summary>Returns access flags for a syntactically valid built-in command.</summary>
+    public static NntpCommandAccess GetAccess(NntpVerb verb, NntpVerb qualifier)
+    {
         var readerAccess = NntpCommandAccess.RequiresAuthentication | NntpCommandAccess.RequiresReader;
-        // Bare LIST (RFC 3977 §7.6.1) plus supported LIST keywords only.
-        // Unsupported RFC 3977/6048 keywords (ACTIVE.TIMES, COUNTS, DISTRIB.PATS, DISTRIBUTIONS,
-        // MODERATORS, SUBSCRIPTIONS) are intentionally not registered.
-        registry.Register(new NntpCommandDescriptor("LIST", readerAccess, List.HandleAsync, logger: listLog));
-        registry.Register(new NntpCommandDescriptor(
-            "LIST", readerAccess, List.HandleAsync, "ACTIVE", listLog));
-        registry.Register(new NntpCommandDescriptor(
-            "LIST", readerAccess, List.HandleAsync, "HEADERS", listLog));
-        registry.Register(new NntpCommandDescriptor(
-            "LIST", readerAccess, List.HandleAsync, "MOTD", listLog));
-        registry.Register(new NntpCommandDescriptor(
-            "LIST", readerAccess, List.HandleAsync, "NEWSGROUPS", listLog));
-        registry.Register(new NntpCommandDescriptor(
-            "LIST", readerAccess, List.HandleAsync, "OVERVIEW.FMT", listLog));
-        registry.Register(new NntpCommandDescriptor("GROUP", readerAccess, Group.HandleAsync, logger: groupLog));
-        registry.Register(new NntpCommandDescriptor("LISTGROUP", readerAccess, ListGroup.HandleAsync, logger: listGroupLog));
-        registry.Register(new NntpCommandDescriptor("NEWGROUPS", readerAccess, NewGroups.HandleAsync, logger: newGroupsLog));
-        registry.Register(new NntpCommandDescriptor("NEWNEWS", readerAccess, NewNews.HandleAsync, logger: newNewsLog));
+        return verb switch
+        {
+            NntpVerb.Capabilities or NntpVerb.Help or NntpVerb.Date or NntpVerb.Quit
+                or NntpVerb.StartTls or NntpVerb.Compress or NntpVerb.BenchIt
+                or NntpVerb.AuthInfo => NntpCommandAccess.Public,
+            NntpVerb.Mode when qualifier == NntpVerb.Reader => NntpCommandAccess.Public,
+            NntpVerb.Mode when qualifier == NntpVerb.Stream => NntpCommandAccess.RequiresStreaming,
+            NntpVerb.Check or NntpVerb.TakeThis or NntpVerb.Ihave => NntpCommandAccess.RequiresTransit,
+            NntpVerb.Post => NntpCommandAccess.RequiresAuthentication
+                | NntpCommandAccess.RequiresReader
+                | NntpCommandAccess.RequiresPosting,
+            NntpVerb.List or NntpVerb.ListGroup or NntpVerb.Group or NntpVerb.Newgroups
+                or NntpVerb.Newnews or NntpVerb.Article or NntpVerb.Head or NntpVerb.Body
+                or NntpVerb.Stat or NntpVerb.Last or NntpVerb.Next or NntpVerb.Over
+                or NntpVerb.Hdr => readerAccess,
+            _ => NntpCommandAccess.Public,
+        };
+    }
 
-        // Article retrieval
-        registry.Register(new NntpCommandDescriptor("ARTICLE", readerAccess, Article.HandleArticleAsync, logger: articleLog));
-        registry.Register(new NntpCommandDescriptor("HEAD", readerAccess, Article.HandleHeadAsync, logger: articleLog));
-        registry.Register(new NntpCommandDescriptor("BODY", readerAccess, Article.HandleBodyAsync, logger: articleLog));
-        registry.Register(new NntpCommandDescriptor("STAT", readerAccess, Article.HandleStatAsync, logger: articleLog));
-
-        // Navigation
-        registry.Register(new NntpCommandDescriptor("LAST", readerAccess, Last.HandleAsync, logger: lastLog));
-        registry.Register(new NntpCommandDescriptor("NEXT", readerAccess, Next.HandleAsync, logger: nextLog));
-
-        // Overview / headers
-        registry.Register(new NntpCommandDescriptor("OVER", readerAccess, Over.HandleAsync, logger: overLog));
-        registry.Register(new NntpCommandDescriptor("HDR", readerAccess, Hdr.HandleAsync, logger: hdrLog));
-
-        // Posting
-        registry.Register(new NntpCommandDescriptor(
-            "POST",
-            NntpCommandAccess.RequiresAuthentication | NntpCommandAccess.RequiresReader | NntpCommandAccess.RequiresPosting,
-            Post.HandleAsync,
-            logger: postLog));
-
-        // Streaming / transit — peer privilege (RequiresTransit / RequiresStreaming), not AUTHINFO.
-        var transitAccess = NntpCommandAccess.RequiresTransit;
-        registry.Register(new NntpCommandDescriptor("IHAVE", transitAccess, IHave.HandleAsync, logger: iHaveLog));
-        registry.Register(new NntpCommandDescriptor("CHECK", transitAccess, Check.HandleAsync, logger: checkLog));
-        registry.Register(new NntpCommandDescriptor("TAKETHIS", transitAccess, TakeThis.HandleAsync, logger: takeThisLog));
-
-        return registry;
+    /// <summary>Returns the static uppercase display name used by TX completion logs.</summary>
+    public static string DisplayName(NntpVerb verb, NntpVerb qualifier)
+    {
+        return (verb, qualifier) switch
+        {
+            (NntpVerb.Mode, NntpVerb.Reader) => "MODE READER",
+            (NntpVerb.Mode, NntpVerb.Stream) => "MODE STREAM",
+            (NntpVerb.AuthInfo, NntpVerb.User) => "AUTHINFO USER",
+            (NntpVerb.AuthInfo, NntpVerb.Pass) => "AUTHINFO PASS",
+            (NntpVerb.AuthInfo, NntpVerb.Sasl) => "AUTHINFO SASL",
+            (NntpVerb.List, NntpVerb.Active) => "LIST ACTIVE",
+            (NntpVerb.List, NntpVerb.Headers) => "LIST HEADERS",
+            (NntpVerb.List, NntpVerb.Motd) => "LIST MOTD",
+            (NntpVerb.List, NntpVerb.Newsgroups) => "LIST NEWSGROUPS",
+            (NntpVerb.List, NntpVerb.OverviewFmt) => "LIST OVERVIEW.FMT",
+            (NntpVerb.Article, _) => "ARTICLE",
+            (NntpVerb.AuthInfo, _) => "AUTHINFO",
+            (NntpVerb.Body, _) => "BODY",
+            (NntpVerb.Capabilities, _) => "CAPABILITIES",
+            (NntpVerb.Check, _) => "CHECK",
+            (NntpVerb.Compress, _) => "COMPRESS",
+            (NntpVerb.Date, _) => "DATE",
+            (NntpVerb.Group, _) => "GROUP",
+            (NntpVerb.Hdr, _) => "HDR",
+            (NntpVerb.Head, _) => "HEAD",
+            (NntpVerb.Help, _) => "HELP",
+            (NntpVerb.Ihave, _) => "IHAVE",
+            (NntpVerb.Last, _) => "LAST",
+            (NntpVerb.List, _) => "LIST",
+            (NntpVerb.ListGroup, _) => "LISTGROUP",
+            (NntpVerb.Mode, _) => "MODE",
+            (NntpVerb.Newgroups, _) => "NEWGROUPS",
+            (NntpVerb.Newnews, _) => "NEWNEWS",
+            (NntpVerb.Next, _) => "NEXT",
+            (NntpVerb.Over, _) => "OVER",
+            (NntpVerb.Post, _) => "POST",
+            (NntpVerb.Quit, _) => "QUIT",
+            (NntpVerb.StartTls, _) => "STARTTLS",
+            (NntpVerb.Stat, _) => "STAT",
+            (NntpVerb.TakeThis, _) => "TAKETHIS",
+            (NntpVerb.BenchIt, _) => "BENCHIT",
+            _ => "INVALID",
+        };
     }
 }

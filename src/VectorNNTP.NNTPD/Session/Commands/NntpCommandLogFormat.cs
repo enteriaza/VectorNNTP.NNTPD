@@ -14,6 +14,27 @@ internal static class NntpCommandLogFormat
             $"{session.ClientAddress}:{session.ClientPort}");
     }
 
+    /// <summary>Returns whether TAKETHIS RX/TX INFO should be suppressed.</summary>
+    public static bool SuppressHotPathCommand(NntpVerb verb) => verb == NntpVerb.TakeThis;
+
+    /// <summary>
+    /// Logging-boundary representation of a command. AUTHINFO secrets are redacted.
+    /// </summary>
+    public static string RedactRxCommand(NntpCommand command, ReadOnlySpan<byte> line)
+    {
+        if (command.Verb == NntpVerb.AuthInfo && command.Qualifier == NntpVerb.Pass)
+        {
+            return "AUTHINFO PASS <redacted>";
+        }
+
+        if (command.Verb == NntpVerb.AuthInfo && command.Qualifier == NntpVerb.Sasl)
+        {
+            return "AUTHINFO SASL <redacted>";
+        }
+
+        return System.Text.Encoding.ASCII.GetString(line);
+    }
+
     /// <summary>
     /// Returns a log-safe RX command line. Passwords and SASL credential material are redacted.
     /// </summary>

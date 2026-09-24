@@ -37,7 +37,6 @@ public sealed class NntpSession
     public NntpSession(
         INntpConnection connection,
         ILogger<NntpSession> logger,
-        NntpCommandRegistry? registry = null,
         ITlsCertificateContextProvider? certificateProvider = null,
         INntpAuthenticationProvider? authenticationProvider = null,
         bool allowCleartextAuth = true,
@@ -51,6 +50,7 @@ public sealed class NntpSession
         Connection = connection;
         ClientIdentity = connection.ClientIdentity;
         _logger = logger;
+        CertificateProvider = certificateProvider;
         _connectionAuthorization = (transitPeerAuthorization ?? TransitPeerAuthorization.Disabled)
             .Resolve(ClientIdentity.ClientAddress);
         _authorization = _connectionAuthorization;
@@ -60,11 +60,7 @@ public sealed class NntpSession
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
         StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
-        registry ??= DefaultNntpCommandCatalog.Create(
-            certificateProvider,
-            AuthenticationProvider,
-            loggerFactory);
-        _dispatcher = new NntpCommandDispatcher(registry, loggerFactory);
+        _dispatcher = new NntpCommandDispatcher(loggerFactory);
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -99,6 +95,9 @@ public sealed class NntpSession
 
     /// <summary>Gets the authentication provider used by AUTHINFO handlers.</summary>
     public INntpAuthenticationProvider AuthenticationProvider { get; }
+
+    /// <summary>Gets the TLS certificate provider used by STARTTLS, if configured.</summary>
+    public ITlsCertificateContextProvider? CertificateProvider { get; }
 
     /// <summary>
     /// Gets a value indicating whether AUTHINFO USER/PASS is permitted without TLS
@@ -272,60 +271,58 @@ public sealed class NntpSession
     {
         if (_authorization.PostingPermitted)
         {
-            return response.WriteLineAsync(
-                NntpReplyCodes.PostingAllowed,
-                "VectorNNTP.NNTPD ready, posting permitted",
-                cancellationToken);
+            return response.WriteLineAsync(NntpResponses.GreetingPostingPermitted, cancellationToken);
         }
 
-        return response.WriteLineAsync(
-            NntpReplyCodes.PostingProhibited,
-            "VectorNNTP.NNTPD ready, posting prohibited",
-            cancellationToken);
+        return response.WriteLineAsync(NntpResponses.GreetingPostingProhibited, cancellationToken);
     }
 
     /// <summary>
-    /// Logs, parses, and dispatches one already-delimited command line (shared by both RX strategies).
+    /// Logs and dispatches one already-parsed command (shared by both RX strategies).
     /// </summary>
-    internal async ValueTask DispatchRawLineAsync(
+    internal async ValueTask DispatchCommandAsync(
         NntpCommandDispatcher dispatcher,
         NntpResponseWriter response,
         ILogger logger,
-        string line,
+        NntpCommand command,
+        ReadOnlyMemory<byte> line,
         NntpMultilineReadResult? preReadArticle,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(logger);
-        ArgumentNullException.ThrowIfNull(line);
 
-        if (!IsBenchItCommand(line) && !NntpCommandLogFormat.SuppressHotPathCommandLog(line))
+        if (command.Verb != NntpVerb.BenchIt
+            && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
+            && logger.IsEnabled(LogLevel.Information))
         {
             logger.LogInformation(
                 "[{Client}] RX: {Command}",
                 NntpCommandLogFormat.Client(this),
-                NntpCommandLogFormat.RedactRxLine(line));
-        }
-
-        if (!NntpCommandParser.TryParse(line, out var parsed))
-        {
-            var syntaxStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            await response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
-                .ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                NntpCommandLoggers.For(typeof(NntpCommandExecution)),
-                this,
-                NntpCommandLogFormat.DisplayNameFromRawLine(line),
-                System.Diagnostics.Stopwatch.GetElapsedTime(syntaxStarted),
-                "syntax error");
-            return;
+                NntpCommandLogFormat.RedactRxCommand(command, line.Span));
         }
 
         await dispatcher
-            .DispatchAsync(this, parsed, response, cancellationToken, preReadArticle)
+            .DispatchAsync(this, command, line, response, cancellationToken, preReadArticle)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Logs a parser rejection without converting the full command line to a string.</summary>
+    internal void LogCommandRejected(NntpCommand command, string detail)
+    {
+        if (!_logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "[{Client}] RX rejected: verb={Verb} qualifier={Qualifier} status={Status} [{Detail}]",
+            NntpCommandLogFormat.Client(this),
+            command.Verb,
+            command.Qualifier,
+            command.Status,
+            detail);
     }
 
     /// <summary>
@@ -353,21 +350,5 @@ public sealed class NntpSession
         {
             return false;
         }
-    }
-
-    private static bool IsBenchItCommand(string line)
-    {
-        // Verb-only internal benchmark command; ignore trailing spaces / unexpected args for log suppression.
-        if (line.Length < 7)
-        {
-            return false;
-        }
-
-        if (!line.StartsWith("BENCHIT", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return line.Length == 7 || line[7] is ' ' or '\t';
     }
 }

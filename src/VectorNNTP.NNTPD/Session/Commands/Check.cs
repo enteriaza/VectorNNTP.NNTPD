@@ -8,6 +8,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// syntactically valid <c>CHECK message-id</c> always returns
 /// <c>238 message-id send article to be transferred</c>. Duplicate detection, deferral, and
 /// TAKETHIS coupling are not implemented.
+/// The Message-ID is copied from session scratch into one owned wire buffer; it is not
+/// converted to a string for response construction.
 /// </remarks>
 internal static class Check
 {
@@ -19,15 +21,10 @@ internal static class Check
 
     private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        if (context.Arguments.Count != 1 || !NntpMessageId.IsWellFormed(context.Arguments[0]))
-        {
-            return context.Response.WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken);
-        }
-
-        var messageId = context.Arguments[0];
-        return context.Response.WriteLineAsync(
-            NntpReplyCodes.SendArticleToBeTransferred,
-            messageId + " send article to be transferred",
-            cancellationToken);
+        var owned = NntpResponseCompose.Concat(
+            NntpResponses.CheckPrefix.Span,
+            context.ArgumentSpan,
+            NntpResponses.CheckSuffix.Span);
+        return context.Response.WriteLineAsync(owned, cancellationToken);
     }
 }

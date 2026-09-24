@@ -18,14 +18,14 @@ public sealed class HelpCommandTests
     {
         await using var duplex = await HelpDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("HELP", out var parsed));
         var readTask = duplex.ReadMultilineResponseAsync();
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "HELP");
         var (status, body) = await readTask;
 
+        Assert.Equal(1, response.ChannelEnqueueCount);
         Assert.Equal("100 Help text follows", status);
         Assert.Equal(Help.BodyLines, body);
         Assert.DoesNotContain(body, l => l.Contains("BENCHIT", StringComparison.OrdinalIgnoreCase));
@@ -48,12 +48,11 @@ public sealed class HelpCommandTests
             streamingPermitted: true));
         session.SetMode(NntpSessionMode.Reader);
 
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("HELP", out var parsed));
         var readTask = duplex.ReadMultilineResponseAsync();
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "HELP");
         var (_, body) = await readTask;
 
         Assert.Equal(Help.BodyLines, body);
@@ -64,11 +63,10 @@ public sealed class HelpCommandTests
     {
         await using var duplex = await HelpDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("HELP MORE", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "HELP MORE");
         Assert.Equal("501 Syntax error", await duplex.ReadClientLineAsync());
     }
 

@@ -205,10 +205,8 @@ public sealed class QuitCommandTests
             recording.CreateLogger<NntpSession>(),
             loggerFactory: recording);
         var response = new NntpResponseWriter(connection.Output);
-        var registry = DefaultNntpCommandCatalog.Create(loggerFactory: recording);
-        Assert.True(NntpCommandParser.TryParse("QUIT", out var parsed));
-        Assert.True(registry.TryResolve(parsed, out var descriptor, out var args, out _));
-        var context = new NntpCommandContext(session, descriptor!, parsed.RawLine, args, response);
+        var (command, line) = NntpCommandTestParse.Parse("QUIT");
+        var context = new NntpCommandContext(session, command, line, response);
 
         try
         {

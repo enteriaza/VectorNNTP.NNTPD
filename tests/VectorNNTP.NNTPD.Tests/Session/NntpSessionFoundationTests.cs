@@ -25,15 +25,19 @@ public sealed class NntpSessionFoundationTests
     [Fact]
     public void CommandParser_SplitsVerbAndArguments()
     {
-        Assert.True(NntpCommandParser.TryParse("CAPABILITIES", out var caps));
-        Assert.Equal("CAPABILITIES", caps.Verb);
-        Assert.Empty(caps.Tokens);
+        var caps = NntpCommandTestParse.ParseCommand("CAPABILITIES");
+        Assert.Equal(NntpVerb.Capabilities, caps.Verb);
+        Assert.Equal(0, caps.TokenCount);
+        Assert.True(caps.IsValid);
 
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO USER fred", out var auth));
-        Assert.Equal("AUTHINFO", auth.Verb);
-        Assert.Equal(["USER", "fred"], auth.Tokens);
+        var (auth, authLine) = NntpCommandTestParse.Parse("AUTHINFO USER fred");
+        Assert.Equal(NntpVerb.AuthInfo, auth.Verb);
+        Assert.Equal(NntpVerb.User, auth.Qualifier);
+        Assert.Equal("fred", Encoding.ASCII.GetString(auth.ArgumentSpan(authLine)));
 
-        Assert.False(NntpCommandParser.TryParse("   ", out _));
+        var empty = NntpCommandParser.Parse("   "u8);
+        Assert.False(empty.IsValid);
+        Assert.Equal(NntpParseStatus.Empty, empty.Status);
     }
 
     [Fact]
@@ -42,11 +46,9 @@ public sealed class NntpSessionFoundationTests
         await using var duplex = await SessionTestDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("NOSUCHCMD", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "NOSUCHCMD");
         Assert.Contains("500 Unknown command", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -56,11 +58,9 @@ public sealed class NntpSessionFoundationTests
         await using var duplex = await SessionTestDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO GENERIC x", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "AUTHINFO GENERIC x");
         Assert.Contains("501 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -70,11 +70,9 @@ public sealed class NntpSessionFoundationTests
         await using var duplex = await SessionTestDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("ARTICLE", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "ARTICLE");
         Assert.Contains("480 Authentication required", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -84,11 +82,9 @@ public sealed class NntpSessionFoundationTests
         await using var duplex = await SessionTestDuplex.CreateAsync();
         var session = duplex.CreateSession();
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("CHECK <msg@example.com>", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "CHECK <msg@example.com>");
         Assert.Contains("480 Authentication required", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -104,11 +100,9 @@ public sealed class NntpSessionFoundationTests
             postingPermitted: false,
             streamingPermitted: false));
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("IHAVE <msg@example.com>", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "IHAVE <msg@example.com>");
         Assert.Contains("502 Permission denied", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -124,11 +118,9 @@ public sealed class NntpSessionFoundationTests
             postingPermitted: false,
             streamingPermitted: false));
         var response = new NntpResponseWriter(duplex.ServerOutput);
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
 
-        Assert.True(NntpCommandParser.TryParse("MODE STREAM", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "MODE STREAM");
         Assert.Contains("502 Streaming not permitted", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 

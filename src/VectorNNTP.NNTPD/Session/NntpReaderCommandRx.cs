@@ -14,6 +14,7 @@ internal sealed class NntpReaderCommandRx
     private readonly NntpSession _session;
     private readonly NntpCommandDispatcher _dispatcher;
     private readonly ILogger _logger;
+    private readonly byte[] _commandScratch = new byte[2048];
 
     /// <summary>Initializes a new instance of the <see cref="NntpReaderCommandRx"/> class.</summary>
     public NntpReaderCommandRx(NntpSession session, NntpCommandDispatcher dispatcher, ILogger logger)
@@ -32,16 +33,25 @@ internal sealed class NntpReaderCommandRx
     public async ValueTask<bool> ProcessOneAsync(NntpResponseWriter response, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(response);
-        var line = await NntpCommandLineReader
-            .ReadLineAsync(_session.Connection.Input, cancellationToken)
+        var length = await NntpCommandLineReader
+            .ReadLineBytesAsync(_session.Connection.Input, _commandScratch, cancellationToken)
             .ConfigureAwait(false);
-        if (line is null)
+        if (length < 0)
         {
             return false;
         }
 
+        var line = _commandScratch.AsMemory(0, length);
+        var command = NntpCommandParser.Parse(line.Span);
         await _session
-            .DispatchRawLineAsync(_dispatcher, response, _logger, line, preReadArticle: null, cancellationToken)
+            .DispatchCommandAsync(
+                _dispatcher,
+                response,
+                _logger,
+                command,
+                line,
+                preReadArticle: null,
+                cancellationToken)
             .ConfigureAwait(false);
         return true;
     }

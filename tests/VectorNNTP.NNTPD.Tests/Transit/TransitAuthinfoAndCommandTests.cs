@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Tests.Session;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Transit;
@@ -90,13 +91,12 @@ public sealed class TransitAuthinfoAndCommandTests
     [Fact]
     public async Task Authinfo_IsPublic_ForReaderStreamAndNonTransit()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO USER x", out var user));
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO PASS y", out var pass));
-        Assert.True(registry.TryResolve(user, out var userDescriptor, out _, out _));
-        Assert.True(registry.TryResolve(pass, out var passDescriptor, out _, out _));
-        Assert.Equal(NntpCommandAccess.Public, userDescriptor!.Access);
-        Assert.Equal(NntpCommandAccess.Public, passDescriptor!.Access);
+        var user = NntpCommandTestParse.ParseCommand("AUTHINFO USER x");
+        var pass = NntpCommandTestParse.ParseCommand("AUTHINFO PASS y");
+        Assert.True(user.IsValid);
+        Assert.True(pass.IsValid);
+        Assert.Equal(NntpCommandAccess.Public, DefaultNntpCommandCatalog.GetAccess(user.Verb, user.Qualifier));
+        Assert.Equal(NntpCommandAccess.Public, DefaultNntpCommandCatalog.GetAccess(pass.Verb, pass.Qualifier));
 
         await using var readerDuplex = await CommandDuplex.CreateAsync(OtherAddress);
         var reader = readerDuplex.CreateSession(CreatePeer());

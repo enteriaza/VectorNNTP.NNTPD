@@ -49,4 +49,54 @@ public static class NntpCommandLineReader
         buffer = buffer.Slice(reader.Position);
         return true;
     }
+
+    /// <summary>
+    /// Reads the next command line into <paramref name="scratch"/> (without CRLF).
+    /// Returns the number of bytes written, or <c>-1</c> on EOF.
+    /// </summary>
+    public static async ValueTask<int> ReadLineBytesAsync(
+        PipeReader reader,
+        byte[] scratch,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(scratch);
+
+        while (true)
+        {
+            var result = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            var buffer = result.Buffer;
+            if (TryCopyLine(ref buffer, scratch, out var length))
+            {
+                reader.AdvanceTo(buffer.Start, buffer.Start);
+                return length;
+            }
+
+            reader.AdvanceTo(buffer.Start, buffer.End);
+            if (result.IsCompleted)
+            {
+                return -1;
+            }
+        }
+    }
+
+    private static bool TryCopyLine(ref ReadOnlySequence<byte> buffer, byte[] scratch, out int length)
+    {
+        var reader = new SequenceReader<byte>(buffer);
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> lineBytes, Crlf))
+        {
+            length = 0;
+            return false;
+        }
+
+        length = checked((int)lineBytes.Length);
+        if (length > scratch.Length)
+        {
+            length = scratch.Length;
+        }
+
+        lineBytes.Slice(0, length).CopyTo(scratch);
+        buffer = buffer.Slice(reader.Position);
+        return true;
+    }
 }

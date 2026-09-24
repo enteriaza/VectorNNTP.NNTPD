@@ -16,7 +16,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// Critical path: parse → consume article (STREAM: framed wire copy; READER fallback:
 /// <see cref="NntpMultilineDataReader"/> destuff) → enqueue → enqueue 239/439 → return.
 /// Disk persistence and outbound network delivery of the status line are not awaited
-/// (<see cref="NntpResponseWriter.EnqueueLineAsync"/>).
+/// (<see cref="NntpResponseWriter.EnqueueLineAsync(ReadOnlyMemory{byte}, CancellationToken)"/>).
 /// </para>
 /// </remarks>
 internal static class TakeThis
@@ -29,15 +29,8 @@ internal static class TakeThis
 
     private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        if (context.Arguments.Count != 1)
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        var messageId = context.Arguments[0];
+        // Syntax already validated by NntpCommandParser. String is the ingest boundary only.
+        var messageId = System.Text.Encoding.ASCII.GetString(context.ArgumentSpan);
         var queue = context.Session.ArticleIngestion;
 
         // Always consume the following multiline block so pipelined bytes stay synchronized,
@@ -70,18 +63,12 @@ internal static class TakeThis
             return;
         }
 
-        if (!NntpMessageId.IsWellFormed(messageId))
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
         if (article.Status == NntpMultilineReadStatus.TooLarge)
         {
-            await context.Response
-                .EnqueueLineAsync(NntpReplyCodes.TransferRejected, messageId, cancellationToken)
+            await EnqueueTransferReplyAsync(
+                    context,
+                    NntpResponses.TransferRejectedPrefix,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "rejected too large";
             return;
@@ -118,10 +105,28 @@ internal static class TakeThis
         }
 
         // 239 means accepted into the ingestion pipeline — not yet persisted to disk.
-        await context.Response
-            .EnqueueLineAsync(NntpReplyCodes.ArticleTransferredOk, messageId, cancellationToken)
+        await EnqueueTransferReplyAsync(
+                context,
+                NntpResponses.ArticleTransferredOkPrefix,
+                cancellationToken)
             .ConfigureAwait(false);
         context.CompletionDetail = "accepted";
+    }
+
+    /// <summary>
+    /// Copies prefix + session-scratch Message-ID + CRLF into one owned buffer, then enqueues
+    /// it. Scratch must not be given to the TX pump: the next command overwrites it.
+    /// </summary>
+    private static ValueTask EnqueueTransferReplyAsync(
+        NntpCommandContext context,
+        ReadOnlyMemory<byte> prefix,
+        CancellationToken cancellationToken)
+    {
+        var owned = NntpResponseCompose.Concat(
+            prefix.Span,
+            context.ArgumentSpan,
+            NntpResponses.Crlf.Span);
+        return context.Response.EnqueueLineAsync(owned, cancellationToken);
     }
 
     private static async ValueTask FailTemporaryAsync(
@@ -132,10 +137,7 @@ internal static class TakeThis
         try
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.ServiceTemporarilyUnavailable,
-                    "Service temporarily unavailable",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.ServiceTemporarilyUnavailable, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (

@@ -27,14 +27,6 @@ internal static class Quit
 
     private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        if (context.Arguments.Count > 0)
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
         // Valid QUIT accepted: after this point the session must become terminal and no further
         // NNTP commands/responses should be processed (aside from finishing this 205 write).
         var responseWritten = false;
@@ -42,7 +34,7 @@ internal static class Quit
         try
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.ConnectionClosing, "Connection closing", cancellationToken)
+                .WriteLineAsync(NntpResponses.ConnectionClosing, cancellationToken)
                 .ConfigureAwait(false);
             responseWritten = true;
 

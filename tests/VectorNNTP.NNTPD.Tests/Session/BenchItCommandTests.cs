@@ -27,12 +27,11 @@ public sealed class BenchItCommandTests
     [Fact]
     public void Registry_ResolvesBenchIt_AsPublic()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse("BENCHIT", out var parsed));
-        Assert.True(registry.TryResolve(parsed, out var descriptor, out _, out var status));
-        Assert.Equal(NntpCommandResolveStatus.Found, status);
-        Assert.Equal(NntpCommandAccess.Public, descriptor!.Access);
-        Assert.Equal("BENCHIT", descriptor.RegistryKey);
+        var parsed = NntpCommandTestParse.ParseCommand("BENCHIT");
+        Assert.True(parsed.IsValid);
+        Assert.Equal(NntpVerb.BenchIt, parsed.Verb);
+        Assert.Equal(NntpCommandAccess.Public, DefaultNntpCommandCatalog.GetAccess(parsed.Verb, parsed.Qualifier));
+        Assert.Equal("BENCHIT", DefaultNntpCommandCatalog.DisplayName(parsed.Verb, parsed.Qualifier));
     }
 
     [Fact]
@@ -40,14 +39,12 @@ public sealed class BenchItCommandTests
     {
         await using var duplex = await BenchDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
-
-        Assert.True(NntpCommandParser.TryParse("BENCHIT", out var parsed));
 
         // Consume concurrently: production pipe pause threshold would otherwise stall a 750 KiB write.
         var readTask = duplex.ReadExactClientBytesAsync(BenchIt.WireResponseBytes);
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "BENCHIT");
         var received = await readTask;
 
         Assert.Equal(BenchIt.WireResponse.ToArray(), received);
@@ -58,12 +55,11 @@ public sealed class BenchItCommandTests
     {
         await using var duplex = await BenchDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("CAPABILITIES", out var parsed));
         var readTask = duplex.ReadUntilTerminatorAsync();
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "CAPABILITIES");
         var text = Encoding.ASCII.GetString(await readTask);
         Assert.DoesNotContain("BENCHIT", text, StringComparison.OrdinalIgnoreCase);
     }

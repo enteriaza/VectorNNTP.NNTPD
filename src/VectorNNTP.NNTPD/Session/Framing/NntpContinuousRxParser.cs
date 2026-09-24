@@ -1,5 +1,5 @@
 using System.Buffers;
-using System.Text;
+using VectorNNTP.NNTPD.Session.Commands;
 
 namespace VectorNNTP.NNTPD.Session.Framing;
 
@@ -32,24 +32,19 @@ public readonly struct NntpContinuousRxUnit
     /// <summary>Initializes a new instance of the <see cref="NntpContinuousRxUnit"/> struct.</summary>
     public NntpContinuousRxUnit(
         NntpContinuousRxKind kind,
-        string? commandLine = null,
-        string? messageId = null,
+        NntpCommand command = default,
         NntpMultilineReadResult article = default)
     {
         Kind = kind;
-        CommandLine = commandLine;
-        MessageId = messageId;
+        Command = command;
         Article = article;
     }
 
     /// <summary>Gets the unit kind.</summary>
     public NntpContinuousRxKind Kind { get; }
 
-    /// <summary>Gets the command line without CRLF, when present.</summary>
-    public string? CommandLine { get; }
-
-    /// <summary>Gets the TAKETHIS message-id argument (maybe empty).</summary>
-    public string? MessageId { get; }
+    /// <summary>Gets the parsed command. Indexes refer to <see cref="NntpContinuousRxParser.CurrentCommandLine"/>.</summary>
+    public NntpCommand Command { get; }
 
     /// <summary>
     /// Gets the article result for <see cref="NntpContinuousRxKind.TakeThis"/>.
@@ -75,20 +70,27 @@ public readonly struct NntpContinuousRxUnit
 public sealed class NntpContinuousRxParser
 {
     private readonly ArrayBufferWriter<byte> _article = new(64 * 1024);
+    private readonly byte[] _commandScratch = new byte[2048];
+    private int _commandLength;
     private bool _articleExceeded;
     private int _maxArticleBytes = int.MaxValue;
-    private string? _pendingMessageId;
-    private string? _pendingTakeThisLine;
+    private NntpCommand _pendingCommand;
 
     /// <summary>Gets the current scan mode.</summary>
     public NntpContinuousRxMode Mode { get; private set; }
+
+    /// <summary>
+    /// Gets the current command-line bytes. Valid until the next command line is consumed.
+    /// </summary>
+    public ReadOnlyMemory<byte> CurrentCommandLine => _commandScratch.AsMemory(0, _commandLength);
 
     /// <summary>Resets command/article state (does not release writer capacity).</summary>
     public void Reset()
     {
         Mode = NntpContinuousRxMode.Command;
-        _pendingMessageId = null;
-        _pendingTakeThisLine = null;
+        _pendingCommand = default;
+        // Keep _commandLength/_commandScratch until the next command is copied so
+        // CurrentCommandLine remains valid for dispatch after a TAKETHIS article.
         _articleExceeded = false;
         _maxArticleBytes = int.MaxValue;
         _article.ResetWrittenCount();
@@ -121,10 +123,12 @@ public sealed class NntpContinuousRxParser
             return NntpContinuousRxUnit.NeedMore;
         }
 
-        if (consumeTakeThisArticle && IsTakeThisVerb(lineBytes, out var messageId, out var rawLine))
+        CopyCommandLine(lineBytes);
+        var command = NntpCommandParser.Parse(CurrentCommandLine.Span);
+
+        if (consumeTakeThisArticle && command.Verb == NntpVerb.TakeThis)
         {
-            _pendingMessageId = messageId;
-            _pendingTakeThisLine = rawLine;
+            _pendingCommand = command;
             Mode = NntpContinuousRxMode.Article;
             _maxArticleBytes = maxArticleBytes;
             _articleExceeded = false;
@@ -132,9 +136,7 @@ public sealed class NntpContinuousRxParser
             return TryConsumeArticle(ref buffer);
         }
 
-        return new NntpContinuousRxUnit(
-            NntpContinuousRxKind.Command,
-            commandLine: ToAscii(lineBytes));
+        return new NntpContinuousRxUnit(NntpContinuousRxKind.Command, command);
     }
 
     private NntpContinuousRxUnit TryConsumeArticle(ref ReadOnlySequence<byte> buffer)
@@ -155,9 +157,8 @@ public sealed class NntpContinuousRxParser
             var article = NntpArticleDestuffer.Complete(_article, _articleExceeded);
             var unit = new NntpContinuousRxUnit(
                 NntpContinuousRxKind.TakeThis,
-                commandLine: _pendingTakeThisLine,
-                messageId: _pendingMessageId,
-                article: article);
+                _pendingCommand,
+                article);
             Reset();
             return unit;
         }
@@ -229,39 +230,15 @@ public sealed class NntpContinuousRxParser
         _article.Advance(needed);
     }
 
-    private static bool IsTakeThisVerb(
-        ReadOnlySequence<byte> lineBytes,
-        out string messageId,
-        out string rawLine)
+    private void CopyCommandLine(ReadOnlySequence<byte> lineBytes)
     {
-        rawLine = ToAscii(lineBytes);
-        messageId = string.Empty;
-        var span = rawLine.AsSpan().Trim();
-        if (span.Length < 8 || !span[..8].Equals("TAKETHIS", StringComparison.OrdinalIgnoreCase))
+        var length = checked((int)lineBytes.Length);
+        if (length > _commandScratch.Length)
         {
-            return false;
+            length = _commandScratch.Length;
         }
 
-        if (span.Length > 8 && !char.IsWhiteSpace(span[8]))
-        {
-            return false;
-        }
-
-        if (span.Length > 8)
-        {
-            messageId = span[8..].Trim().ToString();
-        }
-
-        return true;
-    }
-
-    private static string ToAscii(ReadOnlySequence<byte> lineBytes)
-    {
-        if (lineBytes.IsSingleSegment)
-        {
-            return Encoding.ASCII.GetString(lineBytes.FirstSpan);
-        }
-
-        return Encoding.ASCII.GetString(lineBytes.ToArray());
+        lineBytes.Slice(0, length).CopyTo(_commandScratch);
+        _commandLength = length;
     }
 }

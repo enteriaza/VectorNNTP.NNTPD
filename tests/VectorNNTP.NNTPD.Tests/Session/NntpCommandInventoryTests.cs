@@ -13,8 +13,7 @@ public sealed class NntpCommandInventoryTests
     [Fact]
     public void Catalog_RegistersCompleteInventory()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        var keys = registry.GetRegisteredKeys();
+        var keys = DefaultNntpCommandCatalog.GetRegisteredKeys();
 
         // Production inventory remains complete; BENCHIT is an internal extra (not in InventoryKeys).
         foreach (var key in DefaultNntpCommandCatalog.InventoryKeys)
@@ -46,19 +45,18 @@ public sealed class NntpCommandInventoryTests
     [InlineData("COMPRESS DEFLATE")]
     [InlineData("MODE READER")]
     [InlineData("MODE STREAM")]
-    [InlineData("AUTHINFO USER")]
-    [InlineData("AUTHINFO PASS")]
-    [InlineData("AUTHINFO SASL")]
-    [InlineData("IHAVE")]
-    [InlineData("CHECK")]
-    [InlineData("TAKETHIS")]
-    public void Registry_ResolvesInventoryCommands(string commandLine)
+    [InlineData("AUTHINFO USER x")]
+    [InlineData("AUTHINFO PASS y")]
+    [InlineData("AUTHINFO SASL PLAIN")]
+    [InlineData("IHAVE <msg@example.com>")]
+    [InlineData("CHECK <msg@example.com>")]
+    [InlineData("TAKETHIS <msg@example.com>")]
+    public void Parser_AcceptsInventoryCommands(string commandLine)
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
-        Assert.True(registry.TryResolve(parsed, out var descriptor, out _, out var status));
-        Assert.Equal(NntpCommandResolveStatus.Found, status);
-        Assert.NotNull(descriptor);
+        var parsed = NntpCommandTestParse.ParseCommand(commandLine);
+        Assert.True(parsed.IsValid);
+        Assert.NotEqual(NntpVerb.Unknown, parsed.Verb);
+        Assert.NotEqual(NntpVerb.None, parsed.Verb);
     }
 
     [Theory]
@@ -69,12 +67,12 @@ public sealed class NntpCommandInventoryTests
     [InlineData("LIST MODERATORS")]
     [InlineData("LIST SUBSCRIPTIONS")]
     [InlineData("LIST SUBSCRIPTIONS *")]
-    public void Registry_DoesNotResolveUnsupportedListVariants(string commandLine)
+    public void Parser_RejectsUnsupportedListVariants(string commandLine)
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
-        Assert.False(registry.TryResolve(parsed, out _, out _, out var status));
-        Assert.Equal(NntpCommandResolveStatus.UnknownSubcommand, status);
+        var parsed = NntpCommandTestParse.ParseCommand(commandLine);
+        Assert.Equal(NntpVerb.List, parsed.Verb);
+        Assert.Equal(NntpParseStatus.UnknownQualifier, parsed.Status);
+        Assert.False(parsed.IsValid);
     }
 
     [Fact]
@@ -90,7 +88,7 @@ public sealed class NntpCommandInventoryTests
         Assert.DoesNotContain("LIST MODERATORS", keys);
         Assert.DoesNotContain("LIST SUBSCRIPTIONS", keys);
 
-        var registered = DefaultNntpCommandCatalog.Create().GetRegisteredKeys();
+        var registered = DefaultNntpCommandCatalog.GetRegisteredKeys();
         Assert.DoesNotContain("LIST ACTIVE.TIMES", registered);
         Assert.DoesNotContain("LIST COUNTS", registered);
         Assert.DoesNotContain("LIST DISTRIB.PATS", registered);
@@ -102,27 +100,24 @@ public sealed class NntpCommandInventoryTests
     [Fact]
     public void Registry_ExactMatch_RejectsPrefixConfusion()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
+        var articleX = NntpCommandTestParse.ParseCommand("ARTICLEX");
+        Assert.Equal(NntpVerb.Unknown, articleX.Verb);
+        Assert.Equal(NntpParseStatus.UnknownVerb, articleX.Status);
 
-        Assert.True(NntpCommandParser.TryParse("ARTICLEX", out var articleX));
-        Assert.False(registry.TryResolve(articleX, out _, out _, out var unknown));
-        Assert.Equal(NntpCommandResolveStatus.UnknownCommand, unknown);
-
-        Assert.True(NntpCommandParser.TryParse("AUTHINFO USERXYZ", out var userXyz));
-        Assert.False(registry.TryResolve(userXyz, out _, out _, out var unknownSub));
-        Assert.Equal(NntpCommandResolveStatus.UnknownSubcommand, unknownSub);
+        var userXyz = NntpCommandTestParse.ParseCommand("AUTHINFO USERXYZ");
+        Assert.Equal(NntpVerb.AuthInfo, userXyz.Verb);
+        Assert.Equal(NntpParseStatus.UnknownQualifier, userXyz.Status);
     }
 
     [Fact]
-    public void Registry_TryResolve_Found_DescriptorIsNonNull()
+    public void Parser_Date_IsValidPublicCommand()
     {
-        var registry = DefaultNntpCommandCatalog.Create();
-        Assert.True(NntpCommandParser.TryParse("DATE", out var parsed));
-        Assert.True(registry.TryResolve(parsed, out var descriptor, out var args, out var status));
-        Assert.Equal(NntpCommandResolveStatus.Found, status);
-        Assert.NotNull(descriptor);
-        Assert.Equal("DATE", descriptor.RegistryKey);
-        Assert.Empty(args);
+        var parsed = NntpCommandTestParse.ParseCommand("DATE");
+        Assert.True(parsed.IsValid);
+        Assert.Equal(NntpVerb.Date, parsed.Verb);
+        Assert.Equal(0, parsed.TokenCount);
+        Assert.Equal("DATE", DefaultNntpCommandCatalog.DisplayName(parsed.Verb, parsed.Qualifier));
+        Assert.Equal(NntpCommandAccess.Public, DefaultNntpCommandCatalog.GetAccess(parsed.Verb, parsed.Qualifier));
     }
 
     [Fact]
@@ -137,12 +132,10 @@ public sealed class NntpCommandInventoryTests
             postingPermitted: false,
             streamingPermitted: false));
 
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("LIST", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "LIST");
         Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -151,15 +144,17 @@ public sealed class NntpCommandInventoryTests
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("LIST", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "LIST");
         Assert.Contains("480 Authentication required", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Unknown LIST keywords stay UnknownQualifier / 501 Unknown command variant,
+    /// matching the old registry (not a new parser invention).
+    /// </summary>
     [Theory]
     [InlineData("LIST ACTIVE.TIMES")]
     [InlineData("LIST COUNTS")]
@@ -172,11 +167,10 @@ public sealed class NntpCommandInventoryTests
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, commandLine);
         Assert.Equal("501 Unknown command variant", await duplex.ReadClientLineAsync());
     }
 
@@ -195,11 +189,10 @@ public sealed class NntpCommandInventoryTests
             postingPermitted: false,
             streamingPermitted: false));
 
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse(commandLine, out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, commandLine);
         Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
@@ -208,12 +201,10 @@ public sealed class NntpCommandInventoryTests
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(
-            DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("COMPRESS DEFLATE", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "COMPRESS DEFLATE");
         Assert.Contains("206 Compression active", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         Assert.True(session.Connection.IsCompressed);
     }

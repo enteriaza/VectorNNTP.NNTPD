@@ -55,6 +55,8 @@ public sealed class NntpConnection : INntpConnection
     private int _compression;
     private int _inplaceUpgradeBusy;
     private int _completed;
+    private int _outputWriterCompleted;
+    private int _outputReaderCompleted;
     private int _disposed;
     private int _sendPumpAwaitingOutput;
     private long _outboundIdleVersion;
@@ -126,6 +128,21 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     public bool IsCompleted => Volatile.Read(ref _completed) == 1;
+
+    /// <summary>Test-only: current byte transport (null after teardown closes it).</summary>
+    internal ConnectionByteTransport? ByteTransportForTests => _transport;
+
+    /// <summary>Test-only: send pump task started by <see cref="StartPumps"/>.</summary>
+    internal Task? SendPumpTaskForTests => _sendTask;
+
+    /// <summary>Test-only: whether <c>Output.Writer</c> has been completed.</summary>
+    internal bool OutputWriterCompletedForTests => Volatile.Read(ref _outputWriterCompleted) == 1;
+
+    /// <summary>Test-only: whether <c>Output.Reader</c> has been completed exactly once.</summary>
+    internal bool OutputReaderCompletedForTests => Volatile.Read(ref _outputReaderCompleted) == 1;
+
+    /// <summary>Test-only: 1 when the send pump is awaiting more <see cref="Output"/>.</summary>
+    internal int SendPumpAwaitingOutputForTests => Volatile.Read(ref _sendPumpAwaitingOutput);
 
     /// <inheritdoc />
     public Task PauseReadsAsync(CancellationToken cancellationToken = default)
@@ -508,6 +525,13 @@ public sealed class NntpConnection : INntpConnection
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="Output"/> writer completion and connection cancellation may unblock
+    /// <c>SendAsync</c>. <c>Output.Reader</c> is owned exclusively by the send pump: this
+    /// method must not complete that reader while <c>SendAsync</c> can still
+    /// <c>AdvanceTo</c> an examined buffer. After the send pump returns, a best-effort
+    /// reader complete runs only when the pump did not complete the reader itself.
+    /// </remarks>
     public async Task CompleteAsync(Exception? exception = null)
     {
         if (Interlocked.Exchange(ref _completed, 1) == 1)
@@ -541,19 +565,14 @@ public sealed class NntpConnection : INntpConnection
         {
             // Best-effort.
         }
+        finally
+        {
+            Interlocked.Exchange(ref _outputWriterCompleted, 1);
+        }
 
         try
         {
             await _inputPipe.Reader.CompleteAsync(exception).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            await _outputPipe.Reader.CompleteAsync(exception).ConfigureAwait(false);
         }
         catch
         {
@@ -584,9 +603,38 @@ public sealed class NntpConnection : INntpConnection
             {
                 // Observed via pump logging.
             }
+
+            if (!send.IsCompletedSuccessfully)
+            {
+                await CompleteOutputReaderBestEffortAsync(exception).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            await CompleteOutputReaderBestEffortAsync(exception).ConfigureAwait(false);
         }
 
         await CloseTransportSocketAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Completes <c>Output.Reader</c> only when the send pump did not already do so.
+    /// </summary>
+    private async Task CompleteOutputReaderBestEffortAsync(Exception? exception)
+    {
+        if (Interlocked.Exchange(ref _outputReaderCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            await _outputPipe.Reader.CompleteAsync(exception).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort after a faulted send pump.
+        }
     }
 
     /// <inheritdoc />
@@ -809,6 +857,7 @@ public sealed class NntpConnection : INntpConnection
         }
 
         await reader.CompleteAsync().ConfigureAwait(false);
+        Interlocked.Exchange(ref _outputReaderCompleted, 1);
 
         // Half-close TCP send only for plaintext end-of-stream; TLS shutdown is via SslStream dispose.
         if (socket is not null && !IsTls)

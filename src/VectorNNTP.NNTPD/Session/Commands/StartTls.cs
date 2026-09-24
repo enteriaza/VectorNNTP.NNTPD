@@ -36,7 +36,7 @@ internal static class StartTls
         if (context.Connection.IsTls)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "TLS already active", cancellationToken)
+                .WriteLineAsync(NntpResponses.TlsAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -45,10 +45,7 @@ internal static class StartTls
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "DEFLATE compression already active",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -56,7 +53,7 @@ internal static class StartTls
         if (certificateProvider is null)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "TLS provider unavailable", cancellationToken)
+                .WriteLineAsync(NntpResponses.TlsProviderUnavailable, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -70,7 +67,7 @@ internal static class StartTls
 
         var idleVersionBefore382 = context.Connection.OutboundIdleVersion;
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.ContinueWithTls, "Continue with TLS negotiation", cancellationToken)
+            .WriteLineAsync(NntpResponses.ContinueWithTls, cancellationToken)
             .ConfigureAwait(false);
 
         await context.Connection

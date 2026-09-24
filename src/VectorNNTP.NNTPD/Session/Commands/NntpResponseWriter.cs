@@ -12,8 +12,10 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <remarks>
 /// <para>
 /// All writes are serialized onto one pump so response bytes remain ordered. Ordinary
-/// <see cref="WriteLineAsync"/> awaits pump flush completion (existing command semantics).
-/// <see cref="EnqueueLineAsync"/> only waits until the line is accepted by the ordered queue,
+/// <see cref="WriteLineAsync(int, string, CancellationToken)"/> awaits pump flush completion
+/// (existing command semantics).
+/// <see cref="EnqueueLineAsync(int, string, CancellationToken)"/> only waits until the line is
+/// accepted by the ordered queue,
 /// so TAKETHIS can continue reading the next pipelined article without waiting for network
 /// delivery of the prior 239/439.
 /// </para>
@@ -56,14 +58,17 @@ public sealed class NntpResponseWriter : IAsyncDisposable
 
     private readonly struct WriteRequest
     {
-        public WriteRequest(byte[] payload, TaskCompletionSource? completed)
+        public WriteRequest(ReadOnlyMemory<byte> payload, TaskCompletionSource? completed)
         {
             Payload = payload;
             Completed = completed;
         }
 
-        /// <summary>Owned payload; valid until the pump finishes writing this item.</summary>
-        public byte[] Payload { get; }
+        /// <summary>
+        /// Payload bytes valid until the pump finishes writing this item. Immortal static
+        /// responses may share the same backing array across requests; the pump only reads.
+        /// </summary>
+        public ReadOnlyMemory<byte> Payload { get; }
 
         public TaskCompletionSource? Completed { get; }
     }
@@ -116,6 +121,19 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     }
 
     /// <summary>
+    /// Writes a complete pre-encoded wire response (including CRLF) and awaits pump flush.
+    /// </summary>
+    /// <remarks>
+    /// Does not copy <paramref name="wireLine"/>. The memory must remain unchanged until this
+    /// write has been flushed into the outbound pipe. Immortal static responses satisfy that
+    /// for the process lifetime. Dynamically composed responses must be an owned buffer
+    /// (not Pipe memory, not session scratch). Channel order, coalesce-flush-first, and TCS
+    /// barrier semantics match <see cref="WriteLineAsync(int, string, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask WriteLineAsync(ReadOnlyMemory<byte> wireLine, CancellationToken cancellationToken = default) =>
+        WriteAndAwaitFlushAsync(wireLine, cancellationToken);
+
+    /// <summary>
     /// Enqueues a single-line response without waiting for outbound pipe/network flush.
     /// </summary>
     /// <remarks>
@@ -128,6 +146,18 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(text);
         return EnqueueAsync(new WriteRequest(EncodeLine(code, text), completed: null), cancellationToken);
     }
+
+    /// <summary>
+    /// Enqueues a complete pre-encoded wire response without waiting for outbound flush.
+    /// </summary>
+    /// <remarks>
+    /// Does not copy <paramref name="wireLine"/>. The memory must remain unchanged until the
+    /// coalesced batch that contains this item is flushed. Dynamically composed responses
+    /// must be an owned buffer (not Pipe memory, not session scratch). Coalesce/order
+    /// semantics match <see cref="EnqueueLineAsync(int, string, CancellationToken)"/>.
+    /// </remarks>
+    public ValueTask EnqueueLineAsync(ReadOnlyMemory<byte> wireLine, CancellationToken cancellationToken = default) =>
+        EnqueueAsync(new WriteRequest(wireLine, completed: null), cancellationToken);
 
     /// <summary>
     /// Flushes any held fire-and-forget lines without writing additional response bytes.
@@ -143,7 +173,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             return ValueTask.CompletedTask;
         }
 
-        return WriteAndAwaitFlushAsync([], cancellationToken);
+        return WriteAndAwaitFlushAsync(ReadOnlyMemory<byte>.Empty, cancellationToken);
     }
 
     /// <summary>Begins a multi-line response and writes the initial status line.</summary>
@@ -169,19 +199,20 @@ public sealed class NntpResponseWriter : IAsyncDisposable
 
     /// <summary>Terminates a multi-line response with <c>.CRLF</c> and flushes.</summary>
     public ValueTask WriteMultilineEndAsync(CancellationToken cancellationToken = default) =>
-        WriteAndAwaitFlushAsync(DotCrlf.ToArray(), cancellationToken);
+        WriteAndAwaitFlushAsync(DotCrlf, cancellationToken);
 
     /// <summary>
     /// Writes a precomputed byte payload to the session output pipe and flushes (honouring pipe backpressure).
     /// </summary>
     /// <remarks>
-    /// Intended for BENCHIT reuse of an immutable wire buffer. Still uses the production
-    /// ordered writer path; does not bypass transport pumps.
+    /// Does not copy <paramref name="payload"/>. The memory must remain unchanged until this
+    /// write has been flushed. Intended for BENCHIT reuse of an immutable wire buffer. Still
+    /// uses the production ordered writer path; does not bypass transport pumps.
     /// </remarks>
     public ValueTask WriteBytesAndFlushAsync(
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken = default) =>
-        WriteAndAwaitFlushAsync(payload.ToArray(), cancellationToken);
+        WriteAndAwaitFlushAsync(payload, cancellationToken);
 
     /// <summary>
     /// Writes one framed article through the shared bounded article TX path (default 64 KiB chunks).
@@ -428,7 +459,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         }
     }
 
-    private async ValueTask WriteAndAwaitFlushAsync(byte[] payload, CancellationToken cancellationToken)
+    private async ValueTask WriteAndAwaitFlushAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await EnqueueAsync(new WriteRequest(payload, completed), cancellationToken).ConfigureAwait(false);
@@ -609,9 +640,9 @@ public sealed class NntpResponseWriter : IAsyncDisposable
         }
     }
 
-    private async ValueTask CopyPayloadToPipeAsync(byte[] payload, CancellationToken cancellationToken)
+    private async ValueTask CopyPayloadToPipeAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
-        var remaining = payload.AsMemory();
+        var remaining = payload;
         while (!remaining.IsEmpty)
         {
             var memory = _output.GetMemory(Math.Min(remaining.Length, 64 * 1024));

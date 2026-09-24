@@ -35,9 +35,9 @@ public sealed class NntpCompressTests
 
         await duplex.WriteClientLineAsync("COMPRESS DEFLATE");
         Assert.StartsWith("206 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
-        Assert.True(duplex.Connection.IsCompressed);
 
         var after = await ReadCapabilitiesFromDuplexAsync(duplex);
+        Assert.True(duplex.Connection.IsCompressed);
         Assert.DoesNotContain(after, static c => c.StartsWith("COMPRESS", StringComparison.Ordinal));
         Assert.DoesNotContain("STARTTLS", after);
         Assert.DoesNotContain("MODE-READER", after);
@@ -72,18 +72,32 @@ public sealed class NntpCompressTests
     [InlineData("COMPRESS", "501 ")]
     [InlineData("COMPRESS DEFLATE EXTRA", "501 ")]
     [InlineData("COMPRESS deflate", "501 ")]
+    [InlineData("COMPRESS Deflate", "501 ")]
     [InlineData("COMPRESS FOO", "503 ")]
+    [InlineData("COMPRESS GZIP", "503 ")]
     public async Task Compress_SyntaxAndUnsupportedAlgorithm(string command, string expectedPrefix)
     {
         await using var duplex = await CompressTestDuplex.CreateAsync();
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse(command, out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, command);
         Assert.StartsWith(expectedPrefix, await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         Assert.False(session.Connection.IsCompressed);
+    }
+
+    [Fact]
+    public async Task Compress_Deflate_Exact206Wire_AndIsCompressed()
+    {
+        await using var duplex = await CompressTestDuplex.CreateAsync();
+        var session = duplex.CreateSession();
+        var dispatcher = new NntpCommandDispatcher();
+        var response = new NntpResponseWriter(duplex.ServerOutput);
+
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "COMPRESS DEFLATE");
+        Assert.Equal("206 Compression active", await duplex.ReadClientLineAsync());
+        Assert.True(session.Connection.IsCompressed);
     }
 
     [Fact]
@@ -295,11 +309,10 @@ public sealed class NntpCompressTests
     {
         await using var duplex = await CompressTestDuplex.CreateAsync(pauseReadsFails: true);
         var session = duplex.CreateSession();
-        var dispatcher = new NntpCommandDispatcher(DefaultNntpCommandCatalog.Create());
+        var dispatcher = new NntpCommandDispatcher();
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
-        Assert.True(NntpCommandParser.TryParse("COMPRESS DEFLATE", out var parsed));
-        await dispatcher.DispatchAsync(session, parsed, response, CancellationToken.None);
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "COMPRESS DEFLATE");
         Assert.Contains("403 Unable to activate compression", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         Assert.False(session.Connection.IsCompressed);
         Assert.False(session.Connection.IsCompleted);

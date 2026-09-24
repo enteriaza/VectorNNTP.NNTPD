@@ -20,9 +20,6 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 internal static class Compress
 {
-    private const string DeflateAlgorithm = "DEFLATE";
-    private const int MaxAlgorithmLength = 20;
-
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Compress));
 
     /// <summary>Handles <c>COMPRESS</c> (algorithm argument validated per RFC 8054).</summary>
@@ -39,44 +36,17 @@ internal static class Compress
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "Compression already active",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.CompressionAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        if (context.Arguments.Count != 1)
+        // RFC 8054 §5.3: algorithm names are case-sensitive. Parser already rejected
+        // lowercase/illegal octets (501). This is the semantic DEFLATE check — no string.
+        if (!context.ArgumentSpan.SequenceEqual("DEFLATE"u8))
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.SyntaxError,
-                    "COMPRESS requires a single algorithm argument",
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        var algorithm = context.Arguments[0];
-        if (!IsSyntacticallyValidAlgorithm(algorithm))
-        {
-            await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.SyntaxError,
-                    "Syntactically incorrect compression algorithm",
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        if (!string.Equals(algorithm, DeflateAlgorithm, StringComparison.Ordinal))
-        {
-            await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.FeatureUnavailable,
-                    "Compression algorithm not supported",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.CompressionAlgorithmNotSupported, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -98,10 +68,7 @@ internal static class Compress
                 "[{Client}] COMPRESS DEFLATE refused before activation",
                 NntpCommandLogFormat.Client(context.Session));
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandFailed,
-                    "Unable to activate compression",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.UnableToActivateCompression, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "failed";
             return;
@@ -109,7 +76,7 @@ internal static class Compress
 
         var idleVersionBefore206 = context.Connection.OutboundIdleVersion;
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.CompressionActive, "Compression active", cancellationToken)
+            .WriteLineAsync(NntpResponses.CompressionActive, cancellationToken)
             .ConfigureAwait(false);
 
         await context.Connection
@@ -136,30 +103,6 @@ internal static class Compress
 
             context.Session.RequestClose();
         }
-    }
-
-    /// <summary>
-    /// RFC 8054 §5.3: <c>algorithm = %s"DEFLATE" / 1*20alg-char</c> where
-    /// <c>alg-char = UPPER / DIGIT / "-" / "_"</c> (case-sensitive).
-    /// </summary>
-    private static bool IsSyntacticallyValidAlgorithm(string algorithm)
-    {
-        if (algorithm.Length is < 1 or > MaxAlgorithmLength)
-        {
-            return false;
-        }
-
-        foreach (var c in algorithm)
-        {
-            if (c is (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '-' or '_')
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
     }
 
     /// <summary>

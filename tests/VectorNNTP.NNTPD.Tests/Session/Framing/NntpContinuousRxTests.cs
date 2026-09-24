@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.IO.Pipelines;
 using System.Text;
+using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 using Xunit;
 
@@ -293,8 +294,8 @@ public sealed class NntpContinuousRxTests
             "TAKETHIS <1@t>\r\na\r\n.\r\nTAKETHIS <2@t>\r\nb\r\n.\r\n");
         var buffer = new ReadOnlySequence<byte>(wire);
         var parser = new NntpContinuousRxParser();
-        var first = parser.TryConsume(ref buffer, true, 1024);
-        var second = parser.TryConsume(ref buffer, true, 1024);
+        var first = Capture(parser, parser.TryConsume(ref buffer, true, 1024));
+        var second = Capture(parser, parser.TryConsume(ref buffer, true, 1024));
         Assert.Equal(NntpContinuousRxKind.TakeThis, first.Kind);
         Assert.Equal(NntpContinuousRxKind.TakeThis, second.Kind);
         Assert.Equal("<1@t>", first.MessageId);
@@ -302,7 +303,16 @@ public sealed class NntpContinuousRxTests
         Assert.True(buffer.IsEmpty);
     }
 
-    private static async Task<NntpContinuousRxUnit> ReadOneAsync(
+    private static CapturedRxUnit Capture(NntpContinuousRxParser parser, NntpContinuousRxUnit unit)
+    {
+        var line = parser.CurrentCommandLine.Span;
+        return new CapturedRxUnit(
+            unit,
+            Encoding.ASCII.GetString(line),
+            Encoding.ASCII.GetString(unit.Command.ArgumentSpan(line)));
+    }
+
+    private static async Task<CapturedRxUnit> ReadOneAsync(
         byte[] wire,
         bool consumeTakeThisArticle,
         int maxArticleBytes = 8 * 1024 * 1024)
@@ -318,15 +328,16 @@ public sealed class NntpContinuousRxTests
 
         await pipe.Writer.CompleteAsync();
         var parser = new NntpContinuousRxParser();
-        return await NntpContinuousRxReader.ReadUnitAsync(
+        var unit = await NntpContinuousRxReader.ReadUnitAsync(
             pipe.Reader,
             parser,
             consumeTakeThisArticle,
             maxArticleBytes,
             CancellationToken.None);
+        return Capture(parser, unit);
     }
 
-    private static async Task<NntpContinuousRxUnit> ReadOneSegmentedAsync(
+    private static async Task<CapturedRxUnit> ReadOneSegmentedAsync(
         byte[] wire,
         int segmentSize,
         bool consumeTakeThisArticle)
@@ -342,10 +353,10 @@ public sealed class NntpContinuousRxTests
             .AsTask();
         await FramingPipe.WriteChunkedAsync(pipe.Writer, wire, segmentSize, CancellationToken.None);
         await pipe.Writer.CompleteAsync();
-        return await read.WaitAsync(TimeSpan.FromSeconds(10));
+        return Capture(parser, await read.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
-    private static async Task<NntpContinuousRxUnit> ReadSplitAsync(
+    private static async Task<CapturedRxUnit> ReadSplitAsync(
         byte[] wire,
         int holdBack,
         bool consumeTakeThisArticle)
@@ -360,10 +371,10 @@ public sealed class NntpContinuousRxTests
         await pipe.Writer.WriteAsync(wire.AsMemory()[^holdBack..]);
         await pipe.Writer.FlushAsync();
         await pipe.Writer.CompleteAsync();
-        return await read.WaitAsync(TimeSpan.FromSeconds(5));
+        return Capture(parser, await read.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
-    private static async Task<List<NntpContinuousRxUnit>> ReadAllAsync(
+    private static async Task<List<CapturedRxUnit>> ReadAllAsync(
         byte[] wire,
         bool consumeTakeThisArticle,
         bool stopAfterQuit = false,
@@ -376,7 +387,7 @@ public sealed class NntpContinuousRxTests
         await pipe.Writer.WriteAsync(wire);
         await pipe.Writer.CompleteAsync();
         var parser = new NntpContinuousRxParser();
-        var units = new List<NntpContinuousRxUnit>();
+        var units = new List<CapturedRxUnit>();
         while (true)
         {
             var unit = await NntpContinuousRxReader.ReadUnitAsync(
@@ -390,15 +401,38 @@ public sealed class NntpContinuousRxTests
                 break;
             }
 
-            units.Add(unit);
+            var captured = Capture(parser, unit);
+            units.Add(captured);
             if (stopAfterQuit
-                && unit.Kind == NntpContinuousRxKind.Command
-                && string.Equals(unit.CommandLine, "QUIT", StringComparison.OrdinalIgnoreCase))
+                && captured.Kind == NntpContinuousRxKind.Command
+                && captured.Unit.Command.Verb == NntpVerb.Quit)
             {
                 break;
             }
         }
 
         return units;
+    }
+
+    private readonly struct CapturedRxUnit
+    {
+        public CapturedRxUnit(NntpContinuousRxUnit unit, string commandLine, string argument)
+        {
+            Unit = unit;
+            CommandLine = commandLine;
+            Argument = argument;
+        }
+
+        public NntpContinuousRxUnit Unit { get; }
+
+        public string CommandLine { get; }
+
+        public string Argument { get; }
+
+        public string MessageId => Argument;
+
+        public NntpContinuousRxKind Kind => Unit.Kind;
+
+        public NntpMultilineReadResult Article => Unit.Article;
     }
 }

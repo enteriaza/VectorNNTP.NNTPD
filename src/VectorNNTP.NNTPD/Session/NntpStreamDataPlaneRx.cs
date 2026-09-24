@@ -56,15 +56,21 @@ internal sealed class NntpStreamDataPlaneRx
             return false;
         }
 
-        var line = unit.CommandLine;
-        if (line is null)
+        if (unit.Kind == NntpContinuousRxKind.NeedMore)
         {
             return false;
         }
 
         var preRead = unit.Kind == NntpContinuousRxKind.TakeThis ? unit.Article : (NntpMultilineReadResult?)null;
         await _session
-            .DispatchRawLineAsync(_dispatcher, response, _logger, line, preRead, cancellationToken)
+            .DispatchCommandAsync(
+                _dispatcher,
+                response,
+                _logger,
+                unit.Command,
+                _parser.CurrentCommandLine,
+                preRead,
+                cancellationToken)
             .ConfigureAwait(false);
         return true;
     }

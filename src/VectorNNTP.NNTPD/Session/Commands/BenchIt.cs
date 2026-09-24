@@ -1,5 +1,4 @@
 using System.Text;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -55,21 +54,12 @@ internal static class BenchIt
     }
 
     /// <summary>Handles <c>BENCHIT</c> (internal; public access; non-pipelined via normal session loop).</summary>
-    private static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    internal static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         // Intentionally skip NntpCommandExecution TX INFO logging — benchmark must not measure Serilog.
         return context.Response.WriteBytesAndFlushAsync(WireResponse, cancellationToken);
     }
-
-    /// <summary>Creates the descriptor used by <see cref="DefaultNntpCommandCatalog"/> (NullLogger).</summary>
-    internal static NntpCommandDescriptor CreateDescriptor() =>
-        new(
-            "BENCHIT",
-            NntpCommandAccess.Public,
-            HandleAsync,
-            subcommand: null,
-            logger: NullLogger.Instance);
 
     private static byte[] BuildArticleContent()
     {

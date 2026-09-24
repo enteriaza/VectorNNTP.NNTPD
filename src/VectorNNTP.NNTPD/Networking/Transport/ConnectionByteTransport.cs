@@ -77,6 +77,12 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     /// </summary>
     internal Func<ValueTask>? AfterActiveBeforeAdmitProbe { get; set; }
 
+    /// <summary>
+    /// Test-only: awaited inside <see cref="WriteAsync"/> after write admission and before the stream write.
+    /// Used to hold <c>SendAsync</c> between <c>ReadAsync</c> and <c>AdvanceTo</c>.
+    /// </summary>
+    internal Func<ValueTask>? BeforeStreamWriteProbe { get; set; }
+
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
     {
         while (true)
@@ -147,6 +153,11 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
 
             try
             {
+                if (BeforeStreamWriteProbe is { } writeProbe)
+                {
+                    await writeProbe().ConfigureAwait(false);
+                }
+
                 await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
                 return;
             }

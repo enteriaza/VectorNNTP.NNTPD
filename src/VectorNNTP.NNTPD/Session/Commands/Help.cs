@@ -10,8 +10,12 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// (RFC 3977 §6.1.2 / §8.3 / §8.5 and §4). Mandatory; not a substitute for <c>CAPABILITIES</c>.
 /// </para>
 /// <para>
-/// The body is identical for every session state (TLS, auth, COMPRESS, mode). Trailing arguments
-/// are a syntax error (<c>501</c>). Internal commands such as <c>BENCHIT</c> are not listed.
+/// The body is identical for every session state (TLS, auth, COMPRESS, mode). The complete
+/// multiline wire (<c>100</c> + body + terminator) is one immortal buffer
+/// (<see cref="NntpResponses.HelpComplete"/>) written with a single awaited
+/// <see cref="NntpResponseWriter.WriteLineAsync(ReadOnlyMemory{byte}, CancellationToken)"/>.
+/// Trailing arguments are a syntax error (<c>501</c>). Internal commands such as
+/// <c>BENCHIT</c> are not listed.
 /// </para>
 /// <para>
 /// Compact HELP syntax uses ABNF-style notation where applicable:
@@ -122,25 +126,6 @@ internal static class Help
     public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
         NntpCommandExecution.RunAsync(Logger, context, "HELP", ExecuteAsync, cancellationToken);
 
-    private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
-    {
-        if (context.Arguments.Count > 0)
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "Syntax error", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        await context.Response
-            .WriteMultilineStartAsync(NntpReplyCodes.HelpTextFollows, "Help text follows", cancellationToken)
-            .ConfigureAwait(false);
-
-        foreach (var line in BodyLines)
-        {
-            await context.Response.WriteMultilineDataAsync(line, cancellationToken).ConfigureAwait(false);
-        }
-
-        await context.Response.WriteMultilineEndAsync(cancellationToken).ConfigureAwait(false);
-    }
+    private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
+        context.Response.WriteLineAsync(NntpResponses.HelpComplete, cancellationToken);
 }

@@ -40,10 +40,7 @@ internal static class TransitConnectionAdmission
         ArgumentNullException.ThrowIfNull(connection);
         await using var writer = new NntpResponseWriter(connection.Output);
         await writer
-            .WriteLineAsync(
-                NntpReplyCodes.ServiceTemporarilyUnavailable,
-                "Service temporarily unavailable",
-                cancellationToken)
+            .WriteLineAsync(NntpResponses.ServiceTemporarilyUnavailable, cancellationToken)
             .ConfigureAwait(false);
     }
 }

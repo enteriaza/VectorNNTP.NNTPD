@@ -1,62 +1,238 @@
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>Parsed NNTP command line (verb + tokens).</summary>
-public readonly struct NntpParsedCommand
-{
-    /// <summary>Initializes a new instance of the <see cref="NntpParsedCommand"/> struct.</summary>
-    public NntpParsedCommand(string rawLine, string verb, IReadOnlyList<string> tokens)
-    {
-        RawLine = rawLine;
-        Verb = verb;
-        Tokens = tokens;
-    }
-
-    /// <summary>Gets the raw line without CRLF.</summary>
-    public string RawLine { get; }
-
-    /// <summary>Gets the command verb in uppercase.</summary>
-    public string Verb { get; }
-
-    /// <summary>Gets all tokens after the verb (original casing preserved for arguments).</summary>
-    public IReadOnlyList<string> Tokens { get; }
-}
-
-/// <summary>Splits an NNTP command line into verb and tokens (RFC 3977 basic tokenization).</summary>
+/// <summary>
+/// Authoritative byte-oriented NNTP command parser and syntactic validation boundary.
+/// </summary>
+/// <remarks>
+/// Only <see cref="NntpParseStatus.Ok"/> may reach a command handler. Invalid commands are
+/// rejected at dispatch. Argument bytes remain indexes into the caller's buffer.
+/// Keywords are case-insensitive; SP and TAB are separators (RFC 3977 §3.1).
+/// </remarks>
 public static class NntpCommandParser
 {
-    /// <summary>
-    /// Parses a single command line. Empty lines and lines that are only whitespace are invalid.
-    /// </summary>
-    public static bool TryParse(string line, out NntpParsedCommand command)
+    /// <summary>Parses one command line (CRLF already removed). Never throws for ordinary malformed input.</summary>
+    public static NntpCommand Parse(ReadOnlySpan<byte> line)
     {
-        command = default;
-        if (string.IsNullOrWhiteSpace(line))
+        var verb = NntpVerbClassifier.Classify(line, out _, out int verbEnd);
+        if (verb == NntpVerb.None)
+        {
+            return new NntpCommand(NntpVerb.None, NntpVerb.None, 0, 0, 0, NntpParseStatus.Empty);
+        }
+
+        if (verb == NntpVerb.Unknown)
+        {
+            return Finish(NntpVerb.Unknown, NntpVerb.None, line, verbEnd, NntpParseStatus.UnknownVerb);
+        }
+
+        int index = NntpAscii.SkipWhitespace(line, verbEnd);
+        var qualifier = NntpVerb.None;
+
+        if (NeedsQualifier(verb))
+        {
+            if (index >= line.Length)
+            {
+                return new NntpCommand(verb, NntpVerb.None, 0, 0, 0, NntpParseStatus.UnknownQualifier);
+            }
+
+            int qEnd = NntpAscii.SkipToken(line, index);
+            qualifier = ClassifyQualifier(verb, line.Slice(index, qEnd - index));
+            if (qualifier is NntpVerb.Unknown or NntpVerb.None)
+            {
+                return Finish(verb, NntpVerb.Unknown, line, qEnd, NntpParseStatus.UnknownQualifier);
+            }
+
+            index = NntpAscii.SkipWhitespace(line, qEnd);
+        }
+        else if (verb == NntpVerb.List && index < line.Length)
+        {
+            int qEnd = NntpAscii.SkipToken(line, index);
+            var listQualifier = ClassifyListQualifier(line.Slice(index, qEnd - index));
+            if (listQualifier == NntpVerb.Unknown)
+            {
+                return Finish(verb, NntpVerb.Unknown, line, qEnd, NntpParseStatus.UnknownQualifier);
+            }
+
+            qualifier = listQualifier;
+            index = NntpAscii.SkipWhitespace(line, qEnd);
+        }
+
+        int argEnd = NntpAscii.TrimEndWhitespace(line, index, line.Length);
+        int tokenCount = NntpAscii.CountTokens(line, index, argEnd);
+        int argLength = argEnd - index;
+        var status = Validate(verb, qualifier, line, index, argLength, tokenCount);
+        return new NntpCommand(verb, qualifier, index, argLength, tokenCount, status);
+    }
+
+    private static NntpCommand Finish(
+        NntpVerb verb,
+        NntpVerb qualifier,
+        ReadOnlySpan<byte> line,
+        int after,
+        NntpParseStatus status)
+    {
+        int index = NntpAscii.SkipWhitespace(line, after);
+        int argEnd = NntpAscii.TrimEndWhitespace(line, index, line.Length);
+        return new NntpCommand(
+            verb,
+            qualifier,
+            index,
+            argEnd - index,
+            NntpAscii.CountTokens(line, index, argEnd),
+            status);
+    }
+
+    private static bool NeedsQualifier(NntpVerb verb) => verb is NntpVerb.Mode or NntpVerb.AuthInfo;
+
+    private static NntpParseStatus Validate(
+        NntpVerb verb,
+        NntpVerb qualifier,
+        ReadOnlySpan<byte> line,
+        int argumentStart,
+        int argumentLength,
+        int tokenCount)
+    {
+        var argument = argumentLength <= 0
+            ? ReadOnlySpan<byte>.Empty
+            : line.Slice(argumentStart, argumentLength);
+
+        switch (verb)
+        {
+            case NntpVerb.Check:
+            case NntpVerb.TakeThis:
+            case NntpVerb.Ihave:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.MissingArgument;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return NntpMessageId.IsBasicWellFormed(argument)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
+            case NntpVerb.Quit:
+            case NntpVerb.Help:
+                return tokenCount == 0 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
+
+            case NntpVerb.Compress:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.MissingArgument;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return IsCompressAlgorithmSyntax(argument)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
+            case NntpVerb.AuthInfo when qualifier is NntpVerb.User or NntpVerb.Pass:
+                return argument.IsEmpty ? NntpParseStatus.MissingArgument : NntpParseStatus.Ok;
+
+            default:
+                return NntpParseStatus.Ok;
+        }
+    }
+
+    /// <summary>RFC 8054 §5.3 algorithm syntax (case-sensitive).</summary>
+    internal static bool IsCompressAlgorithmSyntax(ReadOnlySpan<byte> algorithm)
+    {
+        if (algorithm.Length is < 1 or > 20)
         {
             return false;
         }
 
-        // Strip a single trailing CR if a bare LF reader left it.
-        if (line.EndsWith('\r'))
+        for (int i = 0; i < algorithm.Length; i++)
         {
-            line = line[..^1];
-        }
+            byte b = algorithm[i];
+            if ((b >= (byte)'A' && b <= (byte)'Z')
+                || (b >= (byte)'0' && b <= (byte)'9')
+                || b == (byte)'-'
+                || b == (byte)'_')
+            {
+                continue;
+            }
 
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 0)
-        {
             return false;
         }
 
-        var verb = parts[0].ToUpperInvariant();
-        if (verb.Length == 0)
-        {
-            return false;
-        }
-
-        IReadOnlyList<string> tokens = parts.Length == 1
-            ? Array.Empty<string>()
-            : parts.AsSpan(1).ToArray();
-        command = new NntpParsedCommand(line, verb, tokens);
         return true;
+    }
+
+    private static NntpVerb ClassifyQualifier(NntpVerb verb, ReadOnlySpan<byte> token)
+    {
+        if (verb == NntpVerb.Mode)
+        {
+            if (NntpAscii.EqualsFolded(token, "STREAM"u8))
+            {
+                return NntpVerb.Stream;
+            }
+
+            if (NntpAscii.EqualsFolded(token, "READER"u8))
+            {
+                return NntpVerb.Reader;
+            }
+
+            return NntpVerb.Unknown;
+        }
+
+        if (verb == NntpVerb.AuthInfo)
+        {
+            if (NntpAscii.EqualsFolded(token, "USER"u8))
+            {
+                return NntpVerb.User;
+            }
+
+            if (NntpAscii.EqualsFolded(token, "PASS"u8))
+            {
+                return NntpVerb.Pass;
+            }
+
+            if (NntpAscii.EqualsFolded(token, "SASL"u8))
+            {
+                return NntpVerb.Sasl;
+            }
+
+            return NntpVerb.Unknown;
+        }
+
+        return NntpVerb.None;
+    }
+
+    private static NntpVerb ClassifyListQualifier(ReadOnlySpan<byte> token)
+    {
+        if (NntpAscii.EqualsFolded(token, "ACTIVE"u8))
+        {
+            return NntpVerb.Active;
+        }
+
+        if (NntpAscii.EqualsFolded(token, "HEADERS"u8))
+        {
+            return NntpVerb.Headers;
+        }
+
+        if (NntpAscii.EqualsFolded(token, "MOTD"u8))
+        {
+            return NntpVerb.Motd;
+        }
+
+        if (NntpAscii.EqualsFolded(token, "NEWSGROUPS"u8))
+        {
+            return NntpVerb.Newsgroups;
+        }
+
+        if (NntpAscii.EqualsFolded(token, "OVERVIEW.FMT"u8))
+        {
+            return NntpVerb.OverviewFmt;
+        }
+
+        return NntpVerb.Unknown;
     }
 }

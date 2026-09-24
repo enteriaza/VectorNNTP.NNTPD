@@ -61,7 +61,7 @@ internal static class AuthInfo
         if (context.Session.Authentication.IsAuthenticated)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Already authenticated", cancellationToken)
+                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -70,10 +70,7 @@ internal static class AuthInfo
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "DEFLATE compression already active",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -81,26 +78,18 @@ internal static class AuthInfo
         if (!context.Session.IsAuthinfoPassPermitted)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.PrivacyRequired,
-                    "Encryption or stronger authentication required",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.PrivacyRequired, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        if (!AuthinfoArgument.TryGet(context.RawLine, "USER", out var username))
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "AUTHINFO USER requires a username", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
+        // Username string is the session-state ownership boundary.
+        var username = System.Text.Encoding.ASCII.GetString(context.ArgumentSpan);
 
         // Cache only — does not authenticate or grant authorization (RFC 4643).
         context.Session.SetPendingAuthUsername(username);
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.PasswordRequired, "Password required", cancellationToken)
+            .WriteLineAsync(NntpResponses.PasswordRequired, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -112,7 +101,7 @@ internal static class AuthInfo
         if (context.Session.Authentication.IsAuthenticated)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Already authenticated", cancellationToken)
+                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -121,10 +110,7 @@ internal static class AuthInfo
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "DEFLATE compression already active",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -132,10 +118,7 @@ internal static class AuthInfo
         if (!context.Session.IsAuthinfoPassPermitted)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.PrivacyRequired,
-                    "Encryption or stronger authentication required",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.PrivacyRequired, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -144,21 +127,13 @@ internal static class AuthInfo
         if (pending is null)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.AuthenticationOutOfSequence,
-                    "Authentication commands issued out of sequence",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.AuthenticationOutOfSequence, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        if (!AuthinfoArgument.TryGet(context.RawLine, "PASS", out var password))
-        {
-            await context.Response
-                .WriteLineAsync(NntpReplyCodes.SyntaxError, "AUTHINFO PASS requires a password", cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
+        // Password string is the authentication-API ownership boundary.
+        var password = System.Text.Encoding.ASCII.GetString(context.ArgumentSpan);
 
         NntpAuthenticationResult result;
         try
@@ -189,14 +164,14 @@ internal static class AuthInfo
         {
             context.Session.ApplyFailedAuthentication();
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.AuthenticationRejected, "Authentication failed", cancellationToken)
+                .WriteLineAsync(NntpResponses.AuthenticationFailed, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         context.Session.ApplySuccessfulAuthentication(result.Username, result.Authorization);
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.AuthenticationAccepted, "Authentication accepted", cancellationToken)
+            .WriteLineAsync(NntpResponses.AuthenticationAccepted, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -205,7 +180,7 @@ internal static class AuthInfo
         if (context.Session.Authentication.IsAuthenticated)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Already authenticated", cancellationToken)
+                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -214,16 +189,13 @@ internal static class AuthInfo
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "DEFLATE compression already active",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.SyntaxError, "AUTHINFO SASL not implemented", cancellationToken)
+            .WriteLineAsync(NntpResponses.AuthinfoSaslNotImplemented, cancellationToken)
             .ConfigureAwait(false);
     }
 }

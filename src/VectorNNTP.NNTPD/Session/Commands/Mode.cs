@@ -33,7 +33,7 @@ internal static class Mode
         if (context.Session.Authentication.IsAuthenticated)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.CommandUnavailable, "Command unavailable after authentication", cancellationToken)
+                .WriteLineAsync(NntpResponses.CommandUnavailableAfterAuthentication, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -42,10 +42,7 @@ internal static class Mode
         if (context.Connection.IsCompressed)
         {
             await context.Response
-                .WriteLineAsync(
-                    NntpReplyCodes.CommandUnavailable,
-                    "Command unavailable after compression",
-                    cancellationToken)
+                .WriteLineAsync(NntpResponses.CommandUnavailableAfterCompression, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -54,13 +51,13 @@ internal static class Mode
         if (context.Session.Authorization.PostingPermitted)
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.PostingAllowed, "Reader mode, posting permitted", cancellationToken)
+                .WriteLineAsync(NntpResponses.ReaderModePostingPermitted, cancellationToken)
                 .ConfigureAwait(false);
         }
         else
         {
             await context.Response
-                .WriteLineAsync(NntpReplyCodes.PostingProhibited, "Reader mode, posting prohibited", cancellationToken)
+                .WriteLineAsync(NntpResponses.ReaderModePostingProhibited, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -70,7 +67,7 @@ internal static class Mode
         // RFC 4644 §2.3.2: MUST return 203 and MUST NOT affect server state despite the name.
         // StreamingPermitted is enforced by the dispatcher (RequiresStreaming).
         await context.Response
-            .WriteLineAsync(NntpReplyCodes.StreamingPermitted, "Streaming permitted", cancellationToken)
+            .WriteLineAsync(NntpResponses.StreamingPermitted, cancellationToken)
             .ConfigureAwait(false);
     }
 }

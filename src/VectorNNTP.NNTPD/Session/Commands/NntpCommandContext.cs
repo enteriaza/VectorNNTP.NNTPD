@@ -3,27 +3,27 @@ using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
-/// <summary>Per-command execution context supplied to handlers.</summary>
+/// <summary>Per-command execution context supplied to handlers after syntactic validation.</summary>
 public sealed class NntpCommandContext
 {
     /// <summary>Initializes a new instance of the <see cref="NntpCommandContext"/> class.</summary>
     public NntpCommandContext(
         NntpSession session,
-        NntpCommandDescriptor descriptor,
-        string rawLine,
-        IReadOnlyList<string> arguments,
+        NntpCommand command,
+        ReadOnlyMemory<byte> line,
         NntpResponseWriter response,
         NntpMultilineReadResult? preReadArticle = null)
     {
         ArgumentNullException.ThrowIfNull(session);
-        ArgumentNullException.ThrowIfNull(descriptor);
-        ArgumentNullException.ThrowIfNull(rawLine);
-        ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(response);
+        if (!command.IsValid)
+        {
+            throw new ArgumentException("Handlers receive only syntactically valid commands.", nameof(command));
+        }
+
         Session = session;
-        Descriptor = descriptor;
-        RawLine = rawLine;
-        Arguments = arguments;
+        Command = command;
+        Line = line;
         Response = response;
         PreReadArticle = preReadArticle;
     }
@@ -31,16 +31,13 @@ public sealed class NntpCommandContext
     /// <summary>Gets the owning session.</summary>
     public NntpSession Session { get; }
 
-    /// <summary>Gets the matched command descriptor.</summary>
-    public NntpCommandDescriptor Descriptor { get; }
-
-    /// <summary>Gets the raw command line (without trailing CRLF).</summary>
-    public string RawLine { get; }
+    /// <summary>Gets the validated command (indexes into <see cref="Line"/>).</summary>
+    public NntpCommand Command { get; }
 
     /// <summary>
-    /// Gets arguments after the verb (and after the subcommand when the descriptor includes one).
+    /// Gets the current command-line buffer. Valid until the next command is parsed.
     /// </summary>
-    public IReadOnlyList<string> Arguments { get; }
+    public ReadOnlyMemory<byte> Line { get; }
 
     /// <summary>Gets the response writer for this command.</summary>
     public NntpResponseWriter Response { get; }
@@ -59,4 +56,7 @@ public sealed class NntpCommandContext
 
     /// <summary>Gets the underlying transport connection.</summary>
     public INntpConnection Connection => Session.Connection;
+
+    /// <summary>Gets the argument bytes from the current command buffer.</summary>
+    public ReadOnlySpan<byte> ArgumentSpan => Command.ArgumentSpan(Line.Span);
 }
