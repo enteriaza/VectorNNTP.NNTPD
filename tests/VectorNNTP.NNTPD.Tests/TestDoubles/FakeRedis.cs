@@ -1,4 +1,8 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text;
+using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Redis;
 
@@ -76,6 +80,16 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
 
     public TaskCompletionSource? ExistsReached { get; set; }
 
+    public int ScriptEvaluateCount { get; set; }
+
+    public Exception? ScriptException { get; set; }
+
+    public TaskCompletionSource? BlockScript { get; set; }
+
+    internal SessionStateEngine SessionStateEngine { get; } = new();
+
+    internal TransitPeerStateEngine TransitPeerStateEngine { get; } = new();
+
     public Task<TimeSpan> PingAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -142,12 +156,142 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         _keys[ToKey(key)] = (value.ToArray(), DateTimeOffset.UtcNow.Add(expiry));
     }
 
+    public async ValueTask<long> ScriptEvaluateAsync(
+        string script,
+        ReadOnlyMemory<byte>[] keys,
+        ReadOnlyMemory<byte>[] values,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(script);
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(values);
+        if (BlockScript is not null)
+        {
+            await BlockScript.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ScriptEvaluateCount++;
+        if (ScriptException is not null)
+        {
+            throw ScriptException;
+        }
+
+        if (keys.Length == 1)
+        {
+            return EvaluateTransit(script, Encoding.UTF8.GetString(keys[0].Span), values);
+        }
+
+        if (keys.Length < 2)
+        {
+            throw new InvalidOperationException("Admission EVAL requires KEYS[1] source and KEYS[2] session.");
+        }
+
+        var sourceKey = Encoding.UTF8.GetString(keys[0].Span);
+        var sessionKey = Encoding.UTF8.GetString(keys[1].Span);
+        if (script == SessionStateScripts.TryAdmit)
+        {
+            return SessionStateEngine.TryAdmit(
+                sourceKey,
+                sessionKey,
+                Utf8(values[0]),
+                Utf8(values[1]),
+                ParseInt(values[2]),
+                ParseInt(values[3]),
+                ParseLong(values[4]),
+                ParseLong(values[5]),
+                ParseLong(values[6]),
+                ParseLong(values[7]));
+        }
+
+        if (script == SessionStateScripts.Release)
+        {
+            return SessionStateEngine.Release(
+                sourceKey,
+                sessionKey,
+                Utf8(values[0]),
+                Utf8(values[1]),
+                ParseLong(values[2]),
+                ParseLong(values[3]));
+        }
+
+        if (script == SessionStateScripts.Renew)
+        {
+            var ipCount = ParseInt(values[4]);
+            var sources = new (string Ip, long Generation)[ipCount];
+            for (var i = 0; i < ipCount; i++)
+            {
+                sources[i] = (Utf8(values[5 + (i * 2)]), ParseLong(values[6 + (i * 2)]));
+            }
+
+            return SessionStateEngine.Renew(
+                sourceKey,
+                sessionKey,
+                Utf8(values[0]),
+                ParseLong(values[1]),
+                ParseLong(values[2]),
+                ParseLong(values[3]),
+                sources);
+        }
+
+        if (script == SessionStateScripts.ReleaseOwner)
+        {
+            return SessionStateEngine.ReleaseOwner(sourceKey, sessionKey, Utf8(values[0]));
+        }
+
+        throw new NotSupportedException("FakeRedis only evaluates cluster admission scripts.");
+    }
+
+    private long EvaluateTransit(string script, string connectionKey, ReadOnlyMemory<byte>[] values)
+    {
+        if (script == TransitPeerStateScripts.TryAdmit)
+        {
+            return TransitPeerStateEngine.TryAdmit(
+                connectionKey,
+                Utf8(values[0]),
+                ParseInt(values[1]),
+                ParseLong(values[2]),
+                ParseLong(values[3]),
+                ParseLong(values[4]));
+        }
+
+        if (script == TransitPeerStateScripts.Release)
+        {
+            return TransitPeerStateEngine.Release(connectionKey, Utf8(values[0]), ParseLong(values[1]));
+        }
+
+        if (script == TransitPeerStateScripts.Renew)
+        {
+            return TransitPeerStateEngine.Renew(
+                connectionKey,
+                Utf8(values[0]),
+                ParseLong(values[1]),
+                ParseLong(values[2]),
+                ParseLong(values[3]));
+        }
+
+        if (script == TransitPeerStateScripts.ReleaseOwner)
+        {
+            return TransitPeerStateEngine.ReleaseOwner(connectionKey, Utf8(values[0]));
+        }
+
+        throw new NotSupportedException("FakeRedis only evaluates cluster admission scripts.");
+    }
+
     public void Seed(ReadOnlyMemory<byte> key, TimeSpan? expiry = null) =>
         _keys[ToKey(key)] = ([1], DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromHours(2)));
 
     public bool Contains(ReadOnlyMemory<byte> key) => _keys.ContainsKey(ToKey(key));
 
     private static string ToKey(ReadOnlyMemory<byte> key) => Convert.ToHexString(key.Span);
+
+    private static string Utf8(ReadOnlyMemory<byte> value) => Encoding.UTF8.GetString(value.Span);
+
+    private static int ParseInt(ReadOnlyMemory<byte> value) =>
+        int.Parse(Utf8(value), CultureInfo.InvariantCulture);
+
+    private static long ParseLong(ReadOnlyMemory<byte> value) =>
+        long.Parse(Utf8(value), CultureInfo.InvariantCulture);
 }
 
 /// <summary>Direct <see cref="IRedisService"/> double for HistoryDB tests.</summary>

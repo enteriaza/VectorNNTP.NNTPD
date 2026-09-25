@@ -352,13 +352,15 @@ internal static class AuthInfo
             return;
         }
 
-        var admitted = session.AdmitAuthenticatedSession(result.Policy);
+        var admitted = await session.AdmitAuthenticatedSessionAsync(result.Policy, cancellationToken)
+            .ConfigureAwait(false);
         if (!admitted.Succeeded)
         {
             session.ApplyFailedAuthentication();
             var (wire, status) = MapFailure(admitted.Failure);
             if (admitted.Failure is NntpAuthenticationFailureKind.TooManySessions
-                or NntpAuthenticationFailureKind.TooManySourceAddresses)
+                or NntpAuthenticationFailureKind.TooManySourceAddresses
+                or NntpAuthenticationFailureKind.TransientFailure)
             {
                 AuthenticationLogMessages.AdmissionRejected(
                     Logger,

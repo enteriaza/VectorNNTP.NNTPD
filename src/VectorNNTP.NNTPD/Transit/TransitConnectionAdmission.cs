@@ -10,24 +10,23 @@ namespace VectorNNTP.NNTPD.Transit;
 internal static class TransitConnectionAdmission
 {
     /// <summary>
-    /// Consumes a slot when the session is associated with a Transit peer.
-    /// Non-transit clients are admitted without a slot.
+    /// Consumes a cluster slot when the session is associated with a Transit peer.
+    /// Non-transit clients are admitted without a slot and never create peer state.
     /// </summary>
-    public static bool TryAdmit(
+    public static async ValueTask<TransitInboundAdmitResult> TryAdmitAsync(
         ITransitInboundConnectionLimiter limiter,
         NntpSession session,
-        out TransitInboundConnectionLease lease)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(limiter);
         ArgumentNullException.ThrowIfNull(session);
-        lease = TransitInboundConnectionLease.None;
         var peerName = session.Authorization.TransitPeerName;
         if (peerName is null)
         {
-            return true;
+            return TransitInboundAdmitResult.Uncounted;
         }
 
-        return limiter.TryAcquire(peerName, out lease);
+        return await limiter.TryAcquireAsync(peerName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

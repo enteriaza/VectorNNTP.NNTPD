@@ -71,36 +71,40 @@ public sealed class TransitPeerIdentificationAndLimitTests
     }
 
     [Fact]
-    public void Limit_BelowAtAndOver_IdentifyPeerFromSourceIp()
+    public async Task Limit_BelowAtAndOver_IdentifyPeerFromSourceIp()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 2);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
 
         var first = CreateSession(peers, source);
         Assert.Equal(TransitTestPeers.DefaultPeerName, first.Authorization.TransitPeerName);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, first, out var lease1));
+        var lease1 = await TransitConnectionAdmission.TryAdmitAsync(limiter, first);
+        Assert.True(lease1.Admitted);
 
         var second = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, second, out var lease2));
+        var lease2 = await TransitConnectionAdmission.TryAdmitAsync(limiter, second);
+        Assert.True(lease2.Admitted);
         Assert.Equal(2, limiter.GetCount(TransitTestPeers.DefaultPeerName));
 
         var over = CreateSession(peers, source);
-        Assert.False(TransitConnectionAdmission.TryAdmit(limiter, over, out var lease3));
-        Assert.False(lease3.IsHeld);
+        var lease3 = await TransitConnectionAdmission.TryAdmitAsync(limiter, over);
+        Assert.False(lease3.Admitted);
+        Assert.False(lease3.Lease.IsHeld);
 
-        lease1.Dispose();
+        await lease1.Lease.DisposeAsync();
         Assert.Equal(1, limiter.GetCount(TransitTestPeers.DefaultPeerName));
         var reused = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, reused, out var lease4));
-        lease2.Dispose();
-        lease4.Dispose();
+        var lease4 = await TransitConnectionAdmission.TryAdmitAsync(limiter, reused);
+        Assert.True(lease4.Admitted);
+        await lease2.Lease.DisposeAsync();
+        await lease4.Lease.DisposeAsync();
         Assert.Equal(0, limiter.GetCount(TransitTestPeers.DefaultPeerName));
     }
 
     [Fact]
-    public void Limit_AmbiguousMatch_DoesNotConsumeSlot()
+    public async Task Limit_AmbiguousMatch_DoesNotConsumeSlot()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = new TransitConfigurationStore();
@@ -115,62 +119,70 @@ public sealed class TransitPeerIdentificationAndLimitTests
                         "two",
                         TransitTestPeers.Peer(maxIncoming: 1, allowFrom: ["192.0.2.0/24"])),
                 }));
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, membership) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var session = CreateSession(peers, source);
         Assert.Null(session.Authorization.TransitPeerName);
         Assert.False(session.Authorization.AuthorizedTransit);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, session, out var lease));
-        Assert.False(lease.IsHeld);
+        var admitted = await TransitConnectionAdmission.TryAdmitAsync(limiter, session);
+        Assert.True(admitted.Admitted);
+        Assert.False(admitted.Lease.IsHeld);
         Assert.Equal(0, limiter.GetCount("one"));
         Assert.Equal(0, limiter.GetCount("two"));
+        Assert.Equal(0, membership.ActiveCount("one", TransitPeerStateTestFactory.NowMs()));
+        Assert.Equal(0, membership.ActiveCount("two", TransitPeerStateTestFactory.NowMs()));
     }
 
     [Fact]
-    public void Limit_NonMatchingSource_AdmittedWithoutSlot()
+    public async Task Limit_NonMatchingSource_AdmittedWithoutSlot()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 1);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, membership) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var other = CreateSession(peers, IPAddress.Parse("198.51.100.1"));
         Assert.Null(other.Authorization.TransitPeerName);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, other, out var lease));
-        Assert.False(lease.IsHeld);
+        var admitted = await TransitConnectionAdmission.TryAdmitAsync(limiter, other);
+        Assert.True(admitted.Admitted);
+        Assert.False(admitted.Lease.IsHeld);
         Assert.Equal(0, limiter.GetCount(TransitTestPeers.DefaultPeerName));
+        Assert.Equal(0, membership.ActiveCount(TransitTestPeers.DefaultPeerName, TransitPeerStateTestFactory.NowMs()));
     }
 
     [Fact]
-    public void Limit_RemovedPeer_NewConnectionIsNotIdentified()
+    public async Task Limit_RemovedPeer_NewConnectionIsNotIdentified()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 1);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var existing = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, existing, out var lease));
+        var lease = await TransitConnectionAdmission.TryAdmitAsync(limiter, existing);
+        Assert.True(lease.Admitted);
         Assert.Equal(1, limiter.GetCount(TransitTestPeers.DefaultPeerName));
 
         store.Replace(TransitConfigurationSnapshot.Empty);
         Assert.Equal(TransitTestPeers.DefaultPeerName, existing.Authorization.TransitPeerName);
         var fresh = CreateSession(peers, source);
         Assert.Null(fresh.Authorization.TransitPeerName);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, fresh, out var uncounted));
-        Assert.False(uncounted.IsHeld);
+        var uncounted = await TransitConnectionAdmission.TryAdmitAsync(limiter, fresh);
+        Assert.True(uncounted.Admitted);
+        Assert.False(uncounted.Lease.IsHeld);
         Assert.Equal(1, limiter.GetCount(TransitTestPeers.DefaultPeerName));
-        lease.Dispose();
+        await lease.Lease.DisposeAsync();
         Assert.Equal(0, limiter.GetCount(TransitTestPeers.DefaultPeerName));
     }
 
     [Fact]
-    public void Limit_LoweredOnReload_AffectsNewConnectionsOnly()
+    public async Task Limit_LoweredOnReload_AffectsNewConnectionsOnly()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 2);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var existing = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, existing, out var lease));
+        var lease = await TransitConnectionAdmission.TryAdmitAsync(limiter, existing);
+        Assert.True(lease.Admitted);
 
         store.Replace(
             TransitTestPeers.Snapshot(
@@ -180,12 +192,13 @@ public sealed class TransitPeerIdentificationAndLimitTests
         Assert.Equal(2, existing.Authorization.TransitPeerPolicy!.MaxIncomingConnections);
         var blocked = CreateSession(peers, source);
         Assert.Equal(1, blocked.Authorization.TransitPeerPolicy!.MaxIncomingConnections);
-        Assert.False(TransitConnectionAdmission.TryAdmit(limiter, blocked, out _));
+        Assert.False((await TransitConnectionAdmission.TryAdmitAsync(limiter, blocked)).Admitted);
         Assert.Equal(1, limiter.GetCount(TransitTestPeers.DefaultPeerName));
-        lease.Dispose();
+        await lease.Lease.DisposeAsync();
         var next = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, next, out var reused));
-        reused.Dispose();
+        var reused = await TransitConnectionAdmission.TryAdmitAsync(limiter, next);
+        Assert.True(reused.Admitted);
+        await reused.Lease.DisposeAsync();
     }
 
     [Fact]
@@ -193,7 +206,7 @@ public sealed class TransitPeerIdentificationAndLimitTests
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 8);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var leases = new TransitInboundConnectionLease[32];
         var admitted = 0;
@@ -202,17 +215,21 @@ public sealed class TransitPeerIdentificationAndLimitTests
             await Task.Yield();
             var session = CreateSession(peers, source);
             Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
-            if (TransitConnectionAdmission.TryAdmit(limiter, session, out var lease))
+            var outcome = await TransitConnectionAdmission.TryAdmitAsync(limiter, session);
+            if (outcome.Admitted)
             {
                 Interlocked.Increment(ref admitted);
-                leases[i] = lease;
+                leases[i] = outcome.Lease;
             }
         }));
         Assert.Equal(8, admitted);
         Assert.Equal(8, limiter.GetCount(TransitTestPeers.DefaultPeerName));
         foreach (var lease in leases)
         {
-            lease.Dispose();
+            if (lease is not null)
+            {
+                await lease.DisposeAsync();
+            }
         }
 
         Assert.Equal(0, limiter.GetCount(TransitTestPeers.DefaultPeerName));
@@ -223,7 +240,7 @@ public sealed class TransitPeerIdentificationAndLimitTests
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 0);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var input = new System.IO.Pipelines.Pipe();
         var output = new System.IO.Pipelines.Pipe();
@@ -233,7 +250,7 @@ public sealed class TransitPeerIdentificationAndLimitTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<NntpSession>.Instance,
             transitPeerAuthorization: peers);
         Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
-        Assert.False(TransitConnectionAdmission.TryAdmit(limiter, session, out _));
+        Assert.False((await TransitConnectionAdmission.TryAdmitAsync(limiter, session)).Admitted);
         await TransitConnectionAdmission.WriteUnavailableAsync(connection, CancellationToken.None);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var line = await VectorNNTP.NNTPD.Session.CommandProcessor.NntpCommandLineReader.ReadLineAsync(output.Reader, cts.Token);
@@ -241,23 +258,25 @@ public sealed class TransitPeerIdentificationAndLimitTests
     }
 
     [Fact]
-    public void Limit_CancellationStyleRelease_ViaDispose()
+    public async Task Limit_CancellationStyleRelease_ViaDispose()
     {
         var source = IPAddress.Parse("192.0.2.10");
         var store = CreatePeerStore(source, maxIncoming: 1);
-        var limiter = new TransitInboundConnectionLimiter(store);
+        var (limiter, _, _) = TransitPeerStateTestFactory.CreateLimiter(store);
         var peers = TransitPeerAuthorization.CreateForStore(store);
         var first = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, first, out var lease));
-        using (lease)
+        var lease = await TransitConnectionAdmission.TryAdmitAsync(limiter, first);
+        Assert.True(lease.Admitted);
+        await using (lease.Lease)
         {
             var blocked = CreateSession(peers, source);
-            Assert.False(TransitConnectionAdmission.TryAdmit(limiter, blocked, out _));
+            Assert.False((await TransitConnectionAdmission.TryAdmitAsync(limiter, blocked)).Admitted);
         }
 
         var after = CreateSession(peers, source);
-        Assert.True(TransitConnectionAdmission.TryAdmit(limiter, after, out var reused));
-        reused.Dispose();
+        var reused = await TransitConnectionAdmission.TryAdmitAsync(limiter, after);
+        Assert.True(reused.Admitted);
+        await reused.Lease.DisposeAsync();
     }
 
     private static TransitConfigurationStore CreatePeerStore(IPAddress source, int maxIncoming)

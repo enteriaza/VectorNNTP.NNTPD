@@ -7,8 +7,9 @@ namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 /// Classifies transport failures that indicate the peer has already gone away.
 /// </summary>
 /// <remarks>
-/// Used only by the QUIT termination path. Callers must restrict use to that path so
-/// unrelated command I/O failures are not reinterpreted as normal disconnects.
+/// Used by QUIT and by the session command-loop catch. Classification stays
+/// reset/EOF-shaped so unrelated I/O failures are not treated as normal disconnects.
+/// Authenticated-session release is guaranteed by session finalization, not by this classifier.
 /// </remarks>
 internal static class NntpPeerDisconnect
 {

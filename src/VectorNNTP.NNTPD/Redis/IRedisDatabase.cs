@@ -15,4 +15,13 @@ public interface IRedisDatabase
         ReadOnlyMemory<byte> value,
         TimeSpan expiry,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates a Lua script atomically and returns the integer result.
+    /// </summary>
+    ValueTask<long> ScriptEvaluateAsync(
+        string script,
+        ReadOnlyMemory<byte>[] keys,
+        ReadOnlyMemory<byte>[] values,
+        CancellationToken cancellationToken = default);
 }

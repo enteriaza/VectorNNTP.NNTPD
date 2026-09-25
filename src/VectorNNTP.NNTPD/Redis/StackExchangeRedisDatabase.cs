@@ -51,6 +51,39 @@ internal sealed class StackExchangeRedisDatabase : IRedisDatabase
         }
     }
 
+    /// <inheritdoc />
+    public ValueTask<long> ScriptEvaluateAsync(
+        string script,
+        ReadOnlyMemory<byte>[] keys,
+        ReadOnlyMemory<byte>[] values,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(script);
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(values);
+        try
+        {
+            var redisKeys = new RedisKey[keys.Length];
+            for (var i = 0; i < keys.Length; i++)
+            {
+                redisKeys[i] = ToRedisKey(keys[i]);
+            }
+
+            var redisValues = new RedisValue[values.Length];
+            for (var i = 0; i < values.Length; i++)
+            {
+                redisValues[i] = ToRedisValue(values[i]);
+            }
+
+            var pending = _database.ScriptEvaluateAsync(script, redisKeys, redisValues);
+            return AwaitEval(pending, cancellationToken);
+        }
+        catch (Exception ex) when (IsInfrastructureFailure(ex))
+        {
+            return ValueTask.FromException<long>(new RedisUnavailableException("Redis EVAL failed.", ex));
+        }
+    }
+
     private static RedisKey ToRedisKey(ReadOnlyMemory<byte> key)
     {
         // RedisKey is byte[]-backed and has no ReadOnlyMemory implicit.
@@ -88,6 +121,46 @@ internal sealed class StackExchangeRedisDatabase : IRedisDatabase
         catch (Exception ex) when (IsInfrastructureFailure(ex))
         {
             throw new RedisUnavailableException("Redis EXISTS failed.", ex);
+        }
+    }
+
+    private static ValueTask<long> AwaitEval(Task<RedisResult> pending, CancellationToken cancellationToken)
+    {
+        if (pending.IsCompletedSuccessfully)
+        {
+            return new ValueTask<long>(ToInt64(pending.Result));
+        }
+
+        return AwaitEvalSlow(pending, cancellationToken);
+    }
+
+    private static async ValueTask<long> AwaitEvalSlow(Task<RedisResult> pending, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await Await(pending, cancellationToken).ConfigureAwait(false);
+            return ToInt64(result);
+        }
+        catch (Exception ex) when (IsInfrastructureFailure(ex))
+        {
+            throw new RedisUnavailableException("Redis EVAL failed.", ex);
+        }
+    }
+
+    private static long ToInt64(RedisResult result)
+    {
+        if (result.IsNull)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return (long)result;
+        }
+        catch (InvalidCastException)
+        {
+            return 0;
         }
     }
 

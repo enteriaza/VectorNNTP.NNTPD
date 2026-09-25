@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Authentication.Sasl;
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -132,7 +133,7 @@ public sealed class NntpReaderAuthenticationTests
     public async Task SessionLimit_RejectsSecondSession_ThenReleasesOnClose()
     {
         var record = MemoryNntpUserRecordStore.Create("alice", "secret", sessionLimit: 1);
-        var admission = new InMemoryNntpSessionAdmissionTracker();
+        var admission = new InMemorySessionStateTracker();
         await using var first = await AuthHarness.CreateAsync(record, admission: admission);
         await using var second = await AuthHarness.CreateAsync(record, admission: admission);
 
@@ -171,7 +172,7 @@ public sealed class NntpReaderAuthenticationTests
     public async Task SourceIpLimit_RejectsDistinctAddress()
     {
         var record = MemoryNntpUserRecordStore.Create("alice", "secret", srcIpLimit: 1);
-        var admission = new InMemoryNntpSessionAdmissionTracker();
+        var admission = new InMemorySessionStateTracker();
         await using var first = await AuthHarness.CreateAsync(
             record,
             admission: admission,
@@ -193,6 +194,330 @@ public sealed class NntpReaderAuthenticationTests
         await second.ReadClientLineAsync();
         await second.WriteClientLineAsync("AUTHINFO PASS secret");
         Assert.Equal("481 Too many source addresses", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run1;
+        await run2;
+    }
+
+    [Fact]
+    public async Task SourceIpLimit_SameAddressAdditionalSessions_AreAccepted()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", srcIpLimit: 1);
+        var admission = new InMemorySessionStateTracker();
+        var ip = IPAddress.Parse("203.0.113.10");
+        await using var first = await AuthHarness.CreateAsync(record, admission: admission, clientIp: ip);
+        await using var second = await AuthHarness.CreateAsync(record, admission: admission, clientIp: ip);
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("alice", "secret");
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("281 Authentication accepted", await second.ReadClientLineAsync());
+        Assert.True(session2.Authentication.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run1;
+        await run2;
+    }
+
+    [Fact]
+    public async Task DistributedAdmissionUnavailable_Returns503()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", srcIpLimit: 1);
+        var membership = new InMemorySessionStateStore { Unavailable = true };
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        await using var harness = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+        var session = harness.CreateSession();
+        var run = session.RunAsync();
+        await harness.ReadGreetingAsync();
+        await harness.WriteClientLineAsync("AUTHINFO USER alice");
+        await harness.ReadClientLineAsync();
+        await harness.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("503 Temporary authentication failure", await harness.ReadClientLineAsync());
+        Assert.False(session.Authentication.IsAuthenticated);
+        Assert.Null(session.AccountPolicy);
+
+        await harness.WriteClientLineAsync("QUIT");
+        await harness.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task DistributedSourceIpLimit_SameAddressAdditionalSessions_AreAccepted()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", srcIpLimit: 1);
+        var membership = new InMemorySessionStateStore();
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        var ip = IPAddress.Parse("192.0.2.10");
+        await using var first = await AuthHarness.CreateAsync(record, admission: admission, clientIp: ip);
+        await using var second = await AuthHarness.CreateAsync(record, admission: admission, clientIp: ip);
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("alice", "secret");
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("281 Authentication accepted", await second.ReadClientLineAsync());
+        Assert.True(session2.Authentication.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run1;
+        await run2;
+    }
+
+    [Fact]
+    public async Task DistributedSourceIpLimit_RejectsIpv6WhenIpv4IsActive()
+    {
+        var record = MemoryNntpUserRecordStore.Create("a", "secret", srcIpLimit: 1);
+        var membership = new InMemorySessionStateStore();
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        await using var first = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+        await using var second = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("2001:db8::10"));
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("a", "secret");
+        Assert.True(session1.Authentication.IsAuthenticated);
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER a");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("481 Too many source addresses", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
+        Assert.Null(session2.AccountPolicy);
+        Assert.False(session2.Authorization.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run1;
+        await run2;
+    }
+
+    [Fact]
+    public async Task DistributedSourceIpLimit_RejectsIpv4WhenIpv6IsActive()
+    {
+        var record = MemoryNntpUserRecordStore.Create("a", "secret", srcIpLimit: 1);
+        var membership = new InMemorySessionStateStore();
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        await using var first = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("2001:db8::10"));
+        await using var second = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("a", "secret");
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER a");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("481 Too many source addresses", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run1;
+        await run2;
+    }
+
+    [Fact]
+    public async Task IdleAuthenticatedSession_KeepsClusterSlotWithoutFurtherCommands()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", sessionLimit: 1);
+        var clock = new ControllableTimeProvider();
+        var membership = new InMemorySessionStateStore();
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01",
+            clock);
+        await using var first = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+        await using var second = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("198.51.100.20"));
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("alice", "secret");
+        Assert.True(session1.Authentication.IsAuthenticated);
+
+        for (var i = 0; i < 4; i++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(10));
+            await admission.RenewLeasesAsync();
+        }
+
+        Assert.Equal(1, membership.ActiveSessionCount("alice", clock.GetUtcNow().ToUnixTimeMilliseconds()));
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("481 Too many sessions", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await run1;
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run2;
+    }
+
+    [Fact]
+    public async Task DistributedSessionLimit_IsClusterWide()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", sessionLimit: 1);
+        var membership = new InMemorySessionStateStore();
+        var nodeA = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        var nodeB = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd02");
+        await using var first = await AuthHarness.CreateAsync(
+            record,
+            admission: nodeA,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+        await using var second = await AuthHarness.CreateAsync(
+            record,
+            admission: nodeB,
+            clientIp: IPAddress.Parse("2001:db8::10"));
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("alice", "secret");
+        Assert.True(session1.Authentication.IsAuthenticated);
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("481 Too many sessions", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
+        Assert.Null(session2.AccountPolicy);
+
+        await first.WriteClientLineAsync("QUIT");
+        await first.ReadClientLineAsync();
+        await run1;
+
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("281 Authentication accepted", await second.ReadClientLineAsync());
+        Assert.True(session2.Authentication.IsAuthenticated);
+
+        await second.WriteClientLineAsync("QUIT");
+        await second.ReadClientLineAsync();
+        await run2;
+    }
+
+    [Fact]
+    public async Task DistributedReauthentication_DoesNotLeakSourceSlot()
+    {
+        var record = MemoryNntpUserRecordStore.Create("alice", "secret", srcIpLimit: 1);
+        var membership = new InMemorySessionStateStore();
+        var admission = new DistributedSessionStateTracker(
+            membership,
+            NullLogger<DistributedSessionStateTracker>.Instance,
+            "nntpd01");
+        await using var first = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("192.0.2.10"));
+        await using var second = await AuthHarness.CreateAsync(
+            record,
+            admission: admission,
+            clientIp: IPAddress.Parse("2001:db8::10"));
+
+        var session1 = first.CreateSession();
+        var run1 = session1.RunAsync();
+        await first.ReadGreetingAsync();
+        await first.AuthenticateAsync("alice", "secret");
+        await first.WriteClientLineAsync("AUTHINFO USER alice");
+        Assert.StartsWith("502 ", await first.ReadClientLineAsync(), StringComparison.Ordinal);
+
+        var session2 = second.CreateSession();
+        var run2 = session2.RunAsync();
+        await second.ReadGreetingAsync();
+        await second.WriteClientLineAsync("AUTHINFO USER alice");
+        await second.ReadClientLineAsync();
+        await second.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("481 Too many source addresses", await second.ReadClientLineAsync());
+        Assert.False(session2.Authentication.IsAuthenticated);
 
         await first.WriteClientLineAsync("QUIT");
         await first.ReadClientLineAsync();
@@ -764,14 +1089,14 @@ internal sealed class AuthHarness : IAsyncDisposable
     private readonly Pipe _serverToClient = new(NntpPipeOptions.Create());
     private readonly INntpAuthenticationProvider _provider;
     private readonly NntpSaslService _sasl;
-    private readonly INntpSessionAdmissionTracker _admission;
+    private readonly ISessionStateTracker _admission;
     private readonly IPAddress _clientIp;
     private readonly bool _isTls;
 
     private AuthHarness(
         INntpAuthenticationProvider provider,
         NntpSaslService sasl,
-        INntpSessionAdmissionTracker admission,
+        ISessionStateTracker admission,
         IPAddress clientIp,
         bool isTls)
     {
@@ -788,13 +1113,13 @@ internal sealed class AuthHarness : IAsyncDisposable
 
     public static Task<AuthHarness> CreateAsync(
         NntpUserRecord record,
-        INntpSessionAdmissionTracker? admission = null,
+        ISessionStateTracker? admission = null,
         IPAddress? clientIp = null) =>
         CreateAsync(Users(record), admission: admission, clientIp: clientIp);
 
     public static Task<AuthHarness> CreateAsync(
         MemoryNntpUserRecordStore store,
-        INntpSessionAdmissionTracker? admission = null,
+        ISessionStateTracker? admission = null,
         IPAddress? clientIp = null,
         NntpdOptions? newsmaster = null,
         bool isTls = false,
@@ -815,14 +1140,16 @@ internal sealed class AuthHarness : IAsyncDisposable
         return Task.FromResult(new AuthHarness(
             provider,
             sasl,
-            admission ?? new InMemoryNntpSessionAdmissionTracker(),
+            admission ?? new InMemorySessionStateTracker(),
             clientIp ?? IPAddress.Loopback,
             isTls));
     }
 
     public NntpSession CreateSession(
         bool allowCleartextAuth = true,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        TimeSpan? commandIdleTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         var connection = new PipeNntpConnection(
             _clientToServer.Reader,
@@ -836,7 +1163,9 @@ internal sealed class AuthHarness : IAsyncDisposable
             allowCleartextAuth: allowCleartextAuth,
             loggerFactory: loggerFactory,
             sessionAdmission: _admission,
-            saslService: _sasl);
+            saslService: _sasl,
+            commandIdleTimeout: commandIdleTimeout,
+            timeProvider: timeProvider);
     }
 
     public async Task AuthenticateAsync(string username, string password)
@@ -852,6 +1181,9 @@ internal sealed class AuthHarness : IAsyncDisposable
         var line = await ReadClientLineAsync();
         Assert.StartsWith("20", line, StringComparison.Ordinal);
     }
+
+    public Task CompleteClientInputAsync(Exception? error = null) =>
+        _clientToServer.Writer.CompleteAsync(error).AsTask();
 
     public async Task WriteClientLineAsync(string line)
     {

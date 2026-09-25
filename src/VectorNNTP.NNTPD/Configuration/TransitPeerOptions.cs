@@ -26,8 +26,10 @@ public sealed class TransitPeerOptions
     /// Gets or sets the maximum simultaneous inbound connections associated with this peer.
     /// </summary>
     /// <remarks>
-    /// Required. Valid range is <c>0–4096</c>. <c>0</c> admits no new inbound connections
-    /// for this peer. Existing connections are not dropped when the limit is lowered.
+    /// Required. Valid range is <c>0–4096</c>. This is the cluster-wide inbound
+    /// cap for the peer <c>Identifier</c>. <c>0</c> means closed: admit no new
+    /// inbound connections. It is not unlimited. Existing connections are not
+    /// dropped when the limit is lowered.
     /// </remarks>
     public int? MaxIncomingConnections { get; set; }
 

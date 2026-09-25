@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -31,6 +32,8 @@ namespace VectorNNTP.NNTPD.Session;
 /// An established session that executes no NNTP command for <c>Nntpd:IdleTime</c> is disconnected
 /// via the existing close path (reason <c>IdleTimeout</c>). In-flight commands including
 /// pipelined CHECK and TAKETHIS keep the session non-idle.
+/// Any command-loop exit (QUIT, EOF, reset, timeout, cancel, exception, shutdown)
+/// takes the same one-shot finalization path and releases distributed admission at most once.
 /// </remarks>
 public sealed class NntpSession
 {
@@ -47,6 +50,7 @@ public sealed class NntpSession
     private NntpSessionMode _mode;
     private NntpAuthenticationAuthority _authenticationAuthority;
     private int _closeRequested;
+    private int _lifetime;
     private int _activityState;
     private int _commandWork;
     private long _lastCommandTimestamp;
@@ -89,7 +93,7 @@ public sealed class NntpSession
         IModeratorCatalogue? moderatorCatalogue = null,
         IModeratorAuthorization? moderatorAuthorization = null,
         IModerationSubmissionService? moderationSubmission = null,
-        INntpSessionAdmissionTracker? sessionAdmission = null,
+        ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
         ITransitPeerAuthenticator? transitAuthenticator = null)
     {
@@ -282,8 +286,8 @@ public sealed class NntpSession
     /// </summary>
     public NntpAuthenticationAuthority AuthenticationAuthority => _authenticationAuthority;
 
-    /// <summary>Gets the process-local authenticated-session admission tracker, if registered.</summary>
-    public INntpSessionAdmissionTracker? SessionAdmission { get; }
+    /// <summary>Gets the authenticated-session admission tracker, if registered.</summary>
+    public ISessionStateTracker? SessionAdmission { get; }
 
     /// <summary>Gets the AUTHINFO SASL service, if registered.</summary>
     public NntpSaslService? SaslService { get; }
@@ -431,9 +435,18 @@ public sealed class NntpSession
     }
 
     /// <summary>Admits this session for <paramref name="policy"/> after credential success.</summary>
-    internal NntpAuthenticationResult AdmitAuthenticatedSession(NntpAccountPolicy? policy)
+    internal async ValueTask<NntpAuthenticationResult> AdmitAuthenticatedSessionAsync(
+        NntpAccountPolicy? policy,
+        CancellationToken cancellationToken = default)
     {
-        ReleaseAdmission();
+        if (policy is null
+            || !policy.RequiresAdmission
+            || SessionAdmission is null
+            || !string.Equals(_admittedAccountName, policy.Username, StringComparison.Ordinal))
+        {
+            await ReleaseAdmissionAsync().ConfigureAwait(false);
+        }
+
         if (policy is null || !policy.RequiresAdmission || SessionAdmission is null)
         {
             return NntpAuthenticationResult.Success(
@@ -442,35 +455,122 @@ public sealed class NntpSession
                 policy);
         }
 
-        var outcome = SessionAdmission.TryAdmit(
+        var outcome = await SessionAdmission.TryAdmitAsync(
             policy.Username,
             SessionId,
             ClientAddress,
             policy.SessionLimit,
-            policy.SrcIpLimit);
-        if (outcome == NntpSessionAdmissionResult.MaxSessionsExceeded)
+            policy.SrcIpLimit,
+            cancellationToken).ConfigureAwait(false);
+        switch (outcome)
         {
-            return NntpAuthenticationResult.TooManySessions;
+            case SessionAdmissionResult.Success:
+                _admittedAccountName = policy.Username;
+                return NntpAuthenticationResult.Success(policy.Username, Authorization, policy);
+            case SessionAdmissionResult.SessionLimitExceeded:
+                return NntpAuthenticationResult.TooManySessions;
+            case SessionAdmissionResult.SourceAddressLimitExceeded:
+                return NntpAuthenticationResult.TooManySourceAddresses;
+            case SessionAdmissionResult.Unavailable:
+                return NntpAuthenticationResult.TransientFailure;
+            default:
+                return NntpAuthenticationResult.TransientFailure;
+        }
+    }
+
+    /// <summary>Gets the current connection lifetime (tests and diagnostics).</summary>
+    internal NntpSessionLifetime Lifetime => (NntpSessionLifetime)Volatile.Read(ref _lifetime);
+
+    /// <summary>
+    /// Claims the one-shot <see cref="NntpSessionLifetime.Running"/> →
+    /// <see cref="NntpSessionLifetime.Finalizing"/> transition.
+    /// </summary>
+    internal bool TryBeginFinalization()
+    {
+        var current = Volatile.Read(ref _lifetime);
+        if (current is (int)NntpSessionLifetime.Finalizing or (int)NntpSessionLifetime.Finalized)
+        {
+            return false;
         }
 
-        if (outcome == NntpSessionAdmissionResult.IpLimitExceeded)
+        if (current == (int)NntpSessionLifetime.Running
+            && Interlocked.CompareExchange(
+                ref _lifetime,
+                (int)NntpSessionLifetime.Finalizing,
+                (int)NntpSessionLifetime.Running) == (int)NntpSessionLifetime.Running)
         {
-            return NntpAuthenticationResult.TooManySourceAddresses;
+            return true;
         }
 
-        _admittedAccountName = policy.Username;
-        return NntpAuthenticationResult.Success(policy.Username, Authorization, policy);
+        return Interlocked.CompareExchange(
+                ref _lifetime,
+                (int)NntpSessionLifetime.Finalizing,
+                (int)NntpSessionLifetime.Created) == (int)NntpSessionLifetime.Created;
+    }
+
+    /// <summary>
+    /// Releases distributed admission at most once and marks the session finalized.
+    /// Safe to call from QUIT, cancellation, timeout, and exception paths.
+    /// </summary>
+    internal async ValueTask FinalizeAdmissionAsync()
+    {
+        if (!TryBeginFinalization())
+        {
+            return;
+        }
+
+        try
+        {
+            await ReleaseAdmissionAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref _lifetime, (int)NntpSessionLifetime.Finalized);
+        }
+    }
+
+    /// <summary>Releases any admission slot held by this session without awaiting Redis.</summary>
+    internal void ReleaseAdmission()
+    {
+        var pending = ReleaseAdmissionAsync();
+        if (pending.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        if (pending.IsCompleted)
+        {
+            _ = pending.AsTask().Exception;
+            return;
+        }
+
+        _ = ObserveAdmissionReleaseAsync(pending);
     }
 
     /// <summary>Releases any admission slot held by this session.</summary>
-    internal void ReleaseAdmission()
+    internal async ValueTask ReleaseAdmissionAsync()
     {
-        if (_admittedAccountName is { } account && SessionAdmission is not null)
+        var account = Interlocked.Exchange(ref _admittedAccountName, null);
+        if (account is not null && SessionAdmission is not null)
         {
-            SessionAdmission.Release(account, SessionId);
+            await SessionAdmission.ReleaseAsync(account, SessionId).ConfigureAwait(false);
         }
+    }
 
-        _admittedAccountName = null;
+    private async Task ObserveAdmissionReleaseAsync(ValueTask pending)
+    {
+        try
+        {
+            await pending.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            SessionStateLogMessages.SessionStateReleaseFailed(
+                _logger,
+                ex,
+                "session",
+                ClientAddress.ToString());
+        }
     }
 
     /// <summary>Records a successful inbound admission for this session's Transit peer, if any.</summary>
@@ -650,6 +750,10 @@ public sealed class NntpSession
 
         try
         {
+            Interlocked.CompareExchange(
+                ref _lifetime,
+                (int)NntpSessionLifetime.Running,
+                (int)NntpSessionLifetime.Created);
             SessionCensus?.Register(this);
             var response = _response ??= new NntpResponseWriter(Connection.Output);
             Pipeline = new CheckPipeline(this, response);
@@ -684,6 +788,10 @@ public sealed class NntpSession
         {
             // Expected on shutdown or connection close.
         }
+        catch (Exception ex) when (NntpPeerDisconnect.IsPeerDisconnect(ex, Connection))
+        {
+            SessionLogMessages.SessionEndedByPeerDisconnect(_logger, ex, ClientAddress);
+        }
         catch (Exception ex)
         {
             SessionLogMessages.SessionEndedWithError(_logger, ex, ClientAddress);
@@ -710,7 +818,18 @@ public sealed class NntpSession
             }
 
             SessionCensus?.Unregister(this);
-            ReleaseAdmission();
+            try
+            {
+                await FinalizeAdmissionAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                SessionStateLogMessages.SessionStateReleaseFailed(
+                    _logger,
+                    ex,
+                    "session",
+                    ClientAddress.ToString());
+            }
             if (TakeThisWindow is not null)
             {
                 try

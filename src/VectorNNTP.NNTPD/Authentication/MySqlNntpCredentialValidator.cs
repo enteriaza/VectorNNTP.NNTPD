@@ -3,6 +3,7 @@ using VectorNNTP.NNTPD.Authentication.Sasl;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.SessionState;
 
 namespace VectorNNTP.NNTPD.Authentication;
 
@@ -222,5 +223,5 @@ public sealed class MySqlNntpCredentialValidator
     }
 
     internal static string FormatClientIp(IPAddress clientIp) =>
-        InMemoryNntpSessionAdmissionTracker.FormatSourceAddress(clientIp);
+        SourceAddressIdentity.Format(clientIp);
 }

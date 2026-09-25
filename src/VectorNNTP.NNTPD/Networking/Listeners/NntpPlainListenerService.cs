@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
@@ -49,7 +50,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IModeratorCatalogue? _moderatorCatalogue;
     private readonly IModeratorAuthorization _moderatorAuthorization;
     private readonly IModerationSubmissionService _moderationSubmission;
-    private readonly INntpSessionAdmissionTracker? _sessionAdmission;
+    private readonly ISessionStateTracker? _sessionAdmission;
     private readonly NntpSaslService? _saslService;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
@@ -83,7 +84,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IModeratorCatalogue? moderatorCatalogue = null,
         IModeratorAuthorization? moderatorAuthorization = null,
         IModerationSubmissionService? moderationSubmission = null,
-        INntpSessionAdmissionTracker? sessionAdmission = null,
+        ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -342,7 +343,19 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 saslService: _saslService);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
-            if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))
+            TransitInboundAdmitResult admission;
+            try
+            {
+                admission = await TransitConnectionAdmission
+                    .TryAdmitAsync(_inboundConnectionLimiter, session, _runCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_runCts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (!admission.Admitted)
             {
                 session.RecordPeerRejected();
                 _feedDiagnostics.OnRejected(
@@ -367,7 +380,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
             finally
             {
                 _feedDiagnostics.OnReleased(session.FeedProbe);
-                lease.Dispose();
+                await admission.Lease.DisposeAsync().ConfigureAwait(false);
             }
         }
         finally

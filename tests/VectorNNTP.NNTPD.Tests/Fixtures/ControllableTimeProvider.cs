@@ -32,6 +32,18 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
+    /// <summary>Gets whether any <see cref="CreateTimer"/> callback is currently scheduled.</summary>
+    public bool HasScheduledTimers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count > 0;
+            }
+        }
+    }
+
     /// <summary>Advances virtual time and invokes timers that are now due.</summary>
     public void Advance(TimeSpan delta)
     {

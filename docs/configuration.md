@@ -286,6 +286,44 @@ Example:
 }
 ```
 
+### Live SessionState Redis Lua tests
+
+Ordinary `VectorNNTP.NNTPD.Tests` runs do not open Redis and do not read `Redis:Host` or the application-configured production endpoint.
+
+To execute the production SessionState Lua scripts (`TRY_ADMIT`, `RELEASE`, `RENEW`, `RELEASEOWNER`) through `RedisSessionStateStore` against the dedicated test Redis:
+
+```text
+VECTORNNTP_REDIS_INTEGRATION=198.18.0.70:6379
+```
+
+Requirements:
+
+- `198.18.0.70:6379` is the authorized SessionState integration-test Redis (not localhost and not an application-configured production endpoint).
+- Tests create uniquely named accounts (`vnntp.sess.lua.{guid}`) and delete only those accounts' `nntpd:sess:*` / `nntpd:srcip:*` keys. They do not run `FLUSHDB` or `FLUSHALL`.
+- When the variable is unset, the tests skip.
+- When the variable is set and Redis is unreachable, the tests fail.
+
+Do not commit credentials. Redis options have no password field; the unauthenticated connection path is used.
+
+### Live TransitPeerState Redis Lua tests
+
+Ordinary `VectorNNTP.NNTPD.Tests` runs do not open Redis and do not read `Redis:Host` or the application-configured production endpoint.
+
+To execute the production TransitPeerState Lua scripts (`TRY_ADMIT`, `RELEASE`, `RENEW`, `RELEASEOWNER`) through `RedisTransitPeerStateStore` against the dedicated test Redis:
+
+```text
+VECTORNNTP_REDIS_INTEGRATION=198.18.0.70:6379
+```
+
+Requirements:
+
+- `198.18.0.70:6379` is the authorized TransitPeerState integration-test Redis (same dedicated test instance as SessionState; not localhost and not an application-configured production endpoint).
+- Tests create uniquely named peer identifiers (`vnntp.tconn.lua.{guid}`) and delete only those identifiers' `nntpd:tconn:*` keys. They do not run `FLUSHDB` or `FLUSHALL`.
+- When the variable is unset, the tests skip.
+- When the variable is set and Redis is unreachable, the tests fail.
+
+Do not commit credentials. Redis options have no password field; the unauthenticated connection path is used.
+
 ## NntpDB (`ConnectionStrings:NntpDB` and `NntpDb`)
 
 **NNTPD owns the database service and lifecycle; MySqlConnector owns physical connection pooling.** There is no application-owned connection pool.
@@ -627,7 +665,7 @@ Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 | Field | Type | Default | Required? | Description |
 |-------|------|---------|-----------|-------------|
 | `PeerName` | string | _(none)_ | **yes** | Human-readable administrative display name. Preserved exactly. Not a protocol identifier. |
-| `MaxIncomingConnections` | int | _(none)_ | **yes** | Max simultaneous inbound connections associated with this peer (`0–4096`). Counted only after peer identification. `0` admits no new inbound connections. Lowering the limit does not disconnect existing sessions. |
+| `MaxIncomingConnections` | int | _(none)_ | **yes** | Cluster-wide max simultaneous inbound connections for this peer's `Identifier` (`0–4096`). Redis is authoritative. Source IP is ACL identity only; it is not the limit key. Counted only after peer identification. `0` means closed (reject all new inbound connections), not unlimited. Lowering the limit does not disconnect existing sessions; new admits are rejected until cluster usage falls below the new limit. |
 | `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
 | `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
 | `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |

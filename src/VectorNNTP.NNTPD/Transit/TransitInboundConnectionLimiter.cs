@@ -1,82 +1,64 @@
-using System.Collections.Concurrent;
-
 namespace VectorNNTP.NNTPD.Transit;
 
 /// <summary>
-/// Per-peer inbound connection slot counter that reads the current snapshot on each acquire.
+/// Transit-facing inbound limiter. Redis is authoritative for named peers;
+/// the process-local count is diagnostics and lifecycle bookkeeping only.
 /// </summary>
 /// <remarks>
 /// Lowering <c>MaxIncomingConnections</c> on reload does not disconnect existing holders.
 /// Removing a peer rejects new acquires for that name; existing leases still release.
+/// <c>0</c> admits no new inbound connections. Redis unavailability fails closed.
 /// </remarks>
 public sealed class TransitInboundConnectionLimiter : ITransitInboundConnectionLimiter
 {
     private readonly TransitConfigurationStore _store;
-    private readonly ConcurrentDictionary<string, int> _counts = new(StringComparer.Ordinal);
+    private readonly ITransitPeerStateTracker _tracker;
 
     /// <summary>Shared no-op limiter for tests that do not exercise inbound limits.</summary>
     public static ITransitInboundConnectionLimiter Disabled { get; } = new DisabledLimiter();
 
-    /// <summary>Initializes a limiter bound to the active Transit snapshot.</summary>
-    public TransitInboundConnectionLimiter(TransitConfigurationStore store)
+    /// <summary>Initializes a limiter bound to the active Transit snapshot and cluster tracker.</summary>
+    public TransitInboundConnectionLimiter(TransitConfigurationStore store, ITransitPeerStateTracker tracker)
     {
         ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(tracker);
         _store = store;
+        _tracker = tracker;
     }
 
-    /// <summary>Gets the current counted connections for <paramref name="peerName"/> (tests).</summary>
-    public int GetCount(string peerName) =>
-        _counts.TryGetValue(peerName, out var count) ? count : 0;
+    /// <summary>Gets the current local owned count for <paramref name="peerName"/> (tests/diagnostics).</summary>
+    public int GetCount(string peerName) => _tracker.GetLocalCount(peerName);
 
     /// <inheritdoc />
-    public bool TryAcquire(string peerName, out TransitInboundConnectionLease lease)
+    public async ValueTask<TransitInboundAdmitResult> TryAcquireAsync(
+        string peerName,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(peerName);
-        lease = TransitInboundConnectionLease.None;
         if (!_store.Current.Peers.TryGetValue(peerName, out var peer))
         {
-            return false;
+            return TransitInboundAdmitResult.Rejected;
         }
 
         var max = peer.MaxIncomingConnections;
-        while (true)
+        var admitted = await _tracker
+            .TryAdmitAsync(peerName, max, cancellationToken)
+            .ConfigureAwait(false);
+        if (!admitted.Accepted)
         {
-            var current = _counts.GetOrAdd(peerName, 0);
-            if (current >= max)
-            {
-                return false;
-            }
-
-            if (_counts.TryUpdate(peerName, current + 1, current))
-            {
-                lease = new TransitInboundConnectionLease(Release, peerName);
-                return true;
-            }
+            return TransitInboundAdmitResult.Rejected;
         }
-    }
 
-    private void Release(string peerName)
-    {
-        while (true)
-        {
-            if (!_counts.TryGetValue(peerName, out var current) || current <= 0)
-            {
-                return;
-            }
-
-            if (_counts.TryUpdate(peerName, current - 1, current))
-            {
-                return;
-            }
-        }
+        var generation = admitted.Generation;
+        return TransitInboundAdmitResult.Accept(
+            new TransitInboundConnectionLease(ct => _tracker.ReleaseAsync(peerName, generation, ct)));
     }
 
     private sealed class DisabledLimiter : ITransitInboundConnectionLimiter
     {
-        public bool TryAcquire(string peerName, out TransitInboundConnectionLease lease)
-        {
-            lease = TransitInboundConnectionLease.None;
-            return true;
-        }
+        public ValueTask<TransitInboundAdmitResult> TryAcquireAsync(
+            string peerName,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(TransitInboundAdmitResult.Uncounted);
     }
 }

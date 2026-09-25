@@ -17,6 +17,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -62,7 +63,21 @@ public static class NntpdServiceCollectionExtensions
         // Transit AUTHINFO is MODE STREAM / Transit authority and never enters this provider.
         services.TryAddSingleton<INntpUserRecordStore, MySqlUserRecordStore>();
         services.TryAddSingleton<MySqlNntpCredentialValidator>();
-        services.TryAddSingleton<INntpSessionAdmissionTracker, InMemoryNntpSessionAdmissionTracker>();
+        services.TryAddSingleton<ISessionStateStore, RedisSessionStateStore>();
+        services.TryAddSingleton<DistributedSessionStateTracker>(static sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
+            var nodeId = options.ServerId is int id ? $"nntpd{id:00}" : "nntpd";
+            return new DistributedSessionStateTracker(
+                sp.GetRequiredService<ISessionStateStore>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedSessionStateTracker>>(),
+                nodeId);
+        });
+        services.TryAddSingleton<ISessionStateTracker>(static sp =>
+            sp.GetRequiredService<DistributedSessionStateTracker>());
+        services.TryAddSingleton<ISessionStateLeaseManager>(static sp =>
+            sp.GetRequiredService<DistributedSessionStateTracker>());
+        services.TryAddSingleton<SessionStateService>();
         services.TryAddSingleton<NntpSaslService>();
         services.TryAddSingleton<INntpAuthenticationProvider>(static sp =>
         {
@@ -75,6 +90,21 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<TransitConfigurationStore>();
         services.TryAddSingleton<ITransitDnsResolver, TransitDnsClientResolver>();
         services.TryAddSingleton<ITransitDnsAddressCache, TransitDnsAddressCache>();
+        services.TryAddSingleton<ITransitPeerStateStore, RedisTransitPeerStateStore>();
+        services.TryAddSingleton<DistributedTransitPeerStateTracker>(static sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
+            var nodeId = options.ServerId is int id ? $"nntpd{id:00}" : "nntpd";
+            return new DistributedTransitPeerStateTracker(
+                sp.GetRequiredService<ITransitPeerStateStore>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedTransitPeerStateTracker>>(),
+                nodeId);
+        });
+        services.TryAddSingleton<ITransitPeerStateTracker>(static sp =>
+            sp.GetRequiredService<DistributedTransitPeerStateTracker>());
+        services.TryAddSingleton<ITransitPeerStateLeaseManager>(static sp =>
+            sp.GetRequiredService<DistributedTransitPeerStateTracker>());
+        services.TryAddSingleton<TransitPeerStateService>();
         services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
         services.TryAddSingleton<IFeedDiagnostics>(static sp =>
         {
@@ -235,7 +265,8 @@ public static class NntpdServiceCollectionExtensions
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
         // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
-        // Transit AllowFrom DNS refresh →
+        // Transit AllowFrom DNS refresh → SessionState lease renewal →
+        // Transit inbound-ownership renewal →
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
         services.TryAddEnumerable(
@@ -299,6 +330,14 @@ public static class NntpdServiceCollectionExtensions
                 _ = sp.GetRequiredService<TransitConfigurationHotReload>();
                 return sp.GetRequiredService<TransitDnsRefreshService>();
             }));
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, SessionStateService>(static sp =>
+                sp.GetRequiredService<SessionStateService>()));
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, TransitPeerStateService>(static sp =>
+                sp.GetRequiredService<TransitPeerStateService>()));
 
         services.TryAddSingleton<NntpPlainListenerService>();
         services.TryAddEnumerable(

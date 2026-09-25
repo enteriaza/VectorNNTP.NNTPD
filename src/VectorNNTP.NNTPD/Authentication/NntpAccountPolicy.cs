@@ -4,7 +4,8 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// Authenticated account policy copied from <c>nntpusers</c> after a successful credential check.
 /// </summary>
 /// <remarks>
-/// Session and source-IP limits are enforced by <see cref="INntpSessionAdmissionTracker"/>.
+/// Session and source-IP limits are enforced by
+/// <see cref="VectorNNTP.NNTPD.SessionState.ISessionStateTracker"/>.
 /// <see cref="RateLimitMbps"/> and <see cref="ByteLimit"/> are exposed for traffic accounting
 /// and are not enforced by the authentication subsystem.
 /// </remarks>
@@ -42,10 +43,10 @@ public sealed class NntpAccountPolicy
     /// <summary>Gets <c>account_byte_limit</c>. <c>0</c> is unlimited.</summary>
     public long ByteLimit { get; }
 
-    /// <summary>Gets concurrent authenticated session cap. <c>0</c> is unlimited.</summary>
+    /// <summary>Gets the cluster-wide authenticated session cap. <c>0</c> is unlimited.</summary>
     public int SessionLimit { get; }
 
-    /// <summary>Gets distinct source-IP cap. <c>0</c> is unlimited.</summary>
+    /// <summary>Gets the cluster-wide distinct source-IP cap. <c>0</c> is unlimited.</summary>
     public int SrcIpLimit { get; }
 
     /// <summary>Gets the customer/tenant identifier.</summary>

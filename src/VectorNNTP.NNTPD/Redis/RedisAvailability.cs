@@ -1,7 +1,7 @@
 namespace VectorNNTP.NNTPD.Redis;
 
 /// <summary>
-/// Short-lived Redis unavailable / recovery-probe state shared by EXISTS and SET.
+/// Short-lived Redis unavailable / recovery-probe state shared by EXISTS, SET, and EVAL.
 /// </summary>
 /// <remarks>
 /// Healthy operations proceed without a lock. After a failure, callers see

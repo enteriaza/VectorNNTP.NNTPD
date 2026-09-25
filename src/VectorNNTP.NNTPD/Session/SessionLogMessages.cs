@@ -12,6 +12,12 @@ internal static partial class SessionLogMessages
     public static partial void SessionEndedWithError(ILogger logger, Exception exception, IPAddress Client);
 
     [LoggerMessage(
+        EventId = 1612,
+        Level = LogLevel.Debug,
+        Message = "NNTP session ended; peer or transport disconnected for {Client}")]
+    public static partial void SessionEndedByPeerDisconnect(ILogger logger, Exception exception, IPAddress Client);
+
+    [LoggerMessage(
         EventId = 1700,
         Level = LogLevel.Information,
         Message = "Trusted Transit peers configured ({Count}): {Peers}")]
