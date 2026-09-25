@@ -89,6 +89,12 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     /// </summary>
     internal Func<ValueTask>? BeforeStreamReadProbe { get; set; }
 
+    /// <summary>
+    /// Test-only: awaited after a successful stream read returns and before the count is
+    /// handed back to <c>ReceiveAsync</c> for <c>Advance</c>.
+    /// </summary>
+    internal Func<ValueTask>? AfterStreamReadProbe { get; set; }
+
     /// <summary>DIAGNOSTIC-ONLY session attached when <see cref="TransportIoProbe"/> is enabled.</summary>
     internal TransportIoSession? Io { get; set; }
 
@@ -127,7 +133,13 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
                     await readProbe().ConfigureAwait(false);
                 }
 
-                return await ReadStreamAsync(stream, buffer, linked.Token).ConfigureAwait(false);
+                var received = await ReadStreamAsync(stream, buffer, linked.Token).ConfigureAwait(false);
+                if (AfterStreamReadProbe is { } afterRead)
+                {
+                    await afterRead().ConfigureAwait(false);
+                }
+
+                return received;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {

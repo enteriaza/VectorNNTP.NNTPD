@@ -63,6 +63,7 @@ public sealed class NntpConnection : INntpConnection
     private int _outputWriterCompleted;
     private int _outputReaderCompleted;
     private int _inputReaderCompleted;
+    private int _inputWriterCompleted;
     private int _inputReaderConsumer;
     private int _disconnectReason;
     private int _disconnectedLogged;
@@ -160,6 +161,12 @@ public sealed class NntpConnection : INntpConnection
 
     /// <summary>Test-only: whether <c>Input.Reader</c> has been completed exactly once.</summary>
     internal bool InputReaderCompletedForTests => Volatile.Read(ref _inputReaderCompleted) == 1;
+
+    /// <summary>Test-only: whether <c>Input.Writer</c> has been completed exactly once.</summary>
+    internal bool InputWriterCompletedForTests => Volatile.Read(ref _inputWriterCompleted) == 1;
+
+    /// <summary>Test-only: receive pump task started by <see cref="StartPumps"/>.</summary>
+    internal Task? ReceivePumpTaskForTests => _receiveTask;
 
     /// <summary>Test-only: 1 when the send pump is awaiting more <see cref="Output"/>.</summary>
     internal int SendPumpAwaitingOutputForTests => Volatile.Read(ref _sendPumpAwaitingOutput);
@@ -563,8 +570,14 @@ public sealed class NntpConnection : INntpConnection
     /// reader complete runs only when the pump did not complete the reader itself.
     /// </para>
     /// <para>
-    /// <see cref="Input"/> writer completion and connection cancellation unblock the session
-    /// RX loop. <c>Input.Reader</c> is owned exclusively by that consumer
+    /// Connection cancellation unblocks the receive pump. <c>Input.Writer</c> is owned
+    /// exclusively by <c>ReceiveAsync</c>: this method must not complete the writer while
+    /// <c>GetMemory</c> / <c>Advance</c> can still run. The receive pump completes the writer
+    /// in <c>finally</c> after it exits. Completing the writer here while the session has
+    /// already completed the reader would <c>CompletePipe</c> and invalidate the writing head.
+    /// </para>
+    /// <para>
+    /// <c>Input.Reader</c> is owned exclusively by the session RX consumer
     /// (<c>NntpSession</c> / <c>NntpContinuousRxReader</c>): this method must not complete
     /// the reader while <c>ReadAsync</c> / <c>AdvanceTo</c> can still run. The session
     /// completes the reader after the RX loop has stopped.
@@ -587,15 +600,6 @@ public sealed class NntpConnection : INntpConnection
         catch (ObjectDisposedException)
         {
             // Already disposed.
-        }
-
-        try
-        {
-            await _inputPipe.Writer.CompleteAsync(exception).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Best-effort.
         }
 
         try
@@ -623,6 +627,10 @@ public sealed class NntpConnection : INntpConnection
             {
                 // Observed via pump logging.
             }
+        }
+        else
+        {
+            await CompleteInputWriterAsync(exception).ConfigureAwait(false);
         }
 
         if (send is not null)
@@ -777,6 +785,27 @@ public sealed class NntpConnection : INntpConnection
         catch
         {
             // Best-effort; reader may already be completed by a test host.
+        }
+    }
+
+    /// <summary>
+    /// Completes <c>Input.Writer</c> exactly once. Owned by <c>ReceiveAsync</c>;
+    /// <see cref="CompleteAsync"/> calls this only when no receive pump was started.
+    /// </summary>
+    private async Task CompleteInputWriterAsync(Exception? exception)
+    {
+        if (Interlocked.Exchange(ref _inputWriterCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            await _inputPipe.Writer.CompleteAsync(exception).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort.
         }
     }
 
@@ -947,56 +976,70 @@ public sealed class NntpConnection : INntpConnection
 
     private async Task ReceiveAsync()
     {
-        var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
-        var writer = _inputPipe.Writer;
-        var token = _connectionCts.Token;
-
-        var prefix = Interlocked.Exchange(ref _receivePrefix, null);
-        if (prefix is { Length: > 0 })
+        Exception? error = null;
+        try
         {
-            var memory = writer.GetMemory(prefix.Length);
-            prefix.CopyTo(memory);
-            writer.Advance(prefix.Length);
-            RecordReceivedBytes(prefix.Length);
-            var prefixFlush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
-            if (prefixFlush.IsCompleted || prefixFlush.IsCanceled)
-            {
-                await writer.CompleteAsync().ConfigureAwait(false);
-                return;
-            }
-        }
+            var transport = _transport ?? throw new InvalidOperationException("Transport missing.");
+            var writer = _inputPipe.Writer;
+            var token = _connectionCts.Token;
 
-        while (!token.IsCancellationRequested)
-        {
-            var memory = writer.GetMemory(NntpPipeOptions.MinimumSegmentSize);
-            var bytes = await transport.ReadAsync(memory, token).ConfigureAwait(false);
-            if (bytes == 0)
+            var prefix = Interlocked.Exchange(ref _receivePrefix, null);
+            if (prefix is { Length: > 0 })
             {
-                if (!token.IsCancellationRequested)
+                var memory = writer.GetMemory(prefix.Length);
+                prefix.CopyTo(memory);
+                writer.Advance(prefix.Length);
+                RecordReceivedBytes(prefix.Length);
+                var prefixFlush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
+                if (prefixFlush.IsCompleted || prefixFlush.IsCanceled)
                 {
-                    NoteDisconnectReason(TcpDisconnectReason.RemoteClosed);
+                    return;
+                }
+            }
+
+            while (!token.IsCancellationRequested)
+            {
+                var memory = writer.GetMemory(NntpPipeOptions.MinimumSegmentSize);
+                var bytes = await transport.ReadAsync(memory, token).ConfigureAwait(false);
+                if (bytes == 0)
+                {
+                    if (!token.IsCancellationRequested)
+                    {
+                        NoteDisconnectReason(TcpDisconnectReason.RemoteClosed);
+                    }
+
+                    break;
                 }
 
-                break;
-            }
+                // If Quiesce completed while this read returned, octets belong to the upgrade wrap
+                // (e.g. TLS ClientHello), not the application Input pipe.
+                if (!transport.TryCommitReadToApplication(memory.Span[..bytes]))
+                {
+                    continue;
+                }
 
-            // If Quiesce completed while this read returned, octets belong to the upgrade wrap
-            // (e.g. TLS ClientHello), not the application Input pipe.
-            if (!transport.TryCommitReadToApplication(memory.Span[..bytes]))
-            {
-                continue;
-            }
-
-            RecordReceivedBytes(bytes);
-            writer.Advance(bytes);
-            var flush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
-            if (flush.IsCompleted || flush.IsCanceled)
-            {
-                break;
+                RecordReceivedBytes(bytes);
+                writer.Advance(bytes);
+                var flush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
+                if (flush.IsCompleted || flush.IsCanceled)
+                {
+                    break;
+                }
             }
         }
-
-        await writer.CompleteAsync().ConfigureAwait(false);
+        catch (OperationCanceledException) when (_connectionCts.IsCancellationRequested)
+        {
+            // Expected on shutdown; complete the writer without faulting the reader.
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            throw;
+        }
+        finally
+        {
+            await CompleteInputWriterAsync(error).ConfigureAwait(false);
+        }
     }
 
     private void RecordReceivedBytes(int bytes)
