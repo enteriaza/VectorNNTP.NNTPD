@@ -1,7 +1,7 @@
 using System.Net.Sockets;
 using VectorNNTP.NNTPD.Networking.Transport;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Classifies transport failures that indicate the peer has already gone away.

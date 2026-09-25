@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Tests.Logging;
 

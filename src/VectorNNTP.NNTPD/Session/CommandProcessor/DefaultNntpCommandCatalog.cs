@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Built-in NNTP command inventory, access flags, and display names.</summary>
 /// <remarks>

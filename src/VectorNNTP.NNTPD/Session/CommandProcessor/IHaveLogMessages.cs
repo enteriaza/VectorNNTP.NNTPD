@@ -1,6 +1,6 @@
 using VectorNNTP.NNTPD.ArticleIngestion;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Source-generated IHAVE receive/queue diagnostics. Does not log bodies or headers.</summary>
 internal static partial class IHaveLogMessages

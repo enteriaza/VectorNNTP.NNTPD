@@ -2,7 +2,7 @@ using System.Buffers;
 using System.IO.Pipelines;
 using System.Text;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Reads CRLF-delimited NNTP command lines from a <see cref="PipeReader"/>.</summary>
 public static class NntpCommandLineReader

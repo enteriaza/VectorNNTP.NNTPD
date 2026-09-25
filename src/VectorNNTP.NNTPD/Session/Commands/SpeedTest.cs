@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 
 namespace VectorNNTP.NNTPD.Session.Commands;

@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Immortal semantic first/status lines matching <see cref="NntpResponses"/> wire text

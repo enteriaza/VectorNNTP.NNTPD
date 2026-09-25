@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Resolves per-command <see cref="ILogger"/> instances from the host <see cref="ILoggerFactory"/>.

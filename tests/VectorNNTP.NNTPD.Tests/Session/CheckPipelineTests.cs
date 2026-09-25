@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;

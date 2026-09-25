@@ -236,7 +236,7 @@ public sealed class TransitPeerIdentificationAndLimitTests
         Assert.False(TransitConnectionAdmission.TryAdmit(limiter, session, out _));
         await TransitConnectionAdmission.WriteUnavailableAsync(connection, CancellationToken.None);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var line = await VectorNNTP.NNTPD.Session.Commands.NntpCommandLineReader.ReadLineAsync(output.Reader, cts.Token);
+        var line = await VectorNNTP.NNTPD.Session.CommandProcessor.NntpCommandLineReader.ReadLineAsync(output.Reader, cts.Token);
         Assert.Equal("400 Service temporarily unavailable", line);
     }
 

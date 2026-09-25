@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Authorization requirements evaluated by the command dispatcher before invoking a handler.</summary>
 [Flags]

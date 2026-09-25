@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Blake3;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Tests.Session.Framing;

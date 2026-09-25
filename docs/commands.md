@@ -1,6 +1,7 @@
 # NNTP command inventory
 
 Tracker for VectorNNTP.NNTPD command implementations under `src/VectorNNTP.NNTPD/Session/Commands/`.
+Command-processing infrastructure (dispatch, catalog, execution, response writer, logging) lives under `src/VectorNNTP.NNTPD/Session/CommandProcessor/`.
 
 - `[x]` = real protocol behavior present (not merely a stub class).
 - `[ ]` = registered placeholder; returns not-implemented (or equivalent) until the RFC-compliant handler is written.
@@ -84,4 +85,4 @@ IHAVE (RFC 3977 §6.3.2) is a serial, non-pipelined transit ingest: HistoryDB pe
 
 Article ingestion (TAKETHIS and IHAVE → byte-budgeted queue → `spool/incoming`) lives under `ArticleIngestion/`.
 
-Registration lives in `DefaultNntpCommandCatalog.cs` (descriptors + authorization metadata only).
+Registration lives in `Session/CommandProcessor/DefaultNntpCommandCatalog.cs` (descriptors + authorization metadata only).

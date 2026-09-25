@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>ASCII helpers for NNTP command parsing. RFC 3977 §3.1 SP/TAB. No culture.</summary>
 internal static class NntpAscii

@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Configuration;
 

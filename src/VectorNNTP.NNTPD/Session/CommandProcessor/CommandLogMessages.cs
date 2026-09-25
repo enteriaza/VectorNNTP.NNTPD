@@ -1,6 +1,6 @@
 using System.Net.Sockets;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Source-generated command RX/TX and handler log messages.</summary>
 internal static partial class CommandLogMessages

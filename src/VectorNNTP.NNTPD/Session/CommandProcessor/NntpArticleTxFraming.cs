@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Wire framing kind for shared article TX. Mode-independent: callers choose framing; the TX

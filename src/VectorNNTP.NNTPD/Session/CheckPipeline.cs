@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Session;

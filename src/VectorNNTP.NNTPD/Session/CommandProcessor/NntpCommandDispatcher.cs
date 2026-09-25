@@ -1,7 +1,8 @@
 using System.Diagnostics;
+using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Rejects invalid syntax, applies session/authorization gates, then switch-dispatches the handler.
@@ -325,7 +326,7 @@ public sealed class NntpCommandDispatcher
             NntpVerb.Newgroups => typeof(NewGroups),
             NntpVerb.Newnews => typeof(NewNews),
             NntpVerb.BenchIt => typeof(BenchIt),
-            NntpVerb.SpeedTest => typeof(SpeedTest),
+            NntpVerb.SpeedTest => typeof(Commands.SpeedTest),
             _ => typeof(NntpCommandExecution),
         };
 
@@ -345,7 +346,7 @@ public sealed class NntpCommandDispatcher
             (NntpVerb.StartTls, _) => StartTls.HandleAsync(context, context.Session.CertificateProvider, cancellationToken),
             (NntpVerb.Compress, _) => Compress.HandleAsync(context, cancellationToken),
             (NntpVerb.BenchIt, _) => BenchIt.HandleAsync(context, cancellationToken),
-            (NntpVerb.SpeedTest, _) => SpeedTest.HandleAsync(context, cancellationToken),
+            (NntpVerb.SpeedTest, _) => Commands.SpeedTest.HandleAsync(context, cancellationToken),
             (NntpVerb.AuthInfo, NntpVerb.User) => AuthInfo.HandleUserAsync(
                 context, context.Session.AuthenticationProvider, cancellationToken),
             (NntpVerb.AuthInfo, NntpVerb.Pass) => AuthInfo.HandlePassAsync(

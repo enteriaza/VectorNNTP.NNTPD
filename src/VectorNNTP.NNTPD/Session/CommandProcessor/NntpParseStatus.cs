@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Syntactic outcome of <see cref="NntpCommandParser.Parse(ReadOnlySpan{byte})"/>.</summary>
 public enum NntpParseStatus : byte

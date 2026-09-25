@@ -1,6 +1,8 @@
 using System.Text;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.Commands;
+
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Immortal pre-encoded NNTP wire responses. Each value is ASCII, CRLF-terminated, and

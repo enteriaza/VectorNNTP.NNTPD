@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Canonical NNTP verb or qualifier identity. Built-in dispatch uses this enum, not strings.

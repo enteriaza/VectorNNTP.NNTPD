@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Diagnostics;
 

@@ -8,7 +8,6 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session;
-using VectorNNTP.NNTPD.Session.Commands;
 
 namespace VectorNNTP.NNTPD.Bench;
 

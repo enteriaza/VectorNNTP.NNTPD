@@ -1,7 +1,7 @@
 using System.Text;
 using VectorNNTP.NNTPD.History;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Debug-only semantic TX status lines for dynamic CHECK/TAKETHIS/DATE replies.

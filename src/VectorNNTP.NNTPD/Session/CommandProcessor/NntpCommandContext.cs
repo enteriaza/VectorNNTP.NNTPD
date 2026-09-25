@@ -1,7 +1,7 @@
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session.Framing;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Per-command execution context supplied to handlers after syntactic validation.</summary>
 public sealed class NntpCommandContext

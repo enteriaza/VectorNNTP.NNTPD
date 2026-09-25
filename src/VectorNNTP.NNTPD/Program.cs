@@ -1,7 +1,7 @@
 using Serilog;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
-using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 NntpdLoggingExtensions.UseAutoFlushConsoleOutput();
 Log.Logger = NntpdLoggingExtensions.CreateBootstrapLogger();

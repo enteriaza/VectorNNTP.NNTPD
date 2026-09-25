@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Formats effective client identity and redacts secrets for NNTP command RX/TX logs.</summary>
 internal static class NntpCommandLogFormat

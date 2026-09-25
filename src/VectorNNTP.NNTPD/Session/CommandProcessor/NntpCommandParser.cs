@@ -1,6 +1,6 @@
 using VectorNNTP.NNTPD.Configuration;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Authoritative byte-oriented NNTP command parser and syntactic validation boundary.

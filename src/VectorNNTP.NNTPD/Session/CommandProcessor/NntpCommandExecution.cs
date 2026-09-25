@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Times command-handler execution and emits exactly one TX completion record owned by the command module.

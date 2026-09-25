@@ -1,6 +1,7 @@
 using System.Text;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 

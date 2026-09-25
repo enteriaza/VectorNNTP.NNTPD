@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;

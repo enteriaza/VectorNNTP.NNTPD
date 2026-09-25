@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 

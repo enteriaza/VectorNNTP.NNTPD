@@ -3,7 +3,7 @@ using System.Text;
 using System.Threading.Channels;
 using VectorNNTP.NNTPD.Session.Framing;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// Writes NNTP single-line and multi-line responses to a <see cref="PipeWriter"/> through a

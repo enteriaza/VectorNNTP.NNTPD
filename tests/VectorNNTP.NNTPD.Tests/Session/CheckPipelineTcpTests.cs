@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 

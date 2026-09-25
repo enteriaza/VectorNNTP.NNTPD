@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.Logging;

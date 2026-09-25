@@ -1,6 +1,6 @@
 using System.IO.Pipelines;
 
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>
 /// DIAGNOSTIC-ONLY exclusive lease of the existing TX <see cref="PipeWriter"/>.

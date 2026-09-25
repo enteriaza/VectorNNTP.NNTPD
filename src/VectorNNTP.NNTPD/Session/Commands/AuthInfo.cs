@@ -1,4 +1,5 @@
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 

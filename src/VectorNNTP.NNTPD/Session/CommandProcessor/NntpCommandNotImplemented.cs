@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.Session.Commands;
+namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
 /// <summary>Shared placeholder response for commands not yet implemented.</summary>
 internal static class NntpCommandNotImplemented
