@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
+using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -14,7 +15,9 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
+using VectorNNTP.NNTPD.Tests.Email;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.NNTPD.Tests.Moderation;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -686,6 +689,98 @@ public sealed class ModeratedPostCommandTests
             snapshot: snapshot,
             authorization: authorization);
         AssertRejected(approved);
+    }
+
+    [Fact]
+    public async Task EmailQueue_UnapprovedInnRoute_Returns240WithoutSmtpOnPost()
+    {
+        using var harness = new EmailSpoolHarness();
+        var submission = EmailModerationSubmissionServiceTests.Create(harness, enabled: true);
+        var authorization = new ConfiguredModeratorAuthorization(
+        [
+            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
+        ]);
+        var snapshot = Snapshot(Group("fido7.some.group", NewsgroupPostingStatus.Moderated));
+        var outcome = await PostAsync(
+            "fido7.some.group",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            snapshot: snapshot,
+            authorization: authorization,
+            submission: submission);
+        Assert.Equal("240 Article received OK", outcome.Response);
+        Assert.Equal(0, outcome.Queue.TryAdmitCalls);
+        Assert.Single(harness.EmlFiles());
+        var bytes = await File.ReadAllBytesAsync(harness.EmlFiles()[0]);
+        Assert.True(EmailSpoolRecord.TryParse(bytes, out var item));
+        Assert.Equal("fido7-some-group@fido7.org", item!.Recipients[0].Address);
+        var encoded = Encoding.ASCII.GetString(item.EncodedMessage.Span);
+        Assert.Contains("application/news-transmission; usage=moderate", encoded, StringComparison.Ordinal);
+        Assert.DoesNotContain("Injection-Info:", encoded, StringComparison.Ordinal);
+        Assert.DoesNotContain("Injection-Date:", encoded, StringComparison.Ordinal);
+        Assert.DoesNotContain("X-Trace:", encoded, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EmailDisabled_Unapproved_Returns441()
+    {
+        using var harness = new EmailSpoolHarness(enabled: false);
+        var submission = EmailModerationSubmissionServiceTests.Create(harness, enabled: false);
+        var outcome = await PostAsync(
+            "group.a",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            submission: submission);
+        AssertRejected(outcome);
+        Assert.Empty(harness.EmlFiles());
+    }
+
+    [Fact]
+    public async Task EmailEnabled_AuthorizedReinject_DoesNotEnqueue()
+    {
+        using var harness = new EmailSpoolHarness();
+        var submission = EmailModerationSubmissionServiceTests.Create(harness, enabled: true);
+        var outcome = await PostAsync(
+            "group.a",
+            extraHeaders: "Approved: moderator-a@example.com\r\n",
+            user: MapNntpAuthenticationProvider.ModeratorA,
+            submission: submission);
+        AssertAccepted(outcome);
+        Assert.Empty(harness.EmlFiles());
+        Assert.Equal(1, outcome.Queue.TryAdmitCalls);
+    }
+
+    [Fact]
+    public async Task EmailSpoolWriteFailure_Unapproved_Returns441()
+    {
+        var blocker = Path.Combine(Path.GetTempPath(), "vectornntp-post-blocker-" + Guid.NewGuid().ToString("N"));
+        await File.WriteAllBytesAsync(blocker, "x"u8.ToArray());
+        try
+        {
+            var options = EmailModerationSubmissionServiceTests.EnabledOptions();
+            options.Spool.Directory = blocker;
+            var spool = new FilesystemEmailSpool(
+                Microsoft.Extensions.Options.Options.Create(options),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<FilesystemEmailSpool>.Instance);
+            var submission = new EmailModerationSubmissionService(
+                new EmailService(
+                    spool,
+                    new Rfc5322MessageEncoder(),
+                    Microsoft.Extensions.Options.Options.Create(options),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<EmailService>.Instance),
+                new ModerationEmailComposer(Microsoft.Extensions.Options.Options.Create(options)),
+                Microsoft.Extensions.Options.Options.Create(options));
+            var outcome = await PostAsync(
+                "group.a",
+                extraHeaders: "",
+                user: MapNntpAuthenticationProvider.NormalUser,
+                submission: submission);
+            AssertRejected(outcome);
+        }
+        finally
+        {
+            File.Delete(blocker);
+        }
     }
 
     [Fact]

@@ -61,6 +61,8 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - NewsgroupCatalogueService (immutable snapshot + 5 min)   │
 │  - HistoryWriteService (async HistoryDB Redis persistence)  │
 │  - HistoryMaintenanceService (local HistoryDB expiry)       │
+│  - IncomingSpoolWriterService (TAKETHIS/IHAVE/POST spool)   │
+│  - EmailDeliveryService (generic outbound SMTP worker)      │
 │  - NNTP session: greeting, command dispatch, authz gates    │
 │  - Later: full command handlers / storage / feeds             │
 └─────────────────────────────────────────────────────────────┘
@@ -68,7 +70,7 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 
 NNTPD owns the database service and lifecycle (`NntpDbService` + mandatory startup `SELECT 1`). MySqlConnector owns physical connection pooling. There is no application-owned MySQL pool.
 
-`NewsgroupCatalogueService` starts after `NntpDbService` and before NNTP listeners. Initial population of `nntpgroups` must succeed before the application reaches RUNNING. The published `NewsgroupSnapshot` is immutable and swapped atomically every five minutes. Command handlers capture `Current` once; LIST/GROUP/POST newsgroup validation never query MySQL. A failed refresh retains the last known-good snapshot. LIST ACTIVE posting status is the stored `y`/`n`/`m`/`x`/`j` octet; the RFC 6048 `=<newsgroup>` form is not supported. LIST COUNTS reuses the same snapshot and GROUP watermark estimate (`high − low + 1`, or `0` when `high < low`) as a precomputed five-field line. LISTGROUP is registered but unimplemented (`500`) and does not consult the catalogue. POST uses `CatalogueNewsgroupPostingPolicy` on the same snapshot: every `Newsgroups:` target must exist. Status `y` is ordinary local posting. Status `n`/`x`/`j` reject local POST. Status `m` is moderated: an unapproved proto-article is offered to `IModerationSubmissionService` (RFC 5537 §3.5.1, leftmost moderated group) and is not injected. The submission address is the first-match `Moderation:Moderators` route (static mailbox or INN `%s` template: dots to dashes). An `Approved:` header is an assertion and is trusted only when the authenticated AUTHINFO principal is configured as `Username` for every moderated target. Routing-only INN destinations have no `Username` and do not authorize injection. `Control:PgpAuthorities` is not used for this decision. This repository has no SMTP stack; the production submission service reports unavailable and POST returns `441` when forwarding cannot be performed.
+`NewsgroupCatalogueService` starts after `NntpDbService` and before NNTP listeners. Initial population of `nntpgroups` must succeed before the application reaches RUNNING. The published `NewsgroupSnapshot` is immutable and swapped atomically every five minutes. Command handlers capture `Current` once; LIST/GROUP/POST newsgroup validation never query MySQL. A failed refresh retains the last known-good snapshot. LIST ACTIVE posting status is the stored `y`/`n`/`m`/`x`/`j` octet; the RFC 6048 `=<newsgroup>` form is not supported. LIST COUNTS reuses the same snapshot and GROUP watermark estimate (`high − low + 1`, or `0` when `high < low`) as a precomputed five-field line. LISTGROUP is registered but unimplemented (`500`) and does not consult the catalogue. POST uses `CatalogueNewsgroupPostingPolicy` on the same snapshot: every `Newsgroups:` target must exist. Status `y` is ordinary local posting. Status `n`/`x`/`j` reject local POST. Status `m` is moderated: an unapproved proto-article is offered to `IModerationSubmissionService` (RFC 5537 §3.5.1, leftmost moderated group) and is not injected. The submission address is the first-match `Moderation:Moderators` route (static mailbox or INN `%s` template: dots to dashes). An `Approved:` header is an assertion and is trusted only when the authenticated AUTHINFO principal is configured as `Username` for every moderated target. Routing-only INN destinations have no `Username` and do not authorize injection. `Control:PgpAuthorities` is not used for this decision. Unapproved forwarding calls `IModerationSubmissionService`, which composes an RFC 5537 `application/news-transmission; usage=moderate` email and submits it through the generic `IEmailService`. `240` means the complete message was durably written to the local filesystem spool (`spool/smtp`) for asynchronous SMTP delivery — not that a remote SMTP server or moderator mailbox received it. Undelivered spool files survive process restart. When `Email:Enabled` is `false` (the production default) or the spool write fails, POST returns `441`. POST never performs DNS, TCP, TLS, AUTH, or SMTP DATA.
 
 Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer + effective client endpoint). When `ProxyHosts` is non-empty and the TCP peer is trusted, HAProxy PROXY v1/v2 is required on the cleartext socket before TLS/NNTP. Untrusted peers keep TCP identity; PROXY-looking bytes are left as application input and never rewrite client identity (intentional mixed-mode policy; exclusive PROXY ports remain a deployment/firewall choice). `NntpSession` exposes the effective client IP/port without re-parsing the transport.
 
@@ -159,6 +161,54 @@ IhaveArticleInterpreter (destuff exactly once → Article)
 - **Body representation:** destuffed received bytes. yEnc/BASE64/uuencode are **not** decoded.
 - **HistoryDB:** CHECK, IHAVE, and TAKETHIS use `PeekAsync` (no miss reservation). IHAVE and TAKETHIS call `Remember` after a successful enqueue.
 - **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis` and may wait for byte-budget capacity. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after receive. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
+
+### Outbound Email service
+
+`EmailService` is a generic outbound email subsystem. It has no dependency on newsgroups, NNTP commands, moderation, `Approved`, articles, or HistoryDB. Moderation is the first producer; later producers (alerts, account mail) call the same `IEmailService.SendAsync`.
+
+```text
+producer (e.g. EmailModerationSubmissionService)
+  ↓
+IEmailService.SendAsync          ← validate + MIME encode + atomic spool write
+  ↓
+filesystem spool (spool/smtp/*.eml)  ← the durable queue
+  ↓
+EmailDeliveryService worker      ← IApplicationService; scans disk
+  ↓
+ISmtpTransport (TcpClient / SslStream)
+  ↓
+remote SMTP (relay or submission)
+  ↓
+successful 2xx acceptance
+  ↓
+delete spool file
+```
+
+The filesystem spool is the durable outbound email queue. `SendAsync` means **the complete RFC 5322/MIME message (plus SMTP envelope) has been durably written to the local spool**. It does not mean the remote SMTP server accepted the message. SMTP delivery is asynchronous. Successful SMTP delivery deletes the spool file. Undelivered `.eml` files survive process restart, machine restart, and SMTP outage. SMTP acceptance followed by filesystem deletion is inherently at-least-once and cannot provide exactly-once delivery.
+
+Writers publish atomically: write a complete `<md5(uuid)>.tmp`, flush, then rename to `<md5(uuid)>.eml`. The delivery scanner is a non-recursive top-level `spool/smtp/*.eml` listing. It does not recurse into `failed/` and does not treat `.tmp`, `.wrk`, or `.delivered` as pending work.
+
+Spool states:
+
+| File | Meaning | Automatic delivery |
+|------|---------|--------------------|
+| `.tmp` | Incomplete atomic write | Never |
+| `.eml` | Pending outbound message | Yes (only this state) |
+| `.wrk` | In-flight claim | No; crash recovery may rename back to `.eml` because SMTP may not have completed |
+| `failed/*.eml` | Permanent SMTP/parse failure; retained for operators | Never; never moved back to the active spool |
+| `.delivered` | SMTP already accepted the message, but local delete failed | **Never.** Retrying would create a possible duplicate. Crash/startup/shutdown recovery must not rename this to `.eml`. |
+
+In-process claims are serialized so two delivery workers cannot process the same file. Startup recovers leftover `.wrk` files back to `.eml` unless this process still holds the claim. Permanent SMTP failures move the file to `spool/smtp/failed/`. If SMTP accepted the message but deleting the spool file fails, the file is renamed to `.delivered` and a critical log is written. `.delivered` is an operational cleanup-failure artifact, not pending mail, and is never automatically retransmitted.
+
+In-process retry state (attempt count / backoff) is not stored on disk. After restart, pending `.eml` files are eligible for delivery again. The bounded SMTP retry policy still prevents hammering one server during a process lifetime.
+
+Producers never see `TcpClient`, `SslStream`, SMTP commands, STARTTLS, AUTH, retries, spool paths, or connection reuse. POST never waits for DNS, TCP, TLS, AUTH, or DATA.
+
+SMTP transport (`SmtpTransport` / `SmtpConnection`) uses native .NET networking only. Security mode is explicit (`None` / `StartTls` / `ImplicitTls`) and is never inferred from port. Required STARTTLS does not silently downgrade. Implicit TLS handshakes before the SMTP greeting. After STARTTLS the client issues a second EHLO. AUTH PLAIN (preferred) and AUTH LOGIN run only after TLS when `RequireTlsForAuthentication` is true (the default). Certificate validation is mandatory; there is no production option to accept invalid SMTP server certificates. EHLO/HELO uses the application FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Credentials are never logged.
+
+Retries: 4xx / network failures retry with bounded exponential backoff and jitter. 5xx, AUTH, protocol, malformed-message, and partial-recipient failures do not retry; those files are retained under `failed/` for diagnosis. There is no dead-letter database.
+
+Startup validates configuration, creates `spool/smtp` when email is enabled, and does not open SMTP. Shutdown stops new submissions, allows the current SMTP operation to finish within `Email:Spool:ShutdownTimeout`, then leaves remaining `.eml` files on disk.
 
 AUTHINFO flow:
 
@@ -496,7 +546,7 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615.
 
 Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), and `Redis:Host`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs; either failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
@@ -510,4 +560,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP article retrieval, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; raw wire receive, destuff downstream), POST (RFC 3977 §6.3.1; streaming receive into one stuffed IHAVE/TAKETHIS queue buffer, strict article validation, catalogue snapshot newsgroup/posting-status checks, moderator authorization for status `m`, proto-article moderation submission without SMTP, server-owned injection metadata on the ordinary injection path, HistoryDB duplicate detection after the terminator, TryAdmit only), LIST/GROUP against the in-memory newsgroup catalogue, and the session authorization gates are in place. LISTGROUP remains a registered placeholder. SMTP moderator delivery is not implemented.
+NNTP article retrieval, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; raw wire receive, destuff downstream), POST (RFC 3977 §6.3.1; streaming receive into one stuffed IHAVE/TAKETHIS queue buffer, strict article validation, catalogue snapshot newsgroup/posting-status checks, moderator authorization for status `m`, proto-article moderation submission via `IEmailService` durable spool acceptance, server-owned injection metadata on the ordinary injection path, HistoryDB duplicate detection after the terminator, TryAdmit only), LIST/GROUP against the in-memory newsgroup catalogue, and the session authorization gates are in place. LISTGROUP remains a registered placeholder. The outbound Email subsystem is implemented as generic application infrastructure; moderation is one producer.

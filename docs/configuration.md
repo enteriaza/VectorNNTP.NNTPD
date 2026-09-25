@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, and the top-level `Moderation` moderator catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
@@ -53,6 +53,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 | `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). Not a moderator list. |
 | `Moderation:Moderators` | array | INN routing snapshot | no | Ordinary moderated-newsgroup routes (wildmat → routing mailbox/template, optional AUTHINFO username). See below. |
+| `Email:*` | object | disabled | no | Generic outbound email subsystem (SMTP + durable filesystem spool). See below. |
 | `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
 | `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
 
@@ -367,7 +368,7 @@ Moderator reinjection is a normal NNTP POST after AUTHINFO. There is no `MODERAT
 
 Cross-posting: an unapproved article is forwarded to the leftmost moderated group only (RFC 5537 §3.5.1). Further sequential moderator forwarding is the moderators' duty (RFC 5537 §3.9). Reinjection is accepted only when every remaining moderated target is authorized for the authenticated principal and the `Approved:` identities.
 
-SMTP is **not** implemented. `IModerationSubmissionService` is the durable forwarding boundary. The production default is unavailable; unapproved moderated POST returns `441` when forwarding cannot be performed. A future SMTP (or other) implementation can be registered without changing POST policy.
+`IModerationSubmissionService` is the forwarding boundary. POST does not speak SMTP. The production implementation (`EmailModerationSubmissionService`) composes a moderator email and calls `IEmailService.SendAsync`. Acceptance is **durable local spool acceptance**, not remote SMTP delivery. When `Email:Enabled` is `false` (default) the service reports unavailable and unapproved moderated POST returns `441`. Enable email and supply SMTP settings (host, envelope sender, credentials via secrets) to persist moderator mail under `spool/smtp`. Spool-write or encode failures also return `441`.
 
 The current `appsettings.json` snapshot was taken from the INN source (`https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators`, retrieved 2026-09-25) as routing-only entries. `Control:PgpAuthorities` is a separate catalogue.
 
@@ -382,6 +383,62 @@ Example (local authenticated moderator, not an INN public route):
       "Username": "moderator-example"
     }
   ]
+}
+```
+
+## Outbound email (`Email`)
+
+`Email` is a generic application email subsystem. Moderation is one producer. SMTP settings never belong on POST or on `Moderation:Moderators`.
+
+The filesystem spool (`spool/smtp` by default) is the durable outbound email queue. `IEmailService.SendAsync` validates, MIME-encodes, and atomically writes the complete message plus SMTP envelope. It does **not** wait for remote SMTP. Acceptance means the complete message has been durably written to the local spool. SMTP delivery is asynchronous. Successful SMTP delivery removes the spool file. Undelivered files survive process restart. SMTP acceptance followed by filesystem deletion is at-least-once and cannot be exactly-once. `240` after moderated POST means this local spool acceptance only. Disk/permission/serialization failures fail the write; there is no in-memory fallback and no queue-capacity limit.
+
+Spool files under `Email:Spool:Directory` (non-recursive scan of `*.eml` only):
+
+| File | Meaning |
+|------|---------|
+| `.tmp` | Incomplete write. Never delivered. |
+| `.eml` | Pending message. Eligible for delivery. |
+| `.wrk` | In-flight claim. Crash recovery may return this to `.eml`. |
+| `failed/*.eml` | Permanent failure. Retained for inspection. Never automatically delivered or requeued. |
+| `.delivered` | SMTP accepted the message, but local deletion failed. Retained for inspection. **Never automatically delivered** — retrying would duplicate a message the server already accepted. |
+
+EHLO/HELO uses the generated application FQDN (`Nntpd` `ServerId` + `DnsSuffix`). There is no `Email`-specific hostname setting. Certificate validation is mandatory; there is no option to accept invalid SMTP server certificates.
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `Email:Enabled` | bool | `false` | no | When `false`, `SendAsync` returns disabled. No spool file is written and no SMTP connection is opened. |
+| `Email:DefaultFrom` | string | `noreply@usenet.ninja` in appsettings | **yes when enabled** | Default RFC 5322 From mailbox. |
+| `Email:EnvelopeSender` | string | same as DefaultFrom | no | SMTP `MAIL FROM`. Never derived from To/Cc. |
+| `Email:Smtp:Host` | string | empty | **yes when enabled** | SMTP hostname or IP. |
+| `Email:Smtp:Port` | int | `587` | no | TCP port (`1–65535`). Does not select TLS mode. |
+| `Email:Smtp:Security` | enum | `StartTls` | no | `None` (plaintext relay), `StartTls` (RFC 3207), `ImplicitTls` (immediate TLS, typically 465). Explicit; no silent downgrade. |
+| `Email:Smtp:Username` | string | empty | no (secret) | SMTP AUTH username. Use `Email__Smtp__Username`. |
+| `Email:Smtp:Password` | string | empty | no (secret) | SMTP AUTH password. Use `Email__Smtp__Password`. Never commit. |
+| `Email:Smtp:RequireTlsForAuthentication` | bool | `true` | no | Refuse AUTH unless the session is already TLS-protected. Plaintext AUTH requires an explicit `false` and `Security=None`. |
+| `Email:Smtp:ConnectTimeout` | duration | `00:00:15` | no | TCP/TLS connect budget (`100ms`–`5m`). |
+| `Email:Smtp:CommandTimeout` | duration | `00:00:30` | no | SMTP read/write budget (`100ms`–`10m`). |
+| `Email:Smtp:MaxAttempts` | int | `3` | no | In-process delivery attempts including the first (`1–20`). Not persisted on disk. |
+| `Email:Smtp:InitialRetryDelay` | duration | `00:00:02` | no | First retry delay (exponential + jitter). |
+| `Email:Smtp:MaximumRetryDelay` | duration | `00:01:00` | no | Retry delay ceiling. |
+| `Email:Spool:Directory` | string | `spool/smtp` | no | Application-relative spool directory (`Path.GetFullPath`). Created automatically when email is enabled. |
+| `Email:Spool:ShutdownTimeout` | duration | `00:00:15` | no | How long stop waits for the current SMTP operation (`1s`–`5m`). Pending `.eml` files remain on disk. |
+| `Email:Spool:ScanInterval` | duration | `00:00:01` | no | Idle rescan interval (`20ms`–`5m`). A successful write also wakes the worker. |
+
+AUTH mechanisms: PLAIN (preferred when advertised) and LOGIN. AUTH payloads are never logged. STARTTLS required + server without STARTTLS fails. Implicit TLS never sends SMTP before the handshake.
+
+Example (secrets via environment, not this file):
+
+```json
+"Email": {
+  "Enabled": true,
+  "DefaultFrom": "noreply@usenet.ninja",
+  "EnvelopeSender": "noreply@usenet.ninja",
+  "Smtp": {
+    "Host": "smtp.example.net",
+    "Port": 587,
+    "Security": "StartTls"
+  },
+  "Spool": { "Directory": "spool/smtp" }
 }
 ```
 

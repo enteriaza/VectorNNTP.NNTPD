@@ -4,10 +4,9 @@ namespace VectorNNTP.NNTPD.Moderation;
 /// Durable boundary that accepts a proto-article for moderator forwarding.
 /// </summary>
 /// <remarks>
-/// POST policy calls this abstraction; it does not send email. SMTP or another
-/// delivery implementation can be registered without changing posting authorization.
-/// This repository has no mail infrastructure, so the production default reports
-/// <see cref="ModerationSubmissionStatus.Unavailable"/>.
+/// POST policy calls this abstraction; it does not send email or speak SMTP.
+/// The production implementation composes a moderator email and calls
+/// <c>IEmailService.SendAsync</c>. Queue acceptance is not remote SMTP delivery.
 /// </remarks>
 public interface IModerationSubmissionService
 {

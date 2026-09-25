@@ -22,6 +22,8 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.Email;
+using VectorNNTP.NNTPD.Email.Smtp;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 
@@ -176,8 +178,22 @@ public static class NntpdServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<ModerationOptions>, ModerationOptionsValidator>();
         services.TryAddSingleton<IModeratorAuthorization, ConfiguredModeratorAuthorization>();
-        services.TryAddSingleton<IModerationSubmissionService>(
-            static _ => UnavailableModerationSubmissionService.Instance);
+        services
+            .AddOptions<EmailOptions>()
+            .BindConfiguration(EmailOptions.SectionName)
+            .PostConfigure(static options =>
+            {
+                options.Smtp ??= new SmtpOptions();
+                options.Spool ??= new EmailSpoolOptions();
+            })
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
+        services.TryAddSingleton<IEmailSpool, FilesystemEmailSpool>();
+        services.TryAddSingleton<IEmailMessageEncoder, Rfc5322MessageEncoder>();
+        services.TryAddSingleton<ISmtpTransport, SmtpTransport>();
+        services.TryAddSingleton<IEmailService, EmailService>();
+        services.TryAddSingleton<ModerationEmailComposer>();
+        services.TryAddSingleton<IModerationSubmissionService, EmailModerationSubmissionService>();
 
         services
             .AddOptions<NntpDbOptions>()
@@ -201,7 +217,8 @@ public static class NntpdServiceCollectionExtensions
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) → HistoryDB writer →
-        // HistoryDB maintenance → incoming spool writer → Transit AllowFrom DNS refresh →
+        // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
+        // Transit AllowFrom DNS refresh →
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
         services.TryAddEnumerable(
@@ -249,6 +266,11 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, IncomingSpoolWriterService>(static sp =>
                 sp.GetRequiredService<IncomingSpoolWriterService>()));
+
+        services.TryAddSingleton<EmailDeliveryService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, EmailDeliveryService>(static sp =>
+                sp.GetRequiredService<EmailDeliveryService>()));
 
         services.TryAddSingleton<TransitDnsRefreshService>();
         services.TryAddEnumerable(

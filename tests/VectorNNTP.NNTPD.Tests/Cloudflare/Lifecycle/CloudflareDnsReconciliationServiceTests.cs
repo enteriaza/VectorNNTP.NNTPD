@@ -133,10 +133,11 @@ public sealed class CloudflareDnsReconciliationServiceTests
         Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[4].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[5].GetType());
         Assert.Equal(typeof(IncomingSpoolWriterService), services[6].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[7].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[8].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[9].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[10].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[7].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[8].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[9].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[10].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[11].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);
