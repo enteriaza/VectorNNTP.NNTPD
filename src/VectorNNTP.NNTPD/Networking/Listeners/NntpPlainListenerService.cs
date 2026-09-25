@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -21,6 +22,9 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 /// </summary>
 /// <remarks>
 /// Starts after Cloudflare DNS reconciliation and before ACME. Does not wait for certificates.
+/// <see cref="StartAsync"/> succeeds only after every planned endpoint has bound; a bind
+/// failure disposes already-bound endpoints and fails startup. Accept-loop failures after a
+/// successful bind do not fail startup.
 /// </remarks>
 public sealed class NntpPlainListenerService : IApplicationService, IAsyncDisposable
 {
@@ -33,6 +37,10 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly ISpeedTestCoordinator? _speedTest;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
+    private readonly IFeedDiagnostics _feedDiagnostics;
+    private readonly INntpSessionCensus? _sessionCensus;
+    private readonly ITransitPeerMetrics? _peerMetrics;
+    private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -54,7 +62,11 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         ILogger<NntpPlainListenerService> logger,
         ITransitInboundConnectionLimiter? inboundConnectionLimiter = null,
         IHistoryDb? historyDb = null,
-        ISpeedTestCoordinator? speedTest = null)
+        ISpeedTestCoordinator? speedTest = null,
+        IFeedDiagnostics? feedDiagnostics = null,
+        IListenSocketBinder? listenBinder = null,
+        INntpSessionCensus? sessionCensus = null,
+        ITransitPeerMetrics? peerMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -73,6 +85,10 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
         _historyDb = historyDb;
         _speedTest = speedTest;
+        _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
+        _sessionCensus = sessionCensus;
+        _peerMetrics = peerMetrics;
+        _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -90,36 +106,67 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     internal IReadOnlyList<IPEndPoint> LocalEndPoints =>
         _listeners.Select(static l => l.LocalEndPoint).ToArray();
 
+    /// <summary>Gets whether any accept loop is still running (tests).</summary>
+    internal bool HasActiveAcceptLoops => _listeners.Exists(static l => l.AcceptLoopActive);
+
     /// <inheritdoc />
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        var options = _options.Value;
-        var bindings = ListenEndpointPlanner.Plan(options.BindAddress, options.BindPort);
-        if (bindings.Count == 0)
-        {
-            throw new InvalidOperationException("No listen bindings were produced for the plain NNTP port.");
-        }
-
-        foreach (var binding in bindings)
+        try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var listener = new SocketAcceptListener(
-                binding,
-                OnAcceptedAsync,
-                _loggerFactory.CreateLogger($"{nameof(SocketAcceptListener)}.Plain"));
-            listener.Start();
-            _listeners.Add(listener);
-        }
+            var options = _options.Value;
+            var bindings = ListenEndpointPlanner.Plan(options.BindAddress, options.BindPort);
+            if (bindings.Count == 0)
+            {
+                throw new InvalidOperationException("No listen bindings were produced for the plain NNTP port.");
+            }
 
-        _execution = WaitUntilStoppedAsync(_runCts.Token);
-        NetworkingLogMessages.PlainListenersStarted(_logger, _listeners.Count, options.BindPort);
-        return Task.CompletedTask;
+            foreach (var binding in bindings)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var listener = new SocketAcceptListener(
+                    binding,
+                    OnAcceptedAsync,
+                    _loggerFactory.CreateLogger($"{nameof(SocketAcceptListener)}.Plain"),
+                    _listenBinder);
+                try
+                {
+                    listener.Start();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    NetworkingLogMessages.ListenerBindFailed(
+                        _logger,
+                        ex,
+                        "Plain",
+                        binding.EndPoint.ToString(),
+                        options.BindPort);
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                _listeners.Add(listener);
+            }
+
+            _execution = WaitUntilStoppedAsync(_runCts.Token);
+            NetworkingLogMessages.PlainListenersStarted(_logger, _listeners.Count, options.BindPort);
+        }
+        catch
+        {
+            await RollbackPartialStartupAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -187,6 +234,24 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _runCts.Dispose();
     }
 
+    private async Task RollbackPartialStartupAsync()
+    {
+        foreach (var listener in _listeners)
+        {
+            try
+            {
+                await listener.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort rollback of already-bound endpoints.
+            }
+        }
+
+        _listeners.Clear();
+        Interlocked.Exchange(ref _started, 0);
+    }
+
     private async ValueTask OnAcceptedAsync(Socket socket, CancellationToken cancellationToken)
     {
         NntpConnection? connection = null;
@@ -215,7 +280,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 socket,
                 preamble.Identity,
                 _loggerFactory.CreateLogger<NntpConnection>(),
-                preamble.Leftover);
+                preamble.Leftover,
+                _feedDiagnostics);
             _connections[connection] = 0;
 
             // Session owns NNTP greeting/command loop; transport owns the socket lifecycle.
@@ -230,17 +296,25 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 transitPeerAuthorization: _transitPeerAuthorization,
                 streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth,
                 historyDb: _historyDb,
-                speedTest: _speedTest);
+                speedTest: _speedTest,
+                sessionCensus: _sessionCensus,
+                peerMetrics: _peerMetrics);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))
             {
+                session.RecordPeerRejected();
+                _feedDiagnostics.OnRejected(
+                    session.Authorization.TransitPeerName ?? "none",
+                    ConnectionAcceptanceLogging.FormatEndpoint(session.ClientIdentity.Client));
                 await TransitConnectionAdmission
                     .WriteUnavailableAsync(connection, _runCts.Token)
                     .ConfigureAwait(false);
                 return;
             }
 
+            session.RecordPeerAccepted();
+            session.FeedProbe = _feedDiagnostics.OnAccepted(session);
             try
             {
                 await session.RunAsync(_runCts.Token).ConfigureAwait(false);
@@ -251,6 +325,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
             }
             finally
             {
+                _feedDiagnostics.OnReleased(session.FeedProbe);
                 lease.Dispose();
             }
         }

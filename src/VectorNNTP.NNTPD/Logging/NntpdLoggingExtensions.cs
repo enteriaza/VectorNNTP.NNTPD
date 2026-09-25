@@ -30,6 +30,26 @@ public static class NntpdLoggingExtensions
     }
 
     /// <summary>
+    /// Makes <see cref="Console.Out"/> flush every write.
+    /// </summary>
+    /// <remarks>
+    /// When stdout is a console, the runtime already flushes often enough that Information
+    /// lines appear immediately. When stdout is a pipe (IDE, redirected capture),
+    /// <see cref="Console.Out"/> is block-buffered: a startup burst fills the buffer and
+    /// becomes visible, then later Information events sit unseen until the buffer fills
+    /// again or the process exits. Serilog's Console sink writes to <see cref="Console.Out"/>
+    /// and does not Flush. This must run before the first Serilog Console sink is created.
+    /// </remarks>
+    public static void UseAutoFlushConsoleOutput()
+    {
+        var writer = new StreamWriter(Console.OpenStandardOutput(), Console.OutputEncoding)
+        {
+            AutoFlush = true,
+        };
+        Console.SetOut(writer);
+    }
+
+    /// <summary>
     /// Removes Microsoft default logging providers and registers Serilog as the sole provider.
     /// </summary>
     /// <param name="builder">The host application builder.</param>
@@ -85,6 +105,33 @@ public static class NntpdLoggingExtensions
             writeToProviders: false);
 
         return builder;
+    }
+
+    /// <summary>
+    /// Emits one Information event through the host <see cref="ILoggerFactory"/> after
+    /// Serilog has replaced the bootstrap logger.
+    /// </summary>
+    /// <param name="services">The built host service provider.</param>
+    /// <param name="environmentName">Host environment name (no secrets).</param>
+    /// <param name="contentRootPath">Resolved content root used for <c>appsettings.json</c>.</param>
+    public static void WriteLoggingInitialized(
+        IServiceProvider services,
+        string environmentName,
+        string contentRootPath)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentRootPath);
+
+        var factory = services.GetRequiredService<ILoggerFactory>();
+        var logger = factory.CreateLogger(NntpdLogCategories.Hosting);
+        HostingLogMessages.LoggingInitialized(
+            logger,
+            "VectorNNTP.NNTPD",
+            factory.GetType().Name,
+            NntpdLogCategories.Hosting,
+            environmentName,
+            contentRootPath);
     }
 
     /// <summary>

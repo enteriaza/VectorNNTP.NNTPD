@@ -16,6 +16,8 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.SpeedTest;
+using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Hosting;
@@ -45,6 +47,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
         services.TryAddSingleton<IBindAddressResolver, BindAddressResolver>();
         services.TryAddSingleton<ITrustedProxyHosts, TrustedProxyHosts>();
+        services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
         // Real account backends replace this registration; default rejects all credentials.
@@ -53,6 +56,13 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITransitDnsResolver, TransitDnsClientResolver>();
         services.TryAddSingleton<ITransitDnsAddressCache, TransitDnsAddressCache>();
         services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
+        services.TryAddSingleton<IFeedDiagnostics>(static sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
+            return FeedDiagnosticsOptions.ResolveEnabled(options)
+                ? ActivatorUtilities.CreateInstance<FeedDiagnosticsHub>(sp)
+                : NullFeedDiagnostics.Instance;
+        });
         services.TryAddSingleton<ITransitPeerAuthorization, TransitPeerAuthorization>();
         services.TryAddSingleton<TransitConfigurationHotReload>();
         services.TryAddSingleton<ISpeedTestCoordinator, SpeedTestCoordinator>();
@@ -100,6 +110,7 @@ public static class NntpdServiceCollectionExtensions
                 options.ArticleIngestion ??= new ArticleIngestionOptions();
                 options.Transit ??= new TransitOptions();
                 options.SpeedTest ??= new SpeedTestOptions();
+                options.FeedDiagnostics ??= new FeedDiagnosticsOptions();
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
                 options.Transit ??= new TransitOptions();
@@ -128,7 +139,8 @@ public static class NntpdServiceCollectionExtensions
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → HistoryDB writer → HistoryDB maintenance →
         // incoming spool writer → Transit AllowFrom DNS refresh →
-        // plain NNTP listener → ACME → TLS NNTP listener.
+        // plain NNTP listener → ACME → TLS NNTP listener →
+        // optional feed-diagnostics reporter → always-on application telemetry.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
 
@@ -141,6 +153,9 @@ public static class NntpdServiceCollectionExtensions
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());
+        services.TryAddSingleton<IHistoryLookupMetrics>(static sp => sp.GetRequiredService<HistoryDb>());
+        services.TryAddSingleton<ITransitPeerMetrics, TransitPeerMetrics>();
+        services.TryAddSingleton<INntpSessionCensus, NntpSessionCensus>();
         services.TryAddSingleton<HistoryWriteService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, HistoryWriteService>(static sp =>
@@ -179,6 +194,14 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpTlsListenerService>(static sp =>
                 sp.GetRequiredService<NntpTlsListenerService>()));
+        services.TryAddSingleton<FeedDiagnosticsService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, FeedDiagnosticsService>(static sp =>
+                sp.GetRequiredService<FeedDiagnosticsService>()));
+        services.TryAddSingleton<ApplicationTelemetryService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, ApplicationTelemetryService>(static sp =>
+                sp.GetRequiredService<ApplicationTelemetryService>()));
 
         if (includePlaceholderService)
         {

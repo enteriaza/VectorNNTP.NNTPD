@@ -1,7 +1,9 @@
 using Serilog;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
+using VectorNNTP.NNTPD.Session.Commands;
 
+NntpdLoggingExtensions.UseAutoFlushConsoleOutput();
 Log.Logger = NntpdLoggingExtensions.CreateBootstrapLogger();
 
 try
@@ -15,6 +17,11 @@ try
     builder.Services.AddNntpdHosting();
 
     var host = builder.Build();
+    NntpCommandLoggers.Configure(host.Services.GetRequiredService<ILoggerFactory>());
+    NntpdLoggingExtensions.WriteLoggingInitialized(
+        host.Services,
+        builder.Environment.EnvironmentName,
+        builder.Environment.ContentRootPath);
     await host.RunAsync().ConfigureAwait(false);
 
     Log.Information("VectorNNTP.NNTPD host stopped cleanly");

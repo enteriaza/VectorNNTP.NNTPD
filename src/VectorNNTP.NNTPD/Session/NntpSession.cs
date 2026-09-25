@@ -9,6 +9,8 @@ using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Session.SpeedTest;
+using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -34,6 +36,7 @@ public sealed class NntpSession
     private string? _pendingAuthUsername;
     private NntpSessionMode _mode;
     private int _closeRequested;
+    private int _activityState;
     private readonly CancellationTokenSource _closeCts = new();
 
     /// <summary>Initializes a new instance of the <see cref="NntpSession"/> class.</summary>
@@ -48,7 +51,9 @@ public sealed class NntpSession
         ITransitPeerAuthorization? transitPeerAuthorization = null,
         int streamOutstandingArticleDepth = NntpStreamArticleTxScheduler.DefaultDepth,
         IHistoryDb? historyDb = null,
-        ISpeedTestCoordinator? speedTest = null)
+        ISpeedTestCoordinator? speedTest = null,
+        INntpSessionCensus? sessionCensus = null,
+        ITransitPeerMetrics? peerMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -66,6 +71,8 @@ public sealed class NntpSession
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
         HistoryDb = historyDb;
         SpeedTest = speedTest;
+        SessionCensus = sessionCensus;
+        PeerMetrics = peerMetrics;
         StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
         _dispatcher = new NntpCommandDispatcher(loggerFactory);
     }
@@ -88,6 +95,20 @@ public sealed class NntpSession
     /// Gets the SPEEDTEST coordinator, or <see langword="null"/> when the diagnostic is not registered.
     /// </summary>
     public ISpeedTestCoordinator? SpeedTest { get; }
+
+    /// <summary>
+    /// Gets the opt-in feed-diagnostics probe for this session, or <see langword="null"/> when disabled.
+    /// </summary>
+    public FeedSessionProbe? FeedProbe { get; set; }
+
+    /// <summary>Gets the process-wide session census, or <see langword="null"/> when unset (tests).</summary>
+    internal INntpSessionCensus? SessionCensus { get; }
+
+    /// <summary>Gets always-on Transit peer counters, or <see langword="null"/> when unset (tests).</summary>
+    internal ITransitPeerMetrics? PeerMetrics { get; }
+
+    /// <summary>Gets the existing article-ingest activity state for this session.</summary>
+    public FeedSessionState ActivityState => (FeedSessionState)Volatile.Read(ref _activityState);
 
     /// <summary>Gets the per-session CHECK pipeline once <see cref="RunAsync"/> has started.</summary>
     internal CheckPipeline? Pipeline { get; private set; }
@@ -207,6 +228,52 @@ public sealed class NntpSession
         _authorization = _connectionAuthorization;
     }
 
+    /// <summary>Records a successful inbound admission for this session's Transit peer, if any.</summary>
+    public void RecordPeerAccepted()
+    {
+        if (Authorization.TransitPeerName is { } peerId)
+        {
+            PeerMetrics?.RecordAccepted(peerId);
+        }
+    }
+
+    /// <summary>Records an inbound admission rejection for this session's Transit peer, if any.</summary>
+    public void RecordPeerRejected()
+    {
+        if (Authorization.TransitPeerName is { } peerId)
+        {
+            PeerMetrics?.RecordRejected(peerId);
+        }
+    }
+
+    /// <summary>Records one CHECK for this session's Transit peer, if any.</summary>
+    public void RecordPeerCheck()
+    {
+        if (Authorization.TransitPeerName is { } peerId)
+        {
+            PeerMetrics?.RecordCheck(peerId);
+        }
+    }
+
+    /// <summary>Records one framed article received from this session's Transit peer, if any.</summary>
+    public void RecordPeerArticleReceived(int bytes)
+    {
+        if (Authorization.TransitPeerName is { } peerId)
+        {
+            PeerMetrics?.RecordArticleReceived(peerId, bytes);
+        }
+    }
+
+    /// <summary>
+    /// Updates <see cref="ActivityState"/> using the existing feed-session state machine
+    /// and forwards to <see cref="FeedProbe"/> when attached.
+    /// </summary>
+    public void SetActivityState(FeedSessionState state)
+    {
+        Volatile.Write(ref _activityState, (int)state);
+        FeedProbe?.SetState(state);
+    }
+
     /// <summary>
     /// Requests the command loop to exit after the current response (e.g. QUIT / TAKETHIS 400).
     /// Cancels a pending RX <c>ReadAsync</c> so a close requested off the RX stack still ends
@@ -237,6 +304,7 @@ public sealed class NntpSession
 
         try
         {
+            SessionCensus?.Register(this);
             var response = _response ??= new NntpResponseWriter(Connection.Output);
             Pipeline = new CheckPipeline(this, response);
             TakeThisWindow = new TakeThisPipeline(this, response);
@@ -275,6 +343,7 @@ public sealed class NntpSession
         }
         finally
         {
+            SessionCensus?.Unregister(this);
             if (TakeThisWindow is not null)
             {
                 try

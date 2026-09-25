@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
@@ -22,6 +23,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IIncomingArticlePersister _persister;
     private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<IncomingSpoolWriterService> _logger;
+    private readonly IFeedDiagnostics _feedDiagnostics;
     private readonly CancellationTokenSource _runCts = new();
     private Task? _execution;
     private int _started;
@@ -31,7 +33,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IArticleIngestionQueue queue,
         IIncomingArticlePersister persister,
         IOptions<NntpdOptions> options,
-        ILogger<IncomingSpoolWriterService> logger)
+        ILogger<IncomingSpoolWriterService> logger,
+        IFeedDiagnostics? feedDiagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -41,6 +44,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _persister = persister;
         _options = options;
         _logger = logger;
+        _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
     }
 
     /// <inheritdoc />
@@ -116,6 +120,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 break;
             }
 
+            var persisted = false;
+            _feedDiagnostics.BeginSpoolWork();
             try
             {
                 if (article.Producer == InboundArticleProducer.IHave)
@@ -124,6 +130,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 }
 
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
+                persisted = true;
             }
             catch (Exception ex)
             {
@@ -133,6 +140,10 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                     ex,
                     article.MessageId,
                     article.Payload.Length);
+            }
+            finally
+            {
+                _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
             }
 
             if (cancellationToken.IsCancellationRequested && _queue.Count == 0)

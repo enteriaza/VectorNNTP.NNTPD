@@ -46,6 +46,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateTransitQueueMemoryLimit(options, failures);
         ValidateTransit(options, failures);
         ValidateSpeedTest(options, failures);
+        ValidateFeedDiagnostics(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -80,6 +81,17 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add(
                 $"{nameof(NntpdOptions.SpeedTest)}.{nameof(SpeedTestOptions.MaxConcurrentPerPeer)} must be between {SpeedTestOptions.MinConcurrentPerPeer} and {SpeedTestOptions.MaxConcurrentPerPeerLimit}.");
+        }
+    }
+
+    private static void ValidateFeedDiagnostics(NntpdOptions options, List<string> failures)
+    {
+        var feed = options.FeedDiagnostics ?? new FeedDiagnosticsOptions();
+        if (feed.IntervalSeconds is < FeedDiagnosticsOptions.MinIntervalSeconds
+            or > FeedDiagnosticsOptions.MaxIntervalSeconds)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.FeedDiagnostics)}.{nameof(FeedDiagnosticsOptions.IntervalSeconds)} must be between {FeedDiagnosticsOptions.MinIntervalSeconds} and {FeedDiagnosticsOptions.MaxIntervalSeconds}.");
         }
     }
 

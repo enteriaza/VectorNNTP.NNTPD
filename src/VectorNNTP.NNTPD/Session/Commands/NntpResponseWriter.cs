@@ -158,8 +158,10 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     /// (not Pipe memory, not session scratch). Channel order, coalesce-flush-first, and TCS
     /// barrier semantics match <see cref="WriteLineAsync(int, string, CancellationToken)"/>.
     /// </remarks>
-    public ValueTask WriteLineAsync(ReadOnlyMemory<byte> wireLine, CancellationToken cancellationToken = default) =>
-        WriteAndAwaitFlushAsync(wireLine, cancellationToken);
+    public ValueTask WriteLineAsync(ReadOnlyMemory<byte> wireLine, CancellationToken cancellationToken = default)
+    {
+        return WriteAndAwaitFlushAsync(wireLine, cancellationToken);
+    }
 
     /// <summary>
     /// Enqueues a single-line response without waiting for outbound pipe/network flush.

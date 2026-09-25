@@ -6,6 +6,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
@@ -47,6 +48,7 @@ public sealed class NntpConnection : INntpConnection
     private readonly CancellationTokenSource _connectionCts = new();
     private readonly object _completeGate = new();
     private readonly ConnectionClientIdentity _clientIdentity;
+    private readonly IFeedDiagnostics? _feedDiagnostics;
     private Socket? _socket;
     private ConnectionByteTransport? _transport;
     private TlsCertificateLease? _certificateLease;
@@ -73,7 +75,8 @@ public sealed class NntpConnection : INntpConnection
         EndPoint? localEndPoint,
         bool isTls,
         ConnectionClientIdentity clientIdentity,
-        ILogger logger)
+        ILogger logger,
+        IFeedDiagnostics? feedDiagnostics = null)
     {
         _socket = socket;
         _transport = transport;
@@ -82,6 +85,7 @@ public sealed class NntpConnection : INntpConnection
         _mode = isTls ? ModeTls : ModePlain;
         _clientIdentity = clientIdentity;
         _logger = logger;
+        _feedDiagnostics = feedDiagnostics;
         var inputOptions = NntpPipeOptions.Create();
         var outputOptions = NntpPipeOptions.CreateOutput();
         _inputPipe = new Pipe(inputOptions);
@@ -183,7 +187,8 @@ public sealed class NntpConnection : INntpConnection
         Socket socket,
         ConnectionClientIdentity clientIdentity,
         ILogger logger,
-        ReadOnlyMemory<byte> receivePrefix = default)
+        ReadOnlyMemory<byte> receivePrefix = default,
+        IFeedDiagnostics? feedDiagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(socket);
         ArgumentNullException.ThrowIfNull(clientIdentity);
@@ -202,7 +207,8 @@ public sealed class NntpConnection : INntpConnection
             TryGetLocal(socket),
             isTls: false,
             clientIdentity,
-            logger);
+            logger,
+            feedDiagnostics);
         if (!receivePrefix.IsEmpty)
         {
             connection._receivePrefix = receivePrefix.ToArray();
@@ -221,7 +227,8 @@ public sealed class NntpConnection : INntpConnection
         ConnectionClientIdentity clientIdentity,
         ILogger logger,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> tlsPrefix = default)
+        ReadOnlyMemory<byte> tlsPrefix = default,
+        IFeedDiagnostics? feedDiagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(socket);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -258,7 +265,7 @@ public sealed class NntpConnection : INntpConnection
         {
             Io = TransportIoProbe.CreateSession(),
         };
-        var connection = new NntpConnection(socket, transport, remote, local, isTls: true, clientIdentity, logger)
+        var connection = new NntpConnection(socket, transport, remote, local, isTls: true, clientIdentity, logger, feedDiagnostics)
         {
             _certificateLease = lease,
             _negotiatedTlsVersion = tlsVersion,
@@ -858,6 +865,7 @@ public sealed class NntpConnection : INntpConnection
             var memory = writer.GetMemory(prefix.Length);
             prefix.CopyTo(memory);
             writer.Advance(prefix.Length);
+            RecordReceivedBytes(prefix.Length);
             var prefixFlush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
             if (prefixFlush.IsCompleted || prefixFlush.IsCanceled)
             {
@@ -882,6 +890,7 @@ public sealed class NntpConnection : INntpConnection
                 continue;
             }
 
+            RecordReceivedBytes(bytes);
             writer.Advance(bytes);
             var flush = await FlushInputAsync(writer, token, transport.Io).ConfigureAwait(false);
             if (flush.IsCompleted || flush.IsCanceled)
@@ -891,6 +900,14 @@ public sealed class NntpConnection : INntpConnection
         }
 
         await writer.CompleteAsync().ConfigureAwait(false);
+    }
+
+    private void RecordReceivedBytes(int bytes)
+    {
+        if (bytes > 0 && _feedDiagnostics is { IsEnabled: true })
+        {
+            _feedDiagnostics.RecordTcpBytes(bytes);
+        }
     }
 
     private async Task SendAsync()

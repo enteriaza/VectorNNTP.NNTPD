@@ -157,4 +157,15 @@ internal static partial class NetworkingLogMessages
         Level = LogLevel.Debug,
         Message = "Accepted connection handler failed; listener continues")]
     public static partial void AcceptedHandlerFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1424,
+        Level = LogLevel.Error,
+        Message = "Failed to bind {ListenerType} NNTP listener to {Endpoint} (port {Port}); listener startup cannot continue")]
+    public static partial void ListenerBindFailed(
+        ILogger logger,
+        Exception exception,
+        string ListenerType,
+        string Endpoint,
+        int Port);
 }

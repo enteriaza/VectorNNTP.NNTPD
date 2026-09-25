@@ -7,13 +7,13 @@ internal static partial class CommandLogMessages
 {
     [LoggerMessage(
         EventId = 1600,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         Message = "[{Client}] RX: {Command}")]
     public static partial void CommandRx(ILogger logger, string Client, string Command);
 
     [LoggerMessage(
         EventId = 1601,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         Message = "[{Client}] RX rejected: verb={Verb} qualifier={Qualifier} status={Status} [{Detail}]")]
     public static partial void CommandRejected(
         ILogger logger,
@@ -25,13 +25,13 @@ internal static partial class CommandLogMessages
 
     [LoggerMessage(
         EventId = 1602,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         Message = "[{Client}] TX: {Command} executed in {ElapsedSeconds:F3}s")]
     public static partial void CommandTx(ILogger logger, string Client, string Command, double ElapsedSeconds);
 
     [LoggerMessage(
         EventId = 1603,
-        Level = LogLevel.Information,
+        Level = LogLevel.Debug,
         Message = "[{Client}] TX: {Command} executed in {ElapsedSeconds:F3}s [{Detail}]")]
     public static partial void CommandTxWithDetail(
         ILogger logger,

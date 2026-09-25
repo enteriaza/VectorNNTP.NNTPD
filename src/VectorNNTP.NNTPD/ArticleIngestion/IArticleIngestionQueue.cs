@@ -34,6 +34,21 @@ public interface IArticleIngestionQueue
     /// <summary>Gets the high-water mark of <see cref="Count"/> since construction.</summary>
     int PeakCount { get; }
 
+    /// <summary>
+    /// Gets the number of producers waiting for byte-budget capacity.
+    /// </summary>
+    int WaitingProducerCount => 0;
+
+    /// <summary>
+    /// Gets lifetime admission failures (rejected, full, or unavailable).
+    /// </summary>
+    long AdmissionFailureCount => 0;
+
+    /// <summary>
+    /// Gets accumulated producer wait ticks while blocked on byte-budget capacity.
+    /// </summary>
+    long AdmissionWaitTicks => 0;
+
     /// <summary>Gets a value indicating whether the queue is still accepting articles.</summary>
     bool IsAccepting { get; }
 

@@ -75,6 +75,16 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void FeedDiagnostics_DefaultsAreOff()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.False(options.FeedDiagnostics.Enabled);
+        Assert.Equal(FeedDiagnosticsOptions.DefaultIntervalSeconds, options.FeedDiagnostics.IntervalSeconds);
+        Assert.True(options.FeedDiagnostics.IncludeSessions);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
     public void SpeedTest_DefaultsAreDiagnosticSized()
     {
         var options = TestHostFactory.CreateValidOptions();

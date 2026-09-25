@@ -3,6 +3,7 @@ using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -156,6 +157,9 @@ internal sealed class TakeThisPipeline
         CancellationToken cancellationToken)
     {
         ThrowIfShutDown();
+        var probe = _session.FeedProbe;
+        probe?.RecordCommand();
+        _session.SetActivityState(FeedSessionState.Receiving);
         var ownedId = command.ArgumentMemory(line).ToArray();
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var marks = _stageLog is null ? null : new TakeThisStageMarks
@@ -240,6 +244,17 @@ internal sealed class TakeThisPipeline
             marks.ReceiveCompleteTs = System.Diagnostics.Stopwatch.GetTimestamp();
             marks.ArticleBytes = read.Payload.Length;
         }
+
+        if (probe is not null)
+        {
+            var receiveStart = marks?.ReceiveStartTs ?? started;
+            probe.RecordArticleReceived(
+                read.Payload.Length,
+                System.Diagnostics.Stopwatch.GetTimestamp() - receiveStart);
+        }
+
+        _session.RecordPeerArticleReceived(read.Payload.Length);
+        _session.SetActivityState(FeedSessionState.WaitingHistory);
 
         lock (_gate)
         {
@@ -344,6 +359,7 @@ internal sealed class TakeThisPipeline
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
 
             HistoryLookupResult peek;
+            var peekWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 peek = await lookup.ConfigureAwait(false);
@@ -362,6 +378,10 @@ internal sealed class TakeThisPipeline
             {
                 peek = HistoryLookupResult.Unavailable;
             }
+
+            _session.FeedProbe?.RecordHistory(
+                peek,
+                System.Diagnostics.Stopwatch.GetTimestamp() - peekWaitStart);
 
             var emit = false;
             lock (_gate)
@@ -497,9 +517,16 @@ internal sealed class TakeThisPipeline
                 seenMarks.Outcome = "seen";
             }
 
+            var probe = _session.FeedProbe;
+            _session.SetActivityState(FeedSessionState.Completing);
+            var responseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.ArticleTransferredOkPrefix, cancellationToken)
                 .ConfigureAwait(false);
             TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "accepted duplicate");
+            probe?.RecordArticleCompleted(
+                duplicate: true,
+                System.Diagnostics.Stopwatch.GetTimestamp() - responseStart);
+            _session.SetActivityState(FeedSessionState.Idle);
             RecordAccepted(slot);
             return;
         }
@@ -529,7 +556,11 @@ internal sealed class TakeThisPipeline
                 enqueueMarks.EnqueueStartTs = System.Diagnostics.Stopwatch.GetTimestamp();
             }
 
+            var probe = _session.FeedProbe;
+            _session.SetActivityState(FeedSessionState.WaitingQueue);
+            var queueStart = System.Diagnostics.Stopwatch.GetTimestamp();
             enqueue = await queue.EnqueueAsync(inbound, cancellationToken).ConfigureAwait(false);
+            probe?.RecordQueue(enqueue, System.Diagnostics.Stopwatch.GetTimestamp() - queueStart, read.Payload.Length);
             if (slot.Marks is { } acceptedMarks)
             {
                 acceptedMarks.EnqueueAcceptedTs = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -551,9 +582,16 @@ internal sealed class TakeThisPipeline
 
         if (enqueue == ArticleEnqueueResult.Rejected)
         {
+            var rejectProbe = _session.FeedProbe;
+            _session.SetActivityState(FeedSessionState.Completing);
+            var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
             TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "rejected exceeds queue budget");
+            rejectProbe?.RecordArticleCompleted(
+                duplicate: false,
+                System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
+            _session.SetActivityState(FeedSessionState.Idle);
             return;
         }
 
@@ -569,9 +607,16 @@ internal sealed class TakeThisPipeline
             rememberedMarks.RememberCompleteTs = System.Diagnostics.Stopwatch.GetTimestamp();
         }
 
+        var completeProbe = _session.FeedProbe;
+        _session.SetActivityState(FeedSessionState.Completing);
+        var completeStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await EnqueueReplyAsync(slot, NntpResponses.ArticleTransferredOkPrefix, cancellationToken)
             .ConfigureAwait(false);
         TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "accepted");
+        completeProbe?.RecordArticleCompleted(
+            duplicate: false,
+            System.Diagnostics.Stopwatch.GetTimestamp() - completeStart);
+        _session.SetActivityState(FeedSessionState.Idle);
         RecordAccepted(slot);
     }
 

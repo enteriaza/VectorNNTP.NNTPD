@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Commands;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -108,6 +109,10 @@ internal sealed class CheckPipeline
         CancellationToken cancellationToken)
     {
         ThrowIfShutDown();
+        var probe = _session.FeedProbe;
+        probe?.RecordCheck();
+        _session.RecordPeerCheck();
+        _session.SetActivityState(FeedSessionState.WaitingHistory);
         var owned = command.ArgumentMemory(line).ToArray();
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var lookup = Check.LookupAsync(_session, owned, cancellationToken);
@@ -137,6 +142,7 @@ internal sealed class CheckPipeline
             {
                 slot.Completed = true;
                 slot.Result = lookup.Result;
+                probe?.RecordHistory(lookup.Result, System.Diagnostics.Stopwatch.GetTimestamp() - started);
                 emit = HeadIsReadyNoLock();
             }
             else
@@ -240,6 +246,7 @@ internal sealed class CheckPipeline
         try
         {
             HistoryLookupResult result;
+            var historyStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 result = await lookup.ConfigureAwait(false);
@@ -258,6 +265,10 @@ internal sealed class CheckPipeline
             {
                 result = HistoryLookupResult.Unavailable;
             }
+
+            _session.FeedProbe?.RecordHistory(
+                result,
+                System.Diagnostics.Stopwatch.GetTimestamp() - historyStart);
 
             var emit = false;
             lock (_gate)

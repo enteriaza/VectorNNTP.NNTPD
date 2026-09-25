@@ -48,6 +48,8 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
     private int _count;
     private int _peakCount;
     private int _completed;
+    private long _admissionFailures;
+    private long _admissionWaitTicks;
 
     /// <summary>Initializes a new instance of the <see cref="ArticleIngestionQueue"/> class.</summary>
     public ArticleIngestionQueue(IOptions<NntpdOptions> options)
@@ -101,6 +103,15 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
     /// <inheritdoc />
     public bool IsAccepting => Volatile.Read(ref _completed) == 0;
 
+    /// <inheritdoc />
+    public int WaitingProducerCount => DebugWaiterCount;
+
+    /// <inheritdoc />
+    public long AdmissionFailureCount => Volatile.Read(ref _admissionFailures);
+
+    /// <inheritdoc />
+    public long AdmissionWaitTicks => Volatile.Read(ref _admissionWaitTicks);
+
     /// <summary>Gets the number of producers waiting for byte-budget capacity (tests).</summary>
     internal int DebugWaiterCount
     {
@@ -132,23 +143,30 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         var bytes = article.Payload.Length;
         if (bytes > _memoryLimit)
         {
+            RecordAdmission(ArticleEnqueueResult.Rejected, waitTicks: 0);
             return ArticleEnqueueResult.Rejected;
         }
 
         if (!IsAccepting)
         {
+            RecordAdmission(ArticleEnqueueResult.Unavailable, waitTicks: 0);
             return ArticleEnqueueResult.Unavailable;
         }
 
+        var waitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var reserved = await ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
+        var waitTicks = System.Diagnostics.Stopwatch.GetTimestamp() - waitStarted;
         if (reserved != ArticleEnqueueResult.Accepted)
         {
+            RecordAdmission(reserved, waitTicks);
             return reserved;
         }
 
-        return TryWriteReserved(article, bytes)
+        var written = TryWriteReserved(article, bytes)
             ? ArticleEnqueueResult.Accepted
             : ArticleEnqueueResult.Unavailable;
+        RecordAdmission(written, waitTicks);
+        return written;
     }
 
     /// <inheritdoc />
@@ -168,22 +186,27 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         var bytes = article.Payload.Length;
         if (bytes > _memoryLimit)
         {
+            RecordAdmission(ArticleEnqueueResult.Rejected, waitTicks: 0);
             return ArticleEnqueueResult.Rejected;
         }
 
         if (!IsAccepting)
         {
+            RecordAdmission(ArticleEnqueueResult.Unavailable, waitTicks: 0);
             return ArticleEnqueueResult.Unavailable;
         }
 
         if (!TryReserveImmediate(bytes))
         {
+            RecordAdmission(ArticleEnqueueResult.Full, waitTicks: 0);
             return ArticleEnqueueResult.Full;
         }
 
-        return TryWriteReserved(article, bytes)
+        var written = TryWriteReserved(article, bytes)
             ? ArticleEnqueueResult.Accepted
             : ArticleEnqueueResult.Unavailable;
+        RecordAdmission(written, waitTicks: 0);
+        return written;
     }
 
     /// <inheritdoc />
@@ -280,6 +303,21 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         {
             waiter.CancelFromToken();
             return ArticleEnqueueResult.Unavailable;
+        }
+    }
+
+    private void RecordAdmission(ArticleEnqueueResult result, long waitTicks)
+    {
+        if (result is ArticleEnqueueResult.Rejected
+            or ArticleEnqueueResult.Unavailable
+            or ArticleEnqueueResult.Full)
+        {
+            Interlocked.Increment(ref _admissionFailures);
+        }
+
+        if (waitTicks > 0)
+        {
+            Interlocked.Add(ref _admissionWaitTicks, waitTicks);
         }
     }
 

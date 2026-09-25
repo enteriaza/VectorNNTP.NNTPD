@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -39,8 +40,14 @@ internal sealed class NntpStreamDataPlaneRx
     public async ValueTask<bool> ProcessOneAsync(NntpResponseWriter response, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(response);
+        if (_session.Pipeline?.IsFull == true || _session.TakeThisWindow?.IsFull == true)
+        {
+            _session.SetActivityState(FeedSessionState.WaitingWindow);
+        }
+
         await _session.WaitForCheckCapacityAsync(cancellationToken).ConfigureAwait(false);
         await _session.WaitForTakeThisCapacityAsync(cancellationToken).ConfigureAwait(false);
+        _session.SetActivityState(FeedSessionState.Idle);
 
         // Command line only. Authorized TAKETHIS starts HistoryDB peek, frames the
         // article on this RX task, hands the owned buffer to the pipeline, and returns.

@@ -280,6 +280,19 @@ public sealed class ArticleIngestionQueueTests
     }
 
     [Fact]
+    public void TryAdmit_RejectedAndFull_IncrementAdmissionFailures()
+    {
+        var queue = CreateQueue(8);
+        Assert.Equal(ArticleEnqueueResult.Rejected, queue.TryAdmit(Article("<huge@ex.com>", 16)));
+        Assert.Equal(1, queue.AdmissionFailureCount);
+
+        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(Article("<fit@ex.com>", 8)));
+        Assert.Equal(ArticleEnqueueResult.Full, queue.TryAdmit(Article("<more@ex.com>", 1)));
+        Assert.Equal(2, queue.AdmissionFailureCount);
+        Assert.Equal(0, queue.AdmissionWaitTicks);
+    }
+
+    [Fact]
     public async Task Dequeue_IsFifo()
     {
         var queue = CreateQueue(64);

@@ -337,6 +337,16 @@ public sealed class NntpdOptions
     public SpeedTestOptions SpeedTest { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets temporary real-feed observability.
+    /// </summary>
+    /// <remarks>
+    /// Off by default. Periodic snapshots only; not per-article logging.
+    /// Also enabled by environment variable <c>VECTORNNTP_FEED_DIAGNOSTICS</c>.
+    /// </remarks>
+    [Required]
+    public FeedDiagnosticsOptions FeedDiagnostics { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets how long a HistoryDB marker is retained in local memory and Redis.
     /// </summary>
     /// <remarks>

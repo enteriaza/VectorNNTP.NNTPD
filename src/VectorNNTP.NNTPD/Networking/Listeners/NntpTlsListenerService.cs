@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -23,6 +24,9 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 /// Idle when <see cref="NntpdOptions.IsTlsListenerEnabled"/> is <see langword="false"/>.
 /// Does not rebind or restart on certificate rotation; new handshakes observe the latest context.
 /// PROXY preamble (when required) is consumed on the cleartext socket before TLS.
+/// When TLS is enabled, <see cref="StartAsync"/> succeeds only after every planned endpoint has
+/// bound; a bind failure disposes already-bound endpoints and fails startup. Accept-loop
+/// failures after a successful bind do not fail startup.
 /// </remarks>
 public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposable
 {
@@ -35,6 +39,10 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ISpeedTestCoordinator? _speedTest;
     private readonly ITransitPeerAuthorization _transitPeerAuthorization;
     private readonly ITransitInboundConnectionLimiter _inboundConnectionLimiter;
+    private readonly IFeedDiagnostics _feedDiagnostics;
+    private readonly INntpSessionCensus? _sessionCensus;
+    private readonly ITransitPeerMetrics? _peerMetrics;
+    private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
@@ -56,7 +64,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ILogger<NntpTlsListenerService> logger,
         ITransitInboundConnectionLimiter? inboundConnectionLimiter = null,
         IHistoryDb? historyDb = null,
-        ISpeedTestCoordinator? speedTest = null)
+        ISpeedTestCoordinator? speedTest = null,
+        IFeedDiagnostics? feedDiagnostics = null,
+        IListenSocketBinder? listenBinder = null,
+        INntpSessionCensus? sessionCensus = null,
+        ITransitPeerMetrics? peerMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -75,6 +87,10 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _inboundConnectionLimiter = inboundConnectionLimiter ?? TransitInboundConnectionLimiter.Disabled;
         _historyDb = historyDb;
         _speedTest = speedTest;
+        _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
+        _sessionCensus = sessionCensus;
+        _peerMetrics = peerMetrics;
+        _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
     }
@@ -95,48 +111,79 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     internal IReadOnlyList<IPEndPoint> LocalEndPoints =>
         _listeners.Select(static l => l.LocalEndPoint).ToArray();
 
+    /// <summary>Gets whether any accept loop is still running (tests).</summary>
+    internal bool HasActiveAcceptLoops => _listeners.Exists(static l => l.AcceptLoopActive);
+
     /// <inheritdoc />
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        var options = _options.Value;
-        if (!options.IsTlsListenerEnabled)
+        try
         {
-            NetworkingLogMessages.TlsListenerIdle(_logger);
-            return Task.CompletedTask;
-        }
+            var options = _options.Value;
+            if (!options.IsTlsListenerEnabled)
+            {
+                NetworkingLogMessages.TlsListenerIdle(_logger);
+                return;
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!_certificateProvider.IsAvailable)
-        {
-            throw new InvalidOperationException(
-                "TLS listener cannot start: no usable TLS certificate context is published.");
-        }
-
-        var bindings = ListenEndpointPlanner.Plan(options.BindAddress, options.BindPortTls);
-        if (bindings.Count == 0)
-        {
-            throw new InvalidOperationException("No listen bindings were produced for the TLS NNTP port.");
-        }
-
-        foreach (var binding in bindings)
-        {
             cancellationToken.ThrowIfCancellationRequested();
-            var listener = new SocketAcceptListener(
-                binding,
-                OnAcceptedAsync,
-                _loggerFactory.CreateLogger($"{nameof(SocketAcceptListener)}.Tls"));
-            listener.Start();
-            _listeners.Add(listener);
-        }
+            if (!_certificateProvider.IsAvailable)
+            {
+                throw new InvalidOperationException(
+                    "TLS listener cannot start: no usable TLS certificate context is published.");
+            }
 
-        _execution = WaitUntilStoppedAsync(_runCts.Token);
-        NetworkingLogMessages.TlsListenersStarted(_logger, _listeners.Count, options.BindPortTls);
-        return Task.CompletedTask;
+            var bindings = ListenEndpointPlanner.Plan(options.BindAddress, options.BindPortTls);
+            if (bindings.Count == 0)
+            {
+                throw new InvalidOperationException("No listen bindings were produced for the TLS NNTP port.");
+            }
+
+            foreach (var binding in bindings)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var listener = new SocketAcceptListener(
+                    binding,
+                    OnAcceptedAsync,
+                    _loggerFactory.CreateLogger($"{nameof(SocketAcceptListener)}.Tls"),
+                    _listenBinder);
+                try
+                {
+                    listener.Start();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    NetworkingLogMessages.ListenerBindFailed(
+                        _logger,
+                        ex,
+                        "TLS",
+                        binding.EndPoint.ToString(),
+                        options.BindPortTls);
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                _listeners.Add(listener);
+            }
+
+            _execution = WaitUntilStoppedAsync(_runCts.Token);
+            NetworkingLogMessages.TlsListenersStarted(_logger, _listeners.Count, options.BindPortTls);
+        }
+        catch
+        {
+            await RollbackPartialStartupAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -204,6 +251,24 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _runCts.Dispose();
     }
 
+    private async Task RollbackPartialStartupAsync()
+    {
+        foreach (var listener in _listeners)
+        {
+            try
+            {
+                await listener.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort rollback of already-bound endpoints.
+            }
+        }
+
+        _listeners.Clear();
+        Interlocked.Exchange(ref _started, 0);
+    }
+
     private async ValueTask OnAcceptedAsync(Socket socket, CancellationToken cancellationToken)
     {
         NntpConnection? connection = null;
@@ -234,7 +299,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                     preamble.Identity,
                     _loggerFactory.CreateLogger<NntpConnection>(),
                     cancellationToken,
-                    preamble.Leftover)
+                    preamble.Leftover,
+                    _feedDiagnostics)
                 .ConfigureAwait(false);
             _connections[connection] = 0;
 
@@ -249,7 +315,9 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 transitPeerAuthorization: _transitPeerAuthorization,
                 streamOutstandingArticleDepth: _options.Value.Transit.StreamOutstandingArticleDepth,
                 historyDb: _historyDb,
-                speedTest: _speedTest);
+                speedTest: _speedTest,
+                sessionCensus: _sessionCensus,
+                peerMetrics: _peerMetrics);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {
@@ -264,12 +332,18 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))
             {
+                session.RecordPeerRejected();
+                _feedDiagnostics.OnRejected(
+                    session.Authorization.TransitPeerName ?? "none",
+                    ConnectionAcceptanceLogging.FormatEndpoint(session.ClientIdentity.Client));
                 await TransitConnectionAdmission
                     .WriteUnavailableAsync(connection, _runCts.Token)
                     .ConfigureAwait(false);
                 return;
             }
 
+            session.RecordPeerAccepted();
+            session.FeedProbe = _feedDiagnostics.OnAccepted(session);
             try
             {
                 await session.RunAsync(_runCts.Token).ConfigureAwait(false);
@@ -280,6 +354,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
             }
             finally
             {
+                _feedDiagnostics.OnReleased(session.FeedProbe);
                 lease.Dispose();
             }
         }

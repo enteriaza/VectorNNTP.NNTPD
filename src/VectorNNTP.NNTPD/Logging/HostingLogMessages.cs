@@ -58,4 +58,16 @@ internal static partial class HostingLogMessages
         Level = LogLevel.Error,
         Message = "Application shutdown completed with failure")]
     public static partial void ShutdownCompletedWithFailure(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1209,
+        Level = LogLevel.Information,
+        Message = "Application logging initialized Application={Application} Provider={Provider} Category={Category} Environment={Environment} ContentRoot={ContentRoot}")]
+    public static partial void LoggingInitialized(
+        ILogger logger,
+        string Application,
+        string Provider,
+        string Category,
+        string Environment,
+        string ContentRoot);
 }

@@ -1,6 +1,7 @@
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -87,12 +88,16 @@ internal static class TakeThis
 
     private static async ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
+        var probe = context.Session.FeedProbe;
+        probe?.RecordCommand();
+        context.Session.SetActivityState(FeedSessionState.Receiving);
         var messageIdBytes = context.ArgumentSpan.ToArray();
         var lookup = PeekAsync(context.Session, messageIdBytes, cancellationToken);
         var queue = context.Session.ArticleIngestion;
 
         NntpMultilineReadStatus status;
         ReadOnlyMemory<byte> payload;
+        var receiveStart = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             if (context.PreReadArticle is { } preRead)
@@ -129,7 +134,14 @@ internal static class TakeThis
             return;
         }
 
+        probe?.RecordArticleReceived(
+            payload.Length,
+            System.Diagnostics.Stopwatch.GetTimestamp() - receiveStart);
+        context.Session.RecordPeerArticleReceived(payload.Length);
+        context.Session.SetActivityState(FeedSessionState.WaitingHistory);
+
         HistoryLookupResult peek;
+        var peekStart = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             peek = await lookup.ConfigureAwait(false);
@@ -144,6 +156,8 @@ internal static class TakeThis
         {
             peek = HistoryLookupResult.Unavailable;
         }
+
+        probe?.RecordHistory(peek, System.Diagnostics.Stopwatch.GetTimestamp() - peekStart);
 
         if (status == NntpMultilineReadStatus.TooLarge)
         {
@@ -165,11 +179,17 @@ internal static class TakeThis
 
         if (peek == HistoryLookupResult.Seen)
         {
+            context.Session.SetActivityState(FeedSessionState.Completing);
+            var seenStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueTransferReplyAsync(
                     context,
                     NntpResponses.ArticleTransferredOkPrefix,
                     cancellationToken)
                 .ConfigureAwait(false);
+            probe?.RecordArticleCompleted(
+                duplicate: true,
+                System.Diagnostics.Stopwatch.GetTimestamp() - seenStart);
+            context.Session.SetActivityState(FeedSessionState.Idle);
             context.CompletionDetail = "accepted duplicate";
             return;
         }
@@ -186,7 +206,10 @@ internal static class TakeThis
         ArticleEnqueueResult enqueue;
         try
         {
+            context.Session.SetActivityState(FeedSessionState.WaitingQueue);
+            var queueStart = System.Diagnostics.Stopwatch.GetTimestamp();
             enqueue = await queue.EnqueueAsync(inbound, cancellationToken).ConfigureAwait(false);
+            probe?.RecordQueue(enqueue, System.Diagnostics.Stopwatch.GetTimestamp() - queueStart, payload.Length);
         }
         catch (OperationCanceledException) when (
             cancellationToken.IsCancellationRequested
@@ -214,11 +237,17 @@ internal static class TakeThis
         }
 
         context.Session.HistoryDb?.Remember(messageIdBytes);
+        context.Session.SetActivityState(FeedSessionState.Completing);
+        var doneStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await EnqueueTransferReplyAsync(
                 context,
                 NntpResponses.ArticleTransferredOkPrefix,
                 cancellationToken)
             .ConfigureAwait(false);
+        probe?.RecordArticleCompleted(
+            duplicate: false,
+            System.Diagnostics.Stopwatch.GetTimestamp() - doneStart);
+        context.Session.SetActivityState(FeedSessionState.Idle);
         context.CompletionDetail = "accepted";
     }
 

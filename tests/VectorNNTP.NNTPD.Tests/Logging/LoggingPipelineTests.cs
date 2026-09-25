@@ -1,0 +1,403 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Console;
+using Microsoft.Extensions.Logging.Debug;
+using Microsoft.Extensions.Options;
+using Serilog;
+using Serilog.Extensions.Logging;
+using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Hosting;
+using VectorNNTP.NNTPD.Logging;
+using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.Commands;
+
+namespace VectorNNTP.NNTPD.Tests.Logging;
+
+[Collection(SerilogCollection.Name)]
+public sealed class LoggingPipelineTests
+{
+    [Fact]
+    public void ApplicationInformationAndDebug_AreEnabled_ForVectorNntpCategory()
+    {
+        using var host = CreateProductionConfiguredHost();
+        var factory = host.Services.GetRequiredService<ILoggerFactory>();
+        var root = factory.CreateLogger("VectorNNTP.NNTPD");
+        var listener = factory.CreateLogger("VectorNNTP.NNTPD.Networking.Listeners.NntpPlainListenerService");
+
+        Assert.True(root.IsEnabled(LogLevel.Information));
+        Assert.True(root.IsEnabled(LogLevel.Debug));
+        Assert.True(listener.IsEnabled(LogLevel.Information));
+        Assert.True(listener.IsEnabled(LogLevel.Debug));
+    }
+
+    [Fact]
+    public void MicrosoftAndSystem_RemainWarning_WhileHostingLifetimeIsInformation()
+    {
+        using var host = CreateProductionConfiguredHost();
+        var factory = host.Services.GetRequiredService<ILoggerFactory>();
+        var microsoft = factory.CreateLogger("Microsoft.Extensions.Options");
+        var system = factory.CreateLogger("System.Net.Http");
+        var lifetime = factory.CreateLogger("Microsoft.Hosting.Lifetime");
+
+        Assert.False(microsoft.IsEnabled(LogLevel.Information));
+        Assert.True(microsoft.IsEnabled(LogLevel.Warning));
+        Assert.False(system.IsEnabled(LogLevel.Information));
+        Assert.True(system.IsEnabled(LogLevel.Warning));
+        Assert.True(lifetime.IsEnabled(LogLevel.Information));
+    }
+
+    [Fact]
+    public void SerilogFactory_IsExclusive_NoMicrosoftProviders()
+    {
+        using var host = CreateProductionConfiguredHost();
+        var factories = host.Services.GetServices<ILoggerFactory>().ToArray();
+        Assert.Single(factories);
+        Assert.Equal("SerilogLoggerFactory", factories[0].GetType().Name);
+        var providers = host.Services.GetLoggerProviders();
+        Assert.Empty(providers);
+        Assert.DoesNotContain(providers, static p => p is ConsoleLoggerProvider);
+        Assert.DoesNotContain(providers, static p => p is DebugLoggerProvider);
+    }
+
+    [Fact]
+    public void ConnectionAcceptance_ReachesSerilogSink()
+    {
+        var sink = new CollectingSink();
+        using var host = CreateProductionConfiguredHost(sink);
+        var logger = host.Services.GetRequiredService<ILogger<NntpPlainListenerService>>();
+
+        Assert.True(logger.IsEnabled(LogLevel.Information));
+        NetworkingLogMessages.PlainConnectionAccepted(logger, "192.0.2.10:40000");
+
+        var evt = Assert.Single(
+            sink.Events,
+            e => e.RenderMessage().Contains("Plain connection accepted", StringComparison.Ordinal));
+        Assert.Equal(Serilog.Events.LogEventLevel.Information, evt.Level);
+        Assert.Equal(
+            "VectorNNTP.NNTPD.Networking.Listeners.NntpPlainListenerService",
+            evt.Properties["SourceContext"].ToString().Trim('"'));
+        Assert.DoesNotContain("password", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FeedDiagnosticsSnapshot_ReachesSerilogSink()
+    {
+        var sink = new CollectingSink();
+        using var host = CreateProductionConfiguredHost(sink);
+        var logger = host.Services.GetRequiredService<ILogger<FeedDiagnosticsService>>();
+        var text = FeedDiagnosticsFormatter.Format(
+            new FeedDiagnosticsSnapshot
+            {
+                CapturedAt = DateTimeOffset.UtcNow,
+                Interval = TimeSpan.FromSeconds(10),
+                Peers = [],
+                Sessions = [],
+                IntervalArticles = 12,
+                IntervalBytes = 9_000_000,
+            },
+            includeSessions: false);
+
+        FeedDiagnosticsLogMessages.Snapshot(logger, text);
+
+        var evt = Assert.Single(
+            sink.Events,
+            e => e.RenderMessage().Contains("FEED interval=", StringComparison.Ordinal));
+        Assert.Contains("rate=", evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.Equal(
+            "VectorNNTP.NNTPD.Diagnostics.FeedDiagnosticsService",
+            evt.Properties["SourceContext"].ToString().Trim('"'));
+        Assert.DoesNotContain("@", evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain("password", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void LoggingInitialized_ReachesSerilogSink_ThroughILogger()
+    {
+        var sink = new CollectingSink();
+        using var host = CreateProductionConfiguredHost(sink);
+
+        NntpdLoggingExtensions.WriteLoggingInitialized(
+            host.Services,
+            "Production",
+            AppContext.BaseDirectory);
+
+        var evt = Assert.Single(
+            sink.Events,
+            e => e.RenderMessage().Contains("Application logging initialized", StringComparison.Ordinal));
+        Assert.Equal(Serilog.Events.LogEventLevel.Information, evt.Level);
+        Assert.Contains("SerilogLoggerFactory", evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.Contains(NntpdLogCategories.Hosting, evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.Contains("VectorNNTP.NNTPD", evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain("CloudFlare", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Password", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ConfiguredConsoleSink_ReceivesInformationEvent()
+    {
+        var captured = new StringWriter();
+        var previous = Console.Out;
+        IHost? host = null;
+        try
+        {
+            Console.SetOut(captured);
+            host = CreateProductionConfiguredHost();
+            var logger = host.Services.GetRequiredService<ILogger<NntpPlainListenerService>>();
+            NetworkingLogMessages.PlainConnectionAccepted(logger, "198.51.100.10:119");
+            host.Dispose();
+            host = null;
+        }
+        finally
+        {
+            Console.SetOut(previous);
+            host?.Dispose();
+        }
+
+        var output = captured.ToString();
+        Assert.Contains("Plain connection accepted", output, StringComparison.Ordinal);
+        Assert.Contains("198.51.100.10:119", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("password", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Date_IsNotHotPathSuppressed()
+    {
+        Assert.False(NntpCommandLogFormat.SuppressHotPathCommand(NntpVerb.Date));
+        Assert.False(NntpCommandLogFormat.SuppressHotPathCommandLog("DATE"));
+        Assert.True(NntpCommandLogFormat.SuppressHotPathCommand(NntpVerb.TakeThis));
+        Assert.True(NntpCommandLogFormat.SuppressHotPathCommandLog("TAKETHIS <id@ex.com>"));
+    }
+
+    [Fact]
+    public async Task LivePlainAccept_AndDate_EmitThroughSerilog()
+    {
+        var sink = new CollectingSink();
+        using var serilog = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .Enrich.FromLogContext()
+            .WriteTo.Sink(sink)
+            .CreateLogger();
+        using var factory = new SerilogLoggerFactory(serilog);
+
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindAddress = ["127.0.0.1"];
+        options.BindPort = TestHostFactory.GetFreeTcpPort();
+        options.BindPortTls = 0;
+        options.ProxyHosts = [];
+
+        await using var service = new NntpPlainListenerService(
+            Options.Create(options),
+            new TrustedProxyHosts(Options.Create(options)),
+            new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            DenyAllNntpAuthenticationProvider.Instance,
+            DisabledArticleIngestionQueue.Instance,
+            TransitPeerAuthorization.Disabled,
+            factory,
+            factory.CreateLogger<NntpPlainListenerService>());
+
+        await service.StartAsync(CancellationToken.None);
+        var endpoint = service.LocalEndPoints[0];
+        using var client = new TcpClient();
+        await client.ConnectAsync(endpoint);
+        await using var stream = client.GetStream();
+        using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+        await using var writer = new StreamWriter(stream, Encoding.ASCII, leaveOpen: true)
+        {
+            NewLine = "\r\n",
+            AutoFlush = true,
+        };
+
+        var greeting = await reader.ReadLineAsync();
+        Assert.StartsWith("201 ", greeting, StringComparison.Ordinal);
+
+        await writer.WriteLineAsync("DATE");
+        var date = await reader.ReadLineAsync();
+        Assert.StartsWith("111 ", date, StringComparison.Ordinal);
+
+        await writer.WriteLineAsync("QUIT");
+        _ = await reader.ReadLineAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.Contains(
+            sink.Events,
+            e => e.MessageTemplate.Text.Contains("Plain connection accepted from", StringComparison.Ordinal)
+                 && e.Properties.ContainsKey("TcpPeer"));
+        Assert.Contains(
+            sink.Events,
+            e => e.MessageTemplate.Text.Contains("RX:", StringComparison.Ordinal)
+                 && e.Properties.TryGetValue("Command", out var rx)
+                 && rx.ToString().Contains("DATE", StringComparison.Ordinal));
+        Assert.Contains(
+            sink.Events,
+            e => e.MessageTemplate.Text.Contains("TX:", StringComparison.Ordinal)
+                 && e.Properties.TryGetValue("Command", out var tx)
+                 && tx.ToString().Contains("DATE", StringComparison.Ordinal));
+        Assert.Contains(
+            sink.Events,
+            e => e.Properties.TryGetValue("SourceContext", out var sessionCtx)
+                 && sessionCtx.ToString().Contains("VectorNNTP.NNTPD.Session.NntpSession", StringComparison.Ordinal));
+        Assert.Contains(
+            sink.Events,
+            e => e.Properties.TryGetValue("SourceContext", out var dateCtx)
+                 && dateCtx.ToString().Contains("VectorNNTP.NNTPD.Session.Commands.Date", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProductionAssembly_DoesNotReferenceFileSink()
+    {
+        var names = typeof(NntpdLoggingExtensions).Assembly
+            .GetReferencedAssemblies()
+            .Select(static a => a.Name);
+        Assert.DoesNotContain("Serilog.Sinks.File", names, StringComparer.Ordinal);
+        Assert.Contains("Serilog.Sinks.Console", names, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void ProductionSerilogSection_WritesOnlyToConsole()
+    {
+        var section = ProductionSerilogSection();
+        Assert.Equal("Serilog.Sinks.Console", section["Serilog:Using:0"]);
+        Assert.Equal("Console", section["Serilog:WriteTo:0:Name"]);
+        Assert.DoesNotContain(section, static kv =>
+            kv.Value is not null
+            && (kv.Value.Contains("File", StringComparison.Ordinal)
+                || kv.Key.Contains("File", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void CommandLoggers_UseHostFactory_NotNullLogger()
+    {
+        using var host = CreateProductionConfiguredHost();
+        var factory = host.Services.GetRequiredService<ILoggerFactory>();
+        _ = new NntpCommandDispatcher(factory);
+        var dateLogger = NntpCommandLoggers.For(typeof(Date));
+        Assert.True(dateLogger.IsEnabled(LogLevel.Information));
+        Assert.NotEqual(NullLogger.Instance.GetType(), dateLogger.GetType());
+        Assert.Equal("SerilogLoggerFactory", factory.GetType().Name);
+    }
+
+    [Fact]
+    public async Task LivePlainAccept_AndDate_AppearOnConfiguredConsole()
+    {
+        var captured = new StringWriter();
+        var previous = Console.Out;
+        IHost? host = null;
+        NntpPlainListenerService? service = null;
+        try
+        {
+            Console.SetOut(captured);
+            host = CreateProductionConfiguredHost();
+            var factory = host.Services.GetRequiredService<ILoggerFactory>();
+            var logger = host.Services.GetRequiredService<ILogger<NntpPlainListenerService>>();
+            var sessionLogger = factory.CreateLogger<NntpSession>();
+            var dateLogger = factory.CreateLogger("VectorNNTP.NNTPD.Session.Commands.Date");
+
+            Assert.Equal("SerilogLoggerFactory", factory.GetType().Name);
+            Assert.True(logger.IsEnabled(LogLevel.Information));
+            Assert.True(sessionLogger.IsEnabled(LogLevel.Information));
+            Assert.True(dateLogger.IsEnabled(LogLevel.Information));
+
+            var options = TestHostFactory.CreateValidOptions();
+            options.BindAddress = ["127.0.0.1"];
+            options.BindPort = TestHostFactory.GetFreeTcpPort();
+            options.BindPortTls = 0;
+            options.ProxyHosts = [];
+
+            service = new NntpPlainListenerService(
+                Options.Create(options),
+                new TrustedProxyHosts(Options.Create(options)),
+                new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+                DenyAllNntpAuthenticationProvider.Instance,
+                DisabledArticleIngestionQueue.Instance,
+                TransitPeerAuthorization.Disabled,
+                factory,
+                logger);
+
+            await service.StartAsync(CancellationToken.None);
+            var endpoint = service.LocalEndPoints[0];
+            using var client = new TcpClient();
+            await client.ConnectAsync(endpoint);
+            await using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+            await using var writer = new StreamWriter(stream, Encoding.ASCII, leaveOpen: true)
+            {
+                NewLine = "\r\n",
+                AutoFlush = true,
+            };
+
+            var greeting = await reader.ReadLineAsync();
+            Assert.StartsWith("201 ", greeting, StringComparison.Ordinal);
+            await writer.WriteLineAsync("DATE");
+            var date = await reader.ReadLineAsync();
+            Assert.StartsWith("111 ", date, StringComparison.Ordinal);
+            await writer.WriteLineAsync("QUIT");
+            _ = await reader.ReadLineAsync();
+            await service.StopAsync(CancellationToken.None);
+            await service.DisposeAsync();
+            service = null;
+            host.Dispose();
+            host = null;
+        }
+        finally
+        {
+            Console.SetOut(previous);
+            if (service is not null)
+            {
+                await service.DisposeAsync();
+            }
+
+            host?.Dispose();
+        }
+
+        var output = captured.ToString();
+        Assert.Contains("Plain connection accepted", output, StringComparison.Ordinal);
+        Assert.Contains("RX: DATE", output, StringComparison.Ordinal);
+        Assert.Contains("TX: DATE executed in", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("TAKETHIS", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IHost CreateProductionConfiguredHost(CollectingSink? sink = null)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            ContentRootPath = AppContext.BaseDirectory,
+        });
+        TestHostFactory.ConfigureNntpdTestHost(builder);
+        builder.Configuration.AddInMemoryCollection(ProductionSerilogSection());
+        builder.ConfigureNntpdLogging(sink is null
+            ? null
+            : lc =>
+            {
+                lc.WriteTo.Sink(sink);
+            });
+        builder.Services.AddNntpdHosting(includePlaceholderService: false);
+        return builder.Build();
+    }
+
+    private static Dictionary<string, string?> ProductionSerilogSection() => new()
+    {
+        ["Serilog:Using:0"] = "Serilog.Sinks.Console",
+        ["Serilog:MinimumLevel:Default"] = "Debug",
+        ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
+        ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",
+        ["Serilog:MinimumLevel:Override:System"] = "Warning",
+        ["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"] = "Debug",
+        ["Serilog:WriteTo:0:Name"] = "Console",
+        ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,
+        ["Serilog:Enrich:0"] = "FromLogContext",
+        ["Serilog:Properties:Application"] = "VectorNNTP.NNTPD",
+    };
+}

@@ -15,6 +15,7 @@ public sealed class SocketAcceptListener : IAsyncDisposable
     private readonly ListenBinding _binding;
     private readonly Func<Socket, CancellationToken, ValueTask> _onAccepted;
     private readonly ILogger _logger;
+    private readonly IListenSocketBinder _binder;
     private readonly Socket _listenSocket;
     private readonly CancellationTokenSource _cts = new();
     private Task? _acceptLoop;
@@ -25,13 +26,15 @@ public sealed class SocketAcceptListener : IAsyncDisposable
     public SocketAcceptListener(
         ListenBinding binding,
         Func<Socket, CancellationToken, ValueTask> onAccepted,
-        ILogger logger)
+        ILogger logger,
+        IListenSocketBinder? listenBinder = null)
     {
         ArgumentNullException.ThrowIfNull(onAccepted);
         ArgumentNullException.ThrowIfNull(logger);
         _binding = binding;
         _onAccepted = onAccepted;
         _logger = logger;
+        _binder = listenBinder ?? SocketListenBinder.Instance;
 
         var family = binding.Address.AddressFamily;
         _listenSocket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
@@ -40,6 +43,9 @@ public sealed class SocketAcceptListener : IAsyncDisposable
             _listenSocket.DualMode = binding.DualMode;
         }
 
+        // SO_REUSEADDR is retained: Bind success is ownership under these socket options.
+        // On Windows it can allow another process to bind the same endpoint; that is not a
+        // Bind failure and is not treated as exclusive port ownership.
         try
         {
             _listenSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
@@ -51,16 +57,24 @@ public sealed class SocketAcceptListener : IAsyncDisposable
     }
 
     /// <summary>Gets the local endpoint after <see cref="Start"/> (port may be ephemeral in tests).</summary>
-    public IPEndPoint LocalEndPoint => (IPEndPoint)_listenSocket.LocalEndPoint!;
+    public IPEndPoint LocalEndPoint =>
+        _listenSocket.LocalEndPoint as IPEndPoint ?? _binding.EndPoint;
 
     /// <summary>Gets the planned binding.</summary>
     public ListenBinding Binding => _binding;
 
+    /// <summary>Gets whether the accept loop is still running (tests).</summary>
+    internal bool AcceptLoopActive => _acceptLoop is { IsCompleted: false };
+
     /// <summary>Binds, listens, and starts the accept loop.</summary>
+    /// <remarks>
+    /// Bind/listen exceptions propagate to the caller and are startup failures.
+    /// The accept loop is started only after bind/listen succeed; later accept
+    /// failures are logged and the loop continues.
+    /// </remarks>
     public void Start(int backlog = 512)
     {
-        _listenSocket.Bind(_binding.EndPoint);
-        _listenSocket.Listen(backlog);
+        _binder.BindAndListen(_listenSocket, _binding.EndPoint, backlog);
         _acceptLoop = AcceptLoopAsync(_cts.Token);
         NetworkingLogMessages.ListenerStarted(_logger, LocalEndPoint, _binding.DualMode);
     }

@@ -355,10 +355,10 @@ public sealed class TakeThisPipelineTests
         var detached = new List<byte[]>();
         var receiveADone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var receiveBStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        session.TakeThisWindow!.AfterArticleDetached = payload => detached.Add(payload.ToArray());
-        session.TakeThisWindow.AfterReceiveCompleted = () =>
+        session.TakeThisWindow!.AfterArticleDetached = payload =>
         {
-            if (session.TakeThisWindow.Occupied >= 1)
+            detached.Add(payload.ToArray());
+            if (detached.Count >= 1)
             {
                 receiveADone.TrySetResult();
             }

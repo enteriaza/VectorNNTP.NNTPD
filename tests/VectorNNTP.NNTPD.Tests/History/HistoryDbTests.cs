@@ -268,6 +268,25 @@ public sealed class HistoryDbTests
     }
 
     [Fact]
+    public async Task Capture_CountsLookupsHitsMissesAndErrors()
+    {
+        var redis = new FakeRedisService();
+        var history = Create(redis);
+
+        Assert.Equal(HistoryLookupResult.Unseen, await history.LookupAsync(MessageId));
+        Assert.Equal(HistoryLookupResult.Seen, await history.LookupAsync(MessageId));
+        redis.IsUnavailable = true;
+        Assert.Equal(HistoryLookupResult.Unavailable, await history.LookupAsync(OtherId));
+
+        var snapshot = history.Capture();
+        Assert.Equal(3, snapshot.Lookups);
+        Assert.Equal(1, snapshot.Hits);
+        Assert.Equal(1, snapshot.Misses);
+        Assert.Equal(1, snapshot.Errors);
+        Assert.True(snapshot.WaitTicks >= 0);
+    }
+
+    [Fact]
     public async Task Remember_RecordsLocalWithoutExists()
     {
         var redis = new FakeRedisService();

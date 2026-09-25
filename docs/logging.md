@@ -28,6 +28,8 @@ finally { await Log.CloseAndFlushAsync(); }
 
 `AddSerilog` reloads/replaces the bootstrap logger from configuration without duplicating the pipeline. Host disposal and `CloseAndFlushAsync` flush buffered events.
 
+After `host.Build()`, `NntpdLoggingExtensions.WriteLoggingInitialized` emits one Information event through `ILogger` (`VectorNNTP.NNTPD.Hosting`) proving the Serilog factory is live. It includes Application, provider type, category, environment, and content root. It does not dump configuration or secrets.
+
 ## Configuration
 
 Serilog is configured under the `Serilog` section in `appsettings.json` (and environment-specific files).
@@ -74,7 +76,7 @@ Watchdog heartbeats remain Trace/Debug; activation/deactivation stay Information
 
 ## Windows Service and interactive console
 
-All platforms use the same Serilog pipeline. Windows Service and interactive `dotnet run` both emit through the console sink (and whatever sinks you add later via configuration).
+All platforms use the same Serilog pipeline. `Program` assigns an auto-flush `Console.Out` before Serilog creates the Console sink. Serilog's Console sink writes to `Console.Out` and does not Flush; when stdout is a pipe (IDE capture, redirected output) the runtime may block-buffer that writer. Auto-flush keeps later Information lines (connection accept, DATE RX/TX) visible without waiting for the buffer to fill or the process to exit.
 
 ## Structured logging conventions
 
@@ -109,6 +111,7 @@ Logging is a human-readable boundary. The current `ILogger` / `LoggerMessageAttr
 | Symptom | Check |
 |---------|--------|
 | No logs under systemd | Unit `StandardOutput=` inherits; confirm process writes to stdout; `journalctl -u vectornntpd -f` |
+| Startup visible, later Information missing in an IDE console | Confirm the console is attached to the process that accepted the TCP connection; `UseAutoFlushConsoleOutput` keeps `Console.Out` flushing when stdout is a pipe |
 | Too verbose | Raise `Serilog:MinimumLevel` or category overrides |
 | Missing early failure logs | Bootstrap logger must run before `Host.CreateApplicationBuilder` |
 | Duplicate lines | Ensure MEL providers were not re-added; `writeToProviders` must remain `false` |

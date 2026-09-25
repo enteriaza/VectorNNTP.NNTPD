@@ -39,6 +39,9 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
 | `SpeedTest:MaxConcurrent` | int | `2` | no | Maximum concurrent SPEEDTEST operations on this host (`1–8`) |
 | `SpeedTest:MaxConcurrentPerPeer` | int | `1` | no | Maximum concurrent SPEEDTEST operations per Transit identifier (`1–4`) |
+| `FeedDiagnostics:Enabled` | bool | `false` | no | Temporary real-feed snapshot reporter. Also enabled by `VECTORNNTP_FEED_DIAGNOSTICS=1`. Off by default; not per-article logging. |
+| `FeedDiagnostics:IntervalSeconds` | int | `5` | no | Snapshot interval (`1–60`) |
+| `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.

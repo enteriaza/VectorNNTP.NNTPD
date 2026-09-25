@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Redis;
@@ -7,13 +8,18 @@ namespace VectorNNTP.NNTPD.History;
 /// <summary>
 /// HistoryDB consumer of <see cref="IRedisService"/>: local memory first, then Redis.
 /// </summary>
-public sealed class HistoryDb : IHistoryDb
+public sealed class HistoryDb : IHistoryDb, IHistoryLookupMetrics
 {
     private readonly LocalHistoryStore _local;
     private readonly IRedisService _redis;
     private readonly HistoryWriteQueue _writes;
     private readonly TimeSpan _retention;
     private readonly ILogger<HistoryDb> _logger;
+    private long _lookups;
+    private long _hits;
+    private long _misses;
+    private long _errors;
+    private long _waitTicks;
 
     /// <summary>Initializes a new instance of the <see cref="HistoryDb"/> class.</summary>
     public HistoryDb(
@@ -69,18 +75,23 @@ public sealed class HistoryDb : IHistoryDb
         ReadOnlyMemory<byte> messageId,
         CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
         var digest = HistoryDigest.FromMessageId(messageId.Span);
         if (_local.Contains(digest))
         {
+            RecordLookup(HistoryLookupResult.Seen, started);
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Seen);
         }
 
         if (!_redis.TryBeginOperation(out var isRecoveryProbe))
         {
+            RecordLookup(HistoryLookupResult.Unavailable, started);
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unavailable);
         }
 
-        return LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: true, cancellationToken);
+        return AwaitLookupAsync(
+            LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: true, cancellationToken),
+            started);
     }
 
     /// <inheritdoc />
@@ -88,19 +99,33 @@ public sealed class HistoryDb : IHistoryDb
         ReadOnlyMemory<byte> messageId,
         CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
         var digest = HistoryDigest.FromMessageId(messageId.Span);
         if (_local.Contains(digest))
         {
+            RecordLookup(HistoryLookupResult.Seen, started);
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Seen);
         }
 
         if (!_redis.TryBeginOperation(out var isRecoveryProbe))
         {
+            RecordLookup(HistoryLookupResult.Unavailable, started);
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unavailable);
         }
 
-        return LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: false, cancellationToken);
+        return AwaitLookupAsync(
+            LookupRedisAsync(digest, isRecoveryProbe, recordOnMiss: false, cancellationToken),
+            started);
     }
+
+    /// <inheritdoc />
+    public HistoryLookupMetricsSnapshot Capture() =>
+        new(
+            Volatile.Read(ref _lookups),
+            Volatile.Read(ref _hits),
+            Volatile.Read(ref _misses),
+            Volatile.Read(ref _errors),
+            Volatile.Read(ref _waitTicks));
 
     /// <inheritdoc />
     public void Remember(ReadOnlyMemory<byte> messageId)
@@ -156,6 +181,45 @@ public sealed class HistoryDb : IHistoryDb
         {
             _redis.CompleteOperation(isRecoveryProbe, succeeded: false, ex);
             throw;
+        }
+    }
+
+    private async ValueTask<HistoryLookupResult> AwaitLookupAsync(
+        ValueTask<HistoryLookupResult> pending,
+        long started)
+    {
+        try
+        {
+            var result = await pending.ConfigureAwait(false);
+            RecordLookup(result, started);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+    }
+
+    private void RecordLookup(HistoryLookupResult result, long started)
+    {
+        Interlocked.Increment(ref _lookups);
+        switch (result)
+        {
+            case HistoryLookupResult.Seen:
+                Interlocked.Increment(ref _hits);
+                break;
+            case HistoryLookupResult.Unseen:
+                Interlocked.Increment(ref _misses);
+                break;
+            default:
+                Interlocked.Increment(ref _errors);
+                break;
+        }
+
+        var ticks = Stopwatch.GetTimestamp() - started;
+        if (ticks > 0)
+        {
+            Interlocked.Add(ref _waitTicks, ticks);
         }
     }
 }
