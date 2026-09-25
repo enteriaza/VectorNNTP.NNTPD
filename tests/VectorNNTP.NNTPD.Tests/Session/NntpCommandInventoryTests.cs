@@ -24,6 +24,10 @@ public sealed class NntpCommandInventoryTests
 
         Assert.Contains("BENCHIT", keys);
         Assert.DoesNotContain("BENCHIT", DefaultNntpCommandCatalog.InventoryKeys);
+        Assert.DoesNotContain("NEWNEWS", DefaultNntpCommandCatalog.InventoryKeys);
+        Assert.DoesNotContain("NEWGROUPS", DefaultNntpCommandCatalog.InventoryKeys);
+        Assert.DoesNotContain("NEWNEWS", keys);
+        Assert.DoesNotContain("NEWGROUPS", keys);
         Assert.Equal(DefaultNntpCommandCatalog.InventoryKeys.Count + 1, keys.Count);
     }
 
@@ -47,8 +51,6 @@ public sealed class NntpCommandInventoryTests
     [InlineData("LISTGROUP")]
     [InlineData("LISTGROUP misc.test")]
     [InlineData("ARTICLE")]
-    [InlineData("NEWGROUPS")]
-    [InlineData("NEWNEWS")]
     [InlineData("COMPRESS DEFLATE")]
     [InlineData("MODE READER")]
     [InlineData("MODE STREAM")]

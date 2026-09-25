@@ -140,6 +140,8 @@ public sealed class NntpPhaseCResponseTests
         Assert.Equal(1, response.ChannelEnqueueCount);
         Assert.Contains("VERSION 2", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
         Assert.Contains("SPEEDTEST", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWNEWS", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWGROUPS", Encoding.ASCII.GetString(expected), StringComparison.Ordinal);
         Assert.True(expected.AsSpan().EndsWith(".\r\n"u8));
     }
 

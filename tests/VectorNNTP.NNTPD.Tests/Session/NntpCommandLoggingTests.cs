@@ -260,8 +260,6 @@ public sealed class NntpCommandLoggingTests
             ("LIST", "RX: LIST"),
             ("GROUP", "RX: GROUP"),
             ("LISTGROUP", "RX: LISTGROUP"),
-            ("NEWGROUPS", "RX: NEWGROUPS"),
-            ("NEWNEWS", "RX: NEWNEWS"),
             ("ARTICLE", "RX: ARTICLE"),
             ("HEAD", "RX: HEAD"),
             ("BODY", "RX: BODY"),

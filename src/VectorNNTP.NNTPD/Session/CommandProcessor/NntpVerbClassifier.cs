@@ -80,7 +80,6 @@ internal static class NntpVerbClassifier
         {
             (byte)'A' => NntpAscii.EqualsFolded(verb, "ARTICLE"u8) ? NntpVerb.Article : NntpVerb.Unknown,
             (byte)'B' => NntpAscii.EqualsFolded(verb, "BENCHIT"u8) ? NntpVerb.BenchIt : NntpVerb.Unknown,
-            (byte)'N' => NntpAscii.EqualsFolded(verb, "NEWNEWS"u8) ? NntpVerb.Newnews : NntpVerb.Unknown,
             _ => NntpVerb.Unknown,
         };
     }
@@ -102,7 +101,6 @@ internal static class NntpVerbClassifier
         return first switch
         {
             (byte)'L' => NntpAscii.EqualsFolded(verb, "LISTGROUP"u8) ? NntpVerb.ListGroup : NntpVerb.Unknown,
-            (byte)'N' => NntpAscii.EqualsFolded(verb, "NEWGROUPS"u8) ? NntpVerb.Newgroups : NntpVerb.Unknown,
             (byte)'S' => NntpAscii.EqualsFolded(verb, "SPEEDTEST"u8) ? NntpVerb.SpeedTest : NntpVerb.Unknown,
             _ => NntpVerb.Unknown,
         };

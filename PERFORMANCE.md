@@ -929,8 +929,6 @@ Future benchmarks should eventually measure realistic workloads such as:
 - STAT
 - OVER
 - HDR
-- NEWNEWS
-- NEWGROUPS
 - POST
 - additional streaming/ingest variants beyond the TAKETHIS workload documented above
 - article-store/cache behavior

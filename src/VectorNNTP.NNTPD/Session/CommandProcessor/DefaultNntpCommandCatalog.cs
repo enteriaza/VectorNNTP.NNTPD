@@ -36,8 +36,6 @@ public static class DefaultNntpCommandCatalog
         "LISTGROUP",
         "MODE READER",
         "MODE STREAM",
-        "NEWGROUPS",
-        "NEWNEWS",
         "NEXT",
         "OVER",
         "POST",
@@ -73,8 +71,8 @@ public static class DefaultNntpCommandCatalog
                 => NntpCommandAccess.RequiresTransit,
             NntpVerb.Post => NntpCommandAccess.RequiresAuthentication
                 | NntpCommandAccess.RequiresReader,
-            NntpVerb.List or NntpVerb.ListGroup or NntpVerb.Group or NntpVerb.Newgroups
-                or NntpVerb.Newnews or NntpVerb.Article or NntpVerb.Head or NntpVerb.Body
+            NntpVerb.List or NntpVerb.ListGroup or NntpVerb.Group
+                or NntpVerb.Article or NntpVerb.Head or NntpVerb.Body
                 or NntpVerb.Stat or NntpVerb.Last or NntpVerb.Next or NntpVerb.Over
                 or NntpVerb.Hdr => readerAccess,
             _ => NntpCommandAccess.Public,
@@ -113,8 +111,6 @@ public static class DefaultNntpCommandCatalog
             (NntpVerb.List, _) => "LIST",
             (NntpVerb.ListGroup, _) => "LISTGROUP",
             (NntpVerb.Mode, _) => "MODE",
-            (NntpVerb.Newgroups, _) => "NEWGROUPS",
-            (NntpVerb.Newnews, _) => "NEWNEWS",
             (NntpVerb.Next, _) => "NEXT",
             (NntpVerb.Over, _) => "OVER",
             (NntpVerb.Post, _) => "POST",

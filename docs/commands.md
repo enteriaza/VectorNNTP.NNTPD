@@ -75,8 +75,6 @@ LIST MOTD
 ```text
 [ ] AUTHINFO SASL
 [ ] LISTGROUP
-[ ] NEWGROUPS
-[ ] NEWNEWS
 [ ] ARTICLE
 [ ] HEAD
 [ ] BODY
@@ -103,8 +101,6 @@ LIST MOTD
 | `Group.cs` | GROUP |
 | `ListGroup.cs` | LISTGROUP |
 | `Newsgroups/` | Immutable catalogue snapshot + five-minute refresh |
-| `NewGroups.cs` | NEWGROUPS |
-| `NewNews.cs` | NEWNEWS |
 | `Article.cs` | ARTICLE, HEAD, BODY, STAT |
 | `Last.cs` | LAST |
 | `Next.cs` | NEXT |

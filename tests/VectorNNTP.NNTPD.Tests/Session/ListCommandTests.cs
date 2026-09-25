@@ -481,6 +481,8 @@ public sealed class ListCommandTests
         Assert.DoesNotContain("SUBSCRIPTIONS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("\nOVER\n", body, StringComparison.Ordinal);
         Assert.DoesNotContain("\nHDR\n", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWNEWS", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("NEWGROUPS", body, StringComparison.Ordinal);
         Assert.Equal(".", lines[^1]);
     }
 

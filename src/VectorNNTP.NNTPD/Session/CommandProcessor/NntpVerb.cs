@@ -80,12 +80,6 @@ public enum NntpVerb : byte
     /// <summary>AUTHINFO.</summary>
     AuthInfo,
 
-    /// <summary>NEWGROUPS.</summary>
-    Newgroups,
-
-    /// <summary>NEWNEWS.</summary>
-    Newnews,
-
     /// <summary>Internal BENCHIT facility.</summary>
     BenchIt,
 
