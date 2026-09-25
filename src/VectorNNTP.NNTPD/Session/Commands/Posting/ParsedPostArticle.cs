@@ -55,6 +55,21 @@ internal sealed class ParsedPostArticle
     /// <summary>Gets or sets whether a structurally valid <c>Approved:</c> is present.</summary>
     public bool ApprovedPresent { get; set; }
 
+    /// <summary>
+    /// Gets or sets the distinct mailbox identities parsed from <c>Approved:</c>.
+    /// Empty when the header is absent.
+    /// </summary>
+    public string[] ApprovedIdentities { get; set; } = [];
+
+    /// <summary>Gets or sets the catalogue classification for this article's newsgroups.</summary>
+    public NewsgroupCatalogStatus CatalogStatus { get; set; }
+
+    /// <summary>
+    /// Gets or sets moderated <c>Newsgroups:</c> targets in header order when
+    /// <see cref="CatalogStatus"/> is <see cref="NewsgroupCatalogStatus.RequiresModeration"/>.
+    /// </summary>
+    public string[] ModeratedGroups { get; set; } = [];
+
     /// <summary>Returns the first header whose name matches <paramref name="upperName"/>.</summary>
     public bool TryGetHeader(ReadOnlySpan<byte> upperName, out ParsedPostHeader header)
     {

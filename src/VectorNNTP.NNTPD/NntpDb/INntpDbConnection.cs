@@ -11,4 +11,11 @@ public interface INntpDbConnection : IAsyncDisposable
     /// <param name="cancellationToken">Token used to cancel the query.</param>
     /// <returns>The integer result of <c>SELECT 1</c>.</returns>
     ValueTask<int> SelectOneAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Executes <see cref="NntpGroupQueries.SelectNewsgroups"/> and returns every row.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel the query.</param>
+    /// <returns>The complete result set. The caller must not retain this connection.</returns>
+    ValueTask<IReadOnlyList<NntpGroupRow>> QueryNewsgroupsAsync(CancellationToken cancellationToken);
 }

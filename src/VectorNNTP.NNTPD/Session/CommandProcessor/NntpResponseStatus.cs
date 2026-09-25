@@ -8,6 +8,11 @@ internal static class NntpResponseStatus
 {
     internal const string HelpTextFollows = "100 Help text follows";
     internal const string CapabilityListFollows = "101 Capability list:";
+    internal const string ListOfNewsgroupsFollows = "215 list of newsgroups follows";
+    internal const string ListOverviewFmtFollows = "215 Order of fields in overview database.";
+    internal const string ListHeadersFollows = "215 headers and metadata items supported:";
+    internal const string NoSuchNewsgroup = "411 No such newsgroup";
+    internal const string GroupSelected = "211";
     internal const string ReaderModePostingPermitted = "200 Reader mode, posting permitted";
     internal const string ReaderModePostingProhibited = "201 Reader mode, posting prohibited";
     internal const string StreamingPermitted = "203 Streaming permitted";
@@ -59,4 +64,5 @@ internal static class NntpResponseStatus
     internal const string SpeedTestPeerMismatch = "502 SPEEDTEST PEER MISMATCH";
     internal const string CompressionAlgorithmNotSupported = "503 Compression algorithm not supported";
     internal const string SpeedTestNotSupported = "503 SPEEDTEST NOT SUPPORTED";
+    internal const string ListDataItemNotStored = "503 Data item not stored";
 }

@@ -11,6 +11,8 @@ using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session;
@@ -54,6 +56,7 @@ public sealed class NntpSession
     private readonly CancellationTokenSource _closeCts = new();
     private Task? _idleWatchTask;
     private int _closeReason;
+    private ReadOnlyMemory<byte> _selectedGroupName;
 
     /// <summary>Initializes a new instance of the <see cref="NntpSession"/> class.</summary>
     public NntpSession(
@@ -76,7 +79,10 @@ public sealed class NntpSession
         string? injectionIdentity = null,
         Commands.Posting.INewsgroupPostingPolicy? newsgroupPostingPolicy = null,
         string? mailComplaintsTo = null,
-        Commands.Posting.IPostingTraceProtector? postingTraceProtector = null)
+        Commands.Posting.IPostingTraceProtector? postingTraceProtector = null,
+        INewsgroupCatalogue? newsgroupCatalogue = null,
+        IModeratorAuthorization? moderatorAuthorization = null,
+        IModerationSubmissionService? moderationSubmission = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -123,11 +129,16 @@ public sealed class NntpSession
             ? NntpdOptions.FormatFqdn(1, "usenet.ninja")
             : injectionIdentity.Trim();
         NewsgroupPostingPolicy = newsgroupPostingPolicy
-            ?? Commands.Posting.SyntaxOnlyNewsgroupPostingPolicy.Instance;
+            ?? (newsgroupCatalogue is not null
+                ? new Commands.Posting.CatalogueNewsgroupPostingPolicy(newsgroupCatalogue)
+                : Commands.Posting.SyntaxOnlyNewsgroupPostingPolicy.Instance);
         MailComplaintsTo = string.IsNullOrWhiteSpace(mailComplaintsTo)
             ? NntpdOptions.DefaultMailComplaintsTo
             : mailComplaintsTo.Trim();
         PostingTraceProtector = postingTraceProtector;
+        NewsgroupCatalogue = newsgroupCatalogue;
+        ModeratorAuthorization = moderatorAuthorization ?? EmptyModeratorAuthorization.Instance;
+        ModerationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -150,7 +161,10 @@ public sealed class NntpSession
     /// </summary>
     public string InjectionIdentity { get; }
 
-    /// <summary>Gets the newsgroup existence/posting-authorization boundary used by POST.</summary>
+    /// <summary>
+    /// Gets the newsgroup existence/posting-authorization boundary used by POST.
+    /// Catalogue-backed when <see cref="NewsgroupCatalogue"/> is set and no policy was injected.
+    /// </summary>
     public Commands.Posting.INewsgroupPostingPolicy NewsgroupPostingPolicy { get; }
 
     /// <summary>Gets the configured POST <c>mail-complaints-to</c> mailbox.</summary>
@@ -158,6 +172,28 @@ public sealed class NntpSession
 
     /// <summary>Gets the POST <c>X-Trace</c> protector, or <see langword="null"/> when unset (tests).</summary>
     public Commands.Posting.IPostingTraceProtector? PostingTraceProtector { get; }
+
+    /// <summary>
+    /// Gets the in-memory newsgroup catalogue, or <see langword="null"/> when unset (tests).
+    /// </summary>
+    public INewsgroupCatalogue? NewsgroupCatalogue { get; }
+
+    /// <summary>
+    /// Gets the moderator authorization table used by POST for <c>Approved:</c> decisions.
+    /// </summary>
+    public IModeratorAuthorization ModeratorAuthorization { get; }
+
+    /// <summary>
+    /// Gets the moderation submission boundary used when an unapproved moderated
+    /// proto-article must be forwarded.
+    /// </summary>
+    public IModerationSubmissionService ModerationSubmission { get; }
+
+    /// <summary>Gets whether a newsgroup is currently selected.</summary>
+    internal bool HasSelectedGroup => !_selectedGroupName.IsEmpty;
+
+    /// <summary>Gets the original stored name of the currently selected newsgroup.</summary>
+    internal ReadOnlySpan<byte> SelectedGroupName => _selectedGroupName.Span;
 
     /// <summary>Gets the clock used for idle accounting and POST injection timestamps.</summary>
     public TimeProvider Time => _timeProvider;
@@ -253,6 +289,9 @@ public sealed class NntpSession
     /// or <see langword="null"/> when no USER is cached.
     /// </summary>
     public string? PendingAuthUsername => _pendingAuthUsername;
+
+    /// <summary>Selects <paramref name="groupName"/> as the current newsgroup (immortal snapshot bytes).</summary>
+    internal void SelectGroup(ReadOnlyMemory<byte> groupName) => _selectedGroupName = groupName;
 
     /// <summary>Replaces the authorization snapshot (tests / advanced handlers).</summary>
     public void SetAuthorization(NntpAuthorization authorization)

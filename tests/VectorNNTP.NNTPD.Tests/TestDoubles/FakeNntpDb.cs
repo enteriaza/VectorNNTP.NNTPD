@@ -26,6 +26,14 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
 
     public Exception? NextHealthCheckException { get; set; }
 
+    public IReadOnlyList<NntpGroupRow> Newsgroups { get; set; } = [];
+
+    public Exception? QueryNewsgroupsException { get; set; }
+
+    public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
+
+    public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
+
     public IReadOnlyList<FakeNntpDbConnection> Connections
     {
         get
@@ -33,6 +41,23 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             lock (_sync)
             {
                 return _connections.ToArray();
+            }
+        }
+    }
+
+    public int QueryNewsgroupsCount
+    {
+        get
+        {
+            lock (_sync)
+            {
+                var total = 0;
+                foreach (var connection in _connections)
+                {
+                    total += connection.QueryNewsgroupsCount;
+                }
+
+                return total;
             }
         }
     }
@@ -64,6 +89,10 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             HealthCheckException = NextHealthCheckException,
             BlockSelectOne = BlockSelectOne,
             SelectOneStarted = SelectOneStarted,
+            Newsgroups = Newsgroups,
+            QueryNewsgroupsException = QueryNewsgroupsException,
+            BlockQueryNewsgroups = BlockQueryNewsgroups,
+            QueryNewsgroupsStarted = QueryNewsgroupsStarted,
         };
         lock (_sync)
         {
@@ -90,6 +119,16 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
 
     public TaskCompletionSource? SelectOneStarted { get; set; }
 
+    public IReadOnlyList<NntpGroupRow> Newsgroups { get; set; } = [];
+
+    public Exception? QueryNewsgroupsException { get; set; }
+
+    public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
+
+    public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
+
+    public int QueryNewsgroupsCount { get; private set; }
+
     public async ValueTask<int> SelectOneAsync(CancellationToken cancellationToken)
     {
         SelectOneStarted?.TrySetResult();
@@ -106,6 +145,24 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         }
 
         return HealthCheckResult;
+    }
+
+    public async ValueTask<IReadOnlyList<NntpGroupRow>> QueryNewsgroupsAsync(CancellationToken cancellationToken)
+    {
+        QueryNewsgroupsStarted?.TrySetResult();
+        if (BlockQueryNewsgroups is not null)
+        {
+            await BlockQueryNewsgroups.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        QueryNewsgroupsCount++;
+        if (QueryNewsgroupsException is not null)
+        {
+            throw QueryNewsgroupsException;
+        }
+
+        return Newsgroups;
     }
 
     public ValueTask DisposeAsync()

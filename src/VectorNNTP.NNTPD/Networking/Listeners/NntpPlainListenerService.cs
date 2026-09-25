@@ -15,6 +15,8 @@ using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -42,6 +44,9 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly INntpSessionCensus? _sessionCensus;
     private readonly ITransitPeerMetrics? _peerMetrics;
     private readonly IPostingTraceProtector? _postingTraceProtector;
+    private readonly INewsgroupCatalogue? _newsgroupCatalogue;
+    private readonly IModeratorAuthorization _moderatorAuthorization;
+    private readonly IModerationSubmissionService _moderationSubmission;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
@@ -69,7 +74,10 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IListenSocketBinder? listenBinder = null,
         INntpSessionCensus? sessionCensus = null,
         ITransitPeerMetrics? peerMetrics = null,
-        IPostingTraceProtector? postingTraceProtector = null)
+        IPostingTraceProtector? postingTraceProtector = null,
+        INewsgroupCatalogue? newsgroupCatalogue = null,
+        IModeratorAuthorization? moderatorAuthorization = null,
+        IModerationSubmissionService? moderationSubmission = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -92,6 +100,9 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _sessionCensus = sessionCensus;
         _peerMetrics = peerMetrics;
         _postingTraceProtector = postingTraceProtector;
+        _newsgroupCatalogue = newsgroupCatalogue;
+        _moderatorAuthorization = moderatorAuthorization ?? EmptyModeratorAuthorization.Instance;
+        _moderationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -312,7 +323,10 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 maxArticleSize: _options.Value.MaxArticleSize,
                 injectionIdentity: _options.Value.Fqdn,
                 mailComplaintsTo: _options.Value.MailComplaintsTo,
-                postingTraceProtector: _postingTraceProtector);
+                postingTraceProtector: _postingTraceProtector,
+                newsgroupCatalogue: _newsgroupCatalogue,
+                moderatorAuthorization: _moderatorAuthorization,
+                moderationSubmission: _moderationSubmission);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))

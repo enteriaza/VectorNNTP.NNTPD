@@ -1,11 +1,25 @@
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Session.Commands.Posting;
 
+/// <summary>What the POST command should do with a completed receive.</summary>
+internal enum StreamingPostDisposition
+{
+    /// <summary>Article is ready for normal History Peek / TryAdmit injection.</summary>
+    Inject = 0,
+
+    /// <summary>
+    /// Unapproved moderated proto-article; caller must submit for moderation and must
+    /// not Peek, TryAdmit, or Remember.
+    /// </summary>
+    SubmitForModeration = 1,
+}
+
 /// <summary>Outcome of one streaming POST article receive.</summary>
 internal enum StreamingPostReadStatus
 {
-    /// <summary>Terminator seen; stuffed queue wire is ready for History Peek and TryAdmit.</summary>
+    /// <summary>Terminator seen; stuffed wire is ready for the caller-selected disposition.</summary>
     Completed = 0,
 
     /// <summary>Peer disconnected or cancelled before the terminating dot line.</summary>
@@ -53,6 +67,9 @@ internal sealed class StreamingPostReadOptions
     /// when the session is unauthenticated. Never taken from article headers.
     /// </summary>
     public string? AuthenticatedUsername { get; init; }
+
+    /// <summary>Gets the moderator authorization table used for <c>Approved:</c> decisions.</summary>
+    public IModeratorAuthorization ModeratorAuthorization { get; init; } = EmptyModeratorAuthorization.Instance;
 }
 
 /// <summary>Result of <see cref="StreamingPostArticleReader.ReadAsync"/>.</summary>
@@ -63,6 +80,10 @@ internal sealed class StreamingPostReadOptions
 /// <param name="Newsgroups">Validated newsgroup names when known.</param>
 /// <param name="DestuffedSize">Logical destuffed client article size (stuffing dots excluded).</param>
 /// <param name="InjectionUtc">Single captured UTC timestamp written into server-owned headers.</param>
+/// <param name="Disposition">Inject or submit-for-moderation once the terminator is seen.</param>
+/// <param name="ModeratorAddress">Resolved leftmost moderator mailbox on the moderation path.</param>
+/// <param name="TargetModeratedGroup">Leftmost moderated group on the moderation path.</param>
+/// <param name="ApprovedIdentities">Parsed <c>Approved:</c> identities when present.</param>
 internal readonly record struct StreamingPostReadResult(
     StreamingPostReadStatus Status,
     PostingFailure Failure,
@@ -70,4 +91,8 @@ internal readonly record struct StreamingPostReadResult(
     string? MessageId,
     string[] Newsgroups,
     int DestuffedSize,
-    DateTimeOffset InjectionUtc);
+    DateTimeOffset InjectionUtc,
+    StreamingPostDisposition Disposition = StreamingPostDisposition.Inject,
+    string? ModeratorAddress = null,
+    string? TargetModeratedGroup = null,
+    string[]? ApprovedIdentities = null);

@@ -10,6 +10,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
@@ -555,7 +557,7 @@ public sealed class NntpCommandLoggingTests
     }
 
     [Fact]
-    public async Task List_Stub_Logs500StatusLineAndKeepsNotImplementedDetail()
+    public async Task List_Logs215StatusLine_FromCapturedSnapshot()
     {
         var recording = new RecordingLoggerFactory();
         await using var duplex = await LoggingDuplex.CreateAsync();
@@ -566,13 +568,15 @@ public sealed class NntpCommandLoggingTests
                 authorizedReader: true,
                 authorizedTransit: false,
                 postingPermitted: true,
-                streamingPermitted: false));
+                streamingPermitted: false),
+            newsgroupCatalogue: new StaticNewsgroupCatalogue(NewsgroupSnapshot.Empty));
 
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("LIST");
-        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+        Assert.Equal("215 list of newsgroups follows", await duplex.ReadClientLineAsync());
+        Assert.Equal(".", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -582,10 +586,9 @@ public sealed class NntpCommandLoggingTests
             recording.Messages,
             m => m.Contains("TX: LIST", StringComparison.Ordinal));
         Assert.Contains(
-            "TX: LIST [500 Command not implemented] executed in",
+            "TX: LIST [215 list of newsgroups follows] executed in",
             tx,
             StringComparison.Ordinal);
-        Assert.Contains("[not implemented]", tx, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -760,7 +763,8 @@ public sealed class NntpCommandLoggingTests
             bool allowCleartextAuth = true,
             NntpAuthorization? authorization = null,
             IArticleIngestionQueue? articleIngestion = null,
-            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null)
+            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null,
+            INewsgroupCatalogue? newsgroupCatalogue = null)
         {
             var connection = new PipeConnection(_clientToServer.Reader, _serverToClient.Writer);
             var session = new NntpSession(
@@ -770,7 +774,8 @@ public sealed class NntpCommandLoggingTests
                 allowCleartextAuth: allowCleartextAuth,
                 loggerFactory: loggerFactory,
                 articleIngestion: articleIngestion,
-                historyDb: historyDb);
+                historyDb: historyDb,
+                newsgroupCatalogue: newsgroupCatalogue);
             if (authorization is not null)
             {
                 session.SetAuthorization(authorization);

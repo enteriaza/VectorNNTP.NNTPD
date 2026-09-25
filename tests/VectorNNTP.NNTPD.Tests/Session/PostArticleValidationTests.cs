@@ -251,7 +251,7 @@ public sealed class PostArticleValidationTests
     [Fact]
     public void NewsgroupPolicy_ReportsCatalogUnavailable()
     {
-        var evaluation = SyntaxOnlyNewsgroupPostingPolicy.Instance.Evaluate(["misc.test"], approvedHeaderPresent: false);
+        var evaluation = SyntaxOnlyNewsgroupPostingPolicy.Instance.Evaluate(["misc.test"]);
         Assert.Equal(NewsgroupCatalogStatus.CatalogUnavailable, evaluation.Status);
         Assert.Null(evaluation.Failure);
     }

@@ -1,8 +1,8 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, and the top-level `Control` PGP-authority catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, and the top-level `Moderation` moderator catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
-Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency.
+Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
 ## Settings
 
@@ -51,7 +51,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:IntervalSeconds` | int | `5` | no | Snapshot interval (`1–60`) |
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
-| `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). |
+| `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). Not a moderator list. |
+| `Moderation:Moderators` | array | `[]` | no | Ordinary moderated-newsgroup routes (wildmat → Approved identity → AUTHINFO username). See below. |
 | `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
 | `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
 
@@ -215,7 +216,33 @@ nntpd__XTracePreviousKey=<optional-previous-key>
 
 POST returns `240 Article received OK` only after the article has been streamed into one stuffed IHAVE/TAKETHIS queue representation (dot-stuffed wire, NNTP terminator omitted) and admitted with `IArticleIngestionQueue.TryAdmit`. POST does not persist, deliver, or propagate the article; existing ingestion workers own that work after admission. Admission failure returns `441 Posting failed`.
 
-Newsgroup existence and moderation state are not available. POST validates newsgroup-name syntax and consults `INewsgroupPostingPolicy`. The current `SyntaxOnlyNewsgroupPostingPolicy` authorizes syntax-valid groups without asserting that the groups exist.
+## POST newsgroup posting policy
+
+Production plain and TLS listeners inject the process-wide `INewsgroupCatalogue` into each `NntpSession`. When that catalogue is present and no policy is injected, the session uses `CatalogueNewsgroupPostingPolicy`. `SyntaxOnlyNewsgroupPostingPolicy` remains only the fallback for sessions constructed without a catalogue (tests and other offline hosts). It is not the production POST policy.
+
+These are distinct checks:
+
+| Check | When | Failure |
+|-------|------|---------|
+| Session-level posting permission (`Authorization.PostingPermitted`) | First-stage POST, before `340` | `440 Posting not permitted`; the article is not read |
+| Newsgroup-level posting policy | After `340`, from the parsed `Newsgroups:` header against one captured catalogue snapshot | `441 Posting failed`; the article is drained to the terminator but is not Peeked, admitted, Remembered, or acknowledged with `240` |
+
+RFC 3977 does not expose `Newsgroups:` before `340`, so group-policy failures cannot use `440`.
+
+The policy captures `NewsgroupCatalogue.Current` once for that POST evaluation and uses the same case-insensitive snapshot `TryGet` as GROUP/LIST. It does not query MySQL. Every syntax-validated `Newsgroups:` target must exist in that snapshot. Status `n`/`x`/`j` reject the entire POST. Status `m` is classified as requiring moderation; it is not treated as `y`.
+
+| `posting_status` | Local POST |
+|------------------|------------|
+| `y` | Ordinary local posting |
+| `n` | Rejected — posting prohibited |
+| `m` | Moderated. Unapproved posts are submitted for moderator forwarding (or `441` when forwarding is unavailable). Approved posts inject only after AUTHINFO + `Moderation:Moderators` authorization for every moderated target. |
+| `x` | Rejected — closed: local posting and peer articles are prohibited |
+| `j` | Rejected — peer-only: local posting is not accepted |
+| unknown name | Rejected — the group is not in the captured snapshot |
+
+`Approved:` is a claimed mailbox identity. It is not trusted by itself. See `Moderation:Moderators`.
+
+Malformed or empty `Newsgroups:` remain existing parser syntax failures (`441`) and do not consult the snapshot. See `docs/commands.md` and `docs/architecture.md`.
 
 ## Transit article-queue memory (`TransitQueueMemoryLimit`)
 
@@ -291,6 +318,51 @@ Example:
 },
 "NntpDb": {
   "StartupTimeout": "00:00:15"
+}
+```
+
+## Moderation (`Moderation:Moderators`)
+
+Top-level `Moderation` section (not nested under `Nntpd`, and **not** `Control:PgpAuthorities`). This is the ordinary moderated-newsgroup catalogue. PGP control authorities do not authorize `Approved:` and are not used to derive moderator addresses.
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `Moderators` | array | `[]` | no | First-match wildmat routes (RFC 6048 §3 moderators-list order) |
+| `Moderators[].Pattern` | string | _(none)_ | yes when the entry exists | RFC 3977 wildmat matched against the newsgroup name. List more specific patterns before general ones. |
+| `Moderators[].Address` | string | _(none)_ | yes when the entry exists | Expected `Approved:` mailbox identity. Not derived from the group name or from Control. |
+| `Moderators[].Username` | string | _(none)_ | yes when the entry exists | AUTHINFO username authorized to inject that approval. Not assumed equal to the mailbox. |
+
+Passwords are **not** stored here. AUTHINFO secrets remain `Nntpd:NewsmasterPassword` / the authentication provider. Environment-variable overrides use the Generic Host convention `Moderation__Moderators__0__Pattern` (and `Address` / `Username`).
+
+Matching is first-match in configuration order. Duplicate exact patterns (ASCII case-insensitive) fail startup. Empty pattern/address/username and malformed wildmats fail startup. Overlapping distinct wildmats are allowed; the earlier entry wins. One username may cover multiple patterns. One pattern has one identity.
+
+Trust model:
+
+```text
+Approved: moderator@example.com     ← assertion
+AUTHINFO USER moderator-example     ← authenticated principal
+Moderation mapping                  ← authorization
+```
+
+`Approved` alone is not sufficient. A normal authenticated user with a copied `Approved:` header is rejected. An unauthenticated client with `Approved:` is rejected. A moderator for group A cannot approve group B unless a mapping says so.
+
+Moderator reinjection is a normal NNTP POST after AUTHINFO. There is no `MODERATE` command.
+
+Cross-posting: an unapproved article is forwarded to the leftmost moderated group only (RFC 5537 §3.5.1). Further sequential moderator forwarding is the moderators' duty (RFC 5537 §3.9). Reinjection is accepted only when every remaining moderated target is authorized for the authenticated principal and the `Approved:` identities.
+
+SMTP is **not** implemented. `IModerationSubmissionService` is the durable forwarding boundary. The production default is unavailable; unapproved moderated POST returns `441` when forwarding cannot be performed. A future SMTP (or other) implementation can be registered without changing POST policy.
+
+Example:
+
+```json
+"Moderation": {
+  "Moderators": [
+    {
+      "Pattern": "comp.example.*",
+      "Address": "moderator@example.com",
+      "Username": "moderator-example"
+    }
+  ]
 }
 ```
 

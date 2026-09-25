@@ -15,7 +15,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 internal static class Capabilities
 {
-    private const int MaxCapabilityParts = 13;
+    private const int MaxCapabilityParts = 14;
 
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Capabilities));
 
@@ -49,6 +49,8 @@ internal static class Capabilities
         if (context.Session.Mode is NntpSessionMode.Unspecified or NntpSessionMode.Reader)
         {
             parts[n++] = NntpResponses.CapabilityReader;
+            // RFC 3977 §7.6: LIST keywords that are actually implemented.
+            parts[n++] = NntpResponses.CapabilityList;
             // RFC 4643: MUST NOT advertise MODE-READER after authentication.
             // RFC 8054 §2.2.2: MUST NOT advertise MODE-READER once a compression layer is active.
             if (!authenticated && !compressed)

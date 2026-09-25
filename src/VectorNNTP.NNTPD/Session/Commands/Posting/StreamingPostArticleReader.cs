@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.IO.Pipelines;
+using System.Text;
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands.Posting;
@@ -56,6 +58,9 @@ internal static class StreamingPostArticleReader
         private PostingFailure _failure;
         private ParsedPostArticle? _parsed;
         private DateTimeOffset _injectionUtc;
+        private StreamingPostDisposition _disposition = StreamingPostDisposition.Inject;
+        private string? _moderatorAddress;
+        private string? _targetModeratedGroup;
 
         public async ValueTask<StreamingPostReadResult> RunAsync(
             PipeReader reader,
@@ -243,13 +248,6 @@ internal static class StreamingPostArticleReader
             _destuffedBytes += separatorBytes;
             _headerBlockBytes += separatorBytes;
 
-            if (options.TraceProtector is null)
-            {
-                _failure = new PostingFailure(PostingFailureCategory.PersistenceFailure, "trace protector unavailable");
-                MarkRejected();
-                return false;
-            }
-
             _injectionUtc = options.Time.GetUtcNow();
             _parsed = new ParsedPostArticle(
                 ReadOnlyMemory<byte>.Empty,
@@ -268,12 +266,103 @@ internal static class StreamingPostArticleReader
                 return false;
             }
 
+            if (!TryCompletePostingDecision(_parsed))
+            {
+                MarkRejected();
+                return false;
+            }
+
+            _inHeaders = false;
+            return false;
+        }
+
+        private bool TryCompletePostingDecision(ParsedPostArticle article)
+        {
+            if (article.CatalogStatus == NewsgroupCatalogStatus.RequiresModeration)
+            {
+                if (!article.ApprovedPresent)
+                {
+                    return TryBeginModerationSubmission(article);
+                }
+
+                var authorization = options.ModeratorAuthorization ?? EmptyModeratorAuthorization.Instance;
+                if (!authorization.TryAuthorizeApproval(
+                        options.AuthenticatedUsername,
+                        article.ApprovedIdentities,
+                        article.ModeratedGroups,
+                        out var detail))
+                {
+                    _failure = new PostingFailure(
+                        detail == "unresolved moderator"
+                            ? PostingFailureCategory.ModerationForwardingFailed
+                            : PostingFailureCategory.UnauthorizedApproval,
+                        detail ?? "unauthorized approval");
+                    return false;
+                }
+            }
+
+            return TryWriteInjectionHeaders(article);
+        }
+
+        private bool TryBeginModerationSubmission(ParsedPostArticle article)
+        {
+            if (article.ModeratedGroups.Length == 0)
+            {
+                _failure = new PostingFailure(PostingFailureCategory.PolicyRejected, "moderated newsgroup");
+                return false;
+            }
+
+            var target = article.ModeratedGroups[0];
+            if (target.Length is < 1 or > 128)
+            {
+                _failure = new PostingFailure(PostingFailureCategory.InvalidNewsgroups, "malformed newsgroup name");
+                return false;
+            }
+
+            Span<byte> nameBytes = stackalloc byte[128];
+            var written = Encoding.ASCII.GetBytes(target, nameBytes);
+            var authorization = options.ModeratorAuthorization ?? EmptyModeratorAuthorization.Instance;
+            if (!authorization.TryResolve(nameBytes[..written], out var identity))
+            {
+                _failure = new PostingFailure(
+                    PostingFailureCategory.ModerationForwardingFailed,
+                    "unresolved moderator");
+                return false;
+            }
+
+            try
+            {
+                PostHeaderNormalizer.WriteProtoArticleBoundary(
+                    _output,
+                    article.MessageIdSynthesized,
+                    article.MessageId!);
+            }
+            catch (Exception)
+            {
+                _failure = new PostingFailure(PostingFailureCategory.PersistenceFailure, "proto-article header generation failed");
+                return false;
+            }
+
+            _disposition = StreamingPostDisposition.SubmitForModeration;
+            _targetModeratedGroup = target;
+            _moderatorAddress = identity.Address;
+            return true;
+        }
+
+        private bool TryWriteInjectionHeaders(ParsedPostArticle article)
+        {
+            if (options.TraceProtector is null)
+            {
+                _failure = new PostingFailure(PostingFailureCategory.PersistenceFailure, "trace protector unavailable");
+                return false;
+            }
+
             try
             {
                 PostHeaderNormalizer.WriteServerOwnedHeaders(
                     _output,
-                    _parsed.MessageIdSynthesized,
-                    _parsed.MessageId!,
+                    article.MessageIdSynthesized,
+                    article.MessageId!,
                     _injectionUtc,
                     options.InjectionIdentity,
                     options.ClientIdentity,
@@ -284,12 +373,11 @@ internal static class StreamingPostArticleReader
             catch (Exception)
             {
                 _failure = new PostingFailure(PostingFailureCategory.PersistenceFailure, "server header generation failed");
-                MarkRejected();
                 return false;
             }
 
-            _inHeaders = false;
-            return false;
+            _disposition = StreamingPostDisposition.Inject;
+            return true;
         }
 
         private bool HandleTerminator()
@@ -356,7 +444,11 @@ internal static class StreamingPostArticleReader
                     _parsed?.MessageId,
                     _parsed?.Newsgroups ?? [],
                     _destuffedBytes,
-                    _injectionUtc);
+                    _injectionUtc,
+                    _disposition,
+                    _moderatorAddress,
+                    _targetModeratedGroup,
+                    _parsed?.ApprovedIdentities);
             }
 
             return new StreamingPostReadResult(
@@ -366,7 +458,11 @@ internal static class StreamingPostArticleReader
                 _parsed!.MessageId,
                 _parsed.Newsgroups,
                 _destuffedBytes,
-                _injectionUtc);
+                _injectionUtc,
+                _disposition,
+                _moderatorAddress,
+                _targetModeratedGroup,
+                _parsed.ApprovedIdentities);
         }
 
         private StreamingPostReadResult Incomplete() =>
@@ -377,7 +473,11 @@ internal static class StreamingPostArticleReader
                 _parsed?.MessageId,
                 _parsed?.Newsgroups ?? [],
                 _destuffedBytes,
-                _injectionUtc);
+                _injectionUtc,
+                _disposition,
+                _moderatorAddress,
+                _targetModeratedGroup,
+                _parsed?.ApprovedIdentities);
     }
 
     private static bool TryValidateLineOctets(ReadOnlySpan<byte> destuffed, out PostingFailure failure)

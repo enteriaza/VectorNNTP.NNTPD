@@ -132,6 +132,10 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> CompressionAlgorithmNotSupported =
         Line("503 Compression algorithm not supported\r\n"u8);
 
+    /// <summary>RFC 3977 §7.6.1.2: recognized LIST keyword whose information is not maintained.</summary>
+    internal static readonly ReadOnlyMemory<byte> ListDataItemNotStored =
+        Line("503 Data item not stored\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> HelpTextFollows =
         Line("100 Help text follows\r\n"u8);
 
@@ -170,6 +174,21 @@ internal static class NntpResponses
 
     internal static readonly ReadOnlyMemory<byte> CapabilitySpeedTest =
         Multiline("SPEEDTEST\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CapabilityList =
+        Multiline("LIST ACTIVE COUNTS HEADERS NEWSGROUPS OVERVIEW.FMT\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> ListOfNewsgroupsFollows =
+        Line("215 list of newsgroups follows\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> ListOverviewFmtFollows =
+        Line("215 Order of fields in overview database.\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> ListHeadersFollows =
+        Line("215 headers and metadata items supported:\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> NoSuchNewsgroup =
+        Line("411 No such newsgroup\r\n"u8);
 
     internal static readonly ReadOnlyMemory<byte> SpeedTestUnknownPeer =
         Line("502 UNKNOWN SPEEDTEST PEER\r\n"u8);
@@ -249,6 +268,12 @@ internal static class NntpResponses
     /// <summary>Complete HELP multiline wire (status + body + terminator). Immortal.</summary>
     internal static readonly ReadOnlyMemory<byte> HelpComplete = EncodeHelpComplete();
 
+    /// <summary>Complete LIST OVERVIEW.FMT multiline wire. Immortal; RFC 3977 §8.4 compatibility form.</summary>
+    internal static readonly ReadOnlyMemory<byte> ListOverviewFmtComplete = EncodeListOverviewFmtComplete();
+
+    /// <summary>Complete LIST HEADERS multiline wire. Immortal; same for MSGID and RANGE.</summary>
+    internal static readonly ReadOnlyMemory<byte> ListHeadersComplete = EncodeListHeadersComplete();
+
     /// <summary>
     /// Copies <paramref name="asciiIncludingCrlf"/> onto an immortal heap array once.
     /// The UTF-8 literal span must not be retained.
@@ -291,6 +316,39 @@ internal static class NntpResponses
         var parts = new ReadOnlyMemory<byte>[HelpBodyLines.Length + 2];
         parts[0] = HelpTextFollows;
         HelpBodyLines.CopyTo(parts, 1);
+        parts[^1] = MultilineTerminator;
+        return NntpResponseCompose.Concatenate(parts);
+    }
+
+    private static ReadOnlyMemory<byte> EncodeListOverviewFmtComplete() =>
+        EncodeStaticMultiline(
+            ListOverviewFmtFollows,
+            Multiline("Subject:\r\n"u8),
+            Multiline("From:\r\n"u8),
+            Multiline("Date:\r\n"u8),
+            Multiline("Message-ID:\r\n"u8),
+            Multiline("References:\r\n"u8),
+            Multiline("Bytes:\r\n"u8),
+            Multiline("Lines:\r\n"u8));
+
+    private static ReadOnlyMemory<byte> EncodeListHeadersComplete() =>
+        EncodeStaticMultiline(
+            ListHeadersFollows,
+            Multiline("Subject\r\n"u8),
+            Multiline("From\r\n"u8),
+            Multiline("Date\r\n"u8),
+            Multiline("Message-ID\r\n"u8),
+            Multiline("References\r\n"u8),
+            Multiline(":bytes\r\n"u8),
+            Multiline(":lines\r\n"u8));
+
+    private static ReadOnlyMemory<byte> EncodeStaticMultiline(
+        ReadOnlyMemory<byte> status,
+        params ReadOnlyMemory<byte>[] bodyLines)
+    {
+        var parts = new ReadOnlyMemory<byte>[bodyLines.Length + 2];
+        parts[0] = status;
+        bodyLines.CopyTo(parts, 1);
         parts[^1] = MultilineTerminator;
         return NntpResponseCompose.Concatenate(parts);
     }

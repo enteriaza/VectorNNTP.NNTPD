@@ -1,3 +1,4 @@
+using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
@@ -6,7 +7,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// GROUP command as defined by RFC 3977, Section 6.1.1.
 /// </summary>
 /// <remarks>
-/// Selects a newsgroup as the currently selected group. Deliberate placeholder until group storage is implemented.
+/// Group existence and water marks come from one captured
+/// <see cref="NewsgroupSnapshot"/>. The command path does not query MySQL.
+/// Article-number sequences are not invented from the water marks.
 /// </remarks>
 internal static class Group
 {
@@ -14,11 +17,32 @@ internal static class Group
 
     /// <summary>Handles <c>GROUP</c>.</summary>
     public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
+        NntpCommandExecution.RunAsync(Logger, context, "GROUP", ExecuteAsync, cancellationToken);
+
+    private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    {
+        var snapshot = context.Session.NewsgroupCatalogue?.Current;
+        if (snapshot is null)
+        {
+            return NntpCommandNotImplemented.HandleAsync(context, Logger, cancellationToken);
+        }
+
+        if (!snapshot.TryGet(context.ArgumentSpan, out var group))
+        {
+            return NntpCommandReply.WriteAsync(
+                context,
+                Logger,
+                NntpResponses.NoSuchNewsgroup,
+                NntpResponseStatus.NoSuchNewsgroup,
+                cancellationToken);
+        }
+
+        context.Session.SelectGroup(group.GroupNameBytes);
+        return NntpCommandReply.WriteAsync(
             context,
-            "GROUP",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
-            cancellationToken,
-            successDetail: "not implemented");
+            Logger,
+            group.GroupSelectedLine,
+            NntpResponseStatus.GroupSelected,
+            cancellationToken);
+    }
 }

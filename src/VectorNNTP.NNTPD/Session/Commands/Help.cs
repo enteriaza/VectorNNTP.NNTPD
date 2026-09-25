@@ -56,6 +56,7 @@ internal static class Help
         "LAST",
         "LIST",
         "LIST ACTIVE [wildmat]",
+        "LIST COUNTS [wildmat]",
         "LIST HEADERS [MSGID / RANGE]",
         "LIST MOTD",
         "LIST NEWSGROUPS [wildmat]",

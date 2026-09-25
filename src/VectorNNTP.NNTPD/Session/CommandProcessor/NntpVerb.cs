@@ -110,6 +110,9 @@ public enum NntpVerb : byte
     /// <summary>LIST ACTIVE qualifier.</summary>
     Active,
 
+    /// <summary>LIST COUNTS qualifier.</summary>
+    Counts,
+
     /// <summary>LIST HEADERS qualifier.</summary>
     Headers,
 

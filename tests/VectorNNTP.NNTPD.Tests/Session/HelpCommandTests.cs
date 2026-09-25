@@ -105,6 +105,7 @@ public sealed class HelpCommandTests
         AssertUnsupportedListVariantsAbsent(Help.SyntaxLines);
         Assert.Contains("LIST", Help.SyntaxLines);
         Assert.Contains("LIST ACTIVE [wildmat]", Help.SyntaxLines);
+        Assert.Contains("LIST COUNTS [wildmat]", Help.SyntaxLines);
         Assert.Contains("LIST HEADERS [MSGID / RANGE]", Help.SyntaxLines);
         Assert.Contains("LIST NEWSGROUPS [wildmat]", Help.SyntaxLines);
         Assert.Contains("LIST OVERVIEW.FMT", Help.SyntaxLines);
@@ -161,7 +162,6 @@ public sealed class HelpCommandTests
     private static void AssertUnsupportedListVariantsAbsent(IReadOnlyList<string> lines)
     {
         Assert.DoesNotContain(lines, l => l.Contains("ACTIVE.TIMES", StringComparison.Ordinal));
-        Assert.DoesNotContain(lines, l => l.Contains("COUNTS", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("DISTRIB.PATS", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("DISTRIBUTIONS", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("MODERATORS", StringComparison.Ordinal));

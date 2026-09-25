@@ -6,7 +6,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// LISTGROUP command as defined by RFC 3977, Section 6.1.2.
 /// </summary>
 /// <remarks>
-/// Selects a group and lists article numbers. Deliberate placeholder until group storage is implemented.
+/// Lists article numbers in a newsgroup. Deliberate placeholder until an article-number
+/// source exists. Do not invent article numbers from catalogue water marks.
 /// </remarks>
 internal static class ListGroup
 {

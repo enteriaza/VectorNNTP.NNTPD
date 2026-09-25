@@ -15,6 +15,20 @@ internal static partial class PostLogMessages
         int Size);
 
     [LoggerMessage(
+        EventId = 1722,
+        Level = LogLevel.Information,
+        Message = "[{Client}] POST submitted for moderation Message-ID={MessageId} newsgroups={Newsgroups} target={TargetGroup} moderator={ModeratorAddress} user={Username} size={Size}")]
+    public static partial void SubmittedForModeration(
+        ILogger logger,
+        string Client,
+        string MessageId,
+        string Newsgroups,
+        string TargetGroup,
+        string ModeratorAddress,
+        string Username,
+        int Size);
+
+    [LoggerMessage(
         EventId = 1721,
         Level = LogLevel.Information,
         Message = "[{Client}] POST rejected category={Category} Message-ID={MessageId} newsgroups={Newsgroups} size={Size} detail={Detail}")]

@@ -35,11 +35,17 @@ public sealed class NntpCommandInventoryTests
     [InlineData("STARTTLS")]
     [InlineData("LIST")]
     [InlineData("LIST ACTIVE")]
+    [InlineData("LIST COUNTS")]
+    [InlineData("LIST COUNTS misc.*")]
     [InlineData("LIST HEADERS")]
+    [InlineData("LIST HEADERS MSGID")]
+    [InlineData("LIST HEADERS RANGE")]
     [InlineData("LIST MOTD")]
     [InlineData("LIST NEWSGROUPS")]
     [InlineData("LIST OVERVIEW.FMT")]
-    [InlineData("GROUP")]
+    [InlineData("GROUP misc.test")]
+    [InlineData("LISTGROUP")]
+    [InlineData("LISTGROUP misc.test")]
     [InlineData("ARTICLE")]
     [InlineData("NEWGROUPS")]
     [InlineData("NEWNEWS")]
@@ -63,7 +69,6 @@ public sealed class NntpCommandInventoryTests
 
     [Theory]
     [InlineData("LIST ACTIVE.TIMES")]
-    [InlineData("LIST COUNTS")]
     [InlineData("LIST DISTRIB.PATS")]
     [InlineData("LIST DISTRIBUTIONS")]
     [InlineData("LIST MODERATORS")]
@@ -83,8 +88,8 @@ public sealed class NntpCommandInventoryTests
         var keys = DefaultNntpCommandCatalog.InventoryKeys;
         Assert.Contains("LIST", keys);
         Assert.Contains("LIST ACTIVE", keys);
+        Assert.Contains("LIST COUNTS", keys);
         Assert.DoesNotContain("LIST ACTIVE.TIMES", keys);
-        Assert.DoesNotContain("LIST COUNTS", keys);
         Assert.DoesNotContain("LIST DISTRIB.PATS", keys);
         Assert.DoesNotContain("LIST DISTRIBUTIONS", keys);
         Assert.DoesNotContain("LIST MODERATORS", keys);
@@ -92,7 +97,7 @@ public sealed class NntpCommandInventoryTests
 
         var registered = DefaultNntpCommandCatalog.GetRegisteredKeys();
         Assert.DoesNotContain("LIST ACTIVE.TIMES", registered);
-        Assert.DoesNotContain("LIST COUNTS", registered);
+        Assert.Contains("LIST COUNTS", registered);
         Assert.DoesNotContain("LIST DISTRIB.PATS", registered);
         Assert.DoesNotContain("LIST DISTRIBUTIONS", registered);
         Assert.DoesNotContain("LIST MODERATORS", registered);
@@ -123,7 +128,7 @@ public sealed class NntpCommandInventoryTests
     }
 
     [Fact]
-    public async Task Placeholder_List_RemainsRecognizedButReturns500AfterAuthz()
+    public async Task List_WithoutCatalogue_Returns500AfterAuthz()
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
@@ -159,7 +164,6 @@ public sealed class NntpCommandInventoryTests
     /// </summary>
     [Theory]
     [InlineData("LIST ACTIVE.TIMES")]
-    [InlineData("LIST COUNTS")]
     [InlineData("LIST DISTRIB.PATS")]
     [InlineData("LIST DISTRIBUTIONS")]
     [InlineData("LIST MODERATORS")]
@@ -177,10 +181,9 @@ public sealed class NntpCommandInventoryTests
     }
 
     [Theory]
-    [InlineData("LIST ACTIVE")]
-    [InlineData("LIST NEWSGROUPS")]
+    [InlineData("LIST HEADERS")]
     [InlineData("LIST OVERVIEW.FMT")]
-    public async Task SupportedListVariants_RemainRecognized_Return500AfterAuthz(string commandLine)
+    public async Task ImplementedStaticListKeywords_Return215AfterAuthzWithoutCatalogue(string commandLine)
     {
         await using var duplex = await InventoryDuplex.CreateAsync();
         var session = duplex.CreateSession();
@@ -195,7 +198,26 @@ public sealed class NntpCommandInventoryTests
         var response = new NntpResponseWriter(duplex.ServerOutput);
 
         await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, commandLine);
-        Assert.Contains("500 Command not implemented", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("215 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListMotd_RemainsRecognizedWithoutStoredData_Return503AfterAuthz()
+    {
+        await using var duplex = await InventoryDuplex.CreateAsync();
+        var session = duplex.CreateSession();
+        session.SetAuthorization(new NntpAuthorization(
+            isAuthenticated: true,
+            authorizedReader: true,
+            authorizedTransit: false,
+            postingPermitted: false,
+            streamingPermitted: false));
+
+        var dispatcher = new NntpCommandDispatcher();
+        var response = new NntpResponseWriter(duplex.ServerOutput);
+
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "LIST MOTD");
+        Assert.Equal("503 Data item not stored", await duplex.ReadClientLineAsync());
     }
 
     [Fact]

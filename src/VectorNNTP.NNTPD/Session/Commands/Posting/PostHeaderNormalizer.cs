@@ -119,6 +119,25 @@ internal static class PostHeaderNormalizer
         writer.Write("\r\n"u8);
     }
 
+    /// <summary>
+    /// Writes a synthesized Message-ID when required and the header/body separator.
+    /// Does not write Path, Injection-Date, Injection-Info, or X-Trace (RFC 5537 §3.5 step 7).
+    /// </summary>
+    internal static void WriteProtoArticleBoundary(
+        IBufferWriter<byte> writer,
+        bool writeMessageId,
+        string messageId)
+    {
+        ArgumentNullException.ThrowIfNull(writer);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        if (writeMessageId)
+        {
+            WriteHeader(writer, "Message-ID: "u8, messageId);
+        }
+
+        writer.Write("\r\n"u8);
+    }
+
     private static void WriteHeader(IBufferWriter<byte> writer, ReadOnlySpan<byte> prefix, string value)
     {
         writer.Write(prefix);

@@ -1,4 +1,5 @@
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 
@@ -154,6 +155,54 @@ public static class NntpCommandParser
             case NntpVerb.AuthInfo when qualifier is NntpVerb.User or NntpVerb.Pass:
                 return argument.IsEmpty ? NntpParseStatus.MissingArgument : NntpParseStatus.Ok;
 
+            case NntpVerb.Group:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.MissingArgument;
+                }
+
+                return tokenCount == 1 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
+
+            case NntpVerb.ListGroup:
+                return tokenCount <= 2 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
+
+            case NntpVerb.List when qualifier is NntpVerb.None:
+                return tokenCount == 0 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
+
+            case NntpVerb.List when qualifier is NntpVerb.Active or NntpVerb.Counts or NntpVerb.Newsgroups:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.Ok;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return NntpWildmat.TryValidate(argument)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
+            case NntpVerb.List when qualifier is NntpVerb.Motd or NntpVerb.OverviewFmt:
+                return tokenCount == 0 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
+
+            case NntpVerb.List when qualifier is NntpVerb.Headers:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.Ok;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return NntpAscii.EqualsFolded(argument, "MSGID"u8)
+                    || NntpAscii.EqualsFolded(argument, "RANGE"u8)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
             default:
                 return NntpParseStatus.Ok;
         }
@@ -237,6 +286,11 @@ public static class NntpCommandParser
         if (NntpAscii.EqualsFolded(token, "ACTIVE"u8))
         {
             return NntpVerb.Active;
+        }
+
+        if (NntpAscii.EqualsFolded(token, "COUNTS"u8))
+        {
+            return NntpVerb.Counts;
         }
 
         if (NntpAscii.EqualsFolded(token, "HEADERS"u8))

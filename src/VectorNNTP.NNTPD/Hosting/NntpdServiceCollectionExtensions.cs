@@ -20,6 +20,8 @@ using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 
@@ -164,6 +166,16 @@ public static class NntpdServiceCollectionExtensions
         // prevent NNTPD startup, and this catalogue is not a runtime dependency.
 
         services
+            .AddOptions<ModerationOptions>()
+            .BindConfiguration(ModerationOptions.SectionName)
+            .PostConfigure(static options => options.Moderators ??= [])
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<ModerationOptions>, ModerationOptionsValidator>();
+        services.TryAddSingleton<IModeratorAuthorization, ConfiguredModeratorAuthorization>();
+        services.TryAddSingleton<IModerationSubmissionService>(
+            static _ => UnavailableModerationSubmissionService.Instance);
+
+        services
             .AddOptions<NntpDbOptions>()
             .BindConfiguration(NntpDbOptions.SectionName)
             .Configure<IConfiguration>(static (options, configuration) =>
@@ -183,7 +195,8 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) → HistoryDB writer →
+        // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) →
+        // newsgroup catalogue (initial snapshot before RUNNING) → HistoryDB writer →
         // HistoryDB maintenance → incoming spool writer → Transit AllowFrom DNS refresh →
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
@@ -202,6 +215,13 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static sp =>
                 sp.GetRequiredService<NntpDbService>()));
+
+        services.TryAddSingleton<NewsgroupCatalogueService>();
+        services.TryAddSingleton<INewsgroupCatalogue>(static sp =>
+            sp.GetRequiredService<NewsgroupCatalogueService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NewsgroupCatalogueService>(static sp =>
+                sp.GetRequiredService<NewsgroupCatalogueService>()));
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());

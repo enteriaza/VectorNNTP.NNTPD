@@ -51,6 +51,17 @@ public enum PostingFailureCategory
 
     /// <summary>Ingestion/history persistence did not accept the article.</summary>
     PersistenceFailure = 15,
+
+    /// <summary>
+    /// An <c>Approved:</c> identity was present but the authenticated principal is not
+    /// authorized to approve every moderated target.
+    /// </summary>
+    UnauthorizedApproval = 16,
+
+    /// <summary>
+    /// The proto-article required moderator forwarding and submission was unavailable or failed.
+    /// </summary>
+    ModerationForwardingFailed = 17,
 }
 
 /// <summary>A POST validation or persistence failure.</summary>

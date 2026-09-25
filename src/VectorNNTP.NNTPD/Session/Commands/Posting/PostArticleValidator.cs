@@ -11,7 +11,6 @@ internal static class PostArticleValidator
         "NEWSGROUPS"u8.ToArray(),
         "PATH"u8.ToArray(),
         "SUBJECT"u8.ToArray(),
-        "APPROVED"u8.ToArray(),
         "CONTROL"u8.ToArray(),
         "DISTRIBUTION"u8.ToArray(),
         "FOLLOWUP-TO"u8.ToArray(),
@@ -109,7 +108,9 @@ internal static class PostArticleValidator
             return false;
         }
 
-        var evaluation = newsgroupPolicy.Evaluate(article.Newsgroups, article.ApprovedPresent);
+        var evaluation = newsgroupPolicy.Evaluate(article.Newsgroups);
+        article.CatalogStatus = evaluation.Status;
+        article.ModeratedGroups = evaluation.ModeratedGroupNames;
         if (evaluation.Status == NewsgroupCatalogStatus.Rejected)
         {
             failure = evaluation.Failure
@@ -202,16 +203,13 @@ internal static class PostArticleValidator
             return false;
         }
 
-        if (article.TryGetHeader("APPROVED"u8, out var approved))
+        if (!ApprovedHeaderParser.TryRead(article, out var approvedIdentities, out failure))
         {
-            if (!PostFieldSyntax.IsMailbox(approved.UnfoldedValue.Span))
-            {
-                failure = new PostingFailure(PostingFailureCategory.InvalidApproved, "malformed Approved");
-                return false;
-            }
-
-            article.ApprovedPresent = true;
+            return false;
         }
+
+        article.ApprovedIdentities = approvedIdentities;
+        article.ApprovedPresent = approvedIdentities.Length > 0;
 
         if (article.TryGetHeader("CONTROL"u8, out var control))
         {

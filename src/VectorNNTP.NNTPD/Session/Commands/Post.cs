@@ -1,6 +1,7 @@
 using System.Text;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 
@@ -13,9 +14,13 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// Not pipelined. First-stage <c>440</c> does not consume an article. After <c>340</c>
 /// the article is streamed from the session PipeReader into one stuffed output
 /// buffer (client headers write-through, server-owned headers at the header/body
-/// boundary, body copied with stuffing preserved). History Peek,
+/// boundary for ordinary injection, body copied with stuffing preserved). Unapproved
+/// moderated proto-articles are submitted through <see cref="IModerationSubmissionService"/>
+/// without Injection-Info/Injection-Date and without History Peek / TryAdmit / Remember.
+/// Authorized moderator reinjection follows the ordinary injection path. History Peek,
 /// <see cref="IArticleIngestionQueue.TryAdmit"/>, Remember, and <c>240</c> stay
-/// after the terminator. Downstream spool/worker processing is not awaited.
+/// after the terminator and after injection authorization. Downstream spool/worker
+/// processing is not awaited.
 /// </remarks>
 internal static class Post
 {
@@ -66,6 +71,7 @@ internal static class Post
                         AuthenticatedUsername = context.Session.Authentication.IsAuthenticated
                             ? context.Session.Authentication.Username
                             : null,
+                        ModeratorAuthorization = context.Session.ModeratorAuthorization,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -97,6 +103,12 @@ internal static class Post
                         : read.DestuffedSize,
                     cancellationToken)
                 .ConfigureAwait(false);
+            return;
+        }
+
+        if (read.Disposition == StreamingPostDisposition.SubmitForModeration)
+        {
+            await SubmitForModerationAsync(context, read, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -173,6 +185,72 @@ internal static class Post
                 NntpResponses.ArticleReceivedOk,
                 NntpResponseStatus.ArticleReceivedOk,
                 "accepted",
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async ValueTask SubmitForModerationAsync(
+        NntpCommandContext context,
+        StreamingPostReadResult read,
+        CancellationToken cancellationToken)
+    {
+        var submission = new ModerationSubmission
+        {
+            ProtoArticle = read.Wire,
+            MessageId = read.MessageId ?? string.Empty,
+            Newsgroups = read.Newsgroups,
+            TargetModeratedGroup = read.TargetModeratedGroup ?? string.Empty,
+            ModeratorAddress = read.ModeratorAddress ?? string.Empty,
+            AuthenticatedUsername = context.Session.Authentication.IsAuthenticated
+                ? context.Session.Authentication.Username
+                : null,
+            Sender = context.Session.ClientIdentity,
+        };
+
+        ModerationSubmissionResult result;
+        try
+        {
+            result = await context.Session.ModerationSubmission
+                .SubmitAsync(submission, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested
+            || context.Connection.ConnectionClosed.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (result.Status != ModerationSubmissionStatus.Accepted)
+        {
+            await RejectAsync(
+                    context,
+                    new PostingFailure(
+                        PostingFailureCategory.ModerationForwardingFailed,
+                        result.Detail),
+                    read.MessageId,
+                    FormatGroups(read.Newsgroups),
+                    read.DestuffedSize,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        PostLogMessages.SubmittedForModeration(
+            Logger,
+            NntpCommandLogFormat.Client(context.Session),
+            read.MessageId ?? "-",
+            FormatGroups(read.Newsgroups),
+            read.TargetModeratedGroup ?? "-",
+            read.ModeratorAddress ?? "-",
+            context.Session.Authentication.Username ?? "-",
+            read.DestuffedSize);
+
+        await WriteStatusAsync(
+                context,
+                NntpResponses.ArticleReceivedOk,
+                NntpResponseStatus.ArticleReceivedOk,
+                "accepted for moderation",
                 cancellationToken)
             .ConfigureAwait(false);
     }
