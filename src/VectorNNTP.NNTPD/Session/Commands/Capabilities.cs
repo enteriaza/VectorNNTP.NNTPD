@@ -26,7 +26,12 @@ internal static class Capabilities
         var parts = new ReadOnlyMemory<byte>[MaxCapabilityParts];
         var count = CollectLines(context, parts);
         var owned = NntpResponseCompose.Concatenate(parts.AsSpan(0, count));
-        return context.Response.WriteLineAsync(owned, cancellationToken);
+        return NntpCommandReply.WriteAsync(
+            context,
+            Logger,
+            owned,
+            NntpResponseStatus.CapabilityListFollows,
+            cancellationToken);
     }
 
     private static int CollectLines(NntpCommandContext context, Span<ReadOnlyMemory<byte>> parts)

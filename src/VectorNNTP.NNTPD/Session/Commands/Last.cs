@@ -16,7 +16,7 @@ internal static class Last
             Logger,
             context,
             "LAST",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 }

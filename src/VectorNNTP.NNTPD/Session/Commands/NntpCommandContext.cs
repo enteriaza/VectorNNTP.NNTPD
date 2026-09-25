@@ -45,6 +45,12 @@ public sealed class NntpCommandContext
     public NntpResponseWriter Response { get; }
 
     /// <summary>
+    /// Semantic first/status line for TX Debug logging. Set only when Debug is enabled;
+    /// first assignment wins. Never derived from wire bytes.
+    /// </summary>
+    internal string? StatusLine { get; set; }
+
+    /// <summary>
     /// Gets an article already consumed by the continuous RX scanner, when the session
     /// pre-read a TAKETHIS body so the handler must not read the Pipe again.
     /// </summary>

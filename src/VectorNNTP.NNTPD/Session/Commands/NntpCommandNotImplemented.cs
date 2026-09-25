@@ -4,6 +4,14 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 internal static class NntpCommandNotImplemented
 {
     /// <summary>Returns <c>500 Command not implemented</c> (RFC 3977 for unsupported optional commands).</summary>
-    public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        context.Response.WriteLineAsync(NntpResponses.CommandNotImplemented, cancellationToken);
+    public static ValueTask HandleAsync(
+        NntpCommandContext context,
+        ILogger logger,
+        CancellationToken cancellationToken) =>
+        NntpCommandReply.WriteAsync(
+            context,
+            logger,
+            NntpResponses.CommandNotImplemented,
+            NntpResponseStatus.CommandNotImplemented,
+            cancellationToken);
 }

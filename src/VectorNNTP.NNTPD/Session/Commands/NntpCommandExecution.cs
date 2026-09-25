@@ -13,7 +13,9 @@ internal static class NntpCommandExecution
 {
     /// <summary>
     /// Runs <paramref name="execute"/> under a monotonic stopwatch and logs
-    /// <c>[client] TX: COMMAND executed in 0.000s</c> exactly once.
+    /// <c>[client] TX: COMMAND [status] executed in 0.000s</c> exactly once when
+    /// the handler produced an NNTP status line; otherwise the historical no-status
+    /// completion format is retained.
     /// </summary>
     public static async ValueTask RunAsync(
         ILogger logger,
@@ -66,7 +68,8 @@ internal static class NntpCommandExecution
                 context.Session,
                 command,
                 Stopwatch.GetElapsedTime(started),
-                detail);
+                detail,
+                context.StatusLine);
         }
     }
 
@@ -81,19 +84,41 @@ internal static class NntpCommandExecution
         NntpSession session,
         string command,
         TimeSpan elapsed,
-        string? detail = null)
+        string? detail = null,
+        string? statusLine = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
-        if (NntpCommandLogFormat.SuppressHotPathCommandLog(command))
+        if (!logger.IsEnabled(LogLevel.Debug)
+            || NntpCommandLogFormat.SuppressHotPathCommandLog(command))
         {
             return;
         }
 
         var client = NntpCommandLogFormat.Client(session);
         var seconds = elapsed.TotalSeconds;
+        if (statusLine is not null)
+        {
+            if (detail is null)
+            {
+                CommandLogMessages.CommandTxWithStatus(logger, client, command, statusLine, seconds);
+            }
+            else
+            {
+                CommandLogMessages.CommandTxWithStatusAndDetail(
+                    logger,
+                    client,
+                    command,
+                    statusLine,
+                    seconds,
+                    detail);
+            }
+
+            return;
+        }
+
         if (detail is null)
         {
             CommandLogMessages.CommandTx(logger, client, command, seconds);

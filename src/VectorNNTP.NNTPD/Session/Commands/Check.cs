@@ -97,6 +97,11 @@ internal static class Check
         CancellationToken cancellationToken)
     {
         var owned = Compose(result, messageId.Span);
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            context.StatusLine ??= NntpCommandStatusText.FormatCheck(result, messageId.Span);
+        }
+
         return context.Response.WriteLineAsync(owned, cancellationToken);
     }
 }

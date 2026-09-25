@@ -89,6 +89,52 @@ public sealed class SourceGeneratedLoggingTests
     }
 
     [Fact]
+    public void CommandTxWithStatus_PreservesStatusLineAndTimingShape()
+    {
+        var logger = new CapturingLogger();
+
+        CommandLogMessages.CommandTxWithStatus(
+            logger,
+            "198.18.0.70:49860",
+            "CHECK",
+            "238 <want@example.com> send article to be transferred",
+            0.012);
+
+        Assert.Equal(LogLevel.Debug, logger.Level);
+        Assert.Equal(1615, logger.EventId.Id);
+        Assert.Equal(
+            "[198.18.0.70:49860] TX: CHECK [238 <want@example.com> send article to be transferred] executed in 0.012s",
+            logger.Formatted);
+        Assert.Equal("CHECK", logger.GetString("Command"));
+        Assert.Equal(
+            "238 <want@example.com> send article to be transferred",
+            logger.GetString("StatusLine"));
+        Assert.Equal(0.012, logger.GetValue<double>("ElapsedSeconds"));
+    }
+
+    [Fact]
+    public void CommandTxWithStatusAndDetail_PreservesBothStatusAndDetail()
+    {
+        var logger = new CapturingLogger();
+
+        CommandLogMessages.CommandTxWithStatusAndDetail(
+            logger,
+            "198.18.0.70:49860",
+            "STARTTLS",
+            "382 Continue with TLS negotiation",
+            0.001,
+            "TlsVersion=TLSv1.3, Cipher=TLS_AES_256_GCM_SHA384");
+
+        Assert.Equal(LogLevel.Debug, logger.Level);
+        Assert.Equal(1616, logger.EventId.Id);
+        Assert.Equal(
+            "[198.18.0.70:49860] TX: STARTTLS [382 Continue with TLS negotiation] executed in 0.001s [TlsVersion=TLSv1.3, Cipher=TLS_AES_256_GCM_SHA384]",
+            logger.Formatted);
+        Assert.Equal("382 Continue with TLS negotiation", logger.GetString("StatusLine"));
+        Assert.Equal("TlsVersion=TLSv1.3, Cipher=TLS_AES_256_GCM_SHA384", logger.GetString("Detail"));
+    }
+
+    [Fact]
     public void RedactRxCommand_IsExplicitLoggingStringBoundary()
     {
         var command = NntpCommandParser.Parse("HELP"u8);
@@ -203,6 +249,7 @@ public sealed class SourceGeneratedLoggingTests
             1414, 1415, 1416, 1417, 1418, 1419, 1420, 1421, 1422, 1423,
             1500, 1501, 1502, 1503,
             1600, 1601, 1602, 1603, 1604, 1605, 1606, 1607, 1608, 1609, 1610, 1611,
+            1615, 1616,
             1700, 1701, 1702, 1703, 1704, 1705, 1706,
             1800, 1801, 1802, 1803, 1804, 1805, 1806, 1807, 1808, 1809, 1810, 1811, 1812, 1813,
             1814, 1815, 1816, 1817, 1818, 1819, 1820, 1821, 1822, 1823, 1824, 1825, 1826, 1827,

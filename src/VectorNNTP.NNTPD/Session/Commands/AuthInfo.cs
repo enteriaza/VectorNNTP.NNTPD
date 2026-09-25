@@ -60,8 +60,12 @@ internal static class AuthInfo
         _ = authenticationProvider;
         if (context.Session.Authentication.IsAuthenticated)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AlreadyAuthenticated,
+                    NntpResponseStatus.AlreadyAuthenticated,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -69,16 +73,24 @@ internal static class AuthInfo
         // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.DeflateAlreadyActive,
+                    NntpResponseStatus.DeflateAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         if (!context.Session.IsAuthinfoPassPermitted)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.PrivacyRequired, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.PrivacyRequired,
+                    NntpResponseStatus.PrivacyRequired,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -88,8 +100,12 @@ internal static class AuthInfo
 
         // Cache only — does not authenticate or grant authorization (RFC 4643).
         context.Session.SetPendingAuthUsername(username);
-        await context.Response
-            .WriteLineAsync(NntpResponses.PasswordRequired, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.PasswordRequired,
+                    NntpResponseStatus.PasswordRequired,
+                    cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -100,8 +116,12 @@ internal static class AuthInfo
     {
         if (context.Session.Authentication.IsAuthenticated)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AlreadyAuthenticated,
+                    NntpResponseStatus.AlreadyAuthenticated,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -109,16 +129,24 @@ internal static class AuthInfo
         // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.DeflateAlreadyActive,
+                    NntpResponseStatus.DeflateAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         if (!context.Session.IsAuthinfoPassPermitted)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.PrivacyRequired, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.PrivacyRequired,
+                    NntpResponseStatus.PrivacyRequired,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -126,8 +154,12 @@ internal static class AuthInfo
         var pending = context.Session.PendingAuthUsername;
         if (pending is null)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.AuthenticationOutOfSequence, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AuthenticationOutOfSequence,
+                    NntpResponseStatus.AuthenticationOutOfSequence,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -163,15 +195,23 @@ internal static class AuthInfo
         if (!result.Succeeded || result.Username is null || result.Authorization is null)
         {
             context.Session.ApplyFailedAuthentication();
-            await context.Response
-                .WriteLineAsync(NntpResponses.AuthenticationFailed, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AuthenticationFailed,
+                    NntpResponseStatus.AuthenticationFailed,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         context.Session.ApplySuccessfulAuthentication(result.Username, result.Authorization);
-        await context.Response
-            .WriteLineAsync(NntpResponses.AuthenticationAccepted, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AuthenticationAccepted,
+                    NntpResponseStatus.AuthenticationAccepted,
+                    cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -179,8 +219,12 @@ internal static class AuthInfo
     {
         if (context.Session.Authentication.IsAuthenticated)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.AlreadyAuthenticated, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AlreadyAuthenticated,
+                    NntpResponseStatus.AlreadyAuthenticated,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -188,14 +232,22 @@ internal static class AuthInfo
         // RFC 8054 §2.2.2 / §7: authentication MUST NOT be attempted after successful COMPRESS.
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.DeflateAlreadyActive,
+                    NntpResponseStatus.DeflateAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        await context.Response
-            .WriteLineAsync(NntpResponses.AuthinfoSaslNotImplemented, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AuthinfoSaslNotImplemented,
+                    NntpResponseStatus.AuthinfoSaslNotImplemented,
+                    cancellationToken)
             .ConfigureAwait(false);
     }
 }

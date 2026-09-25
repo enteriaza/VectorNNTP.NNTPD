@@ -35,8 +35,12 @@ internal static class StartTls
     {
         if (context.Connection.IsTls)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.TlsAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.TlsAlreadyActive,
+                    NntpResponseStatus.TlsAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -44,16 +48,24 @@ internal static class StartTls
         // RFC 8054 §2.2.2: MUST reply 502 to STARTTLS while a compression layer is already active.
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.DeflateAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.DeflateAlreadyActive,
+                    NntpResponseStatus.DeflateAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
         if (certificateProvider is null)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.TlsProviderUnavailable, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.TlsProviderUnavailable,
+                    NntpResponseStatus.TlsProviderUnavailable,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -66,8 +78,12 @@ internal static class StartTls
         await context.Connection.PauseReadsAsync(cancellationToken).ConfigureAwait(false);
 
         var idleVersionBefore382 = context.Connection.OutboundIdleVersion;
-        await context.Response
-            .WriteLineAsync(NntpResponses.ContinueWithTls, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ContinueWithTls,
+                    NntpResponseStatus.ContinueWithTls,
+                    cancellationToken)
             .ConfigureAwait(false);
 
         await context.Connection

@@ -24,7 +24,7 @@ namespace VectorNNTP.NNTPD.Tests.Session;
 public sealed class NntpCommandLoggingTests
 {
     private static readonly Regex TxPattern = new(
-        @"TX:\s+(?<cmd>.+?)\s+executed in (?<sec>\d+\.\d{3})s",
+        @"TX:\s+(?<cmd>.+?)(?:\s+\[(?<status>[^\]]*)\])?\s+executed in (?<sec>\d+\.\d{3})s",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     [Fact]
@@ -49,8 +49,10 @@ public sealed class NntpCommandLoggingTests
         var tx = recording.Messages.Where(m => m.Contains("TX:", StringComparison.Ordinal)).ToArray();
 
         Assert.Contains(rx, m => m.Contains("RX: CAPABILITIES", StringComparison.Ordinal));
-        Assert.Equal(1, tx.Count(m => m.Contains("TX: CAPABILITIES executed in", StringComparison.Ordinal)));
+        Assert.Equal(1, tx.Count(m => m.Contains("TX: CAPABILITIES [101 Capability list:] executed in", StringComparison.Ordinal)));
         Assert.Contains(tx, m => TxPattern.IsMatch(m) && m.Contains("CAPABILITIES", StringComparison.Ordinal));
+        Assert.DoesNotContain(tx, m => m.Contains("VERSION 2", StringComparison.Ordinal));
+        Assert.DoesNotContain(tx, m => m.Contains("IMPLEMENTATION", StringComparison.Ordinal));
         Assert.Contains(
             recording.Categories,
             c => c == typeof(Capabilities).FullName);
@@ -83,7 +85,9 @@ public sealed class NntpCommandLoggingTests
         var tx = recording.Messages.Where(m => m.Contains("TX:", StringComparison.Ordinal)).ToArray();
 
         Assert.Contains(rx, m => m.Contains("RX: HELP", StringComparison.Ordinal));
-        Assert.Equal(1, tx.Count(m => m.Contains("TX: HELP executed in", StringComparison.Ordinal)));
+        Assert.Equal(1, tx.Count(m => m.Contains("TX: HELP [100 Help text follows] executed in", StringComparison.Ordinal)));
+        Assert.DoesNotContain(tx, m => m.Contains("ARTICLE [message-id / article-number]", StringComparison.Ordinal));
+        Assert.DoesNotContain(tx, m => m.Contains("CHECK message-id", StringComparison.Ordinal));
         Assert.Contains(recording.Categories, c => c == typeof(Help).FullName);
         Assert.DoesNotContain(
             recording.Messages,
@@ -121,7 +125,7 @@ public sealed class NntpCommandLoggingTests
 
         Assert.Contains(recording.Messages, m => m.Contains("RX: STARTTLS", StringComparison.Ordinal));
         var startTlsTx = recording.Messages
-            .Where(m => m.Contains("TX: STARTTLS executed in", StringComparison.Ordinal))
+            .Where(m => m.Contains("TX: STARTTLS [382 Continue with TLS negotiation] executed in", StringComparison.Ordinal))
             .ToArray();
         Assert.Single(startTlsTx);
         Assert.Matches(TxPattern, startTlsTx[0]);
@@ -163,7 +167,10 @@ public sealed class NntpCommandLoggingTests
         _ = await duplex.ReadClientLineAsync();
         await run;
 
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: POST executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: POST [500 Command not implemented] executed in", StringComparison.Ordinal)));
         Assert.Contains(recording.Messages, m => m.Contains("[not implemented]", StringComparison.Ordinal));
     }
 
@@ -180,7 +187,10 @@ public sealed class NntpCommandLoggingTests
         _ = await duplex.ReadClientLineAsync();
         await run;
 
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: QUIT [205 Connection closing] executed in", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -206,7 +216,10 @@ public sealed class NntpCommandLoggingTests
         var joined = string.Join('\n', recording.Messages);
         Assert.DoesNotContain("super-secret-password-xyz", joined, StringComparison.Ordinal);
         Assert.Contains(recording.Messages, m => m.Contains("RX: AUTHINFO PASS <redacted>", StringComparison.Ordinal));
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: AUTHINFO PASS executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: AUTHINFO PASS [281 Authentication accepted] executed in", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -308,10 +321,15 @@ public sealed class NntpCommandLoggingTests
             m => m.Contains("RX: TAKETHIS", StringComparison.Ordinal));
         Assert.Contains(
             recording.Messages,
-            m => m.Contains("TX: TAKETHIS", StringComparison.Ordinal));
+            m => m.Contains("TX: TAKETHIS [239 <bench@ex.com>] executed in", StringComparison.Ordinal)
+                 && m.Contains("[accepted]", StringComparison.Ordinal));
 
         Assert.Contains(recording.Messages, m => m.Contains("RX: DATE", StringComparison.Ordinal));
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: DATE executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: DATE [111 ", StringComparison.Ordinal)
+                && m.Contains("] executed in", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -332,7 +350,11 @@ public sealed class NntpCommandLoggingTests
         await run;
 
         Assert.Contains(recording.Messages, m => m.Contains("RX: DATE", StringComparison.Ordinal));
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: DATE executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: DATE [111 ", StringComparison.Ordinal)
+                && m.Contains("] executed in", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -359,7 +381,7 @@ public sealed class NntpCommandLoggingTests
 
         var tx = Assert.Single(
             recording.Messages,
-            m => m.Contains("TX: STARTTLS executed in", StringComparison.Ordinal));
+            m => m.Contains("TX: STARTTLS [382 Continue with TLS negotiation] executed in", StringComparison.Ordinal));
         Assert.Contains("[failed]", tx, StringComparison.Ordinal);
         Assert.DoesNotContain("TlsVersion=", tx, StringComparison.Ordinal);
         Assert.DoesNotContain("Cipher=", tx, StringComparison.Ordinal);
@@ -370,12 +392,202 @@ public sealed class NntpCommandLoggingTests
     }
 
     [Fact]
+    public async Task Check_Wanted_LogsExactStatusLineFromWriter()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: TransitAuthorization());
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("CHECK <want@example.com>");
+        Assert.Equal(
+            "238 <want@example.com> send article to be transferred",
+            await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: CHECK", StringComparison.Ordinal));
+        Assert.Matches(
+            @"^\[198\.18\.0\.70:49860\] TX: CHECK \[238 <want@example.com> send article to be transferred\] executed in \d+\.\d{3}s$",
+            tx);
+        Assert.DoesNotContain("438", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Check_Duplicate_LogsActual438StatusLine()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: TransitAuthorization(),
+            historyDb: new SeenHistoryDb());
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("CHECK <dup@example.com>");
+        Assert.Equal("438 <dup@example.com>", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: CHECK", StringComparison.Ordinal));
+        Assert.Contains("TX: CHECK [438 <dup@example.com>] executed in", tx, StringComparison.Ordinal);
+        Assert.DoesNotContain("238", tx, StringComparison.Ordinal);
+        Assert.DoesNotContain("send article to be transferred", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Check_Unavailable_Logs431StatusLine()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: TransitAuthorization(),
+            historyDb: new UnavailableHistoryDb());
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("CHECK <later@example.com>");
+        Assert.Equal("431 <later@example.com>", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: CHECK", StringComparison.Ordinal));
+        Assert.Contains("TX: CHECK [431 <later@example.com>] executed in", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TakeThis_RejectedTooLarge_Logs439StatusLine()
+    {
+        var recording = new RecordingLoggerFactory();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
+        {
+            QueueCapacity = 4,
+            MaxArticleBytes = 16,
+        });
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: TransitAuthorization(),
+            articleIngestion: queue);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("TAKETHIS <big@example.com>");
+        await duplex.WriteClientBytesAsync("Subject: oversized-payload-for-439\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        Assert.Equal("439 <big@example.com>", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: TAKETHIS", StringComparison.Ordinal));
+        Assert.Contains("TX: TAKETHIS [439 <big@example.com>] executed in", tx, StringComparison.Ordinal);
+        Assert.Contains("[rejected too large]", tx, StringComparison.Ordinal);
+        Assert.DoesNotContain("Subject: oversized", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TakeThis_HistoryUnavailable_Logs400StatusLine()
+    {
+        var recording = new RecordingLoggerFactory();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: TransitAuthorization(),
+            articleIngestion: queue,
+            historyDb: new UnavailableHistoryDb());
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("TAKETHIS <tmp@example.com>");
+        await duplex.WriteClientBytesAsync("Subject: t\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: TAKETHIS", StringComparison.Ordinal));
+        Assert.Contains(
+            "TX: TAKETHIS [400 Service temporarily unavailable] executed in",
+            tx,
+            StringComparison.Ordinal);
+        Assert.Contains("[temporary failure]", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_Stub_Logs500StatusLineAndKeepsNotImplementedDetail()
+    {
+        var recording = new RecordingLoggerFactory();
+        await using var duplex = await LoggingDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            recording,
+            authorization: new NntpAuthorization(
+                isAuthenticated: true,
+                authorizedReader: true,
+                authorizedTransit: false,
+                postingPermitted: true,
+                streamingPermitted: false));
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("LIST");
+        Assert.Equal("500 Command not implemented", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+
+        var tx = Assert.Single(
+            recording.Messages,
+            m => m.Contains("TX: LIST", StringComparison.Ordinal));
+        Assert.Contains(
+            "TX: LIST [500 Command not implemented] executed in",
+            tx,
+            StringComparison.Ordinal);
+        Assert.Contains("[not implemented]", tx, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RedactRxLine_ProtectsPassAndSasl()
     {
         Assert.Equal("AUTHINFO PASS <redacted>", NntpCommandLogFormat.RedactRxLine("AUTHINFO PASS secret"));
         Assert.Equal("AUTHINFO SASL <redacted>", NntpCommandLogFormat.RedactRxLine("AUTHINFO SASL PLAIN abc"));
         Assert.Equal("CAPABILITIES", NntpCommandLogFormat.RedactRxLine("CAPABILITIES"));
     }
+
+    private static NntpAuthorization TransitAuthorization() =>
+        new(
+            isAuthenticated: true,
+            authorizedReader: false,
+            authorizedTransit: true,
+            postingPermitted: false,
+            streamingPermitted: true);
 
     private static async Task DrainResponseAsync(LoggingDuplex duplex)
     {
@@ -532,7 +744,8 @@ public sealed class NntpCommandLoggingTests
             INntpAuthenticationProvider? authenticationProvider = null,
             bool allowCleartextAuth = true,
             NntpAuthorization? authorization = null,
-            IArticleIngestionQueue? articleIngestion = null)
+            IArticleIngestionQueue? articleIngestion = null,
+            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null)
         {
             var connection = new PipeConnection(_clientToServer.Reader, _serverToClient.Writer);
             var session = new NntpSession(
@@ -541,7 +754,8 @@ public sealed class NntpCommandLoggingTests
                 authenticationProvider: authenticationProvider,
                 allowCleartextAuth: allowCleartextAuth,
                 loggerFactory: loggerFactory,
-                articleIngestion: articleIngestion);
+                articleIngestion: articleIngestion,
+                historyDb: historyDb);
             if (authorization is not null)
             {
                 session.SetAuthorization(authorization);
@@ -664,5 +878,43 @@ public sealed class NntpCommandLoggingTests
 
             private int _compressed;
         }
+    }
+
+    private sealed class UnavailableHistoryDb : VectorNNTP.NNTPD.History.IHistoryDb
+    {
+        public ValueTask<VectorNNTP.NNTPD.History.HistoryLookupResult> LookupAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken = default) =>
+            new(VectorNNTP.NNTPD.History.HistoryLookupResult.Unavailable);
+
+        public ValueTask<VectorNNTP.NNTPD.History.HistoryLookupResult> PeekAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken = default) =>
+            new(VectorNNTP.NNTPD.History.HistoryLookupResult.Unavailable);
+
+        public void Remember(ReadOnlyMemory<byte> messageId)
+        {
+        }
+
+        public bool ContainsLocal(in VectorNNTP.NNTPD.History.HistoryDigest digest) => false;
+    }
+
+    private sealed class SeenHistoryDb : VectorNNTP.NNTPD.History.IHistoryDb
+    {
+        public ValueTask<VectorNNTP.NNTPD.History.HistoryLookupResult> LookupAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken = default) =>
+            new(VectorNNTP.NNTPD.History.HistoryLookupResult.Seen);
+
+        public ValueTask<VectorNNTP.NNTPD.History.HistoryLookupResult> PeekAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken = default) =>
+            new(VectorNNTP.NNTPD.History.HistoryLookupResult.Seen);
+
+        public void Remember(ReadOnlyMemory<byte> messageId)
+        {
+        }
+
+        public bool ContainsLocal(in VectorNNTP.NNTPD.History.HistoryDigest digest) => true;
     }
 }

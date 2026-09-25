@@ -23,7 +23,13 @@ internal static class Date
 
     private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        var owned = FormatUtcDateLine(DateTime.UtcNow);
+        var utc = DateTime.UtcNow;
+        var owned = FormatUtcDateLine(utc, Logger, out var statusLine);
+        if (statusLine is not null)
+        {
+            context.StatusLine ??= statusLine;
+        }
+
         return context.Response.WriteLineAsync(owned, cancellationToken);
     }
 
@@ -31,13 +37,23 @@ internal static class Date
     /// Builds <c>111 YYYYMMDDhhmmss\r\n</c> as one owned buffer using
     /// <c>DateTime.TryFormat</c> so UTC stamp semantics stay on the framework formatter.
     /// </summary>
-    internal static byte[] FormatUtcDateLine(DateTime utc)
+    internal static byte[] FormatUtcDateLine(DateTime utc) =>
+        FormatUtcDateLine(utc, logger: null, out _);
+
+    /// <inheritdoc cref="FormatUtcDateLine(DateTime)"/>
+    internal static byte[] FormatUtcDateLine(DateTime utc, ILogger? logger, out string? statusLine)
     {
+        statusLine = null;
         Span<char> stamp = stackalloc char[StampLength];
         if (!utc.TryFormat(stamp, out var written, "yyyyMMddHHmmss", CultureInfo.InvariantCulture)
             || written != StampLength)
         {
             throw new InvalidOperationException("DATE stamp formatting failed.");
+        }
+
+        if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+        {
+            statusLine = NntpCommandStatusText.FormatDate(stamp);
         }
 
         var wire = new byte[DateWireLength];

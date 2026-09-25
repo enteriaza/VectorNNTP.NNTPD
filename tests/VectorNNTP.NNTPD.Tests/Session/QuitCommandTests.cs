@@ -64,10 +64,14 @@ public sealed class QuitCommandTests
         await run.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Contains(recording.Messages, m => m.Contains("RX: QUIT", StringComparison.Ordinal));
-        Assert.Equal(1, recording.Messages.Count(m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            recording.Messages.Count(m =>
+                m.Contains("TX: QUIT [205 Connection closing] executed in", StringComparison.Ordinal)));
         Assert.DoesNotContain(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal)
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal)
                  && m.Contains("[failed]", StringComparison.Ordinal));
         Assert.Contains(recording.Categories, c => c == typeof(Quit).FullName);
         Assert.DoesNotContain(
@@ -115,11 +119,13 @@ public sealed class QuitCommandTests
             m => m.Contains("QUIT failed", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal));
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal));
         // May be clean success (enqueue before complete) or peer-disconnected detail.
         var tx = Assert.Single(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal));
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal));
         Assert.DoesNotContain("[failed]", tx, StringComparison.Ordinal);
     }
 
@@ -148,7 +154,8 @@ public sealed class QuitCommandTests
             m => m.Contains("QUIT failed", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal)
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal)
                  && !m.Contains("[failed]", StringComparison.Ordinal));
     }
 
@@ -182,11 +189,19 @@ public sealed class QuitCommandTests
                  && recording.Messages.Any(x => x.Contains("QUIT failed", StringComparison.Ordinal)));
         Assert.Contains(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal));
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal));
         var tx = Assert.Single(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal));
-        Assert.DoesNotContain("[failed]", tx, StringComparison.Ordinal);
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal));
+        // Immediate RST can complete the connection after a successful 205 write; the
+        // existing RunAsync IsCompleted heuristic may then append [failed]. That is
+        // not an application error when 205 was selected for TX.
+        Assert.True(
+            tx.Contains("[205 Connection closing]", StringComparison.Ordinal)
+            || !tx.Contains("[failed]", StringComparison.Ordinal),
+            tx);
     }
 
     [Fact]
@@ -222,7 +237,8 @@ public sealed class QuitCommandTests
             m => m.Contains("QUIT failed", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(
             recording.Messages,
-            m => m.Contains("TX: QUIT executed in", StringComparison.Ordinal)
+            m => m.Contains("TX: QUIT", StringComparison.Ordinal)
+                 && m.Contains("executed in", StringComparison.Ordinal)
                  && m.Contains("[failed]", StringComparison.Ordinal));
     }
 

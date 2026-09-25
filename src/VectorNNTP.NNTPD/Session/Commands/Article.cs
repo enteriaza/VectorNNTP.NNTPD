@@ -28,7 +28,7 @@ internal static class Article
             Logger,
             context,
             "ARTICLE",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 
@@ -38,7 +38,7 @@ internal static class Article
             Logger,
             context,
             "HEAD",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 
@@ -48,7 +48,7 @@ internal static class Article
             Logger,
             context,
             "BODY",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 
@@ -58,7 +58,7 @@ internal static class Article
             Logger,
             context,
             "STAT",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 }

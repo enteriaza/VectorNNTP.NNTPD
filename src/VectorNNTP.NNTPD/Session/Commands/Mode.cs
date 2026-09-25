@@ -32,8 +32,12 @@ internal static class Mode
         // RFC 4643: client MUST NOT issue MODE READER after authentication; reject consistently.
         if (context.Session.Authentication.IsAuthenticated)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.CommandUnavailableAfterAuthentication, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.CommandUnavailableAfterAuthentication,
+                    NntpResponseStatus.CommandUnavailableAfterAuthentication,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -41,8 +45,12 @@ internal static class Mode
         // RFC 8054 §2.2.2: client MUST NOT issue MODE READER after a compression layer is active.
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.CommandUnavailableAfterCompression, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.CommandUnavailableAfterCompression,
+                    NntpResponseStatus.CommandUnavailableAfterCompression,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -50,14 +58,22 @@ internal static class Mode
         context.Session.SetMode(NntpSessionMode.Reader);
         if (context.Session.Authorization.PostingPermitted)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.ReaderModePostingPermitted, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ReaderModePostingPermitted,
+                    NntpResponseStatus.ReaderModePostingPermitted,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         else
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.ReaderModePostingProhibited, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ReaderModePostingProhibited,
+                    NntpResponseStatus.ReaderModePostingProhibited,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -66,8 +82,12 @@ internal static class Mode
     {
         // RFC 4644 §2.3.2: MUST return 203 and MUST NOT affect server state despite the name.
         // StreamingPermitted is enforced by the dispatcher (RequiresStreaming).
-        await context.Response
-            .WriteLineAsync(NntpResponses.StreamingPermitted, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.StreamingPermitted,
+                    NntpResponseStatus.StreamingPermitted,
+                    cancellationToken)
             .ConfigureAwait(false);
     }
 }

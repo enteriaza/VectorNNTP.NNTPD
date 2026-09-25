@@ -33,7 +33,12 @@ internal static class IHave
 
         if (peek == HistoryLookupResult.Seen)
         {
-            await context.Response.WriteLineAsync(NntpResponses.IhaveNotWanted, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveNotWanted,
+                    NntpResponseStatus.IhaveNotWanted,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "not wanted";
             return;
@@ -41,7 +46,12 @@ internal static class IHave
 
         if (peek == HistoryLookupResult.Unavailable)
         {
-            await context.Response.WriteLineAsync(NntpResponses.IhaveTryLater, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveTryLater,
+                    NntpResponseStatus.IhaveTryLater,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "try later";
             return;
@@ -51,13 +61,23 @@ internal static class IHave
         if (!queue.TryProbeCapacity())
         {
             IHaveAdmissionLog.BudgetExhausted(Logger, queue);
-            await context.Response.WriteLineAsync(NntpResponses.IhaveTryLater, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveTryLater,
+                    NntpResponseStatus.IhaveTryLater,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "queue full";
             return;
         }
 
-        await context.Response.WriteLineAsync(NntpResponses.IhaveSendArticle, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveSendArticle,
+                    NntpResponseStatus.IhaveSendArticle,
+                    cancellationToken)
             .ConfigureAwait(false);
 
         IHaveArticleReadResult read;
@@ -81,7 +101,12 @@ internal static class IHave
 
         if (read.Status == NntpMultilineReadStatus.TooLarge)
         {
-            await context.Response.WriteLineAsync(NntpResponses.IhaveRejected, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveRejected,
+                    NntpResponseStatus.IhaveRejected,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "rejected too large";
             return;
@@ -99,7 +124,12 @@ internal static class IHave
         var enqueue = queue.TryAdmit(inbound);
         if (enqueue == ArticleEnqueueResult.Rejected)
         {
-            await context.Response.WriteLineAsync(NntpResponses.IhaveRejected, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveRejected,
+                    NntpResponseStatus.IhaveRejected,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "rejected exceeds queue budget";
             return;
@@ -112,7 +142,12 @@ internal static class IHave
                 IHaveAdmissionLog.BudgetExhausted(Logger, queue);
             }
 
-            await context.Response.WriteLineAsync(NntpResponses.IhaveTransferFailed, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveTransferFailed,
+                    NntpResponseStatus.IhaveTransferFailed,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = enqueue == ArticleEnqueueResult.Full
                 ? "queue full"
@@ -130,7 +165,12 @@ internal static class IHave
             read.Metrics.ReceiveElapsed.TotalMilliseconds,
             Queued: true);
 
-        await context.Response.WriteLineAsync(NntpResponses.IhaveTransferredOk, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveTransferredOk,
+                    NntpResponseStatus.IhaveTransferredOk,
+                    cancellationToken)
             .ConfigureAwait(false);
         context.CompletionDetail = "accepted";
     }

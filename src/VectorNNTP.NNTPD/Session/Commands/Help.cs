@@ -128,5 +128,10 @@ internal static class Help
         NntpCommandExecution.RunAsync(Logger, context, "HELP", ExecuteAsync, cancellationToken);
 
     private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        context.Response.WriteLineAsync(NntpResponses.HelpComplete, cancellationToken);
+        NntpCommandReply.WriteAsync(
+            context,
+            Logger,
+            NntpResponses.HelpComplete,
+            NntpResponseStatus.HelpTextFollows,
+            cancellationToken);
 }

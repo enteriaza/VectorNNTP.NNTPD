@@ -167,7 +167,7 @@ public sealed class NntpCompressTests
         Assert.Contains(recording.Messages, m => m.Contains("RX: COMPRESS DEFLATE", StringComparison.Ordinal));
         var tx = Assert.Single(
             recording.Messages,
-            m => m.Contains("TX: COMPRESS executed in", StringComparison.Ordinal));
+            m => m.Contains("TX: COMPRESS [206 Compression active] executed in", StringComparison.Ordinal));
         Assert.Contains("[DEFLATE active]", tx, StringComparison.Ordinal);
         Assert.Contains(recording.Categories, c => c == typeof(Compress).FullName);
     }

@@ -33,8 +33,12 @@ internal static class Quit
         var idleVersionBefore205 = context.Connection.OutboundIdleVersion;
         try
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.ConnectionClosing, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ConnectionClosing,
+                    NntpResponseStatus.ConnectionClosing,
+                    cancellationToken)
                 .ConfigureAwait(false);
             responseWritten = true;
 

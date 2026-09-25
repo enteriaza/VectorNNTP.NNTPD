@@ -499,14 +499,14 @@ internal sealed class TakeThisPipeline
         {
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "rejected too large");
+            WriteTxIfDebug(slot, "rejected too large", TransferLogKind.Rejected);
             return;
         }
 
         if (slot.Peek == HistoryLookupResult.Unavailable)
         {
             await TakeThis.FailTemporaryAsync(_session, _response, cancellationToken).ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "temporary failure");
+            WriteTxIfDebug(slot, "temporary failure", TransferLogKind.Temporary);
             return;
         }
 
@@ -522,7 +522,7 @@ internal sealed class TakeThisPipeline
             var responseStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.ArticleTransferredOkPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "accepted duplicate");
+            WriteTxIfDebug(slot, "accepted duplicate", TransferLogKind.Accepted);
             probe?.RecordArticleCompleted(
                 duplicate: true,
                 System.Diagnostics.Stopwatch.GetTimestamp() - responseStart);
@@ -535,7 +535,7 @@ internal sealed class TakeThisPipeline
         if (!queue.IsAccepting)
         {
             await TakeThis.FailTemporaryAsync(_session, _response, cancellationToken).ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "temporary failure");
+            WriteTxIfDebug(slot, "temporary failure", TransferLogKind.Temporary);
             return;
         }
 
@@ -576,7 +576,7 @@ internal sealed class TakeThisPipeline
         if (enqueue == ArticleEnqueueResult.Unavailable)
         {
             await TakeThis.FailTemporaryAsync(_session, _response, cancellationToken).ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "temporary failure");
+            WriteTxIfDebug(slot, "temporary failure", TransferLogKind.Temporary);
             return;
         }
 
@@ -587,7 +587,7 @@ internal sealed class TakeThisPipeline
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "rejected exceeds queue budget");
+            WriteTxIfDebug(slot, "rejected exceeds queue budget", TransferLogKind.Rejected);
             rejectProbe?.RecordArticleCompleted(
                 duplicate: false,
                 System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
@@ -612,12 +612,35 @@ internal sealed class TakeThisPipeline
         var completeStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await EnqueueReplyAsync(slot, NntpResponses.ArticleTransferredOkPrefix, cancellationToken)
             .ConfigureAwait(false);
-        TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, "accepted");
+        WriteTxIfDebug(slot, "accepted", TransferLogKind.Accepted);
         completeProbe?.RecordArticleCompleted(
             duplicate: false,
             System.Diagnostics.Stopwatch.GetTimestamp() - completeStart);
         _session.SetActivityState(FeedSessionState.Idle);
         RecordAccepted(slot);
+    }
+
+    private enum TransferLogKind
+    {
+        Accepted,
+        Rejected,
+        Temporary,
+    }
+
+    private void WriteTxIfDebug(Slot slot, string detail, TransferLogKind kind)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var status = kind switch
+        {
+            TransferLogKind.Rejected => NntpCommandStatusText.FormatTakeThisRejected(slot.MessageId),
+            TransferLogKind.Temporary => NntpResponseStatus.ServiceTemporarilyUnavailable,
+            _ => NntpCommandStatusText.FormatTakeThisAccepted(slot.MessageId),
+        };
+        TakeThis.WriteCompletion(_logger, _session, slot.StartedTimestamp, detail, status);
     }
 
     private ValueTask EnqueueReplyAsync(

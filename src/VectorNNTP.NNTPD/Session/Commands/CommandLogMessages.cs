@@ -126,4 +126,27 @@ internal static partial class CommandLogMessages
         string PeerId,
         string PeerName,
         string Reason);
+
+    [LoggerMessage(
+        EventId = 1615,
+        Level = LogLevel.Debug,
+        Message = "[{Client}] TX: {Command} [{StatusLine}] executed in {ElapsedSeconds:F3}s")]
+    public static partial void CommandTxWithStatus(
+        ILogger logger,
+        string Client,
+        string Command,
+        string StatusLine,
+        double ElapsedSeconds);
+
+    [LoggerMessage(
+        EventId = 1616,
+        Level = LogLevel.Debug,
+        Message = "[{Client}] TX: {Command} [{StatusLine}] executed in {ElapsedSeconds:F3}s [{Detail}]")]
+    public static partial void CommandTxWithStatusAndDetail(
+        ILogger logger,
+        string Client,
+        string Command,
+        string StatusLine,
+        double ElapsedSeconds,
+        string Detail);
 }

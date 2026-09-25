@@ -397,11 +397,15 @@ internal sealed class CheckPipeline
         }
 
         await _response.EnqueueLineAsync(owned, cancellationToken).ConfigureAwait(false);
-        NntpCommandExecution.WriteCompletion(
-            _logger,
-            _session,
-            "CHECK",
-            System.Diagnostics.Stopwatch.GetElapsedTime(slot.StartedTimestamp));
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            NntpCommandExecution.WriteCompletion(
+                _logger,
+                _session,
+                "CHECK",
+                System.Diagnostics.Stopwatch.GetElapsedTime(slot.StartedTimestamp),
+                statusLine: NntpCommandStatusText.FormatCheck(slot.Result, slot.MessageId));
+        }
     }
 
     private bool HeadIsReadyNoLock()

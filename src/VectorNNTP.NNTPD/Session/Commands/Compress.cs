@@ -35,8 +35,12 @@ internal static class Compress
     {
         if (context.Connection.IsCompressed)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.CompressionAlreadyActive, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.CompressionAlreadyActive,
+                    NntpResponseStatus.CompressionAlreadyActive,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -45,8 +49,12 @@ internal static class Compress
         // lowercase/illegal octets (501). This is the semantic DEFLATE check — no string.
         if (!context.ArgumentSpan.SequenceEqual("DEFLATE"u8))
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.CompressionAlgorithmNotSupported, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.CompressionAlgorithmNotSupported,
+                    NntpResponseStatus.CompressionAlgorithmNotSupported,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -67,16 +75,24 @@ internal static class Compress
                 Logger,
                 ex,
                 NntpCommandLogFormat.Client(context.Session));
-            await context.Response
-                .WriteLineAsync(NntpResponses.UnableToActivateCompression, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.UnableToActivateCompression,
+                    NntpResponseStatus.UnableToActivateCompression,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "failed";
             return;
         }
 
         var idleVersionBefore206 = context.Connection.OutboundIdleVersion;
-        await context.Response
-            .WriteLineAsync(NntpResponses.CompressionActive, cancellationToken)
+        await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.CompressionActive,
+                    NntpResponseStatus.CompressionActive,
+                    cancellationToken)
             .ConfigureAwait(false);
 
         await context.Connection

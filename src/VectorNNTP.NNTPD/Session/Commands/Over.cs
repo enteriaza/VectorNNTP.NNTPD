@@ -16,7 +16,7 @@ internal static class Over
             Logger,
             context,
             "OVER",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, ct),
+            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
             cancellationToken,
             successDetail: "not implemented");
 }

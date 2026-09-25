@@ -48,11 +48,17 @@ public sealed class NntpCommandDispatcher
 
         if (access.HasFlag(NntpCommandAccess.RequiresAuthentication) && !authz.IsAuthenticated)
         {
-            await response
-                .WriteLineAsync(NntpResponses.AuthenticationRequired, cancellationToken)
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    NntpResponses.AuthenticationRequired,
+                    NntpResponseStatus.AuthenticationRequired,
+                    "authentication required",
+                    gateStarted,
+                    cancellationToken)
                 .ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger, session, display, Stopwatch.GetElapsedTime(gateStarted), "authentication required");
             return;
         }
 
@@ -61,13 +67,20 @@ public sealed class NntpCommandDispatcher
             var wire = authz.IsAuthenticated
                 ? NntpResponses.PermissionDenied
                 : NntpResponses.AuthenticationRequired;
-            await response.WriteLineAsync(wire, cancellationToken).ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger,
-                session,
-                display,
-                Stopwatch.GetElapsedTime(gateStarted),
-                authz.IsAuthenticated ? "permission denied" : "authentication required");
+            var status = authz.IsAuthenticated
+                ? NntpResponseStatus.PermissionDenied
+                : NntpResponseStatus.AuthenticationRequired;
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    wire,
+                    status,
+                    authz.IsAuthenticated ? "permission denied" : "authentication required",
+                    gateStarted,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -76,23 +89,36 @@ public sealed class NntpCommandDispatcher
             var wire = authz.IsAuthenticated
                 ? NntpResponses.PermissionDenied
                 : NntpResponses.AuthenticationRequired;
-            await response.WriteLineAsync(wire, cancellationToken).ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger,
-                session,
-                display,
-                Stopwatch.GetElapsedTime(gateStarted),
-                authz.IsAuthenticated ? "permission denied" : "authentication required");
+            var status = authz.IsAuthenticated
+                ? NntpResponseStatus.PermissionDenied
+                : NntpResponseStatus.AuthenticationRequired;
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    wire,
+                    status,
+                    authz.IsAuthenticated ? "permission denied" : "authentication required",
+                    gateStarted,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
         if (access.HasFlag(NntpCommandAccess.RequiresPosting) && !authz.PostingPermitted)
         {
-            await response
-                .WriteLineAsync(NntpResponses.PostingNotPermitted, cancellationToken)
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    NntpResponses.PostingNotPermitted,
+                    NntpResponseStatus.PostingNotPermitted,
+                    "posting not permitted",
+                    gateStarted,
+                    cancellationToken)
                 .ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger, session, display, Stopwatch.GetElapsedTime(gateStarted), "posting not permitted");
             return;
         }
 
@@ -101,33 +127,52 @@ public sealed class NntpCommandDispatcher
             var wire = authz.IsAuthenticated
                 ? NntpResponses.StreamingNotPermitted
                 : NntpResponses.AuthenticationRequired;
-            await response.WriteLineAsync(wire, cancellationToken).ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger,
-                session,
-                display,
-                Stopwatch.GetElapsedTime(gateStarted),
-                authz.IsAuthenticated ? "streaming not permitted" : "authentication required");
+            var status = authz.IsAuthenticated
+                ? NntpResponseStatus.StreamingNotPermitted
+                : NntpResponseStatus.AuthenticationRequired;
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    wire,
+                    status,
+                    authz.IsAuthenticated ? "streaming not permitted" : "authentication required",
+                    gateStarted,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
         if (access.HasFlag(NntpCommandAccess.RequiresReaderMode) && session.Mode != NntpSessionMode.Reader)
         {
-            await response
-                .WriteLineAsync(NntpResponses.NotInReaderMode, cancellationToken)
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    NntpResponses.NotInReaderMode,
+                    NntpResponseStatus.NotInReaderMode,
+                    "not in reader mode",
+                    gateStarted,
+                    cancellationToken)
                 .ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger, session, display, Stopwatch.GetElapsedTime(gateStarted), "not in reader mode");
             return;
         }
 
         if (access.HasFlag(NntpCommandAccess.RequiresStreamMode) && session.Mode != NntpSessionMode.Stream)
         {
-            await response
-                .WriteLineAsync(NntpResponses.NotInStreamMode, cancellationToken)
+            await WriteGatedResponseAsync(
+                    response,
+                    logger,
+                    session,
+                    display,
+                    NntpResponses.NotInStreamMode,
+                    NntpResponseStatus.NotInStreamMode,
+                    "not in stream mode",
+                    gateStarted,
+                    cancellationToken)
                 .ConfigureAwait(false);
-            NntpCommandExecution.WriteCompletion(
-                logger, session, display, Stopwatch.GetElapsedTime(gateStarted), "not in stream mode");
             return;
         }
 
@@ -187,37 +232,66 @@ public sealed class NntpCommandDispatcher
         var display = command.Status is NntpParseStatus.Empty or NntpParseStatus.UnknownVerb
             ? "INVALID"
             : DefaultNntpCommandCatalog.DisplayName(command.Verb, command.Qualifier);
-        var (wire, detail) = Rejection(command);
+        var (wire, detail, statusLine) = Rejection(command);
         await response.WriteLineAsync(wire, cancellationToken).ConfigureAwait(false);
         session.LogCommandRejected(command, detail);
-        NntpCommandExecution.WriteCompletion(
-            _unknownCommandLogger,
-            session,
-            display,
-            Stopwatch.GetElapsedTime(started),
-            detail);
+        if (_unknownCommandLogger.IsEnabled(LogLevel.Debug))
+        {
+            NntpCommandExecution.WriteCompletion(
+                _unknownCommandLogger,
+                session,
+                display,
+                Stopwatch.GetElapsedTime(started),
+                detail,
+                statusLine);
+        }
     }
 
-    private static (ReadOnlyMemory<byte> Wire, string Detail) Rejection(NntpCommand command)
+    private static async ValueTask WriteGatedResponseAsync(
+        NntpResponseWriter response,
+        ILogger logger,
+        NntpSession session,
+        string display,
+        ReadOnlyMemory<byte> wire,
+        string statusLine,
+        string detail,
+        long startedTimestamp,
+        CancellationToken cancellationToken)
+    {
+        await response.WriteLineAsync(wire, cancellationToken).ConfigureAwait(false);
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            NntpCommandExecution.WriteCompletion(
+                logger,
+                session,
+                display,
+                Stopwatch.GetElapsedTime(startedTimestamp),
+                detail,
+                statusLine);
+        }
+    }
+
+    private static (ReadOnlyMemory<byte> Wire, string Detail, string StatusLine) Rejection(NntpCommand command)
     {
         return command.Status switch
         {
-            NntpParseStatus.UnknownVerb => (NntpResponses.UnknownCommand, "unknown command"),
+            NntpParseStatus.UnknownVerb =>
+                (NntpResponses.UnknownCommand, "unknown command", NntpResponseStatus.UnknownCommand),
             NntpParseStatus.UnknownQualifier =>
-                (NntpResponses.UnknownCommandVariant, "unknown variant"),
+                (NntpResponses.UnknownCommandVariant, "unknown variant", NntpResponseStatus.UnknownCommandVariant),
             NntpParseStatus.MissingArgument when command.Verb == NntpVerb.AuthInfo
                 && command.Qualifier == NntpVerb.User =>
-                (NntpResponses.AuthinfoUserRequiresUsername, "syntax error"),
+                (NntpResponses.AuthinfoUserRequiresUsername, "syntax error", NntpResponseStatus.AuthinfoUserRequiresUsername),
             NntpParseStatus.MissingArgument when command.Verb == NntpVerb.AuthInfo
                 && command.Qualifier == NntpVerb.Pass =>
-                (NntpResponses.AuthinfoPassRequiresPassword, "syntax error"),
+                (NntpResponses.AuthinfoPassRequiresPassword, "syntax error", NntpResponseStatus.AuthinfoPassRequiresPassword),
             NntpParseStatus.MissingArgument when command.Verb == NntpVerb.Compress =>
-                (NntpResponses.CompressRequiresAlgorithm, "syntax error"),
+                (NntpResponses.CompressRequiresAlgorithm, "syntax error", NntpResponseStatus.CompressRequiresAlgorithm),
             NntpParseStatus.InvalidArgument when command.Verb == NntpVerb.Compress =>
-                (NntpResponses.CompressAlgorithmSyntaxInvalid, "syntax error"),
+                (NntpResponses.CompressAlgorithmSyntaxInvalid, "syntax error", NntpResponseStatus.CompressAlgorithmSyntaxInvalid),
             NntpParseStatus.ExtraArgument when command.Verb == NntpVerb.Compress =>
-                (NntpResponses.CompressRequiresAlgorithm, "syntax error"),
-            _ => (NntpResponses.SyntaxError, "syntax error"),
+                (NntpResponses.CompressRequiresAlgorithm, "syntax error", NntpResponseStatus.CompressRequiresAlgorithm),
+            _ => (NntpResponses.SyntaxError, "syntax error", NntpResponseStatus.SyntaxError),
         };
     }
 
@@ -294,7 +368,10 @@ public sealed class NntpCommandDispatcher
             (NntpVerb.Ihave, _) => IHave.HandleAsync(context, cancellationToken),
             (NntpVerb.Check, _) => Check.HandleAsync(context, cancellationToken),
             (NntpVerb.TakeThis, _) => TakeThis.HandleAsync(context, cancellationToken),
-            _ => NntpCommandNotImplemented.HandleAsync(context, cancellationToken),
+            _ => NntpCommandNotImplemented.HandleAsync(
+                context,
+                NntpCommandLoggers.For(typeof(NntpCommandExecution)),
+                cancellationToken),
         };
     }
 }

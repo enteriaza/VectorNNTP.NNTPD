@@ -373,6 +373,7 @@ public sealed class LoggingPipelineTests
         Assert.Contains("Plain connection accepted", output, StringComparison.Ordinal);
         Assert.DoesNotContain("RX: DATE", output, StringComparison.Ordinal);
         Assert.DoesNotContain("TX: DATE executed in", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("TX: DATE [", output, StringComparison.Ordinal);
         Assert.DoesNotContain("TAKETHIS", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("password", output, StringComparison.OrdinalIgnoreCase);
     }

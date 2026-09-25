@@ -44,8 +44,12 @@ internal static class SpeedTest
         var coordinator = context.Session.SpeedTest;
         if (coordinator is null)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.SpeedTestNotSupported, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.SpeedTestNotSupported,
+                    NntpResponseStatus.SpeedTestNotSupported,
+                    cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "not supported";
             return;
@@ -54,8 +58,12 @@ internal static class SpeedTest
         var peerToken = context.ArgumentMemory;
         if (!coordinator.TryResolvePeer(peerToken.Span, out var peer) || peer is null)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.SpeedTestUnknownPeer, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.SpeedTestUnknownPeer,
+                    NntpResponseStatus.SpeedTestUnknownPeer,
+                    cancellationToken)
                 .ConfigureAwait(false);
             CommandLogMessages.SpeedTestRejected(
                 Logger,
@@ -71,8 +79,12 @@ internal static class SpeedTest
         if (sessionPeer is not null
             && !SpeedTestCoordinator.NameEquals(sessionPeer, peerToken.Span))
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.SpeedTestPeerMismatch, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.SpeedTestPeerMismatch,
+                    NntpResponseStatus.SpeedTestPeerMismatch,
+                    cancellationToken)
                 .ConfigureAwait(false);
             CommandLogMessages.SpeedTestRejected(
                 Logger,
@@ -86,8 +98,12 @@ internal static class SpeedTest
 
         if (!coordinator.TryAcquire(peer.Identifier, out var lease) || lease is null)
         {
-            await context.Response
-                .WriteLineAsync(NntpResponses.SpeedTestBusy, cancellationToken)
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.SpeedTestBusy,
+                    NntpResponseStatus.SpeedTestBusy,
+                    cancellationToken)
                 .ConfigureAwait(false);
             CommandLogMessages.SpeedTestRejected(
                 Logger,
@@ -114,6 +130,12 @@ internal static class SpeedTest
                 NntpResponses.SpeedTestReadyPrefix.Span,
                 peerToken.Span,
                 NntpResponses.SpeedTestReadySuffix.Span);
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                context.StatusLine ??=
+                    "290 SPEEDTEST " + System.Text.Encoding.ASCII.GetString(peerToken.Span) + " TX";
+            }
+
             await context.Response.WriteLineAsync(ready, workCts.Token).ConfigureAwait(false);
 
             if (!ReferenceEquals(context.Response.UnderlyingOutput, context.Session.Connection.Output))

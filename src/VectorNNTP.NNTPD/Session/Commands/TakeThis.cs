@@ -54,13 +54,15 @@ internal static class TakeThis
         ILogger logger,
         NntpSession session,
         long startedTimestamp,
-        string? detail = null) =>
+        string? detail = null,
+        string? statusLine = null) =>
         NntpCommandExecution.WriteCompletion(
             logger,
             session,
             "TAKETHIS",
             System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp),
-            detail);
+            detail,
+            statusLine);
 
     internal static async ValueTask FailTemporaryAsync(
         NntpSession session,
@@ -161,10 +163,7 @@ internal static class TakeThis
 
         if (status == NntpMultilineReadStatus.TooLarge)
         {
-            await EnqueueTransferReplyAsync(
-                    context,
-                    NntpResponses.TransferRejectedPrefix,
-                    cancellationToken)
+            await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "rejected too large";
             return;
@@ -173,6 +172,7 @@ internal static class TakeThis
         if (peek == HistoryLookupResult.Unavailable || !queue.IsAccepting)
         {
             await FailTemporaryAsync(context.Session, context.Response, cancellationToken).ConfigureAwait(false);
+            NntpCommandReply.TryNote(context, Logger, NntpResponseStatus.ServiceTemporarilyUnavailable);
             context.CompletionDetail = "temporary failure";
             return;
         }
@@ -181,10 +181,7 @@ internal static class TakeThis
         {
             context.Session.SetActivityState(FeedSessionState.Completing);
             var seenStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            await EnqueueTransferReplyAsync(
-                    context,
-                    NntpResponses.ArticleTransferredOkPrefix,
-                    cancellationToken)
+            await EnqueueTransferReplyAsync(context, rejected: false, cancellationToken)
                 .ConfigureAwait(false);
             probe?.RecordArticleCompleted(
                 duplicate: true,
@@ -221,16 +218,14 @@ internal static class TakeThis
         if (enqueue == ArticleEnqueueResult.Unavailable)
         {
             await FailTemporaryAsync(context.Session, context.Response, cancellationToken).ConfigureAwait(false);
+            NntpCommandReply.TryNote(context, Logger, NntpResponseStatus.ServiceTemporarilyUnavailable);
             context.CompletionDetail = "temporary failure";
             return;
         }
 
         if (enqueue == ArticleEnqueueResult.Rejected)
         {
-            await EnqueueTransferReplyAsync(
-                    context,
-                    NntpResponses.TransferRejectedPrefix,
-                    cancellationToken)
+            await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = "rejected exceeds queue budget";
             return;
@@ -239,10 +234,7 @@ internal static class TakeThis
         context.Session.HistoryDb?.Remember(messageIdBytes);
         context.Session.SetActivityState(FeedSessionState.Completing);
         var doneStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        await EnqueueTransferReplyAsync(
-                context,
-                NntpResponses.ArticleTransferredOkPrefix,
-                cancellationToken)
+        await EnqueueTransferReplyAsync(context, rejected: false, cancellationToken)
             .ConfigureAwait(false);
         probe?.RecordArticleCompleted(
             duplicate: false,
@@ -253,13 +245,23 @@ internal static class TakeThis
 
     private static ValueTask EnqueueTransferReplyAsync(
         NntpCommandContext context,
-        ReadOnlyMemory<byte> prefix,
+        bool rejected,
         CancellationToken cancellationToken)
     {
+        var prefix = rejected
+            ? NntpResponses.TransferRejectedPrefix
+            : NntpResponses.ArticleTransferredOkPrefix;
         var owned = NntpResponseCompose.Concat(
             prefix.Span,
             context.ArgumentSpan,
             NntpResponses.Crlf.Span);
+        if (Logger.IsEnabled(LogLevel.Debug))
+        {
+            context.StatusLine ??= rejected
+                ? NntpCommandStatusText.FormatTakeThisRejected(context.ArgumentSpan)
+                : NntpCommandStatusText.FormatTakeThisAccepted(context.ArgumentSpan);
+        }
+
         return context.Response.EnqueueLineImmediateAsync(owned, cancellationToken);
     }
 }
