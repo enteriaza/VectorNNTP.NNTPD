@@ -1,12 +1,22 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// One configured moderator route: an NNTP wildmat, the expected <c>Approved:</c> identity,
-/// and the AUTHINFO principal authorized to inject that approval.
+/// One configured moderator route: an NNTP wildmat, a routing mailbox or INN
+/// <c>%s</c> address template, and an optional AUTHINFO principal authorized
+/// to inject that approval.
 /// </summary>
 /// <remarks>
-/// Credentials are not stored here. The AUTHINFO password remains in the existing
-/// authentication secret mechanism.
+/// <para>
+/// <see cref="Address"/> is the unapproved-article submission destination.
+/// A static mailbox is used as-is. An INN template containing <c>%s</c> is
+/// expanded to the matched newsgroup name with dots changed to dashes.
+/// The expanded mailbox does not authenticate an NNTP client.
+/// </para>
+/// <para>
+/// <see cref="Username"/> is optional. It is required only for local
+/// authenticated reinjection. Routing-only INN destinations omit it.
+/// Credentials are not stored here.
+/// </para>
 /// </remarks>
 public sealed class ModeratorMappingOptions
 {
@@ -16,14 +26,14 @@ public sealed class ModeratorMappingOptions
     public string Pattern { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the expected <c>Approved:</c> mailbox identity for groups matching
-    /// <see cref="Pattern"/>.
+    /// Gets or sets the routing mailbox or INN <c>%s</c> template for groups
+    /// matching <see cref="Pattern"/>.
     /// </summary>
     public string Address { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the AUTHINFO username authorized to approve groups matching
-    /// <see cref="Pattern"/>.
+    /// <see cref="Pattern"/>, or empty when this entry is routing-only.
     /// </summary>
     public string Username { get; set; } = string.Empty;
 }

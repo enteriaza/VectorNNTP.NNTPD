@@ -633,6 +633,62 @@ public sealed class ModeratedPostCommandTests
     }
 
     [Fact]
+    public async Task InnRoutingTemplate_UnapprovedUsesExpandedAddress_DoesNotAuthorize()
+    {
+        var authorization = new ConfiguredModeratorAuthorization(
+        [
+            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
+            new ModeratorMappingOptions { Pattern = "perl.*", Address = "news-moderator-%s@perl.org" },
+            new ModeratorMappingOptions { Pattern = "*", Address = "%s@moderators.isc.org" },
+        ]);
+        var snapshot = Snapshot(
+            Group("fido7.some.group", NewsgroupPostingStatus.Moderated),
+            Group("perl.foo.bar", NewsgroupPostingStatus.Moderated),
+            Group("comp.test", NewsgroupPostingStatus.Moderated));
+        var submission = new RecordingModerationSubmissionService();
+        var unapproved = await PostAsync(
+            "fido7.some.group",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            snapshot: snapshot,
+            authorization: authorization,
+            submission: submission);
+        Assert.Equal("240 Article received OK", unapproved.Response);
+        var recorded = Assert.Single(submission.Submissions);
+        Assert.Equal("fido7-some-group@fido7.org", recorded.ModeratorAddress);
+        Assert.Equal(0, unapproved.Queue.TryAdmitCalls);
+
+        var perlSubmission = new RecordingModerationSubmissionService();
+        var perl = await PostAsync(
+            "perl.foo.bar",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            snapshot: snapshot,
+            authorization: authorization,
+            submission: perlSubmission);
+        Assert.Equal("240 Article received OK", perl.Response);
+        Assert.Equal("news-moderator-perl-foo-bar@perl.org", Assert.Single(perlSubmission.Submissions).ModeratorAddress);
+
+        var catchAll = new RecordingModerationSubmissionService();
+        _ = await PostAsync(
+            "comp.test",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            snapshot: snapshot,
+            authorization: authorization,
+            submission: catchAll);
+        Assert.Equal("comp-test@moderators.isc.org", Assert.Single(catchAll.Submissions).ModeratorAddress);
+
+        var approved = await PostAsync(
+            "fido7.some.group",
+            extraHeaders: "Approved: fido7-some-group@fido7.org\r\n",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            snapshot: snapshot,
+            authorization: authorization);
+        AssertRejected(approved);
+    }
+
+    [Fact]
     public async Task MessageId_SynthesizedOnce_ThenReinjectPreservesSameId()
     {
         var submission = new RecordingModerationSubmissionService();

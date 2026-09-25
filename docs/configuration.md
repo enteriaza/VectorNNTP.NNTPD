@@ -52,7 +52,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 | `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). Not a moderator list. |
-| `Moderation:Moderators` | array | `[]` | no | Ordinary moderated-newsgroup routes (wildmat → Approved identity → AUTHINFO username). See below. |
+| `Moderation:Moderators` | array | INN routing snapshot | no | Ordinary moderated-newsgroup routes (wildmat → routing mailbox/template, optional AUTHINFO username). See below. |
 | `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
 | `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
 
@@ -325,26 +325,43 @@ Example:
 
 Top-level `Moderation` section (not nested under `Nntpd`, and **not** `Control:PgpAuthorities`). This is the ordinary moderated-newsgroup catalogue. PGP control authorities do not authorize `Approved:` and are not used to derive moderator addresses.
 
+Two distinct fields exist on each route:
+
+| Concept | Config key | Meaning |
+|---------|------------|---------|
+| Moderator routing address | `Address` | Where an unapproved proto-article would be submitted. A static mailbox, or an INN template containing `%s`. |
+| Authenticated moderator username | `Username` | Optional AUTHINFO principal authorized to reinject an approved article. Omitted for public INN routing destinations. |
+
+The imported INN `samples/moderators` snapshot supplies **routing addresses only**. It does not create local VectorNNTP moderator accounts, passwords, or AUTHINFO identities. VectorNNTP cannot authenticate against those external mailboxes.
+
+`%s` is replaced with the matched newsgroup name after converting `.` to `-`. Example: `fido7.some.group` + `%s@fido7.org` → `fido7-some-group@fido7.org`. The `perl.*` exception keeps its literal prefix: `news-moderator-%s@perl.org`. Expansion is for submission routing only; it does not grant POST authorization.
+
+Matching is first-match in configuration order (RFC 6048 §3 / INN `moderators`). The catch-all `*` must remain last.
+
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
-| `Moderators` | array | `[]` | no | First-match wildmat routes (RFC 6048 §3 moderators-list order) |
+| `Source:Url` | string | _(none)_ | no | Human-facing INN `samples/moderators` URL |
+| `Source:InnUrl` | string | _(none)_ | no | INN GitHub raw `samples/moderators` URL |
+| `Source:RetrievedFrom` | string | _(none)_ | no | Which URL was actually retrieved (`InnUrl` for the current snapshot) |
+| `Moderators` | array | `[]` | no | First-match wildmat routes (RFC 6048 §3 / INN order) |
 | `Moderators[].Pattern` | string | _(none)_ | yes when the entry exists | RFC 3977 wildmat matched against the newsgroup name. List more specific patterns before general ones. |
-| `Moderators[].Address` | string | _(none)_ | yes when the entry exists | Expected `Approved:` mailbox identity. Not derived from the group name or from Control. |
-| `Moderators[].Username` | string | _(none)_ | yes when the entry exists | AUTHINFO username authorized to inject that approval. Not assumed equal to the mailbox. |
+| `Moderators[].Address` | string | _(none)_ | yes when the entry exists | Routing mailbox or INN `%s` template. Not derived from Control. |
+| `Moderators[].Username` | string | _(empty)_ | no | AUTHINFO username authorized to inject that approval. Omit for routing-only INN destinations. Not assumed equal to the mailbox. |
 
 Passwords are **not** stored here. AUTHINFO secrets remain `Nntpd:NewsmasterPassword` / the authentication provider. Environment-variable overrides use the Generic Host convention `Moderation__Moderators__0__Pattern` (and `Address` / `Username`).
 
-Matching is first-match in configuration order. Duplicate exact patterns (ASCII case-insensitive) fail startup. Empty pattern/address/username and malformed wildmats fail startup. Overlapping distinct wildmats are allowed; the earlier entry wins. One username may cover multiple patterns. One pattern has one identity.
+Duplicate exact patterns (ASCII case-insensitive) fail startup. Empty pattern/address and malformed wildmats or address templates fail startup. An omitted username is valid (routing-only). Overlapping distinct wildmats are allowed; the earlier entry wins. One username may cover multiple patterns. One pattern has one routing address.
 
 Trust model:
 
 ```text
+Address / %s template               ← routing destination (unapproved submission)
 Approved: moderator@example.com     ← assertion
 AUTHINFO USER moderator-example     ← authenticated principal
-Moderation mapping                  ← authorization
+Moderation Username mapping         ← authorization
 ```
 
-`Approved` alone is not sufficient. A normal authenticated user with a copied `Approved:` header is rejected. An unauthenticated client with `Approved:` is rejected. A moderator for group A cannot approve group B unless a mapping says so.
+`Approved` alone is not sufficient. A routing template match alone is not sufficient. A normal authenticated user with a copied `Approved:` header is rejected. An unauthenticated client with `Approved:` is rejected. A moderator for group A cannot approve group B unless a mapping says so.
 
 Moderator reinjection is a normal NNTP POST after AUTHINFO. There is no `MODERATE` command.
 
@@ -352,7 +369,9 @@ Cross-posting: an unapproved article is forwarded to the leftmost moderated grou
 
 SMTP is **not** implemented. `IModerationSubmissionService` is the durable forwarding boundary. The production default is unavailable; unapproved moderated POST returns `441` when forwarding cannot be performed. A future SMTP (or other) implementation can be registered without changing POST policy.
 
-Example:
+The current `appsettings.json` snapshot was taken from the INN source (`https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators`, retrieved 2026-09-25) as routing-only entries. `Control:PgpAuthorities` is a separate catalogue.
+
+Example (local authenticated moderator, not an INN public route):
 
 ```json
 "Moderation": {

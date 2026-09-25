@@ -106,6 +106,68 @@ public sealed class ConfiguredModeratorAuthorizationTests
         Assert.Equal("unresolved moderator", detail);
     }
 
+    [Theory]
+    [InlineData("fido7.some.group", "fido7-some-group@fido7.org")]
+    [InlineData("perl.foo.bar", "news-moderator-perl-foo-bar@perl.org")]
+    [InlineData("comp.test", "comp-test@moderators.isc.org")]
+    public void InnTemplate_ExpandsPercentSWithDotsToDashes(string group, string expected)
+    {
+        Assert.Equal(expected, ModeratorAddressTemplate.Expand(AddressFor(group), Bytes(group)));
+    }
+
+    [Fact]
+    public void InnRoutingCatalogue_FirstMatchAndCatchAll()
+    {
+        var auth = InnRouting();
+        Assert.True(auth.TryResolve(Bytes("fido7.some.group"), out var fido7));
+        Assert.Equal("fido7-some-group@fido7.org", fido7.Address);
+        Assert.Equal(string.Empty, fido7.Username);
+        Assert.True(auth.TryResolve(Bytes("perl.foo.bar"), out var perl));
+        Assert.Equal("news-moderator-perl-foo-bar@perl.org", perl.Address);
+        Assert.True(auth.TryResolve(Bytes("comp.test"), out var catchAll));
+        Assert.Equal("comp-test@moderators.isc.org", catchAll.Address);
+        Assert.Equal("*", catchAll.Pattern);
+    }
+
+    [Fact]
+    public void InnRoutingCatalogue_DoesNotAuthorizeInjection()
+    {
+        var auth = InnRouting();
+        Assert.False(auth.IsAuthenticatedModerator("moderator-a"));
+        Assert.False(auth.CanApprove("moderator-a", Bytes("fido7-some-group@fido7.org"), Bytes("fido7.some.group")));
+        Assert.False(auth.TryAuthorizeApproval(
+            "moderator-a",
+            ["fido7-some-group@fido7.org"],
+            ["fido7.some.group"],
+            out var detail));
+        Assert.Equal("unauthorized moderator principal", detail);
+    }
+
+    [Fact]
+    public void RoutingOnlyEntry_CompileDoesNotDropMissingUsername()
+    {
+        var auth = Create(new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" });
+        Assert.True(auth.TryResolve(Bytes("fido7.announce"), out var identity));
+        Assert.Equal("fido7-announce@fido7.org", identity.Address);
+        Assert.Equal(string.Empty, identity.Username);
+    }
+
+    private static ConfiguredModeratorAuthorization InnRouting() =>
+        Create(
+            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
+            new ModeratorMappingOptions { Pattern = "fj.*", Address = "%s@moderators.fj-news.org" },
+            new ModeratorMappingOptions { Pattern = "medlux.*", Address = "%s@news.medlux.ru" },
+            new ModeratorMappingOptions { Pattern = "nl.*", Address = "%s@nl.news-admin.org" },
+            new ModeratorMappingOptions { Pattern = "perl.*", Address = "news-moderator-%s@perl.org" },
+            new ModeratorMappingOptions { Pattern = "relcom.*", Address = "%s@moderators.relcom.ru" },
+            new ModeratorMappingOptions { Pattern = "si.*", Address = "%s@arnes.si" },
+            new ModeratorMappingOptions { Pattern = "*", Address = "%s@moderators.isc.org" });
+
+    private static string AddressFor(string group) =>
+        group.StartsWith("fido7.", StringComparison.Ordinal) ? "%s@fido7.org"
+        : group.StartsWith("perl.", StringComparison.Ordinal) ? "news-moderator-%s@perl.org"
+        : "%s@moderators.isc.org";
+
     private static ConfiguredModeratorAuthorization Standard() =>
         Create(
             new ModeratorMappingOptions { Pattern = "group.a", Address = "moderator-a@example.com", Username = MapNntpAuthenticationProvider.ModeratorA },

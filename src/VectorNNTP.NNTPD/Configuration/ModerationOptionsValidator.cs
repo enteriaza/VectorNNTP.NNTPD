@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.Configuration;
@@ -8,9 +9,11 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// Validates <see cref="ModerationOptions"/> when the section is bound.
 /// </summary>
 /// <remarks>
-/// An omitted or empty catalogue is valid. Duplicate exact patterns, empty fields,
-/// and malformed wildmats fail validation. Overlapping distinct wildmats are
-/// permitted; first-match order is the documented resolution rule.
+/// An omitted or empty catalogue is valid. Duplicate exact patterns, empty
+/// pattern/address, malformed wildmats, and malformed address templates fail
+/// validation. Username may be omitted for routing-only entries. Overlapping
+/// distinct wildmats are permitted; first-match order is the documented
+/// resolution rule.
 /// </remarks>
 public sealed class ModerationOptionsValidator : IValidateOptions<ModerationOptions>
 {
@@ -38,7 +41,6 @@ public sealed class ModerationOptionsValidator : IValidateOptions<ModerationOpti
 
             var pattern = mapping.Pattern?.Trim() ?? string.Empty;
             var address = mapping.Address?.Trim() ?? string.Empty;
-            var username = mapping.Username?.Trim() ?? string.Empty;
 
             if (pattern.Length == 0)
             {
@@ -62,28 +64,16 @@ public sealed class ModerationOptionsValidator : IValidateOptions<ModerationOpti
             {
                 failures.Add($"{nameof(ModerationOptions.Moderators)}[{i}].{nameof(ModeratorMappingOptions.Address)} must not be empty.");
             }
-            else if (!IsMailboxIdentity(address))
+            else if (!ModeratorAddressTemplate.TryValidate(address))
             {
-                failures.Add($"{nameof(ModerationOptions.Moderators)}[{i}].{nameof(ModeratorMappingOptions.Address)} must be a mailbox identity.");
-            }
-
-            if (username.Length == 0)
-            {
-                failures.Add($"{nameof(ModerationOptions.Moderators)}[{i}].{nameof(ModeratorMappingOptions.Username)} must not be empty.");
+                failures.Add(
+                    $"{nameof(ModerationOptions.Moderators)}[{i}].{nameof(ModeratorMappingOptions.Address)} must be a mailbox identity or a single '%s' INN address template.");
             }
         }
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
-    }
-
-    private static bool IsMailboxIdentity(string value)
-    {
-        var at = value.IndexOf('@');
-        return at > 0
-            && at == value.LastIndexOf('@')
-            && at < value.Length - 1;
     }
 
     private static bool IsAscii(string value)

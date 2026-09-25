@@ -3,6 +3,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.Tests.Configuration;
 
@@ -58,29 +60,94 @@ public sealed class ModerationOptionsTests
     }
 
     [Fact]
-    public void Bind_ProductionAppsettings_HasEmptyCatalogue()
+    public void Bind_ProductionAppsettings_ImportsInnRoutingCatalogue()
     {
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(FindProductionAppsettings(), optional: false)
             .Build();
         var options = new ModerationOptions();
         configuration.GetSection(ModerationOptions.SectionName).Bind(options);
-        Assert.Empty(options.Moderators);
+        Assert.True(new ModerationOptionsValidator().Validate(null, options).Succeeded);
+        Assert.Equal("https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators", options.Source.InnUrl);
+        Assert.Equal("InnUrl", options.Source.RetrievedFrom);
+        Assert.Equal("https://github.com/InterNetNews/inn/blob/main/samples/moderators", options.Source.Url);
+        Assert.Equal(8, options.Moderators.Length);
+        Assert.Equal(
+            [
+                ("fido7.*", "%s@fido7.org"),
+                ("fj.*", "%s@moderators.fj-news.org"),
+                ("medlux.*", "%s@news.medlux.ru"),
+                ("nl.*", "%s@nl.news-admin.org"),
+                ("perl.*", "news-moderator-%s@perl.org"),
+                ("relcom.*", "%s@moderators.relcom.ru"),
+                ("si.*", "%s@arnes.si"),
+                ("*", "%s@moderators.isc.org"),
+            ],
+            options.Moderators.Select(static m => (m.Pattern, m.Address)));
+        Assert.Equal("*", options.Moderators[^1].Pattern);
+        Assert.All(options.Moderators, static mapping =>
+        {
+            Assert.True(string.IsNullOrEmpty(mapping.Username));
+            Assert.True(NntpWildmat.TryValidate(Encoding.ASCII.GetBytes(mapping.Pattern)));
+            Assert.True(ModeratorAddressTemplate.IsTemplate(mapping.Address));
+            Assert.True(ModeratorAddressTemplate.TryValidate(mapping.Address));
+        });
+
+        var control = new ControlOptions();
+        configuration.GetSection(ControlOptions.SectionName).Bind(control);
+        Assert.NotEmpty(control.PgpAuthorities.Authorities);
+        Assert.Equal("AIOE", control.PgpAuthorities.Authorities[0].Name);
+    }
+
+    [Fact]
+    public void Bind_RoutingOnlyEntry_UsernameMayBeOmitted()
+    {
+        var options = Bind(
+            """
+            {
+              "Moderation": {
+                "Moderators": [
+                  {
+                    "Pattern": "fido7.*",
+                    "Address": "%s@fido7.org"
+                  }
+                ]
+              }
+            }
+            """);
+
+        var mapping = Assert.Single(options.Moderators);
+        Assert.Equal("fido7.*", mapping.Pattern);
+        Assert.Equal("%s@fido7.org", mapping.Address);
+        Assert.Equal(string.Empty, mapping.Username);
         Assert.True(new ModerationOptionsValidator().Validate(null, options).Succeeded);
     }
 
     [Theory]
     [InlineData("", "moderator@example.com", "moderator-example")]
     [InlineData("comp.example.*", "", "moderator-example")]
-    [InlineData("comp.example.*", "moderator@example.com", "")]
     [InlineData("   ", "moderator@example.com", "moderator-example")]
-    public void Validate_RejectsEmptyFields(string pattern, string address, string username)
+    public void Validate_RejectsEmptyPatternOrAddress(string pattern, string address, string username)
     {
         var result = Validate(new ModeratorMappingOptions
         {
             Pattern = pattern,
             Address = address,
             Username = username,
+        });
+        Assert.True(result.Failed);
+    }
+
+    [Theory]
+    [InlineData("%q@fido7.org")]
+    [InlineData("%s%s@fido7.org")]
+    [InlineData("not-a-mailbox")]
+    public void Validate_RejectsMalformedAddressTemplate(string address)
+    {
+        var result = Validate(new ModeratorMappingOptions
+        {
+            Pattern = "fido7.*",
+            Address = address,
         });
         Assert.True(result.Failed);
     }

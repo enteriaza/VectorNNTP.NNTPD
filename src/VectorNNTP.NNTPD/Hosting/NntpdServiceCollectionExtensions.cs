@@ -168,7 +168,11 @@ public static class NntpdServiceCollectionExtensions
         services
             .AddOptions<ModerationOptions>()
             .BindConfiguration(ModerationOptions.SectionName)
-            .PostConfigure(static options => options.Moderators ??= [])
+            .PostConfigure(static options =>
+            {
+                options.Source ??= new ModerationSourceOptions();
+                options.Moderators ??= [];
+            })
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<ModerationOptions>, ModerationOptionsValidator>();
         services.TryAddSingleton<IModeratorAuthorization, ConfiguredModeratorAuthorization>();

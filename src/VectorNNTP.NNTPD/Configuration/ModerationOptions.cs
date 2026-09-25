@@ -24,6 +24,11 @@ public sealed class ModerationOptions
     public const string SectionName = "Moderation";
 
     /// <summary>
+    /// Gets or sets provenance for the imported INN <c>samples/moderators</c> snapshot.
+    /// </summary>
+    public ModerationSourceOptions Source { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets the moderator mappings. First matching <see cref="ModeratorMappingOptions.Pattern"/>
     /// wins.
     /// </summary>

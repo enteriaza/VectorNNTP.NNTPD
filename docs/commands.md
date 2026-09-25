@@ -54,7 +54,9 @@ RFC 3977 does not expose the article `Newsgroups:` list before `340`, so group-p
 
 `Approved:` is an assertion (RFC 5536 mailbox-list), not a boolean and not trust by itself. Header-name comparison is case-insensitive. Mailbox identities compare ASCII case-insensitively. Conflicting identities are rejected; identical duplicates collapse. `Approved: 1` / `true` are malformed. `Control:PgpAuthorities` is not a moderator catalogue.
 
-Moderator reinjection is a normal POST: `AUTHINFO USER/PASS`, then `POST` with `Approved: moderator@example.com`. There is no `MODERATE` command. The authenticated session identity plus the configured mapping is the authorization.
+`Moderation:Moderators[].Address` is a routing destination (static mailbox or INN `%s` template: matched newsgroup name with `.` → `-`). That address is where an unapproved proto-article would be submitted. It does not authenticate a client. `Username` is the optional AUTHINFO principal required for local reinjection. The imported INN `samples/moderators` snapshot is routing-only and does not invent local credentials.
+
+Moderator reinjection is a normal POST: `AUTHINFO USER/PASS`, then `POST` with `Approved: moderator@example.com`. There is no `MODERATE` command. The authenticated session identity plus a configured `Username` mapping is the authorization.
 
 Unapproved moderated forwarding happens after Message-ID/Date are present and before Injection-Info/Injection-Date (RFC 5537 §3.5 step 7). The original Message-ID is preserved. This repository has no SMTP or other mail delivery; the production `IModerationSubmissionService` reports unavailable and POST returns `441`. A successful submission (tests / a future delivery backend) returns `240` (RFC 3977: received, possibly following further processing) and does not Peek, `TryAdmit`, or Remember.
 

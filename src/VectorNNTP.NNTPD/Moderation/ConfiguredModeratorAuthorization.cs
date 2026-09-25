@@ -39,7 +39,8 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
 
         for (var i = 0; i < _rules.Length; i++)
         {
-            if (string.Equals(_rules[i].Username, authenticatedUsername, StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(_rules[i].Username)
+                && string.Equals(_rules[i].Username, authenticatedUsername, StringComparison.Ordinal))
             {
                 return true;
             }
@@ -56,7 +57,10 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
             var rule = _rules[i];
             if (NntpWildmat.IsMatchValidated(newsgroup, rule.PatternBytes))
             {
-                identity = new ModeratorIdentity(rule.Pattern, rule.Address, rule.Username);
+                identity = new ModeratorIdentity(
+                    rule.Pattern,
+                    ModeratorAddressTemplate.Expand(rule.Address, newsgroup),
+                    rule.Username);
                 return true;
             }
         }
@@ -73,6 +77,7 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
     {
         if (string.IsNullOrEmpty(authenticatedUsername)
             || !TryResolve(newsgroup, out var identity)
+            || string.IsNullOrEmpty(identity.Username)
             || !string.Equals(authenticatedUsername, identity.Username, StringComparison.Ordinal))
         {
             return false;
@@ -123,7 +128,8 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
                 return false;
             }
 
-            if (!string.Equals(authenticatedUsername, identity.Username, StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(identity.Username)
+                || !string.Equals(authenticatedUsername, identity.Username, StringComparison.Ordinal))
             {
                 failureDetail = "unauthorized moderator principal";
                 return false;
@@ -283,13 +289,13 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
             var pattern = mapping.Pattern?.Trim() ?? string.Empty;
             var address = mapping.Address?.Trim() ?? string.Empty;
             var username = mapping.Username?.Trim() ?? string.Empty;
-            if (pattern.Length == 0 || address.Length == 0 || username.Length == 0)
+            if (pattern.Length == 0 || address.Length == 0)
             {
                 continue;
             }
 
             var patternBytes = Encoding.ASCII.GetBytes(pattern);
-            if (!NntpWildmat.TryValidate(patternBytes))
+            if (!NntpWildmat.TryValidate(patternBytes) || !ModeratorAddressTemplate.TryValidate(address))
             {
                 continue;
             }
