@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
@@ -18,6 +19,7 @@ using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 
@@ -161,14 +163,28 @@ public static class NntpdServiceCollectionExtensions
         // ValidateOnStart is not used: an empty or omitted Control section must not
         // prevent NNTPD startup, and this catalogue is not a runtime dependency.
 
+        services
+            .AddOptions<NntpDbOptions>()
+            .BindConfiguration(NntpDbOptions.SectionName)
+            .Configure<IConfiguration>(static (options, configuration) =>
+            {
+                if (string.IsNullOrWhiteSpace(options.ConnectionString))
+                {
+                    options.ConnectionString =
+                        configuration.GetConnectionString(NntpDbOptions.ConnectionStringName) ?? string.Empty;
+                }
+            })
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<NntpDbOptions>, NntpDbOptionsValidator>();
+
         if (configure is not null)
         {
             optionsBuilder.Configure(configure);
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → Redis → HistoryDB writer → HistoryDB maintenance →
-        // incoming spool writer → Transit AllowFrom DNS refresh →
+        // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) → HistoryDB writer →
+        // HistoryDB maintenance → incoming spool writer → Transit AllowFrom DNS refresh →
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
         services.TryAddEnumerable(
@@ -180,6 +196,12 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RedisService>(static sp =>
                 sp.GetRequiredService<RedisService>()));
+
+        services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
+        services.TryAddSingleton<NntpDbService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static sp =>
+                sp.GetRequiredService<NntpDbService>()));
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());

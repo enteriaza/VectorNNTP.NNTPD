@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
@@ -19,6 +20,9 @@ internal static class TestHostFactory
 
     /// <summary>64-hex AES-256 test key for POST <c>X-Trace</c> (not a production secret).</summary>
     public const string TestXTraceKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// <summary>Offline placeholder for <c>ConnectionStrings:NntpDB</c> (not a live server).</summary>
+    public const string TestNntpDbConnectionString = "Server=127.0.0.1;Database=nntpdb;User ID=test;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;";
 
     /// <summary>Shared parent for test file logs so hosts do not write under the repo <c>logs/</c>.</summary>
     public static readonly string SharedTestLogDir = Path.Combine(Path.GetTempPath(), "vectornntp-nntpd-testhost-logs");
@@ -109,6 +113,7 @@ internal static class TestHostFactory
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["Redis:Port"] = "6379",
+                [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] = TestNntpDbConnectionString,
                 [$"{NntpdOptions.SectionName}:LogDir"] = NewTestLogDir(),
             });
 
@@ -116,6 +121,7 @@ internal static class TestHostFactory
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(localAssignee);
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
+        builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         IsolateTransit(builder.Services);
 
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.

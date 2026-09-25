@@ -28,6 +28,8 @@
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Serilog.Sinks.File.Archive" Version="1.0.6" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.58" />
+    <!-- Sole MySQL provider: maintained ADO.NET driver with net10.0 support. No MySql.Data / EF. -->
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Core;
@@ -1313,7 +1314,10 @@ public sealed class NntpdConfigurationTests
             new Dictionary<string, string?>
             {
                 ["Redis:Host:0"] = "127.0.0.1",
+                [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
+                    TestHostFactory.TestNntpDbConnectionString,
             });
+        builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         builder.ConfigureNntpdLogging(static lc => lc.MinimumLevel.Fatal());
         builder.Services.AddNntpdHosting(includePlaceholderService: false);
         return builder.Build();
@@ -1333,6 +1337,8 @@ public sealed class NntpdConfigurationTests
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
+                [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
+                    TestHostFactory.TestNntpDbConnectionString,
             });
 
         if (configuration is not null)
@@ -1344,6 +1350,7 @@ public sealed class NntpdConfigurationTests
             assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
+        builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindAddress = ["*"];

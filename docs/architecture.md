@@ -57,12 +57,15 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - NntpTlsListenerService (implicit TLS accept/transport)   │
 │  - Optional: PlaceholderApplicationService (tests only)     │
 │  - RedisService (shared ConnectionMultiplexer)              │
+│  - NntpDbService (lifecycle + SELECT 1; MySqlConnector pool)│
 │  - HistoryWriteService (async HistoryDB Redis persistence)  │
 │  - HistoryMaintenanceService (local HistoryDB expiry)       │
 │  - NNTP session: greeting, command dispatch, authz gates    │
 │  - Later: full command handlers / storage / feeds             │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+NNTPD owns the database service and lifecycle (`NntpDbService` + mandatory startup `SELECT 1`). MySqlConnector owns physical connection pooling. There is no application-owned MySQL pool.
 
 Accepted connections establish an immutable `ConnectionClientIdentity` (TCP peer + effective client endpoint). When `ProxyHosts` is non-empty and the TCP peer is trusted, HAProxy PROXY v1/v2 is required on the cleartext socket before TLS/NNTP. Untrusted peers keep TCP identity; PROXY-looking bytes are left as application input and never rewrite client identity (intentional mixed-mode policy; exclusive PROXY ports remain a deployment/firewall choice). `NntpSession` exposes the effective client IP/port without re-parsing the transport.
 

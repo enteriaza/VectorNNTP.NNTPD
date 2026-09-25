@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -127,13 +128,14 @@ public sealed class CloudflareDnsReconciliationServiceTests
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(CloudflareDnsReconciliationService), services[0].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Redis.RedisService), services[1].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[2].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[3].GetType());
-        Assert.Equal(typeof(IncomingSpoolWriterService), services[4].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[5].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[6].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[7].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[8].GetType());
+        Assert.Equal(typeof(NntpDbService), services[2].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[3].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[4].GetType());
+        Assert.Equal(typeof(IncomingSpoolWriterService), services[5].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[6].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[7].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[8].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[9].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

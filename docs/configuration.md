@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, the top-level `Transit` peer dictionary, and the top-level `Control` PGP-authority catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, and the top-level `Control` PGP-authority catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency.
 
@@ -52,6 +52,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 | `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). |
+| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
+| `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -252,6 +254,43 @@ Example:
 "Redis": {
   "Host": [ "redis-01.example.net", "redis-02.example.net" ],
   "Port": 6379
+}
+```
+
+## NntpDB (`ConnectionStrings:NntpDB` and `NntpDb`)
+
+**NNTPD owns the database service and lifecycle; MySqlConnector owns physical connection pooling.** There is no application-owned connection pool.
+
+The NNTPD MySQL database is a **hard application dependency**. `NntpDbService` participates in application startup/shutdown and performs a mandatory `SELECT 1` check. There is no in-memory, mock, or degraded production fallback.
+
+`ConnectionStrings:NntpDB` is the dedicated NNTPD connection string. Do not reuse or modify any other connection string (including GrabberDB, if present). Supply credentials through environment variables or secrets (`ConnectionStrings__NntpDB`). Never log the connection string, passwords, or tokens.
+
+MySQL Connector settings (server, user, SSL, and provider pooling) belong in that connection string. NNTPD does not set `Pooling=false` and does not idle-reap or cache `MySqlConnection` instances. Callers open a logical connection, use it, and dispose it (`await using`); dispose returns the physical connection to MySqlConnector's native pool.
+
+MySqlConnector 2.6.2 pooling options used by the committed connection string:
+
+| Connection-string option | Value | Role |
+|--------------------------|-------|------|
+| `Pooling` | `true` | Enable the provider pool (MySqlConnector default is also `true`) |
+| `MinimumPoolSize` | `2` | Idle connections the provider keeps after `ConnectionIdleTimeout` |
+| `MaximumPoolSize` | `32` | Maximum physical connections in the provider pool |
+| `ConnectionIdleTimeout` | `300` | Seconds an idle pooled connection above the minimum may remain (provider reaper) |
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | MySQL connection string for NNTPD (includes provider pool settings) |
+| `NntpDb:StartupTimeout` | `TimeSpan` | `00:00:15` | no | Wall-clock budget for application-level startup connect / retry (`> 0`) |
+
+Startup opens a logical `MySqlConnection` from `ConnectionStrings:NntpDB`, executes `SELECT 1`, and disposes that logical connection. DNS, TCP, authentication, timeout, or `SELECT 1` failures fail host startup. Transient connectivity errors may retry until `StartupTimeout` elapses; authentication failures and a failed `SELECT 1` result fail immediately. A successful check does not keep that physical connection open; MySqlConnector owns reuse.
+
+Example:
+
+```json
+"ConnectionStrings": {
+  "NntpDB": "Server=mysql.example.net;Port=3306;Database=nntpdb;User ID=nntpd;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;"
+},
+"NntpDb": {
+  "StartupTimeout": "00:00:15"
 }
 ```
 
