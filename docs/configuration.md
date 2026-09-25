@@ -1,8 +1,8 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, and the top-level `Transit` peer dictionary. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, the top-level `Transit` peer dictionary, and the top-level `Control` PGP-authority catalogue. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
-Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.**
+Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency.
 
 ## Settings
 
@@ -51,6 +51,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:IntervalSeconds` | int | `5` | no | Snapshot interval (`1–60`) |
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
+| `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
@@ -253,6 +254,28 @@ Example:
   "Port": 6379
 }
 ```
+
+## Control PGP authorities (`Control:PgpAuthorities`)
+
+Top-level `Control` section (not nested under `Nntpd`). `Control:PgpAuthorities` is an authoritative catalogue of Usenet PGP control authorities derived from ISC/INN `control.ctl`.
+
+This is trusted reference data. It is not currently an authorization engine.
+
+The catalogue does **not** enable control-message processing. `newgroup`, `rmgroup`, `checkgroups`, control-message dispatch, `control.ctl` parsing at runtime, authorization evaluation, and PGP signature verification are not implemented from this configuration. Those will be added separately later.
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `Source:Url` | string | _(none)_ | no | ISC canonical `control.ctl` URL (`https://downloads.isc.org/pub/usenet/CONFIG/control.ctl`) |
+| `Source:InnUrl` | string | _(none)_ | no | INN GitHub `samples/control.ctl` URL |
+| `Source:LastModified` | string | _(none)_ | no | Source `Last modified` date from `control.ctl` (`2023-08-05` for the current snapshot) |
+| `Source:RetrievedFrom` | string | _(none)_ | no | Which URL was actually retrieved (`InnUrl` when the ISC copy is unavailable) |
+| `Authorities` | array | `[]` | no | One entry per source hierarchy that publishes PGP authority metadata |
+
+Each authority stores only public metadata present in the source: `Name`, `Contact`, `AdminGroup`, `Url`, `KeyUrl`, `KeyFingerprint`, `KeyMail`, `SyncableServer`, and explicit `Authorizations` (`Message`, `From`, `Newsgroups`, `VerificationIdentity`) from `verify-*` rules. Optional fields are omitted when the source does not provide them. Fingerprints are stored as uppercase hexadecimal without spaces. Private keys, passphrases, and armored public-key blocks are not stored; public key material can be retrieved later from `KeyUrl`.
+
+An omitted or empty `Control` section is valid. NNTPD starts normally without this catalogue. Binding the section does not carry or process the listed hierarchies.
+
+The current `appsettings.json` snapshot was taken from the INN source (`Last modified: 2023-08-05`) because `https://downloads.isc.org/pub/usenet/CONFIG/control.ctl` was unavailable.
 
 ## Bind addresses
 

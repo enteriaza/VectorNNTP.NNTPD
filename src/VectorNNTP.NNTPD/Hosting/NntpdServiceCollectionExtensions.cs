@@ -134,6 +134,33 @@ public static class NntpdServiceCollectionExtensions
         // reload ignore). IValidateOptions is not registered so an invalid reload
         // cannot throw from IOptionsMonitor before the last valid snapshot is kept.
 
+        services
+            .AddOptions<ControlOptions>()
+            .BindConfiguration(ControlOptions.SectionName)
+            .PostConfigure(static options =>
+            {
+                options.PgpAuthorities ??= new PgpAuthoritiesOptions();
+                options.PgpAuthorities.Source ??= new PgpAuthoritySourceOptions();
+                options.PgpAuthorities.Authorities ??= [];
+                foreach (var authority in options.PgpAuthorities.Authorities)
+                {
+                    if (authority is null)
+                    {
+                        continue;
+                    }
+
+                    authority.Authorizations ??= [];
+                    if (PgpAuthorityFingerprint.TryNormalize(authority.KeyFingerprint, out var normalized))
+                    {
+                        authority.KeyFingerprint = normalized;
+                    }
+                }
+            });
+        services.AddSingleton<IValidateOptions<ControlOptions>, ControlOptionsValidator>();
+        // Catalogue validation is available for tests and explicit IOptions resolution.
+        // ValidateOnStart is not used: an empty or omitted Control section must not
+        // prevent NNTPD startup, and this catalogue is not a runtime dependency.
+
         if (configure is not null)
         {
             optionsBuilder.Configure(configure);
