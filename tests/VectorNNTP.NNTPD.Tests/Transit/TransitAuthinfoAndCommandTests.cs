@@ -32,6 +32,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("AUTHINFO USER feed");
         Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await duplex.WriteClientLineAsync("AUTHINFO PASS s3cret");
@@ -55,6 +57,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("AUTHINFO USER feed");
         Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await duplex.WriteClientLineAsync("AUTHINFO PASS wrong");
@@ -77,6 +81,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var session = duplex.CreateSession(peers, loggerFactory: recording);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("AUTHINFO USER feed");
         _ = await duplex.ReadClientLineAsync();
         await duplex.WriteClientLineAsync("AUTHINFO PASS peer-secret-xyz");
@@ -144,6 +150,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var session = duplex.CreateSession(both);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("AUTHINFO USER not-feed");
         Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await duplex.WriteClientLineAsync("AUTHINFO PASS s3cret");
@@ -158,6 +166,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var userOnly = userOnlyDuplex.CreateSession(CreatePeer(username: "feed", password: ""));
         var userOnlyRun = userOnly.RunAsync();
         _ = await userOnlyDuplex.ReadClientLineAsync();
+        await userOnlyDuplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await userOnlyDuplex.ReadClientLineAsync());
         await userOnlyDuplex.WriteClientLineAsync("AUTHINFO USER feed");
         _ = await userOnlyDuplex.ReadClientLineAsync();
         await userOnlyDuplex.WriteClientLineAsync("AUTHINFO PASS anything");
@@ -170,6 +180,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var passOnly = passOnlyDuplex.CreateSession(CreatePeer(username: "", password: "s3cret"));
         var passOnlyRun = passOnly.RunAsync();
         _ = await passOnlyDuplex.ReadClientLineAsync();
+        await passOnlyDuplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await passOnlyDuplex.ReadClientLineAsync());
         await passOnlyDuplex.WriteClientLineAsync("AUTHINFO USER feed");
         _ = await passOnlyDuplex.ReadClientLineAsync();
         await passOnlyDuplex.WriteClientLineAsync("AUTHINFO PASS s3cret");
@@ -243,6 +255,8 @@ public sealed class TransitAuthinfoAndCommandTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
+        await duplex.WriteClientLineAsync("MODE STREAM");
+        Assert.Equal("203 Streaming permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("AUTHINFO USER feed");
         Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await duplex.WriteClientLineAsync("AUTHINFO PASS anything");

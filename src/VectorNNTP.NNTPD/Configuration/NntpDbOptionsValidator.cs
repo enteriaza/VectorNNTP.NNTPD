@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -15,6 +16,17 @@ public sealed class NntpDbOptionsValidator : IValidateOptions<NntpDbOptions>
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
             failures.Add($"ConnectionStrings:{NntpDbOptions.ConnectionStringName} must be configured.");
+        }
+        else
+        {
+            try
+            {
+                NntpDbConnectionString.Validate(options.ConnectionString);
+            }
+            catch (NntpDbConfigurationException ex)
+            {
+                failures.Add(ex.Message);
+            }
         }
 
         if (options.StartupTimeout <= TimeSpan.Zero)

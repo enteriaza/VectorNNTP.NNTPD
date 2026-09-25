@@ -7,8 +7,10 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// AUTHINFO USER/PASS provider: newsmaster first (when configured), then MySQL reader accounts.
 /// </summary>
 /// <remarks>
-/// A newsmaster username match never falls through to MySQL. Transit peer AUTHINFO is handled
-/// by the AUTHINFO command, not this type.
+/// A newsmaster username match never falls through to MySQL. Transit peer AUTHINFO is
+/// selected only when the session AUTHINFO authority is Transit (MODE STREAM) and is
+/// handled by <see cref="VectorNNTP.NNTPD.Session.Authentication.ITransitPeerAuthenticator"/>,
+/// not this type. This provider is Reader-authority only.
 /// </remarks>
 public sealed class CompositeNntpAuthenticationProvider : INntpAuthenticationProvider
 {

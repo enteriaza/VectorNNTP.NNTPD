@@ -24,6 +24,20 @@ internal static class TestHostFactory
     /// <summary>Offline placeholder for <c>ConnectionStrings:NntpDB</c> (not a live server).</summary>
     public const string TestNntpDbConnectionString = "Server=127.0.0.1;Database=nntpdb;User ID=test;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;";
 
+    /// <summary>
+    /// Deliberately malformed NntpDB string similar to the observed parse failure
+    /// (unclosed quote; rejected by <c>MySqlConnectionStringBuilder</c>).
+    /// </summary>
+    public const string MalformedNntpDbConnectionString =
+        "Server=127.0.0.1;Port=3306;Database=nntpdb;User ID=nntpd;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=128;ConnectionIdleTimeout=300;Password=\"unclosed";
+
+    /// <summary>Fake password used only in malformed-string secret-redaction tests.</summary>
+    public const string FakeNntpDbPassword = "fake-nntpdb-password-not-real";
+
+    /// <summary>Malformed NntpDB string that contains <see cref="FakeNntpDbPassword"/>.</summary>
+    public const string MalformedNntpDbConnectionStringWithPassword =
+        "Server=127.0.0.1;Database=nntpdb;User ID=nntpd;Password=\"" + FakeNntpDbPassword + ";";
+
     /// <summary>Shared parent for test file logs so hosts do not write under the repo <c>logs/</c>.</summary>
     public static readonly string SharedTestLogDir = Path.Combine(Path.GetTempPath(), "vectornntp-nntpd-testhost-logs");
 

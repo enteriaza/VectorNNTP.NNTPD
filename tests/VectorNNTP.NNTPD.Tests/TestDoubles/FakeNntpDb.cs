@@ -12,6 +12,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
 
     public int OpenCount { get; private set; }
 
+    public int OpenAttemptCount { get; private set; }
+
     public Exception? OpenException { get; set; }
 
     public int RemainingOpenFailures { get; set; }
@@ -75,6 +77,7 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
     public async Task<INntpDbConnection> OpenAsync(string connectionString, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        OpenAttemptCount++;
         OpenStarted?.TrySetResult();
         if (BlockOpen is not null)
         {

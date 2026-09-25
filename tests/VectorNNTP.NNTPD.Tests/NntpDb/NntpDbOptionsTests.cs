@@ -37,6 +37,48 @@ public sealed class NntpDbOptionsTests
     }
 
     [Fact]
+    public void Validate_Fails_WhenConnectionStringIsMalformed()
+    {
+        var options = new NntpDbOptions { ConnectionString = TestHostFactory.MalformedNntpDbConnectionString };
+        var result = new NntpDbOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static failure => failure.Contains("NntpDB connection string is invalid", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Failures!,
+            static failure => failure.Contains("initialization string", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            result.Failures!,
+            static failure => failure.Contains(TestHostFactory.MalformedNntpDbConnectionString, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_MalformedConnectionString_DoesNotExposePassword()
+    {
+        var options = new NntpDbOptions
+        {
+            ConnectionString = TestHostFactory.MalformedNntpDbConnectionStringWithPassword,
+        };
+        var result = new NntpDbOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.DoesNotContain(
+            result.Failures!,
+            static failure => failure.Contains(TestHostFactory.FakeNntpDbPassword, StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            result.Failures!,
+            static failure => failure.Contains("Password=", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_Succeeds_WhenConnectionStringIsAcceptedByMySqlConnector()
+    {
+        var options = new NntpDbOptions { ConnectionString = TestHostFactory.TestNntpDbConnectionString };
+        Assert.True(new NntpDbOptionsValidator().Validate(null, options).Succeeded);
+        NntpDbConnectionString.Validate(options.ConnectionString);
+    }
+
+    [Fact]
     public void Validate_Fails_WhenStartupTimeoutNotPositive()
     {
         var options = new NntpDbOptions

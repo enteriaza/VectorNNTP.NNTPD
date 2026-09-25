@@ -12,7 +12,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </para>
 /// <para>
 /// MODE STREAM (RFC 4644 §2.3) is retained for legacy clients. It returns <c>203</c> and
-/// MUST NOT change session state. Authorization is <see cref="NntpCommandAccess.RequiresStreaming"/>
+/// MUST NOT change receive/capability session mode. It does select Transit AUTHINFO
+/// authority (no MySQL). Authorization is <see cref="NntpCommandAccess.RequiresStreaming"/>
 /// (peer or authenticated streaming privilege). CHECK/TAKETHIS are gated by transit authorization
 /// and the advertised <c>STREAMING</c> capability — not by issuing MODE STREAM first.
 /// </para>
@@ -82,8 +83,10 @@ internal static class Mode
 
     private static async ValueTask ExecuteStreamAsync(NntpCommandContext context, CancellationToken cancellationToken)
     {
-        // RFC 4644 §2.3.2: MUST return 203 and MUST NOT affect server state despite the name.
+        // RFC 4644 §2.3.2: MUST return 203 and MUST NOT change receive/capability mode.
+        // AUTHINFO authority is selected here so STREAM credentials are Transit-only.
         // StreamingPermitted is enforced by the dispatcher (RequiresStreaming).
+        context.Session.SetAuthenticationAuthority(NntpAuthenticationAuthority.Transit);
         await NntpCommandReply.WriteAsync(
                     context,
                     Logger,

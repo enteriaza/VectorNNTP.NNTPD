@@ -13,9 +13,11 @@ namespace VectorNNTP.NNTPD.NntpDb;
 /// connection pooling. This type does not cache, idle-reap, or reserve connections.
 /// </para>
 /// <para>
-/// Startup opens a logical connection, executes <c>SELECT 1</c>, disposes that
-/// connection, and fails the host when the check does not succeed. There is no
-/// degraded or in-memory fallback.
+/// Startup validates the connection string with
+/// <c>MySqlConnectionStringBuilder</c>, opens a logical connection, executes
+/// <c>SELECT 1</c>, disposes that connection, and fails the host when the check
+/// does not succeed. A malformed connection string fails immediately without
+/// retry. There is no degraded or in-memory fallback.
 /// </para>
 /// </remarks>
 public sealed class NntpDbService : IApplicationService, IAsyncDisposable
@@ -68,6 +70,9 @@ public sealed class NntpDbService : IApplicationService, IAsyncDisposable
     /// <summary>Gets whether the service is accepting database work (tests).</summary>
     internal bool IsAccepting => Volatile.Read(ref _accepting) == 1;
 
+    /// <summary>Gets how many startup connect attempts ran (tests).</summary>
+    internal int StartupConnectAttempts { get; private set; }
+
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -85,7 +90,11 @@ public sealed class NntpDbService : IApplicationService, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            if (ex is not OperationCanceledException)
+            if (ex is NntpDbConfigurationException configuration)
+            {
+                NntpDbLogMessages.InvalidConnectionString(_logger, configuration.Reason, configuration);
+            }
+            else if (ex is not OperationCanceledException)
             {
                 NntpDbLogMessages.StartupCheckFailed(_logger, ex);
             }
@@ -133,12 +142,15 @@ public sealed class NntpDbService : IApplicationService, IAsyncDisposable
 
     private async Task ConnectWithStartupBudgetAsync(NntpDbOptions options, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        NntpDbConnectionString.Validate(options.ConnectionString);
+
         var deadline = _timeProvider.GetUtcNow() + options.StartupTimeout;
-        var attempt = 0;
+        StartupConnectAttempts = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            attempt++;
+            StartupConnectAttempts++;
             try
             {
                 await using var connection = await _factory
@@ -152,6 +164,10 @@ public sealed class NntpDbService : IApplicationService, IAsyncDisposable
 
                 NntpDbLogMessages.StartupCheckSucceeded(_logger);
                 return;
+            }
+            catch (NntpDbConfigurationException)
+            {
+                throw;
             }
             catch (NntpDbAuthenticationException)
             {
@@ -174,7 +190,7 @@ public sealed class NntpDbService : IApplicationService, IAsyncDisposable
                         ex);
                 }
 
-                NntpDbLogMessages.StartupRetry(_logger, attempt, ex);
+                NntpDbLogMessages.StartupRetry(_logger, StartupConnectAttempts, ex);
                 var remaining = deadline - _timeProvider.GetUtcNow();
                 var delay = remaining < StartupRetryDelay ? remaining : StartupRetryDelay;
                 if (delay > TimeSpan.Zero)

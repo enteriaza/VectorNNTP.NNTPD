@@ -9,10 +9,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// AUTHINFO USER / PASS (RFC 4643, Section 2.3) and AUTHINFO SASL (RFC 4643, Section 2.4).
 /// </summary>
 /// <remarks>
-/// USER caches a username; PASS authenticates via <see cref="INntpAuthenticationProvider"/>
-/// unless the session is already an identified Transit peer. SASL supports PLAIN, LOGIN,
-/// CRAM-MD5, and SCRAM-SHA-256 when <see cref="NntpSaslService"/> is registered.
-/// Credential validation stays in the authentication service, not in other command handlers.
+/// USER caches a username. PASS selects the credential authority from
+/// <see cref="NntpSession.AuthenticationAuthority"/> (MODE), never from source IP.
+/// Transit authority uses <see cref="ITransitPeerAuthenticator"/> only.
+/// Reader authority uses <see cref="INntpAuthenticationProvider"/> only (newsmaster then MySQL).
+/// There is no Transit ↔ Reader fall-through. SASL is reader-authority only.
 /// </remarks>
 internal static class AuthInfo
 {
@@ -105,19 +106,13 @@ internal static class AuthInfo
         NntpAuthenticationResult result;
         try
         {
-            var peerPolicy = context.Session.Authorization.TransitPeerPolicy;
-            if (peerPolicy is not null)
-            {
-                result = peerPolicy.CredentialsMatch(pending, password)
-                    ? NntpAuthenticationResult.Success(pending, context.Session.Authorization)
-                    : NntpAuthenticationResult.Failed;
-            }
-            else
-            {
-                result = await authenticationProvider
-                    .AuthenticateAsync(pending, password, context.Session.ClientAddress, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            result = await AuthenticatePassAsync(
+                    context.Session,
+                    authenticationProvider,
+                    pending,
+                    password,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -134,6 +129,19 @@ internal static class AuthInfo
         if (!TryBeginAuthCommand(context, cancellationToken, out var blocked))
         {
             await blocked.ConfigureAwait(false);
+            return;
+        }
+
+        if (context.Session.AuthenticationAuthority == NntpAuthenticationAuthority.Transit)
+        {
+            context.Session.ApplyFailedAuthentication();
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.AuthenticationFailed,
+                    NntpResponseStatus.AuthenticationFailed,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -193,6 +201,30 @@ internal static class AuthInfo
             .ContinueAsync(exchange, Encoding.ASCII.GetString(line.Span), session.ClientAddress, cancellationToken)
             .ConfigureAwait(false);
         await ApplySaslReplyCoreAsync(session, response, context: null, reply, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ValueTask<NntpAuthenticationResult> AuthenticatePassAsync(
+        NntpSession session,
+        INntpAuthenticationProvider authenticationProvider,
+        string username,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        if (session.AuthenticationAuthority == NntpAuthenticationAuthority.Transit)
+        {
+            return ValueTask.FromResult(
+                session.TransitAuthenticator.Authenticate(
+                    session.Authorization.TransitPeerPolicy,
+                    username,
+                    password,
+                    session.Authorization));
+        }
+
+        return authenticationProvider.AuthenticateAsync(
+            username,
+            password,
+            session.ClientAddress,
+            cancellationToken);
     }
 
     private static bool TryBeginAuthCommand(

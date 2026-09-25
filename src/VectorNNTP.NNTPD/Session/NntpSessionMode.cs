@@ -9,6 +9,10 @@ public enum NntpSessionMode
     /// <summary>Reader mode after a successful <c>MODE READER</c>.</summary>
     Reader = 1,
 
-    /// <summary>Transit/streaming mode after a successful <c>MODE STREAM</c> (future).</summary>
+    /// <summary>
+    /// Transit/streaming operating mode. <c>MODE STREAM</c> does not set this (RFC 4644 §2.3);
+    /// AUTHINFO Transit authority is selected separately via
+    /// <see cref="NntpAuthenticationAuthority"/>.
+    /// </summary>
     Stream = 2,
 }

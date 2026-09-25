@@ -25,7 +25,16 @@ public sealed class MySqlNntpDbConnectionFactory : INntpDbConnectionFactory
             await connection.DisposeAsync().ConfigureAwait(false);
             throw new NntpDbAuthenticationException("MySQL authentication failed.", ex);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbAuthenticationException)
+        catch (ArgumentException ex)
+        {
+            // OpenAsync parses via MySqlConnectionStringBuilder. Format and option-value
+            // errors are configuration, not transient connectivity.
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw new NntpDbConfigurationException(ex.Message, ex);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+            and not NntpDbAuthenticationException
+            and not NntpDbConfigurationException)
         {
             await connection.DisposeAsync().ConfigureAwait(false);
             throw new NntpDbUnavailableException("MySQL connection failed.", ex);

@@ -310,7 +310,7 @@ MySqlConnector 2.6.2 pooling options used by the committed connection string:
 | `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | MySQL connection string for NNTPD (includes provider pool settings) |
 | `NntpDb:StartupTimeout` | `TimeSpan` | `00:00:15` | no | Wall-clock budget for application-level startup connect / retry (`> 0`) |
 
-Startup opens a logical `MySqlConnection` from `ConnectionStrings:NntpDB`, executes `SELECT 1`, and disposes that logical connection. DNS, TCP, authentication, timeout, or `SELECT 1` failures fail host startup. Transient connectivity errors may retry until `StartupTimeout` elapses; authentication failures and a failed `SELECT 1` result fail immediately. A successful check does not keep that physical connection open; MySqlConnector owns reuse.
+Startup opens a logical `MySqlConnection` from `ConnectionStrings:NntpDB`, executes `SELECT 1`, and disposes that logical connection. DNS, TCP, authentication, timeout, or `SELECT 1` failures fail host startup. Transient connectivity errors may retry until `StartupTimeout` elapses. A connection string rejected by `MySqlConnectionStringBuilder`, authentication failures, and a failed `SELECT 1` result fail immediately without retry. A successful check does not keep that physical connection open; MySqlConnector owns reuse.
 
 Example:
 
@@ -568,13 +568,13 @@ Trusted feed peers are configured in a **top-level** `Transit` dictionary. Dicti
 
 This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy.
 
-`AUTHINFO USER/PASS` is a **public** command (READER, STREAM, transit peers, and non-transit clients may issue it). Authentication succeeds for an identified Transit peer only when **both** configured `Username` and `Password` are non-empty and both supplied values match (ordinal). AUTHINFO success is not Transit authorization: a non-transit client that authenticates through the ordinary provider does not become a Transit peer.
+`AUTHINFO USER/PASS` is a **public** command (READER, STREAM, transit peers, and non-transit clients may issue it). Credential authority is the session MODE, not the source IP. `MODE STREAM` authenticates against that session's Transit peer credentials only (both configured `Username` and `Password` non-empty and ordinal match). `MODE READER` and an unspecified mode authenticate against the ordinary provider (newsmaster, then MySQL `nntpusers`) even when the client IP matches a Transit `AllowFrom`. There is no Transit ↔ MySQL fallback. AUTHINFO success is not Transit authorization: a READER authentication does not become a Transit peer.
 
 | Situation | Behavior |
 |-----------|----------|
 | `Transit` omitted / `{}` | Deny-by-default. Sessions start with no transit/streaming privileges. |
-| Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE`. Peer AUTHINFO may authenticate against that peer only. |
-| Effective client matches no peer | Same as empty dictionary for that connection. AUTHINFO uses the ordinary authentication provider. |
+| Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE`. `MODE STREAM` AUTHINFO uses that peer's credentials only. `MODE READER` AUTHINFO uses MySQL/newsmaster. |
+| Effective client matches no peer | Same as empty dictionary for that connection. AUTHINFO uses the ordinary authentication provider unless `MODE STREAM` was accepted (then Transit auth fails without MySQL). |
 | Effective client matches more than one peer | Transit is **denied**. A WARNING is logged on **every** such connection (`source IP` + matching peer names). Literal/CIDR and duplicate-hostname overlap is rejected at configuration validation; residual DNS-vs-literal overlap is still denied at identification time. |
 
 `Nntpd:Transit:StreamOutstandingArticleDepth` is unrelated peer policy: it only bounds concurrent outbound STREAM article TX operations (valid `4–16`).

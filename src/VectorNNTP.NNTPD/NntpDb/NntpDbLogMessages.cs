@@ -38,4 +38,10 @@ internal static partial class NntpDbLogMessages
         Level = LogLevel.Warning,
         Message = "NntpDB startup connectivity retry {Attempt} after a transient failure")]
     public static partial void StartupRetry(ILogger logger, int Attempt, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2206,
+        Level = LogLevel.Error,
+        Message = "NntpDB connection string is invalid: {Reason}")]
+    public static partial void InvalidConnectionString(ILogger logger, string Reason, Exception exception);
 }

@@ -1,9 +1,37 @@
 using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.NntpDb;
 
 public sealed class MySqlNntpDbConnectionTests
 {
+    [Fact]
+    public async Task OpenAsync_MalformedConnectionString_ThrowsConfigurationException()
+    {
+        var factory = new MySqlNntpDbConnectionFactory();
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => factory.OpenAsync(TestHostFactory.MalformedNntpDbConnectionString, CancellationToken.None));
+
+        Assert.Contains("NntpDB connection string is invalid", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("initialization string", ex.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<ArgumentException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task OpenAsync_MalformedConnectionString_DoesNotExposePassword()
+    {
+        var factory = new MySqlNntpDbConnectionFactory();
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => factory.OpenAsync(
+                TestHostFactory.MalformedNntpDbConnectionStringWithPassword,
+                CancellationToken.None));
+
+        Assert.DoesNotContain(TestHostFactory.FakeNntpDbPassword, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(TestHostFactory.FakeNntpDbPassword, ex.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(TestHostFactory.FakeNntpDbPassword, ex.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Password=", ex.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void ConvertSelectOneScalar_AcceptsInt32()
     {

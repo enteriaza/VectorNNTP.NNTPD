@@ -219,8 +219,9 @@ AUTHINFO flow:
 AUTHINFO USER username
     → pending username (not authenticated)
 AUTHINFO PASS password
-    → Transit peer credentials (identified peers only; never MySQL)
-    → otherwise INntpAuthenticationProvider.AuthenticateAsync (newsmaster, then nntpusers)
+    → authority from MODE, never from source IP (no Transit ↔ MySQL fallback)
+    → MODE STREAM / Stream: Transit peer credentials only
+    → MODE READER / unspecified: INntpAuthenticationProvider (newsmaster, then nntpusers)
     → session/source-IP admission
     → on success: NntpAuthenticationState + NntpAuthorization + NntpAccountPolicy
 AUTHINFO SASL mechanism [initial-response]

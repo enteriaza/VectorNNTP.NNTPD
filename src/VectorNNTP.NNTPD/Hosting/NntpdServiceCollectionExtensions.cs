@@ -58,8 +58,8 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
-        // Newsmaster (when configured) then MySQL nntpusers. Transit peer AUTHINFO is
-        // handled in the AUTHINFO command and never falls through to this provider.
+        // Newsmaster (when configured) then MySQL nntpusers. Reader-authority only.
+        // Transit AUTHINFO is MODE STREAM / Transit authority and never enters this provider.
         services.TryAddSingleton<INntpUserRecordStore, MySqlUserRecordStore>();
         services.TryAddSingleton<MySqlNntpCredentialValidator>();
         services.TryAddSingleton<INntpSessionAdmissionTracker, InMemoryNntpSessionAdmissionTracker>();

@@ -35,8 +35,9 @@ public sealed class NntpDbOptions
     /// Gets or sets the wall-clock budget for startup connect and <c>SELECT 1</c>.
     /// </summary>
     /// <remarks>
-    /// Connectivity failures may retry until this budget elapses. Authentication
-    /// and <c>SELECT 1</c> result failures fail immediately.
+    /// Connectivity failures may retry until this budget elapses. A malformed
+    /// connection string, authentication failures, and a failed <c>SELECT 1</c>
+    /// result fail immediately.
     /// </remarks>
     public TimeSpan StartupTimeout { get; set; } = DefaultStartupTimeout;
 }

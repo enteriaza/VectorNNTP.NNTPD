@@ -45,6 +45,7 @@ public sealed class NntpSession
     private string? _admittedAccountName;
     private NntpSaslExchange? _saslExchange;
     private NntpSessionMode _mode;
+    private NntpAuthenticationAuthority _authenticationAuthority;
     private int _closeRequested;
     private int _activityState;
     private int _commandWork;
@@ -89,7 +90,8 @@ public sealed class NntpSession
         IModeratorAuthorization? moderatorAuthorization = null,
         IModerationSubmissionService? moderationSubmission = null,
         INntpSessionAdmissionTracker? sessionAdmission = null,
-        NntpSaslService? saslService = null)
+        NntpSaslService? saslService = null,
+        ITransitPeerAuthenticator? transitAuthenticator = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -102,8 +104,10 @@ public sealed class NntpSession
         _authorization = _connectionAuthorization;
         _authentication = NntpAuthenticationState.Unauthenticated;
         _mode = NntpSessionMode.Unspecified;
+        _authenticationAuthority = NntpAuthenticationAuthority.Reader;
         AllowCleartextAuth = allowCleartextAuth;
         AuthenticationProvider = authenticationProvider ?? DenyAllNntpAuthenticationProvider.Instance;
+        TransitAuthenticator = transitAuthenticator ?? TransitPeerAuthenticator.Instance;
         ArticleIngestion = articleIngestion ?? DisabledArticleIngestionQueue.Instance;
         HistoryDb = historyDb;
         SpeedTest = speedTest;
@@ -267,8 +271,16 @@ public sealed class NntpSession
     /// <summary>Gets the actual TCP peer endpoint of the accepted socket.</summary>
     public IPEndPoint TcpPeer => ClientIdentity.TcpPeer;
 
-    /// <summary>Gets the authentication provider used by AUTHINFO handlers.</summary>
+    /// <summary>Gets the reader AUTHINFO provider (newsmaster / MySQL). Never used in Transit authority.</summary>
     public INntpAuthenticationProvider AuthenticationProvider { get; }
+
+    /// <summary>Gets the Transit AUTHINFO authenticator. Never used in Reader authority.</summary>
+    public ITransitPeerAuthenticator TransitAuthenticator { get; }
+
+    /// <summary>
+    /// Gets the AUTHINFO credential authority selected by MODE, not by source IP.
+    /// </summary>
+    public NntpAuthenticationAuthority AuthenticationAuthority => _authenticationAuthority;
 
     /// <summary>Gets the process-local authenticated-session admission tracker, if registered.</summary>
     public INntpSessionAdmissionTracker? SessionAdmission { get; }
@@ -346,8 +358,25 @@ public sealed class NntpSession
         }
     }
 
-    /// <summary>Sets the session operating mode.</summary>
-    public void SetMode(NntpSessionMode mode) => _mode = mode;
+    /// <summary>
+    /// Sets the session operating mode and the AUTHINFO authority that accompanies it.
+    /// <see cref="NntpSessionMode.Stream"/> selects Transit credentials; any other mode
+    /// selects reader (newsmaster / MySQL) credentials.
+    /// </summary>
+    public void SetMode(NntpSessionMode mode)
+    {
+        _mode = mode;
+        _authenticationAuthority = mode == NntpSessionMode.Stream
+            ? NntpAuthenticationAuthority.Transit
+            : NntpAuthenticationAuthority.Reader;
+    }
+
+    /// <summary>
+    /// Selects the AUTHINFO authority without changing <see cref="Mode"/>.
+    /// Used by <c>MODE STREAM</c>, which must not change RFC 4644 receive state.
+    /// </summary>
+    public void SetAuthenticationAuthority(NntpAuthenticationAuthority authority) =>
+        _authenticationAuthority = authority;
 
     /// <summary>Caches the username from <c>AUTHINFO USER</c> (does not authenticate).</summary>
     public void SetPendingAuthUsername(string username)

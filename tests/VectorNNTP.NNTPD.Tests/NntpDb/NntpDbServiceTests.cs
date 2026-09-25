@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
@@ -19,6 +20,7 @@ public sealed class NntpDbServiceTests
 
         Assert.True(service.HasStarted);
         Assert.True(service.IsAccepting);
+        Assert.Equal(1, service.StartupConnectAttempts);
         Assert.Equal(1, factory.OpenCount);
         var connection = Assert.Single(factory.Connections);
         Assert.Equal(1, connection.SelectOneCount);
@@ -38,6 +40,142 @@ public sealed class NntpDbServiceTests
         Assert.Contains("startup", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(service.HasStarted);
         Assert.False(service.IsAccepting);
+    }
+
+    [Fact]
+    public async Task StartAsync_MalformedConnectionString_FailsImmediately_WithoutRetry()
+    {
+        var factory = new FakeNntpDbConnectionFactory
+        {
+            OpenException = new NntpDbUnavailableException("should not be reached"),
+        };
+        var clock = new ControllableTimeProvider();
+        var logger = new CollectingLogger<NntpDbService>();
+        var service = CreateService(
+            factory,
+            startupTimeout: TimeSpan.FromMinutes(1),
+            clock: clock,
+            connectionString: TestHostFactory.MalformedNntpDbConnectionString,
+            logger: logger);
+
+        var starting = service.StartAsync(CancellationToken.None);
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => starting.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Contains("NntpDB connection string is invalid", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("initialization string", ex.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("index", ex.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<ArgumentException>(ex.InnerException);
+        Assert.Equal(0, service.StartupConnectAttempts);
+        Assert.Equal(0, factory.OpenAttemptCount);
+        Assert.False(service.HasStarted);
+        Assert.False(service.IsAccepting);
+        Assert.Contains(
+            logger.Messages,
+            static message => message.Contains("NntpDB connection string is invalid", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            logger.Messages,
+            static message => message.Contains("startup connectivity retry", StringComparison.Ordinal));
+        Assert.Equal(1, logger.Messages.Count(static message =>
+            message.Contains("NntpDB connection string is invalid", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task StartAsync_MalformedConnectionString_DoesNotExposePassword()
+    {
+        var factory = new FakeNntpDbConnectionFactory();
+        var logger = new CollectingLogger<NntpDbService>();
+        var service = CreateService(
+            factory,
+            connectionString: TestHostFactory.MalformedNntpDbConnectionStringWithPassword,
+            logger: logger);
+
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => service.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)));
+
+        AssertSecretNotExposed(ex.Message);
+        AssertSecretNotExposed(ex.Reason);
+        AssertSecretNotExposed(ex.ToString());
+        foreach (var message in logger.Messages)
+        {
+            AssertSecretNotExposed(message);
+        }
+
+        foreach (var logged in logger.Exceptions)
+        {
+            AssertSecretNotExposed(logged.ToString());
+        }
+
+        Assert.Equal(0, service.StartupConnectAttempts);
+        Assert.Equal(0, factory.OpenAttemptCount);
+    }
+
+    [Fact]
+    public async Task StartAsync_ValidConnectionString_ProceedsPastParsing()
+    {
+        var factory = new FakeNntpDbConnectionFactory();
+        var service = CreateService(factory, connectionString: TestHostFactory.TestNntpDbConnectionString);
+        await service.StartAsync(CancellationToken.None);
+
+        Assert.True(service.HasStarted);
+        Assert.Equal(1, service.StartupConnectAttempts);
+        Assert.Equal(1, factory.OpenAttemptCount);
+        Assert.Equal(1, factory.OpenCount);
+    }
+
+    [Fact]
+    public async Task StartAsync_CanceledToken_IsNotConvertedToConfigurationFailure()
+    {
+        var factory = new FakeNntpDbConnectionFactory();
+        var service = CreateService(factory, connectionString: TestHostFactory.TestNntpDbConnectionString);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.StartAsync(cts.Token));
+        Assert.Equal(0, service.StartupConnectAttempts);
+        Assert.Equal(0, factory.OpenAttemptCount);
+        Assert.False(service.HasStarted);
+    }
+
+    [Fact]
+    public async Task StartAsync_MalformedConnectionString_WithRealFactory_DoesNotOpen()
+    {
+        var clock = new ControllableTimeProvider();
+        var service = new NntpDbService(
+            new MySqlNntpDbConnectionFactory(),
+            Options.Create(new NntpDbOptions
+            {
+                ConnectionString = TestHostFactory.MalformedNntpDbConnectionString,
+                StartupTimeout = TimeSpan.FromMinutes(1),
+            }),
+            NullLogger<NntpDbService>.Instance,
+            clock);
+
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => service.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Contains("NntpDB connection string is invalid", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, service.StartupConnectAttempts);
+        Assert.False(service.HasStarted);
+    }
+
+    [Fact]
+    public async Task Lifecycle_MalformedConnectionString_FailsStartupWithConfigurationException()
+    {
+        var factory = new FakeNntpDbConnectionFactory();
+        var service = CreateService(
+            factory,
+            startupTimeout: TimeSpan.FromMinutes(1),
+            connectionString: TestHostFactory.MalformedNntpDbConnectionString);
+        var lifecycle = TestHostFactory.CreateLifecycle([service]);
+
+        var ex = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+            () => lifecycle.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Contains("NntpDB connection string is invalid", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, service.StartupConnectAttempts);
+        Assert.Equal(0, factory.OpenAttemptCount);
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
     }
 
     [Fact]
@@ -89,6 +227,8 @@ public sealed class NntpDbServiceTests
 
         Assert.True(service.HasStarted);
         Assert.Equal(0, factory.RemainingOpenFailures);
+        Assert.Equal(2, factory.OpenAttemptCount);
+        Assert.Equal(2, service.StartupConnectAttempts);
         Assert.Equal(1, factory.OpenCount);
         Assert.Equal(1, Assert.Single(factory.Connections).SelectOneCount);
         Assert.Equal(1, factory.Connections[0].DisposeCount);
@@ -220,17 +360,61 @@ public sealed class NntpDbServiceTests
     private static NntpDbService CreateService(
         FakeNntpDbConnectionFactory factory,
         TimeSpan? startupTimeout = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        string? connectionString = null,
+        ILogger<NntpDbService>? logger = null)
     {
         var options = new NntpDbOptions
         {
-            ConnectionString = TestHostFactory.TestNntpDbConnectionString,
+            ConnectionString = connectionString ?? TestHostFactory.TestNntpDbConnectionString,
             StartupTimeout = startupTimeout ?? TimeSpan.FromSeconds(15),
         };
         return new NntpDbService(
             factory,
             Options.Create(options),
-            NullLogger<NntpDbService>.Instance,
+            logger ?? NullLogger<NntpDbService>.Instance,
             clock ?? TimeProvider.System);
+    }
+
+    private static void AssertSecretNotExposed(string text)
+    {
+        Assert.DoesNotContain(TestHostFactory.FakeNntpDbPassword, text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password=", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(TestHostFactory.MalformedNntpDbConnectionStringWithPassword, text, StringComparison.Ordinal);
+    }
+
+    private sealed class CollectingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public List<Exception> Exceptions { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            if (exception is not null)
+            {
+                Exceptions.Add(exception);
+            }
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 }
