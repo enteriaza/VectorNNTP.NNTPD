@@ -11,4 +11,11 @@ public enum InboundArticleProducer
     /// preserved, terminator omitted). Workers destuff exactly once.
     /// </summary>
     IHave = 1,
+
+    /// <summary>
+    /// POST. <see cref="InboundArticle.Payload"/> is NNTP wire format after
+    /// destuff/validate/normalize/restuff (dot-stuffing preserved, terminator omitted),
+    /// matching the IHAVE queue contract. Workers destuff exactly once.
+    /// </summary>
+    Post = 2,
 }

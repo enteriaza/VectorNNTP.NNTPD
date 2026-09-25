@@ -1,0 +1,3411 @@
+// Validating benchmarks:
+// ***** BenchmarkRunner: Start   *****
+// ***** Found 36 benchmark(s) in total *****
+// ***** Building 1 exe(s) in Parallel: Start   *****
+// start dotnet  restore /p:UseSharedCompilation=false /p:BuildInParallel=false /m:1 /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1/" /p:OutDir="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0/" /p:OutputPath="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0/" /p:PublishDir="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\publish/" in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1
+// command took 1.08 sec and exited with 0
+// start dotnet  build -c Release --no-restore /p:UseSharedCompilation=false /p:BuildInParallel=false /m:1 /p:Deterministic=true /p:Optimize=true /p:ArtifactsPath="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1/" /p:OutDir="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0/" /p:OutputPath="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0/" /p:PublishDir="C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\publish/" --output "C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0/" in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1
+// command took 8.54 sec and exited with 0
+// ***** Done, took 00:00:09 (9.97 sec)   *****
+// Found 36 benchmarks:
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+//   PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+//   PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 644 636 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1024, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 0 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 146000.00 ns, 146.0000 us/op
+WorkloadJitting  1: 1 op, 13521000.00 ns, 13.5210 ms/op
+
+OverheadJitting  2: 16 op, 261600.00 ns, 16.3500 us/op
+WorkloadJitting  2: 16 op, 2430100.00 ns, 151.8813 us/op
+
+WorkloadPilot    1: 16 op, 1225000.00 ns, 76.5625 us/op
+WorkloadPilot    2: 32 op, 2264600.00 ns, 70.7688 us/op
+WorkloadPilot    3: 64 op, 4841400.00 ns, 75.6469 us/op
+WorkloadPilot    4: 128 op, 9657300.00 ns, 75.4477 us/op
+WorkloadPilot    5: 256 op, 17617600.00 ns, 68.8188 us/op
+WorkloadPilot    6: 512 op, 31549300.00 ns, 61.6197 us/op
+WorkloadPilot    7: 1024 op, 61572000.00 ns, 60.1289 us/op
+WorkloadPilot    8: 2048 op, 119175400.00 ns, 58.1911 us/op
+WorkloadPilot    9: 4096 op, 173850400.00 ns, 42.4439 us/op
+WorkloadPilot   10: 8192 op, 115613800.00 ns, 14.1130 us/op
+WorkloadPilot   11: 16384 op, 183076200.00 ns, 11.1741 us/op
+WorkloadPilot   12: 32768 op, 270908400.00 ns, 8.2675 us/op
+WorkloadPilot   13: 65536 op, 502005200.00 ns, 7.6600 us/op
+
+OverheadWarmup   1: 65536 op, 99200.00 ns, 1.5137 ns/op
+OverheadWarmup   2: 65536 op, 98900.00 ns, 1.5091 ns/op
+OverheadWarmup   3: 65536 op, 109000.00 ns, 1.6632 ns/op
+OverheadWarmup   4: 65536 op, 100200.00 ns, 1.5289 ns/op
+OverheadWarmup   5: 65536 op, 99700.00 ns, 1.5213 ns/op
+OverheadWarmup   6: 65536 op, 99100.00 ns, 1.5121 ns/op
+OverheadWarmup   7: 65536 op, 100200.00 ns, 1.5289 ns/op
+OverheadWarmup   8: 65536 op, 99800.00 ns, 1.5228 ns/op
+
+OverheadActual   1: 65536 op, 98100.00 ns, 1.4969 ns/op
+OverheadActual   2: 65536 op, 98200.00 ns, 1.4984 ns/op
+OverheadActual   3: 65536 op, 98100.00 ns, 1.4969 ns/op
+OverheadActual   4: 65536 op, 99800.00 ns, 1.5228 ns/op
+OverheadActual   5: 65536 op, 98100.00 ns, 1.4969 ns/op
+OverheadActual   6: 65536 op, 99900.00 ns, 1.5244 ns/op
+OverheadActual   7: 65536 op, 110000.00 ns, 1.6785 ns/op
+OverheadActual   8: 65536 op, 99900.00 ns, 1.5244 ns/op
+OverheadActual   9: 65536 op, 100700.00 ns, 1.5366 ns/op
+OverheadActual  10: 65536 op, 99400.00 ns, 1.5167 ns/op
+OverheadActual  11: 65536 op, 100100.00 ns, 1.5274 ns/op
+OverheadActual  12: 65536 op, 100500.00 ns, 1.5335 ns/op
+OverheadActual  13: 65536 op, 106300.00 ns, 1.6220 ns/op
+OverheadActual  14: 65536 op, 100200.00 ns, 1.5289 ns/op
+OverheadActual  15: 65536 op, 100100.00 ns, 1.5274 ns/op
+
+WorkloadWarmup   1: 65536 op, 520139900.00 ns, 7.9367 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 65536 op, 522383200.00 ns, 7.9709 us/op
+WorkloadActual   2: 65536 op, 521790100.00 ns, 7.9619 us/op
+WorkloadActual   3: 65536 op, 521689900.00 ns, 7.9604 us/op
+WorkloadActual   4: 65536 op, 527876700.00 ns, 8.0548 us/op
+
+// AfterActualRun
+WorkloadResult   1: 65536 op, 522283300.00 ns, 7.9694 us/op
+WorkloadResult   2: 65536 op, 521690200.00 ns, 7.9604 us/op
+WorkloadResult   3: 65536 op, 521590000.00 ns, 7.9588 us/op
+// GC:  322 80 0 5075107840 65536
+// Threading:  0 0 65536
+
+// AfterAll
+// Benchmark Process 28908 has exited with code 0.
+
+Mean = 7.963 μs, StdErr = 0.003 μs (0.04%), N = 3, StdDev = 0.006 μs
+Min = 7.959 μs, Q1 = 7.960 μs, Median = 7.960 μs, Q3 = 7.965 μs, Max = 7.969 μs
+IQR = 0.005 μs, LowerFence = 7.952 μs, UpperFence = 7.973 μs
+ConfidenceInterval = [7.859 μs; 8.067 μs] (CI 99.9%), Margin = 0.104 μs (1.31% of Mean)
+Skewness = 0.35, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 35 (97.2%) benchmark(s) to run. Estimated finish 2026-09-25 13:58 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 40308 40276 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1024, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 1 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 150000.00 ns, 150.0000 us/op
+WorkloadJitting  1: 1 op, 13230400.00 ns, 13.2304 ms/op
+
+OverheadJitting  2: 16 op, 299400.00 ns, 18.7125 us/op
+WorkloadJitting  2: 16 op, 1264500.00 ns, 79.0313 us/op
+
+WorkloadPilot    1: 16 op, 606900.00 ns, 37.9313 us/op
+WorkloadPilot    2: 32 op, 1092600.00 ns, 34.1438 us/op
+WorkloadPilot    3: 64 op, 2468100.00 ns, 38.5641 us/op
+WorkloadPilot    4: 128 op, 5150900.00 ns, 40.2414 us/op
+WorkloadPilot    5: 256 op, 9002800.00 ns, 35.1672 us/op
+WorkloadPilot    6: 512 op, 13121900.00 ns, 25.6287 us/op
+WorkloadPilot    7: 1024 op, 25706000.00 ns, 25.1035 us/op
+WorkloadPilot    8: 2048 op, 51337700.00 ns, 25.0672 us/op
+WorkloadPilot    9: 4096 op, 117945900.00 ns, 28.7954 us/op
+WorkloadPilot   10: 8192 op, 136880300.00 ns, 16.7090 us/op
+WorkloadPilot   11: 16384 op, 111018200.00 ns, 6.7760 us/op
+WorkloadPilot   12: 32768 op, 179799100.00 ns, 5.4870 us/op
+WorkloadPilot   13: 65536 op, 358099800.00 ns, 5.4642 us/op
+WorkloadPilot   14: 131072 op, 719152200.00 ns, 5.4867 us/op
+
+OverheadWarmup   1: 131072 op, 193800.00 ns, 1.4786 ns/op
+OverheadWarmup   2: 131072 op, 197100.00 ns, 1.5038 ns/op
+OverheadWarmup   3: 131072 op, 211900.00 ns, 1.6167 ns/op
+OverheadWarmup   4: 131072 op, 197200.00 ns, 1.5045 ns/op
+OverheadWarmup   5: 131072 op, 207600.00 ns, 1.5839 ns/op
+OverheadWarmup   6: 131072 op, 214900.00 ns, 1.6396 ns/op
+OverheadWarmup   7: 131072 op, 194400.00 ns, 1.4832 ns/op
+
+OverheadActual   1: 131072 op, 193000.00 ns, 1.4725 ns/op
+OverheadActual   2: 131072 op, 195900.00 ns, 1.4946 ns/op
+OverheadActual   3: 131072 op, 195100.00 ns, 1.4885 ns/op
+OverheadActual   4: 131072 op, 197000.00 ns, 1.5030 ns/op
+OverheadActual   5: 131072 op, 196300.00 ns, 1.4977 ns/op
+OverheadActual   6: 131072 op, 231700.00 ns, 1.7677 ns/op
+OverheadActual   7: 131072 op, 205500.00 ns, 1.5678 ns/op
+OverheadActual   8: 131072 op, 217500.00 ns, 1.6594 ns/op
+OverheadActual   9: 131072 op, 210300.00 ns, 1.6045 ns/op
+OverheadActual  10: 131072 op, 198300.00 ns, 1.5129 ns/op
+OverheadActual  11: 131072 op, 196300.00 ns, 1.4977 ns/op
+OverheadActual  12: 131072 op, 209900.00 ns, 1.6014 ns/op
+OverheadActual  13: 131072 op, 205900.00 ns, 1.5709 ns/op
+OverheadActual  14: 131072 op, 197200.00 ns, 1.5045 ns/op
+OverheadActual  15: 131072 op, 197000.00 ns, 1.5030 ns/op
+
+WorkloadWarmup   1: 131072 op, 731018900.00 ns, 5.5772 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 725025100.00 ns, 5.5315 us/op
+WorkloadActual   2: 131072 op, 712360100.00 ns, 5.4349 us/op
+WorkloadActual   3: 131072 op, 703158300.00 ns, 5.3647 us/op
+WorkloadActual   4: 131072 op, 733874800.00 ns, 5.5990 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 724827900.00 ns, 5.5300 us/op
+WorkloadResult   2: 131072 op, 712162900.00 ns, 5.4334 us/op
+WorkloadResult   3: 131072 op, 702961100.00 ns, 5.3632 us/op
+WorkloadResult   4: 131072 op, 733677600.00 ns, 5.5975 us/op
+// GC:  574 143 0 9069133824 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 17736 has exited with code 0.
+
+Mean = 5.481 μs, StdErr = 0.052 μs (0.94%), N = 4, StdDev = 0.103 μs
+Min = 5.363 μs, Q1 = 5.416 μs, Median = 5.482 μs, Q3 = 5.547 μs, Max = 5.598 μs
+IQR = 0.131 μs, LowerFence = 5.219 μs, UpperFence = 5.743 μs
+ConfidenceInterval = [4.812 μs; 6.150 μs] (CI 99.9%), Margin = 0.669 μs (12.20% of Mean)
+Skewness = -0.01, Kurtosis = 0.85, MValue = 2
+
+// ** Remained 34 (94.4%) benchmark(s) to run. Estimated finish 2026-09-25 13:58 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37984 37988 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1024, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 2 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 154000.00 ns, 154.0000 us/op
+WorkloadJitting  1: 1 op, 14227700.00 ns, 14.2277 ms/op
+
+OverheadJitting  2: 16 op, 250900.00 ns, 15.6813 us/op
+WorkloadJitting  2: 16 op, 2106000.00 ns, 131.6250 us/op
+
+WorkloadPilot    1: 16 op, 897800.00 ns, 56.1125 us/op
+WorkloadPilot    2: 32 op, 1794300.00 ns, 56.0719 us/op
+WorkloadPilot    3: 64 op, 3259000.00 ns, 50.9219 us/op
+WorkloadPilot    4: 128 op, 6689700.00 ns, 52.2633 us/op
+WorkloadPilot    5: 256 op, 10750900.00 ns, 41.9957 us/op
+WorkloadPilot    6: 512 op, 17685100.00 ns, 34.5412 us/op
+WorkloadPilot    7: 1024 op, 33802000.00 ns, 33.0098 us/op
+WorkloadPilot    8: 2048 op, 63410300.00 ns, 30.9621 us/op
+WorkloadPilot    9: 4096 op, 130480900.00 ns, 31.8557 us/op
+WorkloadPilot   10: 8192 op, 206739800.00 ns, 25.2368 us/op
+WorkloadPilot   11: 16384 op, 170922200.00 ns, 10.4323 us/op
+WorkloadPilot   12: 32768 op, 238807400.00 ns, 7.2878 us/op
+WorkloadPilot   13: 65536 op, 370786900.00 ns, 5.6578 us/op
+WorkloadPilot   14: 131072 op, 743499400.00 ns, 5.6725 us/op
+
+OverheadWarmup   1: 131072 op, 193600.00 ns, 1.4771 ns/op
+OverheadWarmup   2: 131072 op, 218600.00 ns, 1.6678 ns/op
+OverheadWarmup   3: 131072 op, 194700.00 ns, 1.4854 ns/op
+OverheadWarmup   4: 131072 op, 195300.00 ns, 1.4900 ns/op
+OverheadWarmup   5: 131072 op, 192700.00 ns, 1.4702 ns/op
+
+OverheadActual   1: 131072 op, 192400.00 ns, 1.4679 ns/op
+OverheadActual   2: 131072 op, 192800.00 ns, 1.4709 ns/op
+OverheadActual   3: 131072 op, 192600.00 ns, 1.4694 ns/op
+OverheadActual   4: 131072 op, 201400.00 ns, 1.5366 ns/op
+OverheadActual   5: 131072 op, 193500.00 ns, 1.4763 ns/op
+OverheadActual   6: 131072 op, 210300.00 ns, 1.6045 ns/op
+OverheadActual   7: 131072 op, 194800.00 ns, 1.4862 ns/op
+OverheadActual   8: 131072 op, 192600.00 ns, 1.4694 ns/op
+OverheadActual   9: 131072 op, 194500.00 ns, 1.4839 ns/op
+OverheadActual  10: 131072 op, 199900.00 ns, 1.5251 ns/op
+OverheadActual  11: 131072 op, 196200.00 ns, 1.4969 ns/op
+OverheadActual  12: 131072 op, 205300.00 ns, 1.5663 ns/op
+OverheadActual  13: 131072 op, 202000.00 ns, 1.5411 ns/op
+OverheadActual  14: 131072 op, 196200.00 ns, 1.4969 ns/op
+OverheadActual  15: 131072 op, 204300.00 ns, 1.5587 ns/op
+
+WorkloadWarmup   1: 131072 op, 757272100.00 ns, 5.7775 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 758628700.00 ns, 5.7879 us/op
+WorkloadActual   2: 131072 op, 771584300.00 ns, 5.8867 us/op
+WorkloadActual   3: 131072 op, 755042400.00 ns, 5.7605 us/op
+WorkloadActual   4: 131072 op, 757210200.00 ns, 5.7771 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 758432500.00 ns, 5.7864 us/op
+WorkloadResult   2: 131072 op, 754846200.00 ns, 5.7590 us/op
+WorkloadResult   3: 131072 op, 757014000.00 ns, 5.7756 us/op
+// GC:  658 82 0 10354688000 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 35620 has exited with code 0.
+
+Mean = 5.774 μs, StdErr = 0.008 μs (0.14%), N = 3, StdDev = 0.014 μs
+Min = 5.759 μs, Q1 = 5.767 μs, Median = 5.776 μs, Q3 = 5.781 μs, Max = 5.786 μs
+IQR = 0.014 μs, LowerFence = 5.747 μs, UpperFence = 5.801 μs
+ConfidenceInterval = [5.522 μs; 6.025 μs] (CI 99.9%), Margin = 0.251 μs (4.35% of Mean)
+Skewness = -0.14, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 33 (91.7%) benchmark(s) to run. Estimated finish 2026-09-25 13:58 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 40308 40256 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1024, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 3 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 155600.00 ns, 155.6000 us/op
+WorkloadJitting  1: 1 op, 13599700.00 ns, 13.5997 ms/op
+
+OverheadJitting  2: 16 op, 280000.00 ns, 17.5000 us/op
+WorkloadJitting  2: 16 op, 973100.00 ns, 60.8188 us/op
+
+WorkloadPilot    1: 16 op, 627700.00 ns, 39.2313 us/op
+WorkloadPilot    2: 32 op, 1144900.00 ns, 35.7781 us/op
+WorkloadPilot    3: 64 op, 2667300.00 ns, 41.6766 us/op
+WorkloadPilot    4: 128 op, 4668800.00 ns, 36.4750 us/op
+WorkloadPilot    5: 256 op, 8850900.00 ns, 34.5738 us/op
+WorkloadPilot    6: 512 op, 12670500.00 ns, 24.7471 us/op
+WorkloadPilot    7: 1024 op, 24263000.00 ns, 23.6943 us/op
+WorkloadPilot    8: 2048 op, 46108000.00 ns, 22.5137 us/op
+WorkloadPilot    9: 4096 op, 107448700.00 ns, 26.2326 us/op
+WorkloadPilot   10: 8192 op, 153386200.00 ns, 18.7239 us/op
+WorkloadPilot   11: 16384 op, 108178300.00 ns, 6.6027 us/op
+WorkloadPilot   12: 32768 op, 156514800.00 ns, 4.7765 us/op
+WorkloadPilot   13: 65536 op, 302845300.00 ns, 4.6211 us/op
+WorkloadPilot   14: 131072 op, 615726000.00 ns, 4.6976 us/op
+
+OverheadWarmup   1: 131072 op, 196500.00 ns, 1.4992 ns/op
+OverheadWarmup   2: 131072 op, 197700.00 ns, 1.5083 ns/op
+OverheadWarmup   3: 131072 op, 197800.00 ns, 1.5091 ns/op
+OverheadWarmup   4: 131072 op, 204300.00 ns, 1.5587 ns/op
+OverheadWarmup   5: 131072 op, 197400.00 ns, 1.5060 ns/op
+OverheadWarmup   6: 131072 op, 197500.00 ns, 1.5068 ns/op
+OverheadWarmup   7: 131072 op, 206300.00 ns, 1.5739 ns/op
+OverheadWarmup   8: 131072 op, 210300.00 ns, 1.6045 ns/op
+OverheadWarmup   9: 131072 op, 209200.00 ns, 1.5961 ns/op
+
+OverheadActual   1: 131072 op, 195800.00 ns, 1.4938 ns/op
+OverheadActual   2: 131072 op, 195700.00 ns, 1.4931 ns/op
+OverheadActual   3: 131072 op, 195800.00 ns, 1.4938 ns/op
+OverheadActual   4: 131072 op, 315600.00 ns, 2.4078 ns/op
+OverheadActual   5: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual   6: 131072 op, 200200.00 ns, 1.5274 ns/op
+OverheadActual   7: 131072 op, 217600.00 ns, 1.6602 ns/op
+OverheadActual   8: 131072 op, 212100.00 ns, 1.6182 ns/op
+OverheadActual   9: 131072 op, 212000.00 ns, 1.6174 ns/op
+OverheadActual  10: 131072 op, 218900.00 ns, 1.6701 ns/op
+OverheadActual  11: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual  12: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual  13: 131072 op, 223600.00 ns, 1.7059 ns/op
+OverheadActual  14: 131072 op, 199700.00 ns, 1.5236 ns/op
+OverheadActual  15: 131072 op, 209800.00 ns, 1.6006 ns/op
+OverheadActual  16: 131072 op, 211900.00 ns, 1.6167 ns/op
+OverheadActual  17: 131072 op, 199700.00 ns, 1.5236 ns/op
+
+WorkloadWarmup   1: 131072 op, 598215600.00 ns, 4.5640 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 595185000.00 ns, 4.5409 us/op
+WorkloadActual   2: 131072 op, 598145600.00 ns, 4.5635 us/op
+WorkloadActual   3: 131072 op, 600395200.00 ns, 4.5807 us/op
+WorkloadActual   4: 131072 op, 608117800.00 ns, 4.6396 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 594984800.00 ns, 4.5394 us/op
+WorkloadResult   2: 131072 op, 597945400.00 ns, 4.5620 us/op
+WorkloadResult   3: 131072 op, 600195000.00 ns, 4.5791 us/op
+WorkloadResult   4: 131072 op, 607917600.00 ns, 4.6380 us/op
+// GC:  593 6 0 9321840640 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 34812 has exited with code 0.
+
+Mean = 4.580 μs, StdErr = 0.021 μs (0.46%), N = 4, StdDev = 0.042 μs
+Min = 4.539 μs, Q1 = 4.556 μs, Median = 4.571 μs, Q3 = 4.594 μs, Max = 4.638 μs
+IQR = 0.038 μs, LowerFence = 4.500 μs, UpperFence = 4.650 μs
+ConfidenceInterval = [4.307 μs; 4.852 μs] (CI 99.9%), Margin = 0.273 μs (5.96% of Mean)
+Skewness = 0.43, Kurtosis = 1.13, MValue = 2
+
+// ** Remained 32 (88.9%) benchmark(s) to run. Estimated finish 2026-09-25 13:58 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 40240 38008 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1024, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 4 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 150800.00 ns, 150.8000 us/op
+WorkloadJitting  1: 1 op, 13579000.00 ns, 13.5790 ms/op
+
+OverheadJitting  2: 16 op, 254800.00 ns, 15.9250 us/op
+WorkloadJitting  2: 16 op, 1894500.00 ns, 118.4063 us/op
+
+WorkloadPilot    1: 16 op, 617000.00 ns, 38.5625 us/op
+WorkloadPilot    2: 32 op, 1016500.00 ns, 31.7656 us/op
+WorkloadPilot    3: 64 op, 2402300.00 ns, 37.5359 us/op
+WorkloadPilot    4: 128 op, 4850300.00 ns, 37.8930 us/op
+WorkloadPilot    5: 256 op, 7821500.00 ns, 30.5527 us/op
+WorkloadPilot    6: 512 op, 11865600.00 ns, 23.1750 us/op
+WorkloadPilot    7: 1024 op, 22677600.00 ns, 22.1461 us/op
+WorkloadPilot    8: 2048 op, 45453300.00 ns, 22.1940 us/op
+WorkloadPilot    9: 4096 op, 85935800.00 ns, 20.9804 us/op
+WorkloadPilot   10: 8192 op, 189725300.00 ns, 23.1598 us/op
+WorkloadPilot   11: 16384 op, 175788900.00 ns, 10.7293 us/op
+WorkloadPilot   12: 32768 op, 239696100.00 ns, 7.3149 us/op
+WorkloadPilot   13: 65536 op, 304349200.00 ns, 4.6440 us/op
+WorkloadPilot   14: 131072 op, 608022500.00 ns, 4.6388 us/op
+
+OverheadWarmup   1: 131072 op, 214400.00 ns, 1.6357 ns/op
+OverheadWarmup   2: 131072 op, 200800.00 ns, 1.5320 ns/op
+OverheadWarmup   3: 131072 op, 211400.00 ns, 1.6129 ns/op
+OverheadWarmup   4: 131072 op, 200300.00 ns, 1.5282 ns/op
+OverheadWarmup   5: 131072 op, 210500.00 ns, 1.6060 ns/op
+OverheadWarmup   6: 131072 op, 200300.00 ns, 1.5282 ns/op
+
+OverheadActual   1: 131072 op, 200400.00 ns, 1.5289 ns/op
+OverheadActual   2: 131072 op, 201900.00 ns, 1.5404 ns/op
+OverheadActual   3: 131072 op, 210900.00 ns, 1.6090 ns/op
+OverheadActual   4: 131072 op, 200200.00 ns, 1.5274 ns/op
+OverheadActual   5: 131072 op, 218300.00 ns, 1.6655 ns/op
+OverheadActual   6: 131072 op, 202700.00 ns, 1.5465 ns/op
+OverheadActual   7: 131072 op, 202000.00 ns, 1.5411 ns/op
+OverheadActual   8: 131072 op, 200300.00 ns, 1.5282 ns/op
+OverheadActual   9: 131072 op, 209200.00 ns, 1.5961 ns/op
+OverheadActual  10: 131072 op, 199700.00 ns, 1.5236 ns/op
+OverheadActual  11: 131072 op, 199700.00 ns, 1.5236 ns/op
+OverheadActual  12: 131072 op, 199600.00 ns, 1.5228 ns/op
+OverheadActual  13: 131072 op, 199600.00 ns, 1.5228 ns/op
+OverheadActual  14: 131072 op, 208000.00 ns, 1.5869 ns/op
+OverheadActual  15: 131072 op, 208200.00 ns, 1.5884 ns/op
+
+WorkloadWarmup   1: 131072 op, 613172800.00 ns, 4.6781 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 602648300.00 ns, 4.5978 us/op
+WorkloadActual   2: 131072 op, 597605600.00 ns, 4.5594 us/op
+WorkloadActual   3: 131072 op, 587511300.00 ns, 4.4824 us/op
+WorkloadActual   4: 131072 op, 601246800.00 ns, 4.5871 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 602446400.00 ns, 4.5963 us/op
+WorkloadResult   2: 131072 op, 597403700.00 ns, 4.5578 us/op
+WorkloadResult   3: 131072 op, 587309400.00 ns, 4.4808 us/op
+WorkloadResult   4: 131072 op, 601044900.00 ns, 4.5856 us/op
+// GC:  642 160 0 10127147008 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 32732 has exited with code 0.
+
+Mean = 4.555 μs, StdErr = 0.026 μs (0.57%), N = 4, StdDev = 0.052 μs
+Min = 4.481 μs, Q1 = 4.539 μs, Median = 4.572 μs, Q3 = 4.588 μs, Max = 4.596 μs
+IQR = 0.050 μs, LowerFence = 4.464 μs, UpperFence = 4.663 μs
+ConfidenceInterval = [4.218 μs; 4.892 μs] (CI 99.9%), Margin = 0.337 μs (7.40% of Mean)
+Skewness = -0.55, Kurtosis = 1.16, MValue = 2
+
+// ** Remained 31 (86.1%) benchmark(s) to run. Estimated finish 2026-09-25 13:58 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37960 37972 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1024, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 5 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 157800.00 ns, 157.8000 us/op
+WorkloadJitting  1: 1 op, 13405200.00 ns, 13.4052 ms/op
+
+OverheadJitting  2: 16 op, 285000.00 ns, 17.8125 us/op
+WorkloadJitting  2: 16 op, 852600.00 ns, 53.2875 us/op
+
+WorkloadPilot    1: 16 op, 486800.00 ns, 30.4250 us/op
+WorkloadPilot    2: 32 op, 902200.00 ns, 28.1938 us/op
+WorkloadPilot    3: 64 op, 2158000.00 ns, 33.7188 us/op
+WorkloadPilot    4: 128 op, 3936100.00 ns, 30.7508 us/op
+WorkloadPilot    5: 256 op, 6896900.00 ns, 26.9410 us/op
+WorkloadPilot    6: 512 op, 8791500.00 ns, 17.1709 us/op
+WorkloadPilot    7: 1024 op, 16546100.00 ns, 16.1583 us/op
+WorkloadPilot    8: 2048 op, 29852900.00 ns, 14.5766 us/op
+WorkloadPilot    9: 4096 op, 64406100.00 ns, 15.7241 us/op
+WorkloadPilot   10: 8192 op, 130375400.00 ns, 15.9150 us/op
+WorkloadPilot   11: 16384 op, 142244900.00 ns, 8.6819 us/op
+WorkloadPilot   12: 32768 op, 135028600.00 ns, 4.1207 us/op
+WorkloadPilot   13: 65536 op, 243840500.00 ns, 3.7207 us/op
+WorkloadPilot   14: 131072 op, 474370100.00 ns, 3.6192 us/op
+WorkloadPilot   15: 262144 op, 956509100.00 ns, 3.6488 us/op
+
+OverheadWarmup   1: 262144 op, 385600.00 ns, 1.4709 ns/op
+OverheadWarmup   2: 262144 op, 384700.00 ns, 1.4675 ns/op
+OverheadWarmup   3: 262144 op, 385900.00 ns, 1.4721 ns/op
+OverheadWarmup   4: 262144 op, 384300.00 ns, 1.4660 ns/op
+OverheadWarmup   5: 262144 op, 417200.00 ns, 1.5915 ns/op
+OverheadWarmup   6: 262144 op, 384300.00 ns, 1.4660 ns/op
+
+OverheadActual   1: 262144 op, 384600.00 ns, 1.4671 ns/op
+OverheadActual   2: 262144 op, 406300.00 ns, 1.5499 ns/op
+OverheadActual   3: 262144 op, 395100.00 ns, 1.5072 ns/op
+OverheadActual   4: 262144 op, 392900.00 ns, 1.4988 ns/op
+OverheadActual   5: 262144 op, 391900.00 ns, 1.4950 ns/op
+OverheadActual   6: 262144 op, 390500.00 ns, 1.4896 ns/op
+OverheadActual   7: 262144 op, 386100.00 ns, 1.4729 ns/op
+OverheadActual   8: 262144 op, 386400.00 ns, 1.4740 ns/op
+OverheadActual   9: 262144 op, 393700.00 ns, 1.5018 ns/op
+OverheadActual  10: 262144 op, 495100.00 ns, 1.8887 ns/op
+OverheadActual  11: 262144 op, 384200.00 ns, 1.4656 ns/op
+OverheadActual  12: 262144 op, 395700.00 ns, 1.5095 ns/op
+OverheadActual  13: 262144 op, 400500.00 ns, 1.5278 ns/op
+OverheadActual  14: 262144 op, 391900.00 ns, 1.4950 ns/op
+OverheadActual  15: 262144 op, 391900.00 ns, 1.4950 ns/op
+
+WorkloadWarmup   1: 262144 op, 969054800.00 ns, 3.6967 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 262144 op, 945293000.00 ns, 3.6060 us/op
+WorkloadActual   2: 262144 op, 944156600.00 ns, 3.6017 us/op
+WorkloadActual   3: 262144 op, 956249900.00 ns, 3.6478 us/op
+WorkloadActual   4: 262144 op, 944099800.00 ns, 3.6015 us/op
+
+// AfterActualRun
+WorkloadResult   1: 262144 op, 944901100.00 ns, 3.6045 us/op
+WorkloadResult   2: 262144 op, 943764700.00 ns, 3.6002 us/op
+WorkloadResult   3: 262144 op, 943707900.00 ns, 3.6000 us/op
+// GC:  1149 287 0 18138267648 262144
+// Threading:  0 0 262144
+
+// AfterAll
+// Benchmark Process 30648 has exited with code 0.
+
+Mean = 3.602 μs, StdErr = 0.001 μs (0.04%), N = 3, StdDev = 0.003 μs
+Min = 3.600 μs, Q1 = 3.600 μs, Median = 3.600 μs, Q3 = 3.602 μs, Max = 3.605 μs
+IQR = 0.002 μs, LowerFence = 3.597 μs, UpperFence = 3.606 μs
+ConfidenceInterval = [3.555 μs; 3.648 μs] (CI 99.9%), Margin = 0.047 μs (1.30% of Mean)
+Skewness = 0.38, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 30 (83.3%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 40208 37920 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 16384, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 6 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 143900.00 ns, 143.9000 us/op
+WorkloadJitting  1: 1 op, 17417200.00 ns, 17.4172 ms/op
+
+OverheadJitting  2: 16 op, 294100.00 ns, 18.3813 us/op
+WorkloadJitting  2: 16 op, 25258000.00 ns, 1.5786 ms/op
+
+WorkloadPilot    1: 16 op, 12870700.00 ns, 804.4188 us/op
+WorkloadPilot    2: 32 op, 25101200.00 ns, 784.4125 us/op
+WorkloadPilot    3: 64 op, 49540500.00 ns, 774.0703 us/op
+WorkloadPilot    4: 128 op, 98382000.00 ns, 768.6094 us/op
+WorkloadPilot    5: 256 op, 163029000.00 ns, 636.8320 us/op
+WorkloadPilot    6: 512 op, 178566600.00 ns, 348.7629 us/op
+WorkloadPilot    7: 1024 op, 186769100.00 ns, 182.3917 us/op
+WorkloadPilot    8: 2048 op, 215227600.00 ns, 105.0916 us/op
+WorkloadPilot    9: 4096 op, 383141900.00 ns, 93.5405 us/op
+WorkloadPilot   10: 8192 op, 748031200.00 ns, 91.3124 us/op
+
+OverheadWarmup   1: 8192 op, 13600.00 ns, 1.6602 ns/op
+OverheadWarmup   2: 8192 op, 12500.00 ns, 1.5259 ns/op
+OverheadWarmup   3: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadWarmup   4: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadWarmup   5: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadWarmup   6: 8192 op, 12600.00 ns, 1.5381 ns/op
+OverheadWarmup   7: 8192 op, 12600.00 ns, 1.5381 ns/op
+
+OverheadActual   1: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadActual   2: 8192 op, 12700.00 ns, 1.5503 ns/op
+OverheadActual   3: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadActual   4: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadActual   5: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadActual   6: 8192 op, 13700.00 ns, 1.6724 ns/op
+OverheadActual   7: 8192 op, 12400.00 ns, 1.5137 ns/op
+OverheadActual   8: 8192 op, 12700.00 ns, 1.5503 ns/op
+OverheadActual   9: 8192 op, 12500.00 ns, 1.5259 ns/op
+OverheadActual  10: 8192 op, 12900.00 ns, 1.5747 ns/op
+OverheadActual  11: 8192 op, 12600.00 ns, 1.5381 ns/op
+OverheadActual  12: 8192 op, 12600.00 ns, 1.5381 ns/op
+OverheadActual  13: 8192 op, 12700.00 ns, 1.5503 ns/op
+OverheadActual  14: 8192 op, 12600.00 ns, 1.5381 ns/op
+OverheadActual  15: 8192 op, 12500.00 ns, 1.5259 ns/op
+
+WorkloadWarmup   1: 8192 op, 768907600.00 ns, 93.8608 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 8192 op, 764449500.00 ns, 93.3166 us/op
+WorkloadActual   2: 8192 op, 751794300.00 ns, 91.7718 us/op
+WorkloadActual   3: 8192 op, 750771600.00 ns, 91.6469 us/op
+WorkloadActual   4: 8192 op, 754850900.00 ns, 92.1449 us/op
+
+// AfterActualRun
+WorkloadResult   1: 8192 op, 764436900.00 ns, 93.3151 us/op
+WorkloadResult   2: 8192 op, 751781700.00 ns, 91.7702 us/op
+WorkloadResult   3: 8192 op, 750759000.00 ns, 91.6454 us/op
+WorkloadResult   4: 8192 op, 754838300.00 ns, 92.1433 us/op
+// GC:  82 13 0 1292566528 8192
+// Threading:  0 0 8192
+
+// AfterAll
+// Benchmark Process 26376 has exited with code 0.
+
+Mean = 92.219 μs, StdErr = 0.381 μs (0.41%), N = 4, StdDev = 0.761 μs
+Min = 91.645 μs, Q1 = 91.739 μs, Median = 91.957 μs, Q3 = 92.436 μs, Max = 93.315 μs
+IQR = 0.697 μs, LowerFence = 90.693 μs, UpperFence = 93.482 μs
+ConfidenceInterval = [87.301 μs; 97.136 μs] (CI 99.9%), Margin = 4.918 μs (5.33% of Mean)
+Skewness = 0.59, Kurtosis = 1.19, MValue = 2
+
+// ** Remained 29 (80.6%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37956 37988 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 16384, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 7 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 144300.00 ns, 144.3000 us/op
+WorkloadJitting  1: 1 op, 15926700.00 ns, 15.9267 ms/op
+
+OverheadJitting  2: 16 op, 254200.00 ns, 15.8875 us/op
+WorkloadJitting  2: 16 op, 22842400.00 ns, 1.4277 ms/op
+
+WorkloadPilot    1: 16 op, 11420900.00 ns, 713.8063 us/op
+WorkloadPilot    2: 32 op, 22242500.00 ns, 695.0781 us/op
+WorkloadPilot    3: 64 op, 45545700.00 ns, 711.6516 us/op
+WorkloadPilot    4: 128 op, 90626200.00 ns, 708.0172 us/op
+WorkloadPilot    5: 256 op, 90764900.00 ns, 354.5504 us/op
+WorkloadPilot    6: 512 op, 127768900.00 ns, 249.5486 us/op
+WorkloadPilot    7: 1024 op, 144877700.00 ns, 141.4821 us/op
+WorkloadPilot    8: 2048 op, 121431500.00 ns, 59.2927 us/op
+WorkloadPilot    9: 4096 op, 202087200.00 ns, 49.3377 us/op
+WorkloadPilot   10: 8192 op, 399620400.00 ns, 48.7818 us/op
+WorkloadPilot   11: 16384 op, 806339300.00 ns, 49.2150 us/op
+
+OverheadWarmup   1: 16384 op, 26100.00 ns, 1.5930 ns/op
+OverheadWarmup   2: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadWarmup   3: 16384 op, 26200.00 ns, 1.5991 ns/op
+OverheadWarmup   4: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadWarmup   5: 16384 op, 25800.00 ns, 1.5747 ns/op
+OverheadWarmup   6: 16384 op, 25300.00 ns, 1.5442 ns/op
+
+OverheadActual   1: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   2: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual   3: 16384 op, 25100.00 ns, 1.5320 ns/op
+OverheadActual   4: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   5: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual   6: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   7: 16384 op, 25500.00 ns, 1.5564 ns/op
+OverheadActual   8: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   9: 16384 op, 26400.00 ns, 1.6113 ns/op
+OverheadActual  10: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  11: 16384 op, 25600.00 ns, 1.5625 ns/op
+OverheadActual  12: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  13: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual  14: 16384 op, 29700.00 ns, 1.8127 ns/op
+OverheadActual  15: 16384 op, 25600.00 ns, 1.5625 ns/op
+
+WorkloadWarmup   1: 16384 op, 813072200.00 ns, 49.6260 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 16384 op, 803285800.00 ns, 49.0287 us/op
+WorkloadActual   2: 16384 op, 806768600.00 ns, 49.2412 us/op
+WorkloadActual   3: 16384 op, 824060800.00 ns, 50.2967 us/op
+WorkloadActual   4: 16384 op, 819337700.00 ns, 50.0084 us/op
+
+// AfterActualRun
+WorkloadResult   1: 16384 op, 803260500.00 ns, 49.0271 us/op
+WorkloadResult   2: 16384 op, 806743300.00 ns, 49.2397 us/op
+WorkloadResult   3: 16384 op, 824035500.00 ns, 50.2951 us/op
+WorkloadResult   4: 16384 op, 819312400.00 ns, 50.0069 us/op
+// GC:  72 0 0 1141374976 16384
+// Threading:  0 0 16384
+
+// AfterAll
+// Benchmark Process 8628 has exited with code 0.
+
+Mean = 49.642 μs, StdErr = 0.303 μs (0.61%), N = 4, StdDev = 0.605 μs
+Min = 49.027 μs, Q1 = 49.187 μs, Median = 49.623 μs, Q3 = 50.079 μs, Max = 50.295 μs
+IQR = 0.892 μs, LowerFence = 47.848 μs, UpperFence = 51.417 μs
+ConfidenceInterval = [45.730 μs; 53.554 μs] (CI 99.9%), Margin = 3.912 μs (7.88% of Mean)
+Skewness = 0.03, Kurtosis = 0.69, MValue = 2
+
+// ** Remained 28 (77.8%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 3m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 2580 40240 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 16384, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 8 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 145600.00 ns, 145.6000 us/op
+WorkloadJitting  1: 1 op, 17139500.00 ns, 17.1395 ms/op
+
+OverheadJitting  2: 16 op, 258800.00 ns, 16.1750 us/op
+WorkloadJitting  2: 16 op, 1609600.00 ns, 100.6000 us/op
+
+WorkloadPilot    1: 16 op, 1183200.00 ns, 73.9500 us/op
+WorkloadPilot    2: 32 op, 2376400.00 ns, 74.2625 us/op
+WorkloadPilot    3: 64 op, 4243700.00 ns, 66.3078 us/op
+WorkloadPilot    4: 128 op, 8113600.00 ns, 63.3875 us/op
+WorkloadPilot    5: 256 op, 12208100.00 ns, 47.6879 us/op
+WorkloadPilot    6: 512 op, 25114700.00 ns, 49.0521 us/op
+WorkloadPilot    7: 1024 op, 49214900.00 ns, 48.0614 us/op
+WorkloadPilot    8: 2048 op, 93639700.00 ns, 45.7225 us/op
+WorkloadPilot    9: 4096 op, 210397200.00 ns, 51.3665 us/op
+WorkloadPilot   10: 8192 op, 274610800.00 ns, 33.5218 us/op
+WorkloadPilot   11: 16384 op, 310634300.00 ns, 18.9596 us/op
+WorkloadPilot   12: 32768 op, 506962600.00 ns, 15.4713 us/op
+
+OverheadWarmup   1: 32768 op, 49700.00 ns, 1.5167 ns/op
+OverheadWarmup   2: 32768 op, 48600.00 ns, 1.4832 ns/op
+OverheadWarmup   3: 32768 op, 50500.00 ns, 1.5411 ns/op
+OverheadWarmup   4: 32768 op, 50500.00 ns, 1.5411 ns/op
+OverheadWarmup   5: 32768 op, 49900.00 ns, 1.5228 ns/op
+OverheadWarmup   6: 32768 op, 48400.00 ns, 1.4771 ns/op
+OverheadWarmup   7: 32768 op, 50700.00 ns, 1.5472 ns/op
+
+OverheadActual   1: 32768 op, 48500.00 ns, 1.4801 ns/op
+OverheadActual   2: 32768 op, 59200.00 ns, 1.8066 ns/op
+OverheadActual   3: 32768 op, 48400.00 ns, 1.4771 ns/op
+OverheadActual   4: 32768 op, 48600.00 ns, 1.4832 ns/op
+OverheadActual   5: 32768 op, 48400.00 ns, 1.4771 ns/op
+OverheadActual   6: 32768 op, 50000.00 ns, 1.5259 ns/op
+OverheadActual   7: 32768 op, 50000.00 ns, 1.5259 ns/op
+OverheadActual   8: 32768 op, 50400.00 ns, 1.5381 ns/op
+OverheadActual   9: 32768 op, 57400.00 ns, 1.7517 ns/op
+OverheadActual  10: 32768 op, 50000.00 ns, 1.5259 ns/op
+OverheadActual  11: 32768 op, 52100.00 ns, 1.5900 ns/op
+OverheadActual  12: 32768 op, 49600.00 ns, 1.5137 ns/op
+OverheadActual  13: 32768 op, 50200.00 ns, 1.5320 ns/op
+OverheadActual  14: 32768 op, 49400.00 ns, 1.5076 ns/op
+OverheadActual  15: 32768 op, 49500.00 ns, 1.5106 ns/op
+
+WorkloadWarmup   1: 32768 op, 521592300.00 ns, 15.9177 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 32768 op, 507041200.00 ns, 15.4737 us/op
+WorkloadActual   2: 32768 op, 503265200.00 ns, 15.3584 us/op
+WorkloadActual   3: 32768 op, 490376600.00 ns, 14.9651 us/op
+WorkloadActual   4: 32768 op, 485168800.00 ns, 14.8062 us/op
+
+// AfterActualRun
+WorkloadResult   1: 32768 op, 506991200.00 ns, 15.4721 us/op
+WorkloadResult   2: 32768 op, 503215200.00 ns, 15.3569 us/op
+WorkloadResult   3: 32768 op, 490326600.00 ns, 14.9636 us/op
+WorkloadResult   4: 32768 op, 485118800.00 ns, 14.8047 us/op
+// GC:  326 81 0 5120720896 32768
+// Threading:  0 0 32768
+
+// AfterAll
+// Benchmark Process 20416 has exited with code 0.
+
+Mean = 15.149 μs, StdErr = 0.158 μs (1.04%), N = 4, StdDev = 0.317 μs
+Min = 14.805 μs, Q1 = 14.924 μs, Median = 15.160 μs, Q3 = 15.386 μs, Max = 15.472 μs
+IQR = 0.462 μs, LowerFence = 14.231 μs, UpperFence = 16.079 μs
+ConfidenceInterval = [13.104 μs; 17.195 μs] (CI 99.9%), Margin = 2.046 μs (13.50% of Mean)
+Skewness = -0.04, Kurtosis = 0.7, MValue = 2
+
+// ** Remained 27 (75.0%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 38004 2684 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 16384, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 9 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 143500.00 ns, 143.5000 us/op
+WorkloadJitting  1: 1 op, 15425400.00 ns, 15.4254 ms/op
+
+OverheadJitting  2: 16 op, 283400.00 ns, 17.7125 us/op
+WorkloadJitting  2: 16 op, 1154500.00 ns, 72.1563 us/op
+
+WorkloadPilot    1: 16 op, 702800.00 ns, 43.9250 us/op
+WorkloadPilot    2: 32 op, 1306200.00 ns, 40.8188 us/op
+WorkloadPilot    3: 64 op, 3143700.00 ns, 49.1203 us/op
+WorkloadPilot    4: 128 op, 5570400.00 ns, 43.5188 us/op
+WorkloadPilot    5: 256 op, 10554800.00 ns, 41.2297 us/op
+WorkloadPilot    6: 512 op, 16258900.00 ns, 31.7557 us/op
+WorkloadPilot    7: 1024 op, 30584500.00 ns, 29.8677 us/op
+WorkloadPilot    8: 2048 op, 57787000.00 ns, 28.2163 us/op
+WorkloadPilot    9: 4096 op, 120118800.00 ns, 29.3259 us/op
+WorkloadPilot   10: 8192 op, 252240100.00 ns, 30.7910 us/op
+WorkloadPilot   11: 16384 op, 189432700.00 ns, 11.5621 us/op
+WorkloadPilot   12: 32768 op, 200509400.00 ns, 6.1191 us/op
+WorkloadPilot   13: 65536 op, 382969100.00 ns, 5.8436 us/op
+WorkloadPilot   14: 131072 op, 761635600.00 ns, 5.8108 us/op
+
+OverheadWarmup   1: 131072 op, 199100.00 ns, 1.5190 ns/op
+OverheadWarmup   2: 131072 op, 196500.00 ns, 1.4992 ns/op
+OverheadWarmup   3: 131072 op, 205200.00 ns, 1.5656 ns/op
+OverheadWarmup   4: 131072 op, 195500.00 ns, 1.4915 ns/op
+OverheadWarmup   5: 131072 op, 196300.00 ns, 1.4977 ns/op
+OverheadWarmup   6: 131072 op, 206900.00 ns, 1.5785 ns/op
+OverheadWarmup   7: 131072 op, 197300.00 ns, 1.5053 ns/op
+
+OverheadActual   1: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadActual   2: 131072 op, 196300.00 ns, 1.4977 ns/op
+OverheadActual   3: 131072 op, 224600.00 ns, 1.7136 ns/op
+OverheadActual   4: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadActual   5: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadActual   6: 131072 op, 198500.00 ns, 1.5144 ns/op
+OverheadActual   7: 131072 op, 205500.00 ns, 1.5678 ns/op
+OverheadActual   8: 131072 op, 203900.00 ns, 1.5556 ns/op
+OverheadActual   9: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual  10: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual  11: 131072 op, 203500.00 ns, 1.5526 ns/op
+OverheadActual  12: 131072 op, 195600.00 ns, 1.4923 ns/op
+OverheadActual  13: 131072 op, 195700.00 ns, 1.4931 ns/op
+OverheadActual  14: 131072 op, 203300.00 ns, 1.5511 ns/op
+OverheadActual  15: 131072 op, 195700.00 ns, 1.4931 ns/op
+
+WorkloadWarmup   1: 131072 op, 766677500.00 ns, 5.8493 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 815527000.00 ns, 6.2220 us/op
+WorkloadActual   2: 131072 op, 768187400.00 ns, 5.8608 us/op
+WorkloadActual   3: 131072 op, 788769200.00 ns, 6.0178 us/op
+WorkloadActual   4: 131072 op, 768556500.00 ns, 5.8636 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 815330600.00 ns, 6.2205 us/op
+WorkloadResult   2: 131072 op, 767991000.00 ns, 5.8593 us/op
+WorkloadResult   3: 131072 op, 788572800.00 ns, 6.0163 us/op
+WorkloadResult   4: 131072 op, 768360100.00 ns, 5.8621 us/op
+// GC:  595 7 0 9383706624 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 20976 has exited with code 0.
+
+Mean = 5.990 μs, StdErr = 0.085 μs (1.42%), N = 4, StdDev = 0.171 μs
+Min = 5.859 μs, Q1 = 5.861 μs, Median = 5.939 μs, Q3 = 6.067 μs, Max = 6.220 μs
+IQR = 0.206 μs, LowerFence = 5.552 μs, UpperFence = 6.376 μs
+ConfidenceInterval = [4.888 μs; 7.092 μs] (CI 99.9%), Margin = 1.102 μs (18.40% of Mean)
+Skewness = 0.41, Kurtosis = 1, MValue = 2
+
+// ** Remained 26 (72.2%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37948 37364 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 16384, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 10 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 173200.00 ns, 173.2000 us/op
+WorkloadJitting  1: 1 op, 17183900.00 ns, 17.1839 ms/op
+
+OverheadJitting  2: 16 op, 342500.00 ns, 21.4063 us/op
+WorkloadJitting  2: 16 op, 1440800.00 ns, 90.0500 us/op
+
+WorkloadPilot    1: 16 op, 1327400.00 ns, 82.9625 us/op
+WorkloadPilot    2: 32 op, 2014200.00 ns, 62.9438 us/op
+WorkloadPilot    3: 64 op, 3786700.00 ns, 59.1672 us/op
+WorkloadPilot    4: 128 op, 6751000.00 ns, 52.7422 us/op
+WorkloadPilot    5: 256 op, 9865300.00 ns, 38.5363 us/op
+WorkloadPilot    6: 512 op, 18400900.00 ns, 35.9393 us/op
+WorkloadPilot    7: 1024 op, 35256000.00 ns, 34.4297 us/op
+WorkloadPilot    8: 2048 op, 67724900.00 ns, 33.0688 us/op
+WorkloadPilot    9: 4096 op, 149385500.00 ns, 36.4711 us/op
+WorkloadPilot   10: 8192 op, 275494200.00 ns, 33.6297 us/op
+WorkloadPilot   11: 16384 op, 253279600.00 ns, 15.4590 us/op
+WorkloadPilot   12: 32768 op, 449642400.00 ns, 13.7220 us/op
+WorkloadPilot   13: 65536 op, 881420600.00 ns, 13.4494 us/op
+
+OverheadWarmup   1: 65536 op, 99600.00 ns, 1.5198 ns/op
+OverheadWarmup   2: 65536 op, 98600.00 ns, 1.5045 ns/op
+OverheadWarmup   3: 65536 op, 99600.00 ns, 1.5198 ns/op
+OverheadWarmup   4: 65536 op, 99400.00 ns, 1.5167 ns/op
+OverheadWarmup   5: 65536 op, 99900.00 ns, 1.5244 ns/op
+OverheadWarmup   6: 65536 op, 99800.00 ns, 1.5228 ns/op
+
+OverheadActual   1: 65536 op, 98500.00 ns, 1.5030 ns/op
+OverheadActual   2: 65536 op, 100500.00 ns, 1.5335 ns/op
+OverheadActual   3: 65536 op, 98500.00 ns, 1.5030 ns/op
+OverheadActual   4: 65536 op, 98400.00 ns, 1.5015 ns/op
+OverheadActual   5: 65536 op, 98400.00 ns, 1.5015 ns/op
+OverheadActual   6: 65536 op, 109600.00 ns, 1.6724 ns/op
+OverheadActual   7: 65536 op, 100300.00 ns, 1.5305 ns/op
+OverheadActual   8: 65536 op, 98900.00 ns, 1.5091 ns/op
+OverheadActual   9: 65536 op, 100300.00 ns, 1.5305 ns/op
+OverheadActual  10: 65536 op, 99900.00 ns, 1.5244 ns/op
+OverheadActual  11: 65536 op, 108000.00 ns, 1.6479 ns/op
+OverheadActual  12: 65536 op, 99100.00 ns, 1.5121 ns/op
+OverheadActual  13: 65536 op, 98000.00 ns, 1.4954 ns/op
+OverheadActual  14: 65536 op, 99100.00 ns, 1.5121 ns/op
+OverheadActual  15: 65536 op, 100000.00 ns, 1.5259 ns/op
+
+WorkloadWarmup   1: 65536 op, 892348200.00 ns, 13.6162 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 65536 op, 881938500.00 ns, 13.4573 us/op
+WorkloadActual   2: 65536 op, 895176500.00 ns, 13.6593 us/op
+WorkloadActual   3: 65536 op, 892817600.00 ns, 13.6233 us/op
+WorkloadActual   4: 65536 op, 878406900.00 ns, 13.4034 us/op
+
+// AfterActualRun
+WorkloadResult   1: 65536 op, 881839400.00 ns, 13.4558 us/op
+WorkloadResult   2: 65536 op, 895077400.00 ns, 13.6578 us/op
+WorkloadResult   3: 65536 op, 892718500.00 ns, 13.6218 us/op
+WorkloadResult   4: 65536 op, 878307800.00 ns, 13.4019 us/op
+// GC:  642 160 0 10127671296 65536
+// Threading:  0 0 65536
+
+// AfterAll
+// Benchmark Process 33716 has exited with code 0.
+
+Mean = 13.534 μs, StdErr = 0.062 μs (0.46%), N = 4, StdDev = 0.125 μs
+Min = 13.402 μs, Q1 = 13.442 μs, Median = 13.539 μs, Q3 = 13.631 μs, Max = 13.658 μs
+IQR = 0.188 μs, LowerFence = 13.160 μs, UpperFence = 13.914 μs
+ConfidenceInterval = [12.729 μs; 14.340 μs] (CI 99.9%), Margin = 0.805 μs (5.95% of Mean)
+Skewness = -0.03, Kurtosis = 0.66, MValue = 2
+
+// ** Remained 25 (69.4%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37348 37372 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 16384, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 11 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 147300.00 ns, 147.3000 us/op
+WorkloadJitting  1: 1 op, 15249900.00 ns, 15.2499 ms/op
+
+OverheadJitting  2: 16 op, 263500.00 ns, 16.4688 us/op
+WorkloadJitting  2: 16 op, 876900.00 ns, 54.8063 us/op
+
+WorkloadPilot    1: 16 op, 516000.00 ns, 32.2500 us/op
+WorkloadPilot    2: 32 op, 892500.00 ns, 27.8906 us/op
+WorkloadPilot    3: 64 op, 2335300.00 ns, 36.4891 us/op
+WorkloadPilot    4: 128 op, 3938100.00 ns, 30.7664 us/op
+WorkloadPilot    5: 256 op, 7682400.00 ns, 30.0094 us/op
+WorkloadPilot    6: 512 op, 10884000.00 ns, 21.2578 us/op
+WorkloadPilot    7: 1024 op, 20840200.00 ns, 20.3518 us/op
+WorkloadPilot    8: 2048 op, 40627000.00 ns, 19.8374 us/op
+WorkloadPilot    9: 4096 op, 76868200.00 ns, 18.7667 us/op
+WorkloadPilot   10: 8192 op, 174032800.00 ns, 21.2442 us/op
+WorkloadPilot   11: 16384 op, 270143200.00 ns, 16.4882 us/op
+WorkloadPilot   12: 32768 op, 205855300.00 ns, 6.2822 us/op
+WorkloadPilot   13: 65536 op, 338395200.00 ns, 5.1635 us/op
+WorkloadPilot   14: 131072 op, 671164000.00 ns, 5.1206 us/op
+
+OverheadWarmup   1: 131072 op, 193500.00 ns, 1.4763 ns/op
+OverheadWarmup   2: 131072 op, 196700.00 ns, 1.5007 ns/op
+OverheadWarmup   3: 131072 op, 208400.00 ns, 1.5900 ns/op
+OverheadWarmup   4: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadWarmup   5: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadWarmup   6: 131072 op, 207300.00 ns, 1.5816 ns/op
+
+OverheadActual   1: 131072 op, 196700.00 ns, 1.5007 ns/op
+OverheadActual   2: 131072 op, 196700.00 ns, 1.5007 ns/op
+OverheadActual   3: 131072 op, 206900.00 ns, 1.5785 ns/op
+OverheadActual   4: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadActual   5: 131072 op, 196700.00 ns, 1.5007 ns/op
+OverheadActual   6: 131072 op, 206400.00 ns, 1.5747 ns/op
+OverheadActual   7: 131072 op, 196300.00 ns, 1.4977 ns/op
+OverheadActual   8: 131072 op, 212000.00 ns, 1.6174 ns/op
+OverheadActual   9: 131072 op, 206500.00 ns, 1.5755 ns/op
+OverheadActual  10: 131072 op, 209900.00 ns, 1.6014 ns/op
+OverheadActual  11: 131072 op, 196400.00 ns, 1.4984 ns/op
+OverheadActual  12: 131072 op, 205000.00 ns, 1.5640 ns/op
+OverheadActual  13: 131072 op, 196600.00 ns, 1.4999 ns/op
+OverheadActual  14: 131072 op, 196700.00 ns, 1.5007 ns/op
+OverheadActual  15: 131072 op, 196900.00 ns, 1.5022 ns/op
+
+WorkloadWarmup   1: 131072 op, 712787100.00 ns, 5.4381 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 131072 op, 652302800.00 ns, 4.9767 us/op
+WorkloadActual   2: 131072 op, 644197200.00 ns, 4.9148 us/op
+WorkloadActual   3: 131072 op, 642543500.00 ns, 4.9022 us/op
+WorkloadActual   4: 131072 op, 649956300.00 ns, 4.9588 us/op
+
+// AfterActualRun
+WorkloadResult   1: 131072 op, 652106100.00 ns, 4.9752 us/op
+WorkloadResult   2: 131072 op, 644000500.00 ns, 4.9133 us/op
+WorkloadResult   3: 131072 op, 642346800.00 ns, 4.9007 us/op
+WorkloadResult   4: 131072 op, 649759600.00 ns, 4.9573 us/op
+// GC:  579 2 0 9130999808 131072
+// Threading:  0 0 131072
+
+// AfterAll
+// Benchmark Process 9364 has exited with code 0.
+
+Mean = 4.937 μs, StdErr = 0.018 μs (0.36%), N = 4, StdDev = 0.035 μs
+Min = 4.901 μs, Q1 = 4.910 μs, Median = 4.935 μs, Q3 = 4.962 μs, Max = 4.975 μs
+IQR = 0.052 μs, LowerFence = 4.833 μs, UpperFence = 5.039 μs
+ConfidenceInterval = [4.708 μs; 5.165 μs] (CI 99.9%), Margin = 0.228 μs (4.62% of Mean)
+Skewness = 0.04, Kurtosis = 0.7, MValue = 2
+
+// ** Remained 24 (66.7%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 2504 37356 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 65536, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 12 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 164600.00 ns, 164.6000 us/op
+WorkloadJitting  1: 1 op, 19812900.00 ns, 19.8129 ms/op
+
+OverheadJitting  2: 16 op, 259300.00 ns, 16.2063 us/op
+WorkloadJitting  2: 16 op, 59233500.00 ns, 3.7021 ms/op
+
+WorkloadPilot    1: 16 op, 45999800.00 ns, 2.8750 ms/op
+WorkloadPilot    2: 32 op, 89670700.00 ns, 2.8022 ms/op
+WorkloadPilot    3: 64 op, 155608500.00 ns, 2.4314 ms/op
+WorkloadPilot    4: 128 op, 127682400.00 ns, 997.5188 us/op
+WorkloadPilot    5: 256 op, 119538400.00 ns, 466.9469 us/op
+WorkloadPilot    6: 512 op, 232565900.00 ns, 454.2303 us/op
+WorkloadPilot    7: 1024 op, 388508300.00 ns, 379.4026 us/op
+WorkloadPilot    8: 2048 op, 729524800.00 ns, 356.2133 us/op
+
+OverheadWarmup   1: 2048 op, 4500.00 ns, 2.1973 ns/op
+OverheadWarmup   2: 2048 op, 3900.00 ns, 1.9043 ns/op
+OverheadWarmup   3: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadWarmup   4: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadWarmup   5: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadWarmup   6: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadWarmup   7: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadWarmup   8: 2048 op, 3400.00 ns, 1.6602 ns/op
+
+OverheadActual   1: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   2: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   3: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual   4: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual   5: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   6: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   7: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual   8: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual   9: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  10: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  11: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual  12: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  13: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  14: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  15: 2048 op, 3600.00 ns, 1.7578 ns/op
+
+WorkloadWarmup   1: 2048 op, 731119700.00 ns, 356.9920 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 2048 op, 729739000.00 ns, 356.3179 us/op
+WorkloadActual   2: 2048 op, 729779700.00 ns, 356.3377 us/op
+WorkloadActual   3: 2048 op, 728553800.00 ns, 355.7392 us/op
+WorkloadActual   4: 2048 op, 724885000.00 ns, 353.9478 us/op
+
+// AfterActualRun
+WorkloadResult   1: 2048 op, 729735600.00 ns, 356.3162 us/op
+WorkloadResult   2: 2048 op, 729776300.00 ns, 356.3361 us/op
+WorkloadResult   3: 2048 op, 728550400.00 ns, 355.7375 us/op
+WorkloadResult   4: 2048 op, 724881600.00 ns, 353.9461 us/op
+// GC:  53 10 0 850018304 2048
+// Threading:  0 0 2048
+
+// AfterAll
+// Benchmark Process 21808 has exited with code 0.
+
+Mean = 355.584 μs, StdErr = 0.563 μs (0.16%), N = 4, StdDev = 1.127 μs
+Min = 353.946 μs, Q1 = 355.290 μs, Median = 356.027 μs, Q3 = 356.321 μs, Max = 356.336 μs
+IQR = 1.032 μs, LowerFence = 353.742 μs, UpperFence = 357.868 μs
+ConfidenceInterval = [348.304 μs; 362.864 μs] (CI 99.9%), Margin = 7.280 μs (2.05% of Mean)
+Skewness = -0.62, Kurtosis = 1.21, MValue = 2
+
+// ** Remained 23 (63.9%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 40164 37508 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 65536, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 13 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 163000.00 ns, 163.0000 us/op
+WorkloadJitting  1: 1 op, 18198300.00 ns, 18.1983 ms/op
+
+OverheadJitting  2: 16 op, 269800.00 ns, 16.8625 us/op
+WorkloadJitting  2: 16 op, 54211700.00 ns, 3.3882 ms/op
+
+WorkloadPilot    1: 16 op, 42333200.00 ns, 2.6458 ms/op
+WorkloadPilot    2: 32 op, 84574000.00 ns, 2.6429 ms/op
+WorkloadPilot    3: 64 op, 72639000.00 ns, 1.1350 ms/op
+WorkloadPilot    4: 128 op, 78982000.00 ns, 617.0469 us/op
+WorkloadPilot    5: 256 op, 100703200.00 ns, 393.3719 us/op
+WorkloadPilot    6: 512 op, 158096600.00 ns, 308.7824 us/op
+WorkloadPilot    7: 1024 op, 244417000.00 ns, 238.6885 us/op
+WorkloadPilot    8: 2048 op, 466991600.00 ns, 228.0232 us/op
+WorkloadPilot    9: 4096 op, 935375900.00 ns, 228.3633 us/op
+
+OverheadWarmup   1: 4096 op, 8000.00 ns, 1.9531 ns/op
+OverheadWarmup   2: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadWarmup   3: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadWarmup   4: 4096 op, 6800.00 ns, 1.6602 ns/op
+OverheadWarmup   5: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadWarmup   6: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadWarmup   7: 4096 op, 6600.00 ns, 1.6113 ns/op
+
+OverheadActual   1: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   2: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   3: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadActual   4: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadActual   5: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   6: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadActual   7: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadActual   8: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   9: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual  10: 4096 op, 7000.00 ns, 1.7090 ns/op
+OverheadActual  11: 4096 op, 6700.00 ns, 1.6357 ns/op
+OverheadActual  12: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  13: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual  14: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  15: 4096 op, 6600.00 ns, 1.6113 ns/op
+
+WorkloadWarmup   1: 4096 op, 930645200.00 ns, 227.2083 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 4096 op, 935590700.00 ns, 228.4157 us/op
+WorkloadActual   2: 4096 op, 935395800.00 ns, 228.3681 us/op
+WorkloadActual   3: 4096 op, 930413900.00 ns, 227.1518 us/op
+WorkloadActual   4: 4096 op, 935665000.00 ns, 228.4338 us/op
+
+// AfterActualRun
+WorkloadResult   1: 4096 op, 935584100.00 ns, 228.4141 us/op
+WorkloadResult   2: 4096 op, 935389200.00 ns, 228.3665 us/op
+WorkloadResult   3: 4096 op, 930407300.00 ns, 227.1502 us/op
+WorkloadResult   4: 4096 op, 935658400.00 ns, 228.4322 us/op
+// GC:  170 170 170 829308480 4096
+// Threading:  0 0 4096
+
+// AfterAll
+// Benchmark Process 33980 has exited with code 0.
+
+Mean = 228.091 μs, StdErr = 0.314 μs (0.14%), N = 4, StdDev = 0.628 μs
+Min = 227.150 μs, Q1 = 228.062 μs, Median = 228.390 μs, Q3 = 228.419 μs, Max = 228.432 μs
+IQR = 0.356 μs, LowerFence = 227.528 μs, UpperFence = 228.953 μs
+ConfidenceInterval = [224.035 μs; 232.147 μs] (CI 99.9%), Margin = 4.056 μs (1.78% of Mean)
+Skewness = -0.75, Kurtosis = 1.31, MValue = 2
+
+// ** Remained 22 (61.1%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 20792 37292 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 65536, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 14 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 150100.00 ns, 150.1000 us/op
+WorkloadJitting  1: 1 op, 17449800.00 ns, 17.4498 ms/op
+
+OverheadJitting  2: 16 op, 282800.00 ns, 17.6750 us/op
+WorkloadJitting  2: 16 op, 3380000.00 ns, 211.2500 us/op
+
+WorkloadPilot    1: 16 op, 2323500.00 ns, 145.2188 us/op
+WorkloadPilot    2: 32 op, 5374800.00 ns, 167.9625 us/op
+WorkloadPilot    3: 64 op, 7619600.00 ns, 119.0563 us/op
+WorkloadPilot    4: 128 op, 12562100.00 ns, 98.1414 us/op
+WorkloadPilot    5: 256 op, 23076800.00 ns, 90.1438 us/op
+WorkloadPilot    6: 512 op, 45865200.00 ns, 89.5805 us/op
+WorkloadPilot    7: 1024 op, 90291900.00 ns, 88.1757 us/op
+WorkloadPilot    8: 2048 op, 192611300.00 ns, 94.0485 us/op
+WorkloadPilot    9: 4096 op, 300191200.00 ns, 73.2889 us/op
+WorkloadPilot   10: 8192 op, 415887700.00 ns, 50.7675 us/op
+WorkloadPilot   11: 16384 op, 764526300.00 ns, 46.6630 us/op
+
+OverheadWarmup   1: 16384 op, 26000.00 ns, 1.5869 ns/op
+OverheadWarmup   2: 16384 op, 24600.00 ns, 1.5015 ns/op
+OverheadWarmup   3: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadWarmup   4: 16384 op, 38500.00 ns, 2.3499 ns/op
+OverheadWarmup   5: 16384 op, 25100.00 ns, 1.5320 ns/op
+OverheadWarmup   6: 16384 op, 38400.00 ns, 2.3438 ns/op
+OverheadWarmup   7: 16384 op, 37000.00 ns, 2.2583 ns/op
+
+OverheadActual   1: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadActual   2: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   3: 16384 op, 24500.00 ns, 1.4954 ns/op
+OverheadActual   4: 16384 op, 36900.00 ns, 2.2522 ns/op
+OverheadActual   5: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadActual   6: 16384 op, 24600.00 ns, 1.5015 ns/op
+OverheadActual   7: 16384 op, 36700.00 ns, 2.2400 ns/op
+OverheadActual   8: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadActual   9: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual  10: 16384 op, 25000.00 ns, 1.5259 ns/op
+OverheadActual  11: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual  12: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual  13: 16384 op, 25000.00 ns, 1.5259 ns/op
+OverheadActual  14: 16384 op, 25100.00 ns, 1.5320 ns/op
+OverheadActual  15: 16384 op, 24900.00 ns, 1.5198 ns/op
+
+WorkloadWarmup   1: 16384 op, 778302100.00 ns, 47.5038 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 16384 op, 769368400.00 ns, 46.9585 us/op
+WorkloadActual   2: 16384 op, 764138400.00 ns, 46.6393 us/op
+WorkloadActual   3: 16384 op, 770311400.00 ns, 47.0161 us/op
+WorkloadActual   4: 16384 op, 776939000.00 ns, 47.4206 us/op
+
+// AfterActualRun
+WorkloadResult   1: 16384 op, 769343500.00 ns, 46.9570 us/op
+WorkloadResult   2: 16384 op, 764113500.00 ns, 46.6378 us/op
+WorkloadResult   3: 16384 op, 770286500.00 ns, 47.0146 us/op
+WorkloadResult   4: 16384 op, 776914100.00 ns, 47.4191 us/op
+// GC:  420 3 0 6612844544 16384
+// Threading:  0 0 16384
+
+// AfterAll
+// Benchmark Process 29680 has exited with code 0.
+
+Mean = 47.007 μs, StdErr = 0.160 μs (0.34%), N = 4, StdDev = 0.321 μs
+Min = 46.638 μs, Q1 = 46.877 μs, Median = 46.986 μs, Q3 = 47.116 μs, Max = 47.419 μs
+IQR = 0.238 μs, LowerFence = 46.519 μs, UpperFence = 47.473 μs
+ConfidenceInterval = [44.934 μs; 49.080 μs] (CI 99.9%), Margin = 2.073 μs (4.41% of Mean)
+Skewness = 0.15, Kurtosis = 1.12, MValue = 2
+
+// ** Remained 21 (58.3%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37252 37336 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 65536, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 15 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 155800.00 ns, 155.8000 us/op
+WorkloadJitting  1: 1 op, 15629900.00 ns, 15.6299 ms/op
+
+OverheadJitting  2: 16 op, 280300.00 ns, 17.5188 us/op
+WorkloadJitting  2: 16 op, 1643200.00 ns, 102.7000 us/op
+
+WorkloadPilot    1: 16 op, 1194200.00 ns, 74.6375 us/op
+WorkloadPilot    2: 32 op, 2722200.00 ns, 85.0688 us/op
+WorkloadPilot    3: 64 op, 5162500.00 ns, 80.6641 us/op
+WorkloadPilot    4: 128 op, 10381500.00 ns, 81.1055 us/op
+WorkloadPilot    5: 256 op, 19472200.00 ns, 76.0633 us/op
+WorkloadPilot    6: 512 op, 40104000.00 ns, 78.3281 us/op
+WorkloadPilot    7: 1024 op, 80167500.00 ns, 78.2886 us/op
+WorkloadPilot    8: 2048 op, 159297600.00 ns, 77.7820 us/op
+WorkloadPilot    9: 4096 op, 305343600.00 ns, 74.5468 us/op
+WorkloadPilot   10: 8192 op, 421378900.00 ns, 51.4379 us/op
+WorkloadPilot   11: 16384 op, 772354100.00 ns, 47.1408 us/op
+
+OverheadWarmup   1: 16384 op, 26500.00 ns, 1.6174 ns/op
+OverheadWarmup   2: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadWarmup   3: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadWarmup   4: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadWarmup   5: 16384 op, 25500.00 ns, 1.5564 ns/op
+OverheadWarmup   6: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadWarmup   7: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadWarmup   8: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadWarmup   9: 16384 op, 25500.00 ns, 1.5564 ns/op
+
+OverheadActual   1: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   2: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadActual   3: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadActual   4: 16384 op, 25500.00 ns, 1.5564 ns/op
+OverheadActual   5: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   6: 16384 op, 35700.00 ns, 2.1790 ns/op
+OverheadActual   7: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual   8: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadActual   9: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual  10: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadActual  11: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual  12: 16384 op, 25500.00 ns, 1.5564 ns/op
+OverheadActual  13: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual  14: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual  15: 16384 op, 25300.00 ns, 1.5442 ns/op
+
+WorkloadWarmup   1: 16384 op, 766094700.00 ns, 46.7587 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 16384 op, 769650500.00 ns, 46.9757 us/op
+WorkloadActual   2: 16384 op, 764480100.00 ns, 46.6602 us/op
+WorkloadActual   3: 16384 op, 770499000.00 ns, 47.0275 us/op
+WorkloadActual   4: 16384 op, 770187400.00 ns, 47.0085 us/op
+
+// AfterActualRun
+WorkloadResult   1: 16384 op, 769625200.00 ns, 46.9742 us/op
+WorkloadResult   2: 16384 op, 764454800.00 ns, 46.6586 us/op
+WorkloadResult   3: 16384 op, 770473700.00 ns, 47.0260 us/op
+WorkloadResult   4: 16384 op, 770162100.00 ns, 47.0070 us/op
+// GC:  682 682 682 3347250752 16384
+// Threading:  0 0 16384
+
+// AfterAll
+// Benchmark Process 22120 has exited with code 0.
+
+Mean = 46.916 μs, StdErr = 0.087 μs (0.18%), N = 4, StdDev = 0.173 μs
+Min = 46.659 μs, Q1 = 46.895 μs, Median = 46.991 μs, Q3 = 47.012 μs, Max = 47.026 μs
+IQR = 0.116 μs, LowerFence = 46.721 μs, UpperFence = 47.186 μs
+ConfidenceInterval = [45.797 μs; 48.036 μs] (CI 99.9%), Margin = 1.119 μs (2.39% of Mean)
+Skewness = -0.72, Kurtosis = 1.29, MValue = 2
+
+// ** Remained 20 (55.6%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37208 37212 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 65536, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 16 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 151500.00 ns, 151.5000 us/op
+WorkloadJitting  1: 1 op, 16792900.00 ns, 16.7929 ms/op
+
+OverheadJitting  2: 16 op, 263600.00 ns, 16.4750 us/op
+WorkloadJitting  2: 16 op, 3497600.00 ns, 218.6000 us/op
+
+WorkloadPilot    1: 16 op, 2491800.00 ns, 155.7375 us/op
+WorkloadPilot    2: 32 op, 5115400.00 ns, 159.8563 us/op
+WorkloadPilot    3: 64 op, 7208900.00 ns, 112.6391 us/op
+WorkloadPilot    4: 128 op, 11743000.00 ns, 91.7422 us/op
+WorkloadPilot    5: 256 op, 20633400.00 ns, 80.5992 us/op
+WorkloadPilot    6: 512 op, 41831300.00 ns, 81.7018 us/op
+WorkloadPilot    7: 1024 op, 77623400.00 ns, 75.8041 us/op
+WorkloadPilot    8: 2048 op, 169328400.00 ns, 82.6799 us/op
+WorkloadPilot    9: 4096 op, 288279300.00 ns, 70.3807 us/op
+WorkloadPilot   10: 8192 op, 381554300.00 ns, 46.5765 us/op
+WorkloadPilot   11: 16384 op, 736055200.00 ns, 44.9252 us/op
+
+OverheadWarmup   1: 16384 op, 26200.00 ns, 1.5991 ns/op
+OverheadWarmup   2: 16384 op, 24700.00 ns, 1.5076 ns/op
+OverheadWarmup   3: 16384 op, 24700.00 ns, 1.5076 ns/op
+OverheadWarmup   4: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadWarmup   5: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadWarmup   6: 16384 op, 59200.00 ns, 3.6133 ns/op
+OverheadWarmup   7: 16384 op, 26000.00 ns, 1.5869 ns/op
+OverheadWarmup   8: 16384 op, 39300.00 ns, 2.3987 ns/op
+
+OverheadActual   1: 16384 op, 25300.00 ns, 1.5442 ns/op
+OverheadActual   2: 16384 op, 24700.00 ns, 1.5076 ns/op
+OverheadActual   3: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   4: 16384 op, 24700.00 ns, 1.5076 ns/op
+OverheadActual   5: 16384 op, 25100.00 ns, 1.5320 ns/op
+OverheadActual   6: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   7: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   8: 16384 op, 26100.00 ns, 1.5930 ns/op
+OverheadActual   9: 16384 op, 25100.00 ns, 1.5320 ns/op
+OverheadActual  10: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual  11: 16384 op, 26300.00 ns, 1.6052 ns/op
+OverheadActual  12: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual  13: 16384 op, 25700.00 ns, 1.5686 ns/op
+OverheadActual  14: 16384 op, 25400.00 ns, 1.5503 ns/op
+OverheadActual  15: 16384 op, 25400.00 ns, 1.5503 ns/op
+
+WorkloadWarmup   1: 16384 op, 748561200.00 ns, 45.6885 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 16384 op, 760488100.00 ns, 46.4165 us/op
+WorkloadActual   2: 16384 op, 755691900.00 ns, 46.1238 us/op
+WorkloadActual   3: 16384 op, 751138200.00 ns, 45.8458 us/op
+WorkloadActual   4: 16384 op, 753743400.00 ns, 46.0048 us/op
+
+// AfterActualRun
+WorkloadResult   1: 16384 op, 760462900.00 ns, 46.4150 us/op
+WorkloadResult   2: 16384 op, 755666700.00 ns, 46.1222 us/op
+WorkloadResult   3: 16384 op, 751113000.00 ns, 45.8443 us/op
+WorkloadResult   4: 16384 op, 753718200.00 ns, 46.0033 us/op
+// GC:  418 139 0 6584401920 16384
+// Threading:  0 0 16384
+
+// AfterAll
+// Benchmark Process 25512 has exited with code 0.
+
+Mean = 46.096 μs, StdErr = 0.121 μs (0.26%), N = 4, StdDev = 0.241 μs
+Min = 45.844 μs, Q1 = 45.964 μs, Median = 46.063 μs, Q3 = 46.195 μs, Max = 46.415 μs
+IQR = 0.232 μs, LowerFence = 45.616 μs, UpperFence = 46.543 μs
+ConfidenceInterval = [44.538 μs; 47.654 μs] (CI 99.9%), Margin = 1.558 μs (3.38% of Mean)
+Skewness = 0.28, Kurtosis = 1.07, MValue = 2
+
+// ** Remained 19 (52.8%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 2m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37192 37200 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 65536, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 17 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 155400.00 ns, 155.4000 us/op
+WorkloadJitting  1: 1 op, 15319500.00 ns, 15.3195 ms/op
+
+OverheadJitting  2: 16 op, 295900.00 ns, 18.4938 us/op
+WorkloadJitting  2: 16 op, 1449500.00 ns, 90.5938 us/op
+
+WorkloadPilot    1: 16 op, 1009900.00 ns, 63.1188 us/op
+WorkloadPilot    2: 32 op, 2307700.00 ns, 72.1156 us/op
+WorkloadPilot    3: 64 op, 4548700.00 ns, 71.0734 us/op
+WorkloadPilot    4: 128 op, 8824900.00 ns, 68.9445 us/op
+WorkloadPilot    5: 256 op, 17356600.00 ns, 67.7992 us/op
+WorkloadPilot    6: 512 op, 35243000.00 ns, 68.8340 us/op
+WorkloadPilot    7: 1024 op, 69290100.00 ns, 67.6661 us/op
+WorkloadPilot    8: 2048 op, 139728000.00 ns, 68.2266 us/op
+WorkloadPilot    9: 4096 op, 276833500.00 ns, 67.5863 us/op
+WorkloadPilot   10: 8192 op, 418708900.00 ns, 51.1119 us/op
+WorkloadPilot   11: 16384 op, 751389400.00 ns, 45.8612 us/op
+
+OverheadWarmup   1: 16384 op, 26000.00 ns, 1.5869 ns/op
+OverheadWarmup   2: 16384 op, 25800.00 ns, 1.5747 ns/op
+OverheadWarmup   3: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadWarmup   4: 16384 op, 25700.00 ns, 1.5686 ns/op
+OverheadWarmup   5: 16384 op, 26000.00 ns, 1.5869 ns/op
+OverheadWarmup   6: 16384 op, 25900.00 ns, 1.5808 ns/op
+OverheadWarmup   7: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadWarmup   8: 16384 op, 25500.00 ns, 1.5564 ns/op
+OverheadWarmup   9: 16384 op, 24800.00 ns, 1.5137 ns/op
+
+OverheadActual   1: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadActual   2: 16384 op, 24400.00 ns, 1.4893 ns/op
+OverheadActual   3: 16384 op, 24300.00 ns, 1.4832 ns/op
+OverheadActual   4: 16384 op, 24700.00 ns, 1.5076 ns/op
+OverheadActual   5: 16384 op, 25900.00 ns, 1.5808 ns/op
+OverheadActual   6: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual   7: 16384 op, 28600.00 ns, 1.7456 ns/op
+OverheadActual   8: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual   9: 16384 op, 24900.00 ns, 1.5198 ns/op
+OverheadActual  10: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  11: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  12: 16384 op, 25200.00 ns, 1.5381 ns/op
+OverheadActual  13: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  14: 16384 op, 24800.00 ns, 1.5137 ns/op
+OverheadActual  15: 16384 op, 24900.00 ns, 1.5198 ns/op
+
+WorkloadWarmup   1: 16384 op, 747025700.00 ns, 45.5948 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 16384 op, 748064200.00 ns, 45.6582 us/op
+WorkloadActual   2: 16384 op, 749517600.00 ns, 45.7469 us/op
+WorkloadActual   3: 16384 op, 750471600.00 ns, 45.8052 us/op
+WorkloadActual   4: 16384 op, 751639100.00 ns, 45.8764 us/op
+
+// AfterActualRun
+WorkloadResult   1: 16384 op, 748039400.00 ns, 45.6567 us/op
+WorkloadResult   2: 16384 op, 749492800.00 ns, 45.7454 us/op
+WorkloadResult   3: 16384 op, 750446800.00 ns, 45.8036 us/op
+WorkloadResult   4: 16384 op, 751614300.00 ns, 45.8749 us/op
+// GC:  682 682 682 3315662400 16384
+// Threading:  0 0 16384
+
+// AfterAll
+// Benchmark Process 30584 has exited with code 0.
+
+Mean = 45.770 μs, StdErr = 0.046 μs (0.10%), N = 4, StdDev = 0.092 μs
+Min = 45.657 μs, Q1 = 45.723 μs, Median = 45.775 μs, Q3 = 45.821 μs, Max = 45.875 μs
+IQR = 0.098 μs, LowerFence = 45.576 μs, UpperFence = 45.969 μs
+ConfidenceInterval = [45.174 μs; 46.367 μs] (CI 99.9%), Margin = 0.597 μs (1.30% of Mean)
+Skewness = -0.09, Kurtosis = 0.99, MValue = 2
+
+// ** Remained 18 (50.0%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37204 37196 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 262144, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 18 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 150500.00 ns, 150.5000 us/op
+WorkloadJitting  1: 1 op, 41380100.00 ns, 41.3801 ms/op
+
+WorkloadPilot    1: 2 op, 22493600.00 ns, 11.2468 ms/op
+WorkloadPilot    2: 3 op, 32774100.00 ns, 10.9247 ms/op
+WorkloadPilot    3: 4 op, 43731800.00 ns, 10.9330 ms/op
+WorkloadPilot    4: 5 op, 54449200.00 ns, 10.8898 ms/op
+WorkloadPilot    5: 6 op, 51027800.00 ns, 8.5046 ms/op
+WorkloadPilot    6: 7 op, 19340700.00 ns, 2.7630 ms/op
+WorkloadPilot    7: 8 op, 21485800.00 ns, 2.6857 ms/op
+WorkloadPilot    8: 9 op, 23464500.00 ns, 2.6072 ms/op
+WorkloadPilot    9: 10 op, 25912100.00 ns, 2.5912 ms/op
+WorkloadPilot   10: 11 op, 28095900.00 ns, 2.5542 ms/op
+WorkloadPilot   11: 12 op, 24131100.00 ns, 2.0109 ms/op
+WorkloadPilot   12: 13 op, 24025300.00 ns, 1.8481 ms/op
+WorkloadPilot   13: 14 op, 25130300.00 ns, 1.7950 ms/op
+WorkloadPilot   14: 15 op, 26359800.00 ns, 1.7573 ms/op
+WorkloadPilot   15: 16 op, 27963000.00 ns, 1.7477 ms/op
+WorkloadPilot   16: 32 op, 54309800.00 ns, 1.6972 ms/op
+WorkloadPilot   17: 64 op, 107485000.00 ns, 1.6795 ms/op
+WorkloadPilot   18: 128 op, 224326000.00 ns, 1.7525 ms/op
+WorkloadPilot   19: 256 op, 417561800.00 ns, 1.6311 ms/op
+WorkloadPilot   20: 512 op, 820920100.00 ns, 1.6034 ms/op
+
+WorkloadWarmup   1: 512 op, 788126900.00 ns, 1.5393 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 512 op, 790116800.00 ns, 1.5432 ms/op
+WorkloadActual   2: 512 op, 794316100.00 ns, 1.5514 ms/op
+WorkloadActual   3: 512 op, 773824800.00 ns, 1.5114 ms/op
+WorkloadActual   4: 512 op, 795534200.00 ns, 1.5538 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 512 op, 790116800.00 ns, 1.5432 ms/op
+WorkloadResult   2: 512 op, 794316100.00 ns, 1.5514 ms/op
+WorkloadResult   3: 512 op, 773824800.00 ns, 1.5114 ms/op
+WorkloadResult   4: 512 op, 795534200.00 ns, 1.5538 ms/op
+// GC:  258 256 256 941683160 512
+// Threading:  0 0 512
+
+// AfterAll
+// Benchmark Process 29212 has exited with code 0.
+
+Mean = 1.540 ms, StdErr = 0.010 ms (0.64%), N = 4, StdDev = 0.020 ms
+Min = 1.511 ms, Q1 = 1.535 ms, Median = 1.547 ms, Q3 = 1.552 ms, Max = 1.554 ms
+IQR = 0.017 ms, LowerFence = 1.510 ms, UpperFence = 1.577 ms
+ConfidenceInterval = [1.413 ms; 1.666 ms] (CI 99.9%), Margin = 0.126 ms (8.21% of Mean)
+Skewness = -0.64, Kurtosis = 1.23, MValue = 2
+
+// ** Remained 17 (47.2%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37176 37144 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 262144, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 19 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 176300.00 ns, 176.3000 us/op
+WorkloadJitting  1: 1 op, 36446100.00 ns, 36.4461 ms/op
+
+WorkloadPilot    1: 2 op, 20432300.00 ns, 10.2162 ms/op
+WorkloadPilot    2: 3 op, 30216400.00 ns, 10.0721 ms/op
+WorkloadPilot    3: 4 op, 40945100.00 ns, 10.2363 ms/op
+WorkloadPilot    4: 5 op, 52181700.00 ns, 10.4363 ms/op
+WorkloadPilot    5: 6 op, 58647400.00 ns, 9.7746 ms/op
+WorkloadPilot    6: 7 op, 23153900.00 ns, 3.3077 ms/op
+WorkloadPilot    7: 8 op, 25178500.00 ns, 3.1473 ms/op
+WorkloadPilot    8: 9 op, 28746000.00 ns, 3.1940 ms/op
+WorkloadPilot    9: 10 op, 31395500.00 ns, 3.1396 ms/op
+WorkloadPilot   10: 11 op, 22954700.00 ns, 2.0868 ms/op
+WorkloadPilot   11: 12 op, 14072900.00 ns, 1.1727 ms/op
+WorkloadPilot   12: 13 op, 15019400.00 ns, 1.1553 ms/op
+WorkloadPilot   13: 14 op, 16142000.00 ns, 1.1530 ms/op
+WorkloadPilot   14: 15 op, 17182400.00 ns, 1.1455 ms/op
+WorkloadPilot   15: 16 op, 18117700.00 ns, 1.1324 ms/op
+WorkloadPilot   16: 32 op, 35890200.00 ns, 1.1216 ms/op
+WorkloadPilot   17: 64 op, 80784800.00 ns, 1.2623 ms/op
+WorkloadPilot   18: 128 op, 130929600.00 ns, 1.0229 ms/op
+WorkloadPilot   19: 256 op, 242503600.00 ns, 947.2797 us/op
+WorkloadPilot   20: 512 op, 450742200.00 ns, 880.3559 us/op
+WorkloadPilot   21: 1024 op, 871874200.00 ns, 851.4396 us/op
+
+WorkloadWarmup   1: 1024 op, 876880400.00 ns, 856.3285 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 1024 op, 869396100.00 ns, 849.0196 us/op
+WorkloadActual   2: 1024 op, 865080400.00 ns, 844.8051 us/op
+WorkloadActual   3: 1024 op, 864773600.00 ns, 844.5055 us/op
+WorkloadActual   4: 1024 op, 869632300.00 ns, 849.2503 us/op
+
+// AfterActualRun
+WorkloadResult   1: 1024 op, 869396100.00 ns, 849.0196 us/op
+WorkloadResult   2: 1024 op, 865080400.00 ns, 844.8051 us/op
+WorkloadResult   3: 1024 op, 864773600.00 ns, 844.5055 us/op
+WorkloadResult   4: 1024 op, 869632300.00 ns, 849.2503 us/op
+// GC:  292 292 292 1019682432 1024
+// Threading:  0 0 1024
+
+// AfterAll
+// Benchmark Process 9000 has exited with code 0.
+
+Mean = 846.895 μs, StdErr = 1.295 μs (0.15%), N = 4, StdDev = 2.591 μs
+Min = 844.505 μs, Q1 = 844.730 μs, Median = 846.912 μs, Q3 = 849.077 μs, Max = 849.250 μs
+IQR = 4.347 μs, LowerFence = 838.209 μs, UpperFence = 855.598 μs
+ConfidenceInterval = [830.152 μs; 863.638 μs] (CI 99.9%), Margin = 16.743 μs (1.98% of Mean)
+Skewness = -0, Kurtosis = 0.57, MValue = 2
+
+// ** Remained 16 (44.4%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37272 37284 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 262144, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 20 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 157500.00 ns, 157.5000 us/op
+WorkloadJitting  1: 1 op, 17135900.00 ns, 17.1359 ms/op
+
+OverheadJitting  2: 16 op, 252300.00 ns, 15.7688 us/op
+WorkloadJitting  2: 16 op, 9704100.00 ns, 606.5063 us/op
+
+WorkloadPilot    1: 16 op, 9477200.00 ns, 592.3250 us/op
+WorkloadPilot    2: 32 op, 18396600.00 ns, 574.8938 us/op
+WorkloadPilot    3: 64 op, 36821000.00 ns, 575.3281 us/op
+WorkloadPilot    4: 128 op, 74314400.00 ns, 580.5813 us/op
+WorkloadPilot    5: 256 op, 150554200.00 ns, 588.1023 us/op
+WorkloadPilot    6: 512 op, 296248300.00 ns, 578.6100 us/op
+WorkloadPilot    7: 1024 op, 514583800.00 ns, 502.5232 us/op
+
+OverheadWarmup   1: 1024 op, 3100.00 ns, 3.0273 ns/op
+OverheadWarmup   2: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadWarmup   3: 1024 op, 2400.00 ns, 2.3438 ns/op
+OverheadWarmup   4: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   5: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+
+OverheadActual   1: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   2: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   3: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadActual   4: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   5: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   7: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   8: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   9: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  10: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  11: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  12: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  13: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  14: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  15: 1024 op, 1900.00 ns, 1.8555 ns/op
+
+WorkloadWarmup   1: 1024 op, 492973800.00 ns, 481.4197 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 1024 op, 500239100.00 ns, 488.5147 us/op
+WorkloadActual   2: 1024 op, 501867900.00 ns, 490.1054 us/op
+WorkloadActual   3: 1024 op, 495778000.00 ns, 484.1582 us/op
+WorkloadActual   4: 1024 op, 493305700.00 ns, 481.7438 us/op
+
+// AfterActualRun
+WorkloadResult   1: 1024 op, 500237200.00 ns, 488.5129 us/op
+WorkloadResult   2: 1024 op, 501866000.00 ns, 490.1035 us/op
+WorkloadResult   3: 1024 op, 495776100.00 ns, 484.1563 us/op
+WorkloadResult   4: 1024 op, 493303800.00 ns, 481.7420 us/op
+// GC:  511 511 511 1761876672 1024
+// Threading:  0 0 1024
+
+// AfterAll
+// Benchmark Process 5812 has exited with code 0.
+
+Mean = 486.129 μs, StdErr = 1.928 μs (0.40%), N = 4, StdDev = 3.856 μs
+Min = 481.742 μs, Q1 = 483.553 μs, Median = 486.335 μs, Q3 = 488.911 μs, Max = 490.104 μs
+IQR = 5.358 μs, LowerFence = 475.516 μs, UpperFence = 496.947 μs
+ConfidenceInterval = [461.208 μs; 511.049 μs] (CI 99.9%), Margin = 24.920 μs (5.13% of Mean)
+Skewness = -0.07, Kurtosis = 0.75, MValue = 2
+
+// ** Remained 15 (41.7%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37272 37284 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 262144, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 21 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 155700.00 ns, 155.7000 us/op
+WorkloadJitting  1: 1 op, 15878800.00 ns, 15.8788 ms/op
+
+OverheadJitting  2: 16 op, 281200.00 ns, 17.5750 us/op
+WorkloadJitting  2: 16 op, 4285700.00 ns, 267.8563 us/op
+
+WorkloadPilot    1: 16 op, 3459600.00 ns, 216.2250 us/op
+WorkloadPilot    2: 32 op, 7443300.00 ns, 232.6031 us/op
+WorkloadPilot    3: 64 op, 14824600.00 ns, 231.6344 us/op
+WorkloadPilot    4: 128 op, 29420300.00 ns, 229.8461 us/op
+WorkloadPilot    5: 256 op, 58466200.00 ns, 228.3836 us/op
+WorkloadPilot    6: 512 op, 120916900.00 ns, 236.1658 us/op
+WorkloadPilot    7: 1024 op, 240492600.00 ns, 234.8561 us/op
+WorkloadPilot    8: 2048 op, 429369100.00 ns, 209.6529 us/op
+WorkloadPilot    9: 4096 op, 724842500.00 ns, 176.9635 us/op
+
+OverheadWarmup   1: 4096 op, 7600.00 ns, 1.8555 ns/op
+OverheadWarmup   2: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadWarmup   3: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadWarmup   4: 4096 op, 7100.00 ns, 1.7334 ns/op
+OverheadWarmup   5: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadWarmup   6: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadWarmup   7: 4096 op, 6600.00 ns, 1.6113 ns/op
+
+OverheadActual   1: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual   2: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual   3: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   4: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   5: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual   6: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual   7: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual   8: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual   9: 4096 op, 6600.00 ns, 1.6113 ns/op
+OverheadActual  10: 4096 op, 6900.00 ns, 1.6846 ns/op
+OverheadActual  11: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  12: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  13: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  14: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  15: 4096 op, 6500.00 ns, 1.5869 ns/op
+
+WorkloadWarmup   1: 4096 op, 720620900.00 ns, 175.9328 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 4096 op, 722908100.00 ns, 176.4912 us/op
+WorkloadActual   2: 4096 op, 725396500.00 ns, 177.0988 us/op
+WorkloadActual   3: 4096 op, 712793800.00 ns, 174.0219 us/op
+WorkloadActual   4: 4096 op, 711989400.00 ns, 173.8255 us/op
+
+// AfterActualRun
+WorkloadResult   1: 4096 op, 722901600.00 ns, 176.4896 us/op
+WorkloadResult   2: 4096 op, 725390000.00 ns, 177.0972 us/op
+WorkloadResult   3: 4096 op, 712787300.00 ns, 174.0203 us/op
+WorkloadResult   4: 4096 op, 711982900.00 ns, 173.8240 us/op
+// GC:  1170 1170 1170 4084268864 4096
+// Threading:  0 0 4096
+
+// AfterAll
+// Benchmark Process 33140 has exited with code 0.
+
+Mean = 175.358 μs, StdErr = 0.839 μs (0.48%), N = 4, StdDev = 1.678 μs
+Min = 173.824 μs, Q1 = 173.971 μs, Median = 175.255 μs, Q3 = 176.642 μs, Max = 177.097 μs
+IQR = 2.670 μs, LowerFence = 169.966 μs, UpperFence = 180.647 μs
+ConfidenceInterval = [164.514 μs; 186.202 μs] (CI 99.9%), Margin = 10.844 μs (6.18% of Mean)
+Skewness = 0.04, Kurtosis = 0.62, MValue = 2
+
+// ** Remained 14 (38.9%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37848 37192 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 262144, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 22 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 154100.00 ns, 154.1000 us/op
+WorkloadJitting  1: 1 op, 16526200.00 ns, 16.5262 ms/op
+
+OverheadJitting  2: 16 op, 275600.00 ns, 17.2250 us/op
+WorkloadJitting  2: 16 op, 9336800.00 ns, 583.5500 us/op
+
+WorkloadPilot    1: 16 op, 8903100.00 ns, 556.4438 us/op
+WorkloadPilot    2: 32 op, 17782400.00 ns, 555.7000 us/op
+WorkloadPilot    3: 64 op, 35108300.00 ns, 548.5672 us/op
+WorkloadPilot    4: 128 op, 71104900.00 ns, 555.5070 us/op
+WorkloadPilot    5: 256 op, 144375400.00 ns, 563.9664 us/op
+WorkloadPilot    6: 512 op, 295698800.00 ns, 577.5367 us/op
+WorkloadPilot    7: 1024 op, 520399000.00 ns, 508.2021 us/op
+
+OverheadWarmup   1: 1024 op, 3000.00 ns, 2.9297 ns/op
+OverheadWarmup   2: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   3: 1024 op, 2300.00 ns, 2.2461 ns/op
+OverheadWarmup   4: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   5: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+
+OverheadActual   1: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadActual   2: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   3: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadActual   4: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadActual   5: 1024 op, 2100.00 ns, 2.0508 ns/op
+OverheadActual   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   7: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   8: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   9: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  10: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  11: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadActual  12: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  13: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  14: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  15: 1024 op, 1900.00 ns, 1.8555 ns/op
+
+WorkloadWarmup   1: 1024 op, 501981400.00 ns, 490.2162 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 1024 op, 499377200.00 ns, 487.6730 us/op
+WorkloadActual   2: 1024 op, 500863100.00 ns, 489.1241 us/op
+WorkloadActual   3: 1024 op, 502029000.00 ns, 490.2627 us/op
+WorkloadActual   4: 1024 op, 496445900.00 ns, 484.8104 us/op
+
+// AfterActualRun
+WorkloadResult   1: 1024 op, 499375300.00 ns, 487.6712 us/op
+WorkloadResult   2: 1024 op, 500861200.00 ns, 489.1223 us/op
+WorkloadResult   3: 1024 op, 502027100.00 ns, 490.2608 us/op
+WorkloadResult   4: 1024 op, 496444000.00 ns, 484.8086 us/op
+// GC:  511 511 511 1760271040 1024
+// Threading:  0 0 1024
+
+// AfterAll
+// Benchmark Process 26516 has exited with code 0.
+
+Mean = 487.966 μs, StdErr = 1.178 μs (0.24%), N = 4, StdDev = 2.357 μs
+Min = 484.809 μs, Q1 = 486.956 μs, Median = 488.397 μs, Q3 = 489.407 μs, Max = 490.261 μs
+IQR = 2.451 μs, LowerFence = 483.278 μs, UpperFence = 493.084 μs
+ConfidenceInterval = [472.738 μs; 503.193 μs] (CI 99.9%), Margin = 15.228 μs (3.12% of Mean)
+Skewness = -0.34, Kurtosis = 1.04, MValue = 2
+
+// ** Remained 13 (36.1%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37112 37820 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 262144, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 23 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 146200.00 ns, 146.2000 us/op
+WorkloadJitting  1: 1 op, 15983400.00 ns, 15.9834 ms/op
+
+OverheadJitting  2: 16 op, 288800.00 ns, 18.0500 us/op
+WorkloadJitting  2: 16 op, 4181200.00 ns, 261.3250 us/op
+
+WorkloadPilot    1: 16 op, 3487600.00 ns, 217.9750 us/op
+WorkloadPilot    2: 32 op, 7239400.00 ns, 226.2313 us/op
+WorkloadPilot    3: 64 op, 14305600.00 ns, 223.5250 us/op
+WorkloadPilot    4: 128 op, 28721200.00 ns, 224.3844 us/op
+WorkloadPilot    5: 256 op, 56986400.00 ns, 222.6031 us/op
+WorkloadPilot    6: 512 op, 113884100.00 ns, 222.4299 us/op
+WorkloadPilot    7: 1024 op, 232021500.00 ns, 226.5835 us/op
+WorkloadPilot    8: 2048 op, 409753800.00 ns, 200.0751 us/op
+WorkloadPilot    9: 4096 op, 705084800.00 ns, 172.1398 us/op
+
+OverheadWarmup   1: 4096 op, 7500.00 ns, 1.8311 ns/op
+OverheadWarmup   2: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadWarmup   3: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadWarmup   4: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadWarmup   5: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadWarmup   6: 4096 op, 6400.00 ns, 1.5625 ns/op
+
+OverheadActual   1: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   2: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   3: 4096 op, 7000.00 ns, 1.7090 ns/op
+OverheadActual   4: 4096 op, 14400.00 ns, 3.5156 ns/op
+OverheadActual   5: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   6: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   7: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual   8: 4096 op, 6300.00 ns, 1.5381 ns/op
+OverheadActual   9: 4096 op, 6300.00 ns, 1.5381 ns/op
+OverheadActual  10: 4096 op, 6300.00 ns, 1.5381 ns/op
+OverheadActual  11: 4096 op, 6900.00 ns, 1.6846 ns/op
+OverheadActual  12: 4096 op, 6500.00 ns, 1.5869 ns/op
+OverheadActual  13: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual  14: 4096 op, 6400.00 ns, 1.5625 ns/op
+OverheadActual  15: 4096 op, 6300.00 ns, 1.5381 ns/op
+
+WorkloadWarmup   1: 4096 op, 714942300.00 ns, 174.5465 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 4096 op, 715033000.00 ns, 174.5686 us/op
+WorkloadActual   2: 4096 op, 708859400.00 ns, 173.0614 us/op
+WorkloadActual   3: 4096 op, 702934700.00 ns, 171.6149 us/op
+WorkloadActual   4: 4096 op, 708781800.00 ns, 173.0424 us/op
+
+// AfterActualRun
+WorkloadResult   1: 4096 op, 708853000.00 ns, 173.0598 us/op
+WorkloadResult   2: 4096 op, 702928300.00 ns, 171.6134 us/op
+WorkloadResult   3: 4096 op, 708775400.00 ns, 173.0409 us/op
+// GC:  1170 1170 1170 4076371776 4096
+// Threading:  0 0 4096
+
+// AfterAll
+// Benchmark Process 33208 has exited with code 0.
+
+Mean = 172.571 μs, StdErr = 0.479 μs (0.28%), N = 3, StdDev = 0.830 μs
+Min = 171.613 μs, Q1 = 172.327 μs, Median = 173.041 μs, Q3 = 173.050 μs, Max = 173.060 μs
+IQR = 0.723 μs, LowerFence = 171.242 μs, UpperFence = 174.135 μs
+ConfidenceInterval = [157.435 μs; 187.708 μs] (CI 99.9%), Margin = 15.137 μs (8.77% of Mean)
+Skewness = -0.38, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 12 (33.3%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37300 37320 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1048576, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 24 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 144000.00 ns, 144.0000 us/op
+WorkloadJitting  1: 1 op, 75620700.00 ns, 75.6207 ms/op
+
+WorkloadPilot    1: 2 op, 87706100.00 ns, 43.8531 ms/op
+WorkloadPilot    2: 3 op, 129512800.00 ns, 43.1709 ms/op
+WorkloadPilot    3: 4 op, 79786800.00 ns, 19.9467 ms/op
+WorkloadPilot    4: 5 op, 34595000.00 ns, 6.9190 ms/op
+WorkloadPilot    5: 6 op, 42985700.00 ns, 7.1643 ms/op
+WorkloadPilot    6: 7 op, 47859400.00 ns, 6.8371 ms/op
+WorkloadPilot    7: 8 op, 52686200.00 ns, 6.5858 ms/op
+WorkloadPilot    8: 9 op, 59062400.00 ns, 6.5625 ms/op
+WorkloadPilot    9: 10 op, 64329900.00 ns, 6.4330 ms/op
+WorkloadPilot   10: 11 op, 70368300.00 ns, 6.3971 ms/op
+WorkloadPilot   11: 12 op, 81392100.00 ns, 6.7827 ms/op
+WorkloadPilot   12: 13 op, 90803000.00 ns, 6.9848 ms/op
+WorkloadPilot   13: 14 op, 91318600.00 ns, 6.5228 ms/op
+WorkloadPilot   14: 15 op, 97999200.00 ns, 6.5333 ms/op
+WorkloadPilot   15: 16 op, 105032000.00 ns, 6.5645 ms/op
+WorkloadPilot   16: 32 op, 210712400.00 ns, 6.5848 ms/op
+WorkloadPilot   17: 64 op, 415301400.00 ns, 6.4891 ms/op
+WorkloadPilot   18: 128 op, 833926800.00 ns, 6.5151 ms/op
+
+WorkloadWarmup   1: 128 op, 838202900.00 ns, 6.5485 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 128 op, 833877100.00 ns, 6.5147 ms/op
+WorkloadActual   2: 128 op, 834190700.00 ns, 6.5171 ms/op
+WorkloadActual   3: 128 op, 836073600.00 ns, 6.5318 ms/op
+WorkloadActual   4: 128 op, 833356900.00 ns, 6.5106 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 128 op, 833877100.00 ns, 6.5147 ms/op
+WorkloadResult   2: 128 op, 834190700.00 ns, 6.5171 ms/op
+WorkloadResult   3: 128 op, 833356900.00 ns, 6.5106 ms/op
+// GC:  98 98 98 962883600 128
+// Threading:  0 0 128
+
+// AfterAll
+// Benchmark Process 36676 has exited with code 0.
+
+Mean = 6.514 ms, StdErr = 0.002 ms (0.03%), N = 3, StdDev = 0.003 ms
+Min = 6.511 ms, Q1 = 6.513 ms, Median = 6.515 ms, Q3 = 6.516 ms, Max = 6.517 ms
+IQR = 0.003 ms, LowerFence = 6.508 ms, UpperFence = 6.521 ms
+ConfidenceInterval = [6.454 ms; 6.574 ms] (CI 99.9%), Margin = 0.060 ms (0.92% of Mean)
+Skewness = -0.16, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 11 (30.6%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37324 644 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1048576, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 25 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 146900.00 ns, 146.9000 us/op
+WorkloadJitting  1: 1 op, 68466300.00 ns, 68.4663 ms/op
+
+WorkloadPilot    1: 2 op, 81397900.00 ns, 40.6990 ms/op
+WorkloadPilot    2: 3 op, 122393700.00 ns, 40.7979 ms/op
+WorkloadPilot    3: 4 op, 90523100.00 ns, 22.6308 ms/op
+WorkloadPilot    4: 5 op, 19892600.00 ns, 3.9785 ms/op
+WorkloadPilot    5: 6 op, 23939100.00 ns, 3.9899 ms/op
+WorkloadPilot    6: 7 op, 27242700.00 ns, 3.8918 ms/op
+WorkloadPilot    7: 8 op, 31156200.00 ns, 3.8945 ms/op
+WorkloadPilot    8: 9 op, 35250500.00 ns, 3.9167 ms/op
+WorkloadPilot    9: 10 op, 38738600.00 ns, 3.8739 ms/op
+WorkloadPilot   10: 11 op, 43257300.00 ns, 3.9325 ms/op
+WorkloadPilot   11: 12 op, 46593200.00 ns, 3.8828 ms/op
+WorkloadPilot   12: 13 op, 49129400.00 ns, 3.7792 ms/op
+WorkloadPilot   13: 14 op, 56022800.00 ns, 4.0016 ms/op
+WorkloadPilot   14: 15 op, 58397200.00 ns, 3.8931 ms/op
+WorkloadPilot   15: 16 op, 61457400.00 ns, 3.8411 ms/op
+WorkloadPilot   16: 32 op, 115180600.00 ns, 3.5994 ms/op
+WorkloadPilot   17: 64 op, 213943700.00 ns, 3.3429 ms/op
+WorkloadPilot   18: 128 op, 422800500.00 ns, 3.3031 ms/op
+WorkloadPilot   19: 256 op, 835437900.00 ns, 3.2634 ms/op
+
+WorkloadWarmup   1: 256 op, 834240800.00 ns, 3.2588 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 256 op, 828491000.00 ns, 3.2363 ms/op
+WorkloadActual   2: 256 op, 835256800.00 ns, 3.2627 ms/op
+WorkloadActual   3: 256 op, 824823500.00 ns, 3.2220 ms/op
+WorkloadActual   4: 256 op, 829170300.00 ns, 3.2389 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 256 op, 828491000.00 ns, 3.2363 ms/op
+WorkloadResult   2: 256 op, 835256800.00 ns, 3.2627 ms/op
+WorkloadResult   3: 256 op, 824823500.00 ns, 3.2220 ms/op
+WorkloadResult   4: 256 op, 829170300.00 ns, 3.2389 ms/op
+// GC:  256 255 255 1066076768 256
+// Threading:  0 0 256
+
+// AfterAll
+// Benchmark Process 9916 has exited with code 0.
+
+Mean = 3.240 ms, StdErr = 0.008 ms (0.26%), N = 4, StdDev = 0.017 ms
+Min = 3.222 ms, Q1 = 3.233 ms, Median = 3.238 ms, Q3 = 3.245 ms, Max = 3.263 ms
+IQR = 0.012 ms, LowerFence = 3.214 ms, UpperFence = 3.263 ms
+ConfidenceInterval = [3.131 ms; 3.349 ms] (CI 99.9%), Margin = 0.109 ms (3.37% of Mean)
+Skewness = 0.3, Kurtosis = 1.14, MValue = 2
+
+// ** Remained 10 (27.8%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 1m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37072 37076 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1048576, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 26 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 186000.00 ns, 186.0000 us/op
+WorkloadJitting  1: 1 op, 19279000.00 ns, 19.2790 ms/op
+
+OverheadJitting  2: 16 op, 287400.00 ns, 17.9625 us/op
+WorkloadJitting  2: 16 op, 30209000.00 ns, 1.8881 ms/op
+
+WorkloadPilot    1: 16 op, 30208300.00 ns, 1.8880 ms/op
+WorkloadPilot    2: 32 op, 62568700.00 ns, 1.9553 ms/op
+WorkloadPilot    3: 64 op, 127120500.00 ns, 1.9863 ms/op
+WorkloadPilot    4: 128 op, 262079800.00 ns, 2.0475 ms/op
+WorkloadPilot    5: 256 op, 505024800.00 ns, 1.9728 ms/op
+
+OverheadWarmup   1: 256 op, 2600.00 ns, 10.1563 ns/op
+OverheadWarmup   2: 256 op, 1000.00 ns, 3.9063 ns/op
+OverheadWarmup   3: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadWarmup   4: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadWarmup   5: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadWarmup   6: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadWarmup   7: 256 op, 800.00 ns, 3.1250 ns/op
+
+OverheadActual   1: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   2: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   3: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   4: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   5: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   6: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   7: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual   8: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual   9: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  10: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  11: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  12: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  13: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  14: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  15: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  16: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  17: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  18: 256 op, 700.00 ns, 2.7344 ns/op
+OverheadActual  19: 256 op, 800.00 ns, 3.1250 ns/op
+OverheadActual  20: 256 op, 700.00 ns, 2.7344 ns/op
+
+WorkloadWarmup   1: 256 op, 460335000.00 ns, 1.7982 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 256 op, 418353300.00 ns, 1.6342 ms/op
+WorkloadActual   2: 256 op, 426526100.00 ns, 1.6661 ms/op
+WorkloadActual   3: 256 op, 413995600.00 ns, 1.6172 ms/op
+WorkloadActual   4: 256 op, 437349000.00 ns, 1.7084 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 256 op, 418352550.00 ns, 1.6342 ms/op
+WorkloadResult   2: 256 op, 426525350.00 ns, 1.6661 ms/op
+WorkloadResult   3: 256 op, 413994850.00 ns, 1.6172 ms/op
+WorkloadResult   4: 256 op, 437348250.00 ns, 1.7084 ms/op
+// GC:  120 119 119 1653840728 256
+// Threading:  0 0 256
+
+// AfterAll
+// Benchmark Process 13872 has exited with code 0.
+
+Mean = 1.656 ms, StdErr = 0.020 ms (1.21%), N = 4, StdDev = 0.040 ms
+Min = 1.617 ms, Q1 = 1.630 ms, Median = 1.650 ms, Q3 = 1.677 ms, Max = 1.708 ms
+IQR = 0.047 ms, LowerFence = 1.560 ms, UpperFence = 1.747 ms
+ConfidenceInterval = [1.397 ms; 1.916 ms] (CI 99.9%), Margin = 0.259 ms (15.65% of Mean)
+Skewness = 0.27, Kurtosis = 0.96, MValue = 2
+
+// ** Remained 9 (25.0%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37248 37212 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1048576, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 27 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 145000.00 ns, 145.0000 us/op
+WorkloadJitting  1: 1 op, 16393300.00 ns, 16.3933 ms/op
+
+OverheadJitting  2: 16 op, 268100.00 ns, 16.7563 us/op
+WorkloadJitting  2: 16 op, 9511000.00 ns, 594.4375 us/op
+
+WorkloadPilot    1: 16 op, 10204500.00 ns, 637.7813 us/op
+WorkloadPilot    2: 32 op, 18010200.00 ns, 562.8188 us/op
+WorkloadPilot    3: 64 op, 36101900.00 ns, 564.0922 us/op
+WorkloadPilot    4: 128 op, 69024900.00 ns, 539.2570 us/op
+WorkloadPilot    5: 256 op, 135826700.00 ns, 530.5730 us/op
+WorkloadPilot    6: 512 op, 274159900.00 ns, 535.4686 us/op
+WorkloadPilot    7: 1024 op, 481512700.00 ns, 470.2272 us/op
+WorkloadPilot    8: 2048 op, 817791900.00 ns, 399.3125 us/op
+
+OverheadWarmup   1: 2048 op, 4400.00 ns, 2.1484 ns/op
+OverheadWarmup   2: 2048 op, 3800.00 ns, 1.8555 ns/op
+OverheadWarmup   3: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadWarmup   4: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadWarmup   5: 2048 op, 3600.00 ns, 1.7578 ns/op
+OverheadWarmup   6: 2048 op, 3700.00 ns, 1.8066 ns/op
+OverheadWarmup   7: 2048 op, 3600.00 ns, 1.7578 ns/op
+OverheadWarmup   8: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadWarmup   9: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadWarmup  10: 2048 op, 3500.00 ns, 1.7090 ns/op
+
+OverheadActual   1: 2048 op, 3600.00 ns, 1.7578 ns/op
+OverheadActual   2: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   3: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   4: 2048 op, 3900.00 ns, 1.9043 ns/op
+OverheadActual   5: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   6: 2048 op, 4000.00 ns, 1.9531 ns/op
+OverheadActual   7: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual   8: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual   9: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual  10: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual  11: 2048 op, 3600.00 ns, 1.7578 ns/op
+OverheadActual  12: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual  13: 2048 op, 3500.00 ns, 1.7090 ns/op
+OverheadActual  14: 2048 op, 3400.00 ns, 1.6602 ns/op
+OverheadActual  15: 2048 op, 3500.00 ns, 1.7090 ns/op
+
+WorkloadWarmup   1: 2048 op, 850040600.00 ns, 415.0589 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 2048 op, 824219100.00 ns, 402.4507 us/op
+WorkloadActual   2: 2048 op, 816103100.00 ns, 398.4878 us/op
+WorkloadActual   3: 2048 op, 814102400.00 ns, 397.5109 us/op
+WorkloadActual   4: 2048 op, 816912300.00 ns, 398.8830 us/op
+
+// AfterActualRun
+WorkloadResult   1: 2048 op, 816099600.00 ns, 398.4861 us/op
+WorkloadResult   2: 2048 op, 814098900.00 ns, 397.5092 us/op
+WorkloadResult   3: 2048 op, 816908800.00 ns, 398.8813 us/op
+// GC:  1375 1363 1361 8527198656 2048
+// Threading:  0 0 2048
+
+// AfterAll
+// Benchmark Process 33396 has exited with code 0.
+
+Mean = 398.292 μs, StdErr = 0.408 μs (0.10%), N = 3, StdDev = 0.706 μs
+Min = 397.509 μs, Q1 = 397.998 μs, Median = 398.486 μs, Q3 = 398.684 μs, Max = 398.881 μs
+IQR = 0.686 μs, LowerFence = 396.969 μs, UpperFence = 399.713 μs
+ConfidenceInterval = [385.407 μs; 411.177 μs] (CI 99.9%), Margin = 12.885 μs (3.24% of Mean)
+Skewness = -0.25, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 8 (22.2%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 1392 37176 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 1048576, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 28 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 146800.00 ns, 146.8000 us/op
+WorkloadJitting  1: 1 op, 19051600.00 ns, 19.0516 ms/op
+
+OverheadJitting  2: 16 op, 272600.00 ns, 17.0375 us/op
+WorkloadJitting  2: 16 op, 31469600.00 ns, 1.9669 ms/op
+
+WorkloadPilot    1: 16 op, 31909100.00 ns, 1.9943 ms/op
+WorkloadPilot    2: 32 op, 64965300.00 ns, 2.0302 ms/op
+WorkloadPilot    3: 64 op, 127817300.00 ns, 1.9971 ms/op
+WorkloadPilot    4: 128 op, 262992200.00 ns, 2.0546 ms/op
+WorkloadPilot    5: 256 op, 489421900.00 ns, 1.9118 ms/op
+WorkloadPilot    6: 512 op, 855325000.00 ns, 1.6706 ms/op
+
+OverheadWarmup   1: 512 op, 2300.00 ns, 4.4922 ns/op
+OverheadWarmup   2: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadWarmup   3: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadWarmup   4: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadWarmup   5: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadWarmup   6: 512 op, 1200.00 ns, 2.3438 ns/op
+
+OverheadActual   1: 512 op, 1100.00 ns, 2.1484 ns/op
+OverheadActual   2: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual   3: 512 op, 1100.00 ns, 2.1484 ns/op
+OverheadActual   4: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual   5: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual   6: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual   7: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual   8: 512 op, 1100.00 ns, 2.1484 ns/op
+OverheadActual   9: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual  10: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual  11: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual  12: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual  13: 512 op, 1200.00 ns, 2.3438 ns/op
+OverheadActual  14: 512 op, 1100.00 ns, 2.1484 ns/op
+OverheadActual  15: 512 op, 1200.00 ns, 2.3438 ns/op
+
+WorkloadWarmup   1: 512 op, 903193200.00 ns, 1.7640 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 512 op, 842431100.00 ns, 1.6454 ms/op
+WorkloadActual   2: 512 op, 827639600.00 ns, 1.6165 ms/op
+WorkloadActual   3: 512 op, 839131500.00 ns, 1.6389 ms/op
+WorkloadActual   4: 512 op, 833946000.00 ns, 1.6288 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 512 op, 842429900.00 ns, 1.6454 ms/op
+WorkloadResult   2: 512 op, 827638400.00 ns, 1.6165 ms/op
+WorkloadResult   3: 512 op, 839130300.00 ns, 1.6389 ms/op
+WorkloadResult   4: 512 op, 833944800.00 ns, 1.6288 ms/op
+// GC:  233 230 230 3306823248 512
+// Threading:  0 0 512
+
+// AfterAll
+// Benchmark Process 30300 has exited with code 0.
+
+Mean = 1.632 ms, StdErr = 0.006 ms (0.39%), N = 4, StdDev = 0.013 ms
+Min = 1.616 ms, Q1 = 1.626 ms, Median = 1.634 ms, Q3 = 1.641 ms, Max = 1.645 ms
+IQR = 0.015 ms, LowerFence = 1.603 ms, UpperFence = 1.663 ms
+ConfidenceInterval = [1.551 ms; 1.714 ms] (CI 99.9%), Margin = 0.082 ms (4.99% of Mean)
+Skewness = -0.2, Kurtosis = 0.93, MValue = 2
+
+// ** Remained 7 (19.4%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37936 37160 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 1048576, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 29 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 144800.00 ns, 144.8000 us/op
+WorkloadJitting  1: 1 op, 16312700.00 ns, 16.3127 ms/op
+
+OverheadJitting  2: 16 op, 304100.00 ns, 19.0063 us/op
+WorkloadJitting  2: 16 op, 9446800.00 ns, 590.4250 us/op
+
+WorkloadPilot    1: 16 op, 9494600.00 ns, 593.4125 us/op
+WorkloadPilot    2: 32 op, 17800900.00 ns, 556.2781 us/op
+WorkloadPilot    3: 64 op, 35805200.00 ns, 559.4563 us/op
+WorkloadPilot    4: 128 op, 68406100.00 ns, 534.4227 us/op
+WorkloadPilot    5: 256 op, 140262300.00 ns, 547.8996 us/op
+WorkloadPilot    6: 512 op, 271182800.00 ns, 529.6539 us/op
+WorkloadPilot    7: 1024 op, 516483100.00 ns, 504.3780 us/op
+
+OverheadWarmup   1: 1024 op, 2900.00 ns, 2.8320 ns/op
+OverheadWarmup   2: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   3: 1024 op, 11800.00 ns, 11.5234 ns/op
+OverheadWarmup   4: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadWarmup   5: 1024 op, 2000.00 ns, 1.9531 ns/op
+OverheadWarmup   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+
+OverheadActual   1: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   2: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   3: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   4: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   5: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   6: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   7: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   8: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual   9: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  10: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  11: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  12: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual  13: 1024 op, 1800.00 ns, 1.7578 ns/op
+OverheadActual  14: 1024 op, 1900.00 ns, 1.8555 ns/op
+OverheadActual  15: 1024 op, 2000.00 ns, 1.9531 ns/op
+
+WorkloadWarmup   1: 1024 op, 452678400.00 ns, 442.0688 us/op
+
+// BeforeActualRun
+WorkloadActual   1: 1024 op, 434488600.00 ns, 424.3053 us/op
+WorkloadActual   2: 1024 op, 431415000.00 ns, 421.3037 us/op
+WorkloadActual   3: 1024 op, 426101300.00 ns, 416.1146 us/op
+WorkloadActual   4: 1024 op, 426473200.00 ns, 416.4777 us/op
+
+// AfterActualRun
+WorkloadResult   1: 1024 op, 434486700.00 ns, 424.3034 us/op
+WorkloadResult   2: 1024 op, 431413100.00 ns, 421.3019 us/op
+WorkloadResult   3: 1024 op, 426099400.00 ns, 416.1127 us/op
+WorkloadResult   4: 1024 op, 426471300.00 ns, 416.4759 us/op
+// GC:  689 683 682 4261730240 1024
+// Threading:  0 0 1024
+
+// AfterAll
+// Benchmark Process 30952 has exited with code 0.
+
+Mean = 419.548 μs, StdErr = 1.978 μs (0.47%), N = 4, StdDev = 3.955 μs
+Min = 416.113 μs, Q1 = 416.385 μs, Median = 418.889 μs, Q3 = 422.052 μs, Max = 424.303 μs
+IQR = 5.667 μs, LowerFence = 407.884 μs, UpperFence = 430.553 μs
+ConfidenceInterval = [393.990 μs; 445.106 μs] (CI 99.9%), Margin = 25.558 μs (6.09% of Mean)
+Skewness = 0.18, Kurtosis = 0.77, MValue = 2
+
+// ** Remained 6 (16.7%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 1532 3912 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 5242880, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 30 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 175300.00 ns, 175.3000 us/op
+WorkloadJitting  1: 1 op, 172400000.00 ns, 172.4000 ms/op
+
+WorkloadPilot    1: 2 op, 64676000.00 ns, 32.3380 ms/op
+WorkloadPilot    2: 3 op, 114317600.00 ns, 38.1059 ms/op
+WorkloadPilot    3: 4 op, 144441300.00 ns, 36.1103 ms/op
+WorkloadPilot    4: 5 op, 172869800.00 ns, 34.5740 ms/op
+WorkloadPilot    5: 6 op, 193934100.00 ns, 32.3224 ms/op
+WorkloadPilot    6: 7 op, 236341400.00 ns, 33.7631 ms/op
+WorkloadPilot    7: 8 op, 285453500.00 ns, 35.6817 ms/op
+WorkloadPilot    8: 9 op, 327028900.00 ns, 36.3365 ms/op
+WorkloadPilot    9: 10 op, 355729300.00 ns, 35.5729 ms/op
+WorkloadPilot   10: 11 op, 380149900.00 ns, 34.5591 ms/op
+WorkloadPilot   11: 12 op, 401479300.00 ns, 33.4566 ms/op
+WorkloadPilot   12: 13 op, 437562200.00 ns, 33.6586 ms/op
+WorkloadPilot   13: 14 op, 471179400.00 ns, 33.6557 ms/op
+WorkloadPilot   14: 15 op, 502389700.00 ns, 33.4926 ms/op
+
+WorkloadWarmup   1: 15 op, 498847400.00 ns, 33.2565 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 15 op, 501191100.00 ns, 33.4127 ms/op
+WorkloadActual   2: 15 op, 517998600.00 ns, 34.5332 ms/op
+WorkloadActual   3: 15 op, 511181200.00 ns, 34.0787 ms/op
+WorkloadActual   4: 15 op, 517679900.00 ns, 34.5120 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 15 op, 501191100.00 ns, 33.4127 ms/op
+WorkloadResult   2: 15 op, 517998600.00 ns, 34.5332 ms/op
+WorkloadResult   3: 15 op, 511181200.00 ns, 34.0787 ms/op
+WorkloadResult   4: 15 op, 517679900.00 ns, 34.5120 ms/op
+// GC:  17 16 15 701317696 15
+// Threading:  0 0 15
+
+// AfterAll
+// Benchmark Process 34996 has exited with code 0.
+
+Mean = 34.134 ms, StdErr = 0.262 ms (0.77%), N = 4, StdDev = 0.525 ms
+Min = 33.413 ms, Q1 = 33.912 ms, Median = 34.295 ms, Q3 = 34.517 ms, Max = 34.533 ms
+IQR = 0.605 ms, LowerFence = 33.005 ms, UpperFence = 35.425 ms
+ConfidenceInterval = [30.744 ms; 37.524 ms] (CI 99.9%), Margin = 3.390 ms (9.93% of Mean)
+Skewness = -0.45, Kurtosis = 1.05, MValue = 2
+
+// ** Remained 5 (13.9%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37796 37788 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 5242880, Shape: \"dot-leading\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 31 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 190800.00 ns, 190.8000 us/op
+WorkloadJitting  1: 1 op, 227733000.00 ns, 227.7330 ms/op
+
+WorkloadPilot    1: 2 op, 242787200.00 ns, 121.3936 ms/op
+WorkloadPilot    2: 3 op, 60006400.00 ns, 20.0021 ms/op
+WorkloadPilot    3: 4 op, 80958500.00 ns, 20.2396 ms/op
+WorkloadPilot    4: 5 op, 98308400.00 ns, 19.6617 ms/op
+WorkloadPilot    5: 6 op, 118568500.00 ns, 19.7614 ms/op
+WorkloadPilot    6: 7 op, 139182100.00 ns, 19.8832 ms/op
+WorkloadPilot    7: 8 op, 155471200.00 ns, 19.4339 ms/op
+WorkloadPilot    8: 9 op, 179038300.00 ns, 19.8931 ms/op
+WorkloadPilot    9: 10 op, 177162500.00 ns, 17.7163 ms/op
+WorkloadPilot   10: 11 op, 194676100.00 ns, 17.6978 ms/op
+WorkloadPilot   11: 12 op, 228447800.00 ns, 19.0373 ms/op
+WorkloadPilot   12: 13 op, 258601300.00 ns, 19.8924 ms/op
+WorkloadPilot   13: 14 op, 281589800.00 ns, 20.1136 ms/op
+WorkloadPilot   14: 15 op, 302187900.00 ns, 20.1459 ms/op
+WorkloadPilot   15: 16 op, 318418000.00 ns, 19.9011 ms/op
+WorkloadPilot   16: 32 op, 638901800.00 ns, 19.9657 ms/op
+
+WorkloadWarmup   1: 32 op, 637272200.00 ns, 19.9148 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 32 op, 639071800.00 ns, 19.9710 ms/op
+WorkloadActual   2: 32 op, 641690900.00 ns, 20.0528 ms/op
+WorkloadActual   3: 32 op, 640702600.00 ns, 20.0220 ms/op
+WorkloadActual   4: 32 op, 647772600.00 ns, 20.2429 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 32 op, 639071800.00 ns, 19.9710 ms/op
+WorkloadResult   2: 32 op, 641690900.00 ns, 20.0528 ms/op
+WorkloadResult   3: 32 op, 640702600.00 ns, 20.0220 ms/op
+// GC:  22 21 17 623608816 32
+// Threading:  0 0 32
+
+// AfterAll
+// Benchmark Process 25556 has exited with code 0.
+
+Mean = 20.015 ms, StdErr = 0.024 ms (0.12%), N = 3, StdDev = 0.041 ms
+Min = 19.971 ms, Q1 = 19.996 ms, Median = 20.022 ms, Q3 = 20.037 ms, Max = 20.053 ms
+IQR = 0.041 ms, LowerFence = 19.935 ms, UpperFence = 20.099 ms
+ConfidenceInterval = [19.261 ms; 20.769 ms] (CI 99.9%), Margin = 0.754 ms (3.77% of Mean)
+Skewness = -0.16, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 4 (11.1%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37744 37764 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 5242880, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 32 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 157900.00 ns, 157.9000 us/op
+WorkloadJitting  1: 1 op, 29155500.00 ns, 29.1555 ms/op
+
+OverheadJitting  2: 16 op, 282400.00 ns, 17.6500 us/op
+WorkloadJitting  2: 16 op, 165280300.00 ns, 10.3300 ms/op
+
+WorkloadPilot    1: 16 op, 157496700.00 ns, 9.8435 ms/op
+WorkloadPilot    2: 32 op, 487237000.00 ns, 15.2262 ms/op
+WorkloadPilot    3: 64 op, 615347700.00 ns, 9.6148 ms/op
+
+OverheadWarmup   1: 64 op, 1700.00 ns, 26.5625 ns/op
+OverheadWarmup   2: 64 op, 900.00 ns, 14.0625 ns/op
+OverheadWarmup   3: 64 op, 700.00 ns, 10.9375 ns/op
+OverheadWarmup   4: 64 op, 600.00 ns, 9.3750 ns/op
+OverheadWarmup   5: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   6: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   7: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   8: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   9: 64 op, 400.00 ns, 6.2500 ns/op
+
+OverheadActual   1: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   2: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual   3: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   4: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   5: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   6: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   7: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   8: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual   9: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  10: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  11: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  12: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  13: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  14: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  15: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  16: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  17: 64 op, 16700.00 ns, 260.9375 ns/op
+OverheadActual  18: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  19: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  20: 64 op, 400.00 ns, 6.2500 ns/op
+
+WorkloadWarmup   1: 64 op, 547409700.00 ns, 8.5533 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 64 op, 530430900.00 ns, 8.2880 ms/op
+WorkloadActual   2: 64 op, 529862400.00 ns, 8.2791 ms/op
+WorkloadActual   3: 64 op, 542557400.00 ns, 8.4775 ms/op
+WorkloadActual   4: 64 op, 530152900.00 ns, 8.2836 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 64 op, 530430400.00 ns, 8.2880 ms/op
+WorkloadResult   2: 64 op, 529861900.00 ns, 8.2791 ms/op
+WorkloadResult   3: 64 op, 530152400.00 ns, 8.2836 ms/op
+// GC:  72 69 63 2165347192 64
+// Threading:  0 0 64
+
+// AfterAll
+// Benchmark Process 8568 has exited with code 0.
+
+Mean = 8.284 ms, StdErr = 0.003 ms (0.03%), N = 3, StdDev = 0.004 ms
+Min = 8.279 ms, Q1 = 8.281 ms, Median = 8.284 ms, Q3 = 8.286 ms, Max = 8.288 ms
+IQR = 0.004 ms, LowerFence = 8.275 ms, UpperFence = 8.292 ms
+ConfidenceInterval = [8.203 ms; 8.365 ms] (CI 99.9%), Margin = 0.081 ms (0.98% of Mean)
+Skewness = -0.01, Kurtosis = 0.67, MValue = 2
+
+// ** Remained 3 (8.3%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 2512 37716 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 5242880, Shape: \"multi-header\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 33 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 152000.00 ns, 152.0000 us/op
+WorkloadJitting  1: 1 op, 20345900.00 ns, 20.3459 ms/op
+
+OverheadJitting  2: 16 op, 289400.00 ns, 18.0875 us/op
+WorkloadJitting  2: 16 op, 79464200.00 ns, 4.9665 ms/op
+
+WorkloadPilot    1: 16 op, 66677900.00 ns, 4.1674 ms/op
+WorkloadPilot    2: 32 op, 155286400.00 ns, 4.8527 ms/op
+WorkloadPilot    3: 64 op, 285372200.00 ns, 4.4589 ms/op
+WorkloadPilot    4: 128 op, 651175500.00 ns, 5.0873 ms/op
+
+OverheadWarmup   1: 128 op, 2100.00 ns, 16.4063 ns/op
+OverheadWarmup   2: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   3: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   4: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   5: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   6: 128 op, 600.00 ns, 4.6875 ns/op
+
+OverheadActual   1: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   2: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   3: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   4: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   5: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   6: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   7: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   8: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   9: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  10: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  11: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual  12: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  13: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  14: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual  15: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  16: 128 op, 500.00 ns, 3.9063 ns/op
+OverheadActual  17: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  18: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  19: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  20: 128 op, 600.00 ns, 4.6875 ns/op
+
+WorkloadWarmup   1: 128 op, 607469800.00 ns, 4.7459 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 128 op, 593911700.00 ns, 4.6399 ms/op
+WorkloadActual   2: 128 op, 606358600.00 ns, 4.7372 ms/op
+WorkloadActual   3: 128 op, 590288400.00 ns, 4.6116 ms/op
+WorkloadActual   4: 128 op, 566536900.00 ns, 4.4261 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 128 op, 593911100.00 ns, 4.6399 ms/op
+WorkloadResult   2: 128 op, 606358000.00 ns, 4.7372 ms/op
+WorkloadResult   3: 128 op, 590287800.00 ns, 4.6116 ms/op
+WorkloadResult   4: 128 op, 566536300.00 ns, 4.4261 ms/op
+// GC:  73 66 55 2426148840 128
+// Threading:  0 0 128
+
+// AfterAll
+// Benchmark Process 29680 has exited with code 0.
+
+Mean = 4.604 ms, StdErr = 0.065 ms (1.41%), N = 4, StdDev = 0.130 ms
+Min = 4.426 ms, Q1 = 4.565 ms, Median = 4.626 ms, Q3 = 4.664 ms, Max = 4.737 ms
+IQR = 0.099 ms, LowerFence = 4.417 ms, UpperFence = 4.813 ms
+ConfidenceInterval = [3.763 ms; 5.444 ms] (CI 99.9%), Margin = 0.840 ms (18.26% of Mean)
+Skewness = -0.36, Kurtosis = 1.15, MValue = 2
+
+// ** Remained 2 (5.6%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 24512 40352 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Legacy(Size: 5242880, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 34 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 301500.00 ns, 301.5000 us/op
+WorkloadJitting  1: 1 op, 27863000.00 ns, 27.8630 ms/op
+
+OverheadJitting  2: 16 op, 281000.00 ns, 17.5625 us/op
+WorkloadJitting  2: 16 op, 172397900.00 ns, 10.7749 ms/op
+
+WorkloadPilot    1: 16 op, 186748200.00 ns, 11.6718 ms/op
+WorkloadPilot    2: 32 op, 340338900.00 ns, 10.6356 ms/op
+WorkloadPilot    3: 64 op, 853588500.00 ns, 13.3373 ms/op
+
+OverheadWarmup   1: 64 op, 2200.00 ns, 34.3750 ns/op
+OverheadWarmup   2: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   3: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   4: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadWarmup   5: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadWarmup   6: 64 op, 500.00 ns, 7.8125 ns/op
+
+OverheadActual   1: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   2: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual   3: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   4: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   5: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   6: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   7: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual   8: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual   9: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  10: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  11: 64 op, 300.00 ns, 4.6875 ns/op
+OverheadActual  12: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  13: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  14: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  15: 64 op, 400.00 ns, 6.2500 ns/op
+OverheadActual  16: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  17: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  18: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  19: 64 op, 500.00 ns, 7.8125 ns/op
+OverheadActual  20: 64 op, 500.00 ns, 7.8125 ns/op
+
+WorkloadWarmup   1: 64 op, 547158300.00 ns, 8.5493 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 64 op, 536512800.00 ns, 8.3830 ms/op
+WorkloadActual   2: 64 op, 535457900.00 ns, 8.3665 ms/op
+WorkloadActual   3: 64 op, 528899000.00 ns, 8.2640 ms/op
+WorkloadActual   4: 64 op, 530516800.00 ns, 8.2893 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 64 op, 536512300.00 ns, 8.3830 ms/op
+WorkloadResult   2: 64 op, 535457400.00 ns, 8.3665 ms/op
+WorkloadResult   3: 64 op, 528898500.00 ns, 8.2640 ms/op
+WorkloadResult   4: 64 op, 530516300.00 ns, 8.2893 ms/op
+// GC:  72 68 63 2165246840 64
+// Threading:  0 0 64
+
+// AfterAll
+// Benchmark Process 20832 has exited with code 0.
+
+Mean = 8.326 ms, StdErr = 0.029 ms (0.35%), N = 4, StdDev = 0.058 ms
+Min = 8.264 ms, Q1 = 8.283 ms, Median = 8.328 ms, Q3 = 8.371 ms, Max = 8.383 ms
+IQR = 0.088 ms, LowerFence = 8.152 ms, UpperFence = 8.502 ms
+ConfidenceInterval = [7.951 ms; 8.700 ms] (CI 99.9%), Margin = 0.374 ms (4.50% of Mean)
+Skewness = -0.03, Kurtosis = 0.66, MValue = 2
+
+// ** Remained 1 (2.8%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Setup power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// **************************
+// Benchmark: PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+// *** Execute ***
+// Launch: 1 / 1
+// Execute: dotnet VectorNNTP.NNTPD.PostAllocBench-1.dll --anonymousPipes 37808 37792 --benchmarkName "VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench.Streaming(Size: 5242880, Shape: \"normal\")" --job "Runtime=.NET 10.0, IterationCount=4, WarmupCount=1" --benchmarkId 35 in C:\Users\chrisk\source\repos\Usenet.ninja\VectorNNTP\tools\VectorNNTP.NNTPD.PostAllocBench\bin\Release\net10.0\VectorNNTP.NNTPD.PostAllocBench-1\bin\Release\net10.0
+// BeforeAnythingElse
+
+// Benchmark Process Environment Information:
+// BenchmarkDotNet v0.15.2
+// Runtime=.NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+// GC=Concurrent Workstation
+// HardwareIntrinsics=AVX2,AES,BMI1,BMI2,FMA,LZCNT,PCLMUL,POPCNT,AvxVnni,SERIALIZE VectorSize=256
+// Job: Job-EATLBP(IterationCount=4, WarmupCount=1)
+
+OverheadJitting  1: 1 op, 145300.00 ns, 145.3000 us/op
+WorkloadJitting  1: 1 op, 20595600.00 ns, 20.5956 ms/op
+
+OverheadJitting  2: 16 op, 270300.00 ns, 16.8938 us/op
+WorkloadJitting  2: 16 op, 77731800.00 ns, 4.8582 ms/op
+
+WorkloadPilot    1: 16 op, 82728600.00 ns, 5.1705 ms/op
+WorkloadPilot    2: 32 op, 144018700.00 ns, 4.5006 ms/op
+WorkloadPilot    3: 64 op, 312732400.00 ns, 4.8864 ms/op
+WorkloadPilot    4: 128 op, 589165200.00 ns, 4.6029 ms/op
+
+OverheadWarmup   1: 128 op, 2100.00 ns, 16.4063 ns/op
+OverheadWarmup   2: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   3: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadWarmup   4: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadWarmup   5: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadWarmup   6: 128 op, 700.00 ns, 5.4688 ns/op
+
+OverheadActual   1: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   2: 128 op, 500.00 ns, 3.9063 ns/op
+OverheadActual   3: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   4: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   5: 128 op, 500.00 ns, 3.9063 ns/op
+OverheadActual   6: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual   7: 128 op, 700.00 ns, 5.4688 ns/op
+OverheadActual   8: 128 op, 500.00 ns, 3.9063 ns/op
+OverheadActual   9: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  10: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  11: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  12: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  13: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  14: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  15: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  16: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  17: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  18: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  19: 128 op, 600.00 ns, 4.6875 ns/op
+OverheadActual  20: 128 op, 600.00 ns, 4.6875 ns/op
+
+WorkloadWarmup   1: 128 op, 621464600.00 ns, 4.8552 ms/op
+
+// BeforeActualRun
+WorkloadActual   1: 128 op, 618064300.00 ns, 4.8286 ms/op
+WorkloadActual   2: 128 op, 546960100.00 ns, 4.2731 ms/op
+WorkloadActual   3: 128 op, 576073600.00 ns, 4.5006 ms/op
+WorkloadActual   4: 128 op, 528561400.00 ns, 4.1294 ms/op
+
+// AfterActualRun
+WorkloadResult   1: 128 op, 618063700.00 ns, 4.8286 ms/op
+WorkloadResult   2: 128 op, 546959500.00 ns, 4.2731 ms/op
+WorkloadResult   3: 128 op, 576073000.00 ns, 4.5006 ms/op
+WorkloadResult   4: 128 op, 528560800.00 ns, 4.1294 ms/op
+// GC:  73 67 55 2425903448 128
+// Threading:  0 0 128
+
+// AfterAll
+// Benchmark Process 36468 has exited with code 0.
+
+Mean = 4.433 ms, StdErr = 0.152 ms (3.44%), N = 4, StdDev = 0.305 ms
+Min = 4.129 ms, Q1 = 4.237 ms, Median = 4.387 ms, Q3 = 4.583 ms, Max = 4.829 ms
+IQR = 0.345 ms, LowerFence = 3.719 ms, UpperFence = 5.101 ms
+ConfidenceInterval = [2.463 ms; 6.403 ms] (CI 99.9%), Margin = 1.970 ms (44.44% of Mean)
+Skewness = 0.27, Kurtosis = 0.97, MValue = 2
+
+// ** Remained 0 (0.0%) benchmark(s) to run. Estimated finish 2026-09-25 13:59 (0h 0m from now) **
+Successfully reverted power plan (GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c FriendlyName: High performance)
+// ***** BenchmarkRunner: Finish  *****
+
+// * Export *
+  BenchmarkDotNet.Artifacts\results\VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench-report.csv
+  BenchmarkDotNet.Artifacts\results\VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench-report-github.md
+  BenchmarkDotNet.Artifacts\results\VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench-report.html
+  BenchmarkDotNet.Artifacts\results\VectorNNTP.NNTPD.PostAllocBench.PostStreamingBench-report-default.md
+
+// * Detailed results *
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 7.963 μs, StdErr = 0.003 μs (0.04%), N = 3, StdDev = 0.006 μs
+Min = 7.959 μs, Q1 = 7.960 μs, Median = 7.960 μs, Q3 = 7.965 μs, Max = 7.969 μs
+IQR = 0.005 μs, LowerFence = 7.952 μs, UpperFence = 7.973 μs
+ConfidenceInterval = [7.859 μs; 8.067 μs] (CI 99.9%), Margin = 0.104 μs (1.31% of Mean)
+Skewness = 0.35, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[7.954 μs ; 7.975 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 5.481 μs, StdErr = 0.052 μs (0.94%), N = 4, StdDev = 0.103 μs
+Min = 5.363 μs, Q1 = 5.416 μs, Median = 5.482 μs, Q3 = 5.547 μs, Max = 5.598 μs
+IQR = 0.131 μs, LowerFence = 5.219 μs, UpperFence = 5.743 μs
+ConfidenceInterval = [4.812 μs; 6.150 μs] (CI 99.9%), Margin = 0.669 μs (12.20% of Mean)
+Skewness = -0.01, Kurtosis = 0.85, MValue = 2
+-------------------- Histogram --------------------
+[5.278 μs ; 5.430 μs) | @
+[5.430 μs ; 5.601 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 5.774 μs, StdErr = 0.008 μs (0.14%), N = 3, StdDev = 0.014 μs
+Min = 5.759 μs, Q1 = 5.767 μs, Median = 5.776 μs, Q3 = 5.781 μs, Max = 5.786 μs
+IQR = 0.014 μs, LowerFence = 5.747 μs, UpperFence = 5.801 μs
+ConfidenceInterval = [5.522 μs; 6.025 μs] (CI 99.9%), Margin = 0.251 μs (4.35% of Mean)
+Skewness = -0.14, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[5.746 μs ; 5.799 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 4.580 μs, StdErr = 0.021 μs (0.46%), N = 4, StdDev = 0.042 μs
+Min = 4.539 μs, Q1 = 4.556 μs, Median = 4.571 μs, Q3 = 4.594 μs, Max = 4.638 μs
+IQR = 0.038 μs, LowerFence = 4.500 μs, UpperFence = 4.650 μs
+ConfidenceInterval = [4.307 μs; 4.852 μs] (CI 99.9%), Margin = 0.273 μs (5.96% of Mean)
+Skewness = 0.43, Kurtosis = 1.13, MValue = 2
+-------------------- Histogram --------------------
+[4.514 μs ; 4.673 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 4.555 μs, StdErr = 0.026 μs (0.57%), N = 4, StdDev = 0.052 μs
+Min = 4.481 μs, Q1 = 4.539 μs, Median = 4.572 μs, Q3 = 4.588 μs, Max = 4.596 μs
+IQR = 0.050 μs, LowerFence = 4.464 μs, UpperFence = 4.663 μs
+ConfidenceInterval = [4.218 μs; 4.892 μs] (CI 99.9%), Margin = 0.337 μs (7.40% of Mean)
+Skewness = -0.55, Kurtosis = 1.16, MValue = 2
+-------------------- Histogram --------------------
+[4.438 μs ; 4.623 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1024, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 3.602 μs, StdErr = 0.001 μs (0.04%), N = 3, StdDev = 0.003 μs
+Min = 3.600 μs, Q1 = 3.600 μs, Median = 3.600 μs, Q3 = 3.602 μs, Max = 3.605 μs
+IQR = 0.002 μs, LowerFence = 3.597 μs, UpperFence = 3.606 μs
+ConfidenceInterval = [3.555 μs; 3.648 μs] (CI 99.9%), Margin = 0.047 μs (1.30% of Mean)
+Skewness = 0.38, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[3.600 μs ; 3.605 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 92.219 μs, StdErr = 0.381 μs (0.41%), N = 4, StdDev = 0.761 μs
+Min = 91.645 μs, Q1 = 91.739 μs, Median = 91.957 μs, Q3 = 92.436 μs, Max = 93.315 μs
+IQR = 0.697 μs, LowerFence = 90.693 μs, UpperFence = 93.482 μs
+ConfidenceInterval = [87.301 μs; 97.136 μs] (CI 99.9%), Margin = 4.918 μs (5.33% of Mean)
+Skewness = 0.59, Kurtosis = 1.19, MValue = 2
+-------------------- Histogram --------------------
+[91.016 μs ; 93.944 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 49.642 μs, StdErr = 0.303 μs (0.61%), N = 4, StdDev = 0.605 μs
+Min = 49.027 μs, Q1 = 49.187 μs, Median = 49.623 μs, Q3 = 50.079 μs, Max = 50.295 μs
+IQR = 0.892 μs, LowerFence = 47.848 μs, UpperFence = 51.417 μs
+ConfidenceInterval = [45.730 μs; 53.554 μs] (CI 99.9%), Margin = 3.912 μs (7.88% of Mean)
+Skewness = 0.03, Kurtosis = 0.69, MValue = 2
+-------------------- Histogram --------------------
+[49.016 μs ; 50.796 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 15.149 μs, StdErr = 0.158 μs (1.04%), N = 4, StdDev = 0.317 μs
+Min = 14.805 μs, Q1 = 14.924 μs, Median = 15.160 μs, Q3 = 15.386 μs, Max = 15.472 μs
+IQR = 0.462 μs, LowerFence = 14.231 μs, UpperFence = 16.079 μs
+ConfidenceInterval = [13.104 μs; 17.195 μs] (CI 99.9%), Margin = 2.046 μs (13.50% of Mean)
+Skewness = -0.04, Kurtosis = 0.7, MValue = 2
+-------------------- Histogram --------------------
+[14.543 μs ; 14.956 μs) | @
+[14.956 μs ; 15.480 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 5.990 μs, StdErr = 0.085 μs (1.42%), N = 4, StdDev = 0.171 μs
+Min = 5.859 μs, Q1 = 5.861 μs, Median = 5.939 μs, Q3 = 6.067 μs, Max = 6.220 μs
+IQR = 0.206 μs, LowerFence = 5.552 μs, UpperFence = 6.376 μs
+ConfidenceInterval = [4.888 μs; 7.092 μs] (CI 99.9%), Margin = 1.102 μs (18.40% of Mean)
+Skewness = 0.41, Kurtosis = 1, MValue = 2
+-------------------- Histogram --------------------
+[5.797 μs ; 6.079 μs) | @@@
+[6.079 μs ; 6.361 μs) | @
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 13.534 μs, StdErr = 0.062 μs (0.46%), N = 4, StdDev = 0.125 μs
+Min = 13.402 μs, Q1 = 13.442 μs, Median = 13.539 μs, Q3 = 13.631 μs, Max = 13.658 μs
+IQR = 0.188 μs, LowerFence = 13.160 μs, UpperFence = 13.914 μs
+ConfidenceInterval = [12.729 μs; 14.340 μs] (CI 99.9%), Margin = 0.805 μs (5.95% of Mean)
+Skewness = -0.03, Kurtosis = 0.66, MValue = 2
+-------------------- Histogram --------------------
+[13.299 μs ; 13.692 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=16384, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 4.937 μs, StdErr = 0.018 μs (0.36%), N = 4, StdDev = 0.035 μs
+Min = 4.901 μs, Q1 = 4.910 μs, Median = 4.935 μs, Q3 = 4.962 μs, Max = 4.975 μs
+IQR = 0.052 μs, LowerFence = 4.833 μs, UpperFence = 5.039 μs
+ConfidenceInterval = [4.708 μs; 5.165 μs] (CI 99.9%), Margin = 0.228 μs (4.62% of Mean)
+Skewness = 0.04, Kurtosis = 0.7, MValue = 2
+-------------------- Histogram --------------------
+[4.880 μs ; 4.978 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 355.584 μs, StdErr = 0.563 μs (0.16%), N = 4, StdDev = 1.127 μs
+Min = 353.946 μs, Q1 = 355.290 μs, Median = 356.027 μs, Q3 = 356.321 μs, Max = 356.336 μs
+IQR = 1.032 μs, LowerFence = 353.742 μs, UpperFence = 357.868 μs
+ConfidenceInterval = [348.304 μs; 362.864 μs] (CI 99.9%), Margin = 7.280 μs (2.05% of Mean)
+Skewness = -0.62, Kurtosis = 1.21, MValue = 2
+-------------------- Histogram --------------------
+[353.015 μs ; 357.268 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 228.091 μs, StdErr = 0.314 μs (0.14%), N = 4, StdDev = 0.628 μs
+Min = 227.150 μs, Q1 = 228.062 μs, Median = 228.390 μs, Q3 = 228.419 μs, Max = 228.432 μs
+IQR = 0.356 μs, LowerFence = 227.528 μs, UpperFence = 228.953 μs
+ConfidenceInterval = [224.035 μs; 232.147 μs] (CI 99.9%), Margin = 4.056 μs (1.78% of Mean)
+Skewness = -0.75, Kurtosis = 1.31, MValue = 2
+-------------------- Histogram --------------------
+[226.631 μs ; 228.951 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 47.007 μs, StdErr = 0.160 μs (0.34%), N = 4, StdDev = 0.321 μs
+Min = 46.638 μs, Q1 = 46.877 μs, Median = 46.986 μs, Q3 = 47.116 μs, Max = 47.419 μs
+IQR = 0.238 μs, LowerFence = 46.519 μs, UpperFence = 47.473 μs
+ConfidenceInterval = [44.934 μs; 49.080 μs] (CI 99.9%), Margin = 2.073 μs (4.41% of Mean)
+Skewness = 0.15, Kurtosis = 1.12, MValue = 2
+-------------------- Histogram --------------------
+[46.373 μs ; 47.684 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 46.916 μs, StdErr = 0.087 μs (0.18%), N = 4, StdDev = 0.173 μs
+Min = 46.659 μs, Q1 = 46.895 μs, Median = 46.991 μs, Q3 = 47.012 μs, Max = 47.026 μs
+IQR = 0.116 μs, LowerFence = 46.721 μs, UpperFence = 47.186 μs
+ConfidenceInterval = [45.797 μs; 48.036 μs] (CI 99.9%), Margin = 1.119 μs (2.39% of Mean)
+Skewness = -0.72, Kurtosis = 1.29, MValue = 2
+-------------------- Histogram --------------------
+[46.515 μs ; 47.169 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 46.096 μs, StdErr = 0.121 μs (0.26%), N = 4, StdDev = 0.241 μs
+Min = 45.844 μs, Q1 = 45.964 μs, Median = 46.063 μs, Q3 = 46.195 μs, Max = 46.415 μs
+IQR = 0.232 μs, LowerFence = 45.616 μs, UpperFence = 46.543 μs
+ConfidenceInterval = [44.538 μs; 47.654 μs] (CI 99.9%), Margin = 1.558 μs (3.38% of Mean)
+Skewness = 0.28, Kurtosis = 1.07, MValue = 2
+-------------------- Histogram --------------------
+[45.645 μs ; 46.443 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=65536, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 45.770 μs, StdErr = 0.046 μs (0.10%), N = 4, StdDev = 0.092 μs
+Min = 45.657 μs, Q1 = 45.723 μs, Median = 45.775 μs, Q3 = 45.821 μs, Max = 45.875 μs
+IQR = 0.098 μs, LowerFence = 45.576 μs, UpperFence = 45.969 μs
+ConfidenceInterval = [45.174 μs; 46.367 μs] (CI 99.9%), Margin = 0.597 μs (1.30% of Mean)
+Skewness = -0.09, Kurtosis = 0.99, MValue = 2
+-------------------- Histogram --------------------
+[45.580 μs ; 45.951 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 1.540 ms, StdErr = 0.010 ms (0.64%), N = 4, StdDev = 0.020 ms
+Min = 1.511 ms, Q1 = 1.535 ms, Median = 1.547 ms, Q3 = 1.552 ms, Max = 1.554 ms
+IQR = 0.017 ms, LowerFence = 1.510 ms, UpperFence = 1.577 ms
+ConfidenceInterval = [1.413 ms; 1.666 ms] (CI 99.9%), Margin = 0.126 ms (8.21% of Mean)
+Skewness = -0.64, Kurtosis = 1.23, MValue = 2
+-------------------- Histogram --------------------
+[1.495 ms ; 1.532 ms) | @
+[1.532 ms ; 1.570 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 846.895 μs, StdErr = 1.295 μs (0.15%), N = 4, StdDev = 2.591 μs
+Min = 844.505 μs, Q1 = 844.730 μs, Median = 846.912 μs, Q3 = 849.077 μs, Max = 849.250 μs
+IQR = 4.347 μs, LowerFence = 838.209 μs, UpperFence = 855.598 μs
+ConfidenceInterval = [830.152 μs; 863.638 μs] (CI 99.9%), Margin = 16.743 μs (1.98% of Mean)
+Skewness = -0, Kurtosis = 0.57, MValue = 2
+-------------------- Histogram --------------------
+[842.363 μs ; 851.393 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 486.129 μs, StdErr = 1.928 μs (0.40%), N = 4, StdDev = 3.856 μs
+Min = 481.742 μs, Q1 = 483.553 μs, Median = 486.335 μs, Q3 = 488.911 μs, Max = 490.104 μs
+IQR = 5.358 μs, LowerFence = 475.516 μs, UpperFence = 496.947 μs
+ConfidenceInterval = [461.208 μs; 511.049 μs] (CI 99.9%), Margin = 24.920 μs (5.13% of Mean)
+Skewness = -0.07, Kurtosis = 0.75, MValue = 2
+-------------------- Histogram --------------------
+[478.553 μs ; 492.001 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 175.358 μs, StdErr = 0.839 μs (0.48%), N = 4, StdDev = 1.678 μs
+Min = 173.824 μs, Q1 = 173.971 μs, Median = 175.255 μs, Q3 = 176.642 μs, Max = 177.097 μs
+IQR = 2.670 μs, LowerFence = 169.966 μs, UpperFence = 180.647 μs
+ConfidenceInterval = [164.514 μs; 186.202 μs] (CI 99.9%), Margin = 10.844 μs (6.18% of Mean)
+Skewness = 0.04, Kurtosis = 0.62, MValue = 2
+-------------------- Histogram --------------------
+[173.405 μs ; 178.485 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 487.966 μs, StdErr = 1.178 μs (0.24%), N = 4, StdDev = 2.357 μs
+Min = 484.809 μs, Q1 = 486.956 μs, Median = 488.397 μs, Q3 = 489.407 μs, Max = 490.261 μs
+IQR = 2.451 μs, LowerFence = 483.278 μs, UpperFence = 493.084 μs
+ConfidenceInterval = [472.738 μs; 503.193 μs] (CI 99.9%), Margin = 15.228 μs (3.12% of Mean)
+Skewness = -0.34, Kurtosis = 1.04, MValue = 2
+-------------------- Histogram --------------------
+[482.860 μs ; 492.209 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=262144, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 172.571 μs, StdErr = 0.479 μs (0.28%), N = 3, StdDev = 0.830 μs
+Min = 171.613 μs, Q1 = 172.327 μs, Median = 173.041 μs, Q3 = 173.050 μs, Max = 173.060 μs
+IQR = 0.723 μs, LowerFence = 171.242 μs, UpperFence = 174.135 μs
+ConfidenceInterval = [157.435 μs; 187.708 μs] (CI 99.9%), Margin = 15.137 μs (8.77% of Mean)
+Skewness = -0.38, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[171.582 μs ; 173.092 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 6.514 ms, StdErr = 0.002 ms (0.03%), N = 3, StdDev = 0.003 ms
+Min = 6.511 ms, Q1 = 6.513 ms, Median = 6.515 ms, Q3 = 6.516 ms, Max = 6.517 ms
+IQR = 0.003 ms, LowerFence = 6.508 ms, UpperFence = 6.521 ms
+ConfidenceInterval = [6.454 ms; 6.574 ms] (CI 99.9%), Margin = 0.060 ms (0.92% of Mean)
+Skewness = -0.16, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[6.508 ms ; 6.520 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 3.240 ms, StdErr = 0.008 ms (0.26%), N = 4, StdDev = 0.017 ms
+Min = 3.222 ms, Q1 = 3.233 ms, Median = 3.238 ms, Q3 = 3.245 ms, Max = 3.263 ms
+IQR = 0.012 ms, LowerFence = 3.214 ms, UpperFence = 3.263 ms
+ConfidenceInterval = [3.131 ms; 3.349 ms] (CI 99.9%), Margin = 0.109 ms (3.37% of Mean)
+Skewness = 0.3, Kurtosis = 1.14, MValue = 2
+-------------------- Histogram --------------------
+[3.208 ms ; 3.263 ms) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 1.656 ms, StdErr = 0.020 ms (1.21%), N = 4, StdDev = 0.040 ms
+Min = 1.617 ms, Q1 = 1.630 ms, Median = 1.650 ms, Q3 = 1.677 ms, Max = 1.708 ms
+IQR = 0.047 ms, LowerFence = 1.560 ms, UpperFence = 1.747 ms
+ConfidenceInterval = [1.397 ms; 1.916 ms] (CI 99.9%), Margin = 0.259 ms (15.65% of Mean)
+Skewness = 0.27, Kurtosis = 0.96, MValue = 2
+-------------------- Histogram --------------------
+[1.608 ms ; 1.675 ms) | @@@
+[1.675 ms ; 1.742 ms) | @
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 398.292 μs, StdErr = 0.408 μs (0.10%), N = 3, StdDev = 0.706 μs
+Min = 397.509 μs, Q1 = 397.998 μs, Median = 398.486 μs, Q3 = 398.684 μs, Max = 398.881 μs
+IQR = 0.686 μs, LowerFence = 396.969 μs, UpperFence = 399.713 μs
+ConfidenceInterval = [385.407 μs; 411.177 μs] (CI 99.9%), Margin = 12.885 μs (3.24% of Mean)
+Skewness = -0.25, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[396.866 μs ; 399.524 μs) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 1.632 ms, StdErr = 0.006 ms (0.39%), N = 4, StdDev = 0.013 ms
+Min = 1.616 ms, Q1 = 1.626 ms, Median = 1.634 ms, Q3 = 1.641 ms, Max = 1.645 ms
+IQR = 0.015 ms, LowerFence = 1.603 ms, UpperFence = 1.663 ms
+ConfidenceInterval = [1.551 ms; 1.714 ms] (CI 99.9%), Margin = 0.082 ms (4.99% of Mean)
+Skewness = -0.2, Kurtosis = 0.93, MValue = 2
+-------------------- Histogram --------------------
+[1.606 ms ; 1.653 ms) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=1048576, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 419.548 μs, StdErr = 1.978 μs (0.47%), N = 4, StdDev = 3.955 μs
+Min = 416.113 μs, Q1 = 416.385 μs, Median = 418.889 μs, Q3 = 422.052 μs, Max = 424.303 μs
+IQR = 5.667 μs, LowerFence = 407.884 μs, UpperFence = 430.553 μs
+ConfidenceInterval = [393.990 μs; 445.106 μs] (CI 99.9%), Margin = 25.558 μs (6.09% of Mean)
+Skewness = 0.18, Kurtosis = 0.77, MValue = 2
+-------------------- Histogram --------------------
+[414.520 μs ; 427.574 μs) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 34.134 ms, StdErr = 0.262 ms (0.77%), N = 4, StdDev = 0.525 ms
+Min = 33.413 ms, Q1 = 33.912 ms, Median = 34.295 ms, Q3 = 34.517 ms, Max = 34.533 ms
+IQR = 0.605 ms, LowerFence = 33.005 ms, UpperFence = 35.425 ms
+ConfidenceInterval = [30.744 ms; 37.524 ms] (CI 99.9%), Margin = 3.390 ms (9.93% of Mean)
+Skewness = -0.45, Kurtosis = 1.05, MValue = 2
+-------------------- Histogram --------------------
+[32.979 ms ; 33.872 ms) | @
+[33.872 ms ; 34.740 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=dot-leading]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 20.015 ms, StdErr = 0.024 ms (0.12%), N = 3, StdDev = 0.041 ms
+Min = 19.971 ms, Q1 = 19.996 ms, Median = 20.022 ms, Q3 = 20.037 ms, Max = 20.053 ms
+IQR = 0.041 ms, LowerFence = 19.935 ms, UpperFence = 20.099 ms
+ConfidenceInterval = [19.261 ms; 20.769 ms] (CI 99.9%), Margin = 0.754 ms (3.77% of Mean)
+Skewness = -0.16, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[19.933 ms ; 20.090 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 8.284 ms, StdErr = 0.003 ms (0.03%), N = 3, StdDev = 0.004 ms
+Min = 8.279 ms, Q1 = 8.281 ms, Median = 8.284 ms, Q3 = 8.286 ms, Max = 8.288 ms
+IQR = 0.004 ms, LowerFence = 8.275 ms, UpperFence = 8.292 ms
+ConfidenceInterval = [8.203 ms; 8.365 ms] (CI 99.9%), Margin = 0.081 ms (0.98% of Mean)
+Skewness = -0.01, Kurtosis = 0.67, MValue = 2
+-------------------- Histogram --------------------
+[8.275 ms ; 8.292 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=multi-header]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 4.604 ms, StdErr = 0.065 ms (1.41%), N = 4, StdDev = 0.130 ms
+Min = 4.426 ms, Q1 = 4.565 ms, Median = 4.626 ms, Q3 = 4.664 ms, Max = 4.737 ms
+IQR = 0.099 ms, LowerFence = 4.417 ms, UpperFence = 4.813 ms
+ConfidenceInterval = [3.763 ms; 5.444 ms] (CI 99.9%), Margin = 0.840 ms (18.26% of Mean)
+Skewness = -0.36, Kurtosis = 1.15, MValue = 2
+-------------------- Histogram --------------------
+[4.319 ms ; 4.567 ms) | @
+[4.567 ms ; 4.782 ms) | @@@
+---------------------------------------------------
+
+PostStreamingBench.Legacy: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 8.326 ms, StdErr = 0.029 ms (0.35%), N = 4, StdDev = 0.058 ms
+Min = 8.264 ms, Q1 = 8.283 ms, Median = 8.328 ms, Q3 = 8.371 ms, Max = 8.383 ms
+IQR = 0.088 ms, LowerFence = 8.152 ms, UpperFence = 8.502 ms
+ConfidenceInterval = [7.951 ms; 8.700 ms] (CI 99.9%), Margin = 0.374 ms (4.50% of Mean)
+Skewness = -0.03, Kurtosis = 0.66, MValue = 2
+-------------------- Histogram --------------------
+[8.253 ms ; 8.420 ms) | @@@@
+---------------------------------------------------
+
+PostStreamingBench.Streaming: Job-KULIUI(Runtime=.NET 10.0, IterationCount=4, WarmupCount=1) [Size=5242880, Shape=normal]
+Runtime = .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2; GC = Concurrent Workstation
+Mean = 4.433 ms, StdErr = 0.152 ms (3.44%), N = 4, StdDev = 0.305 ms
+Min = 4.129 ms, Q1 = 4.237 ms, Median = 4.387 ms, Q3 = 4.583 ms, Max = 4.829 ms
+IQR = 0.345 ms, LowerFence = 3.719 ms, UpperFence = 5.101 ms
+ConfidenceInterval = [2.463 ms; 6.403 ms] (CI 99.9%), Margin = 1.970 ms (44.44% of Mean)
+Skewness = 0.27, Kurtosis = 0.97, MValue = 2
+-------------------- Histogram --------------------
+[4.063 ms ; 4.567 ms) | @@@
+[4.567 ms ; 5.081 ms) | @
+---------------------------------------------------
+
+// * Summary *
+
+BenchmarkDotNet v0.15.2, Windows 11 (10.0.26200.9457)
+Unknown processor
+.NET SDK 10.0.401
+  [Host]     : .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+  Job-KULIUI : .NET 10.0.12 (10.0.1226.42308), X64 RyuJIT AVX2
+
+Runtime=.NET 10.0  IterationCount=4  WarmupCount=1  
+
+| Method    | Size    | Shape        | Mean          | Error         | StdDev      | Ratio | RatioSD | Gen0      | Gen1      | Gen2      | Allocated   | Alloc Ratio |
+|---------- |-------- |------------- |--------------:|--------------:|------------:|------:|--------:|----------:|----------:|----------:|------------:|------------:|
+| Legacy    | 1024    | dot-leading  |      7.963 μs |     0.1043 μs |   0.0057 μs |  1.00 |    0.00 |    4.9133 |    1.2207 |         - |    75.63 KB |        1.00 |
+| Streaming | 1024    | dot-leading  |      5.481 μs |     0.6687 μs |   0.1035 μs |  0.69 |    0.01 |    4.3793 |    1.0910 |         - |    67.57 KB |        0.89 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 1024    | multi-header |      5.774 μs |     0.2514 μs |   0.0138 μs |  1.00 |    0.00 |    5.0201 |    0.6256 |         - |    77.15 KB |        1.00 |
+| Streaming | 1024    | multi-header |      4.580 μs |     0.2728 μs |   0.0422 μs |  0.79 |    0.01 |    4.5242 |    0.0458 |         - |    69.45 KB |        0.90 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 1024    | normal       |      4.555 μs |     0.3369 μs |   0.0521 μs |  1.00 |    0.01 |    4.8981 |    1.2207 |         - |    75.45 KB |        1.00 |
+| Streaming | 1024    | normal       |      3.602 μs |     0.0468 μs |   0.0026 μs |  0.79 |    0.01 |    4.3831 |    1.0948 |         - |    67.57 KB |        0.90 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 16384   | dot-leading  |     92.219 μs |     4.9177 μs |   0.7610 μs |  1.00 |    0.01 |   10.0098 |    1.5869 |         - |   154.09 KB |        1.00 |
+| Streaming | 16384   | dot-leading  |     49.642 μs |     3.9122 μs |   0.6054 μs |  0.54 |    0.01 |    4.3945 |         - |         - |    68.03 KB |        0.44 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 16384   | multi-header |     15.149 μs |     2.0455 μs |   0.3165 μs |  1.00 |    0.03 |    9.9487 |    2.4719 |         - |   152.61 KB |        1.00 |
+| Streaming | 16384   | multi-header |      5.990 μs |     1.1020 μs |   0.1705 μs |  0.40 |    0.01 |    4.5395 |    0.0534 |         - |    69.91 KB |        0.46 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 16384   | normal       |     13.534 μs |     0.8053 μs |   0.1246 μs |  1.00 |    0.01 |    9.7961 |    2.4414 |         - |   150.91 KB |        1.00 |
+| Streaming | 16384   | normal       |      4.937 μs |     0.2283 μs |   0.0353 μs |  0.36 |    0.00 |    4.4174 |    0.0153 |         - |    68.03 KB |        0.45 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 65536   | dot-leading  |    355.584 μs |     7.2804 μs |   1.1267 μs |  1.00 |    0.00 |   25.8789 |    4.8828 |         - |   405.32 KB |        1.00 |
+| Streaming | 65536   | dot-leading  |    228.091 μs |     4.0558 μs |   0.6276 μs |  0.64 |    0.00 |   41.5039 |   41.5039 |   41.5039 |   197.72 KB |        0.49 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 65536   | multi-header |     47.007 μs |     2.0728 μs |   0.3208 μs |  1.00 |    0.01 |   25.6348 |    0.1831 |         - |   394.16 KB |        1.00 |
+| Streaming | 65536   | multi-header |     46.916 μs |     1.1193 μs |   0.1732 μs |  1.00 |    0.01 |   41.6260 |   41.6260 |   41.6260 |   199.51 KB |        0.51 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 65536   | normal       |     46.096 μs |     1.5579 μs |   0.2411 μs |  1.00 |    0.01 |   25.5127 |    8.4839 |         - |   392.46 KB |        1.00 |
+| Streaming | 65536   | normal       |     45.770 μs |     0.5967 μs |   0.0923 μs |  0.99 |    0.00 |   41.6260 |   41.6260 |   41.6260 |   197.63 KB |        0.50 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 262144  | dot-leading  |  1,539.937 μs |   126.4779 μs |  19.5726 μs |  1.00 |    0.02 |  503.9063 |  500.0000 |  500.0000 |  1796.12 KB |        1.00 |
+| Streaming | 262144  | dot-leading  |    846.895 μs |    16.7427 μs |   2.5910 μs |  0.55 |    0.01 |  285.1563 |  285.1563 |  285.1563 |   972.45 KB |        0.54 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 262144  | multi-header |    486.129 μs |    24.9204 μs |   3.8565 μs |  1.00 |    0.01 |  499.0234 |  499.0234 |  499.0234 |  1680.26 KB |        1.00 |
+| Streaming | 262144  | multi-header |    175.358 μs |    10.8438 μs |   1.6781 μs |  0.36 |    0.00 |  285.6445 |  285.6445 |  285.6445 |   973.77 KB |        0.58 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 262144  | normal       |    487.966 μs |    15.2277 μs |   2.3565 μs |  1.00 |    0.01 |  499.0234 |  499.0234 |  499.0234 |  1678.73 KB |        1.00 |
+| Streaming | 262144  | normal       |    172.571 μs |    15.1368 μs |   0.8297 μs |  0.35 |    0.00 |  285.6445 |  285.6445 |  285.6445 |   971.88 KB |        0.58 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 1048576 | dot-leading  |  6,514.127 μs |    60.0253 μs |   3.2902 μs |  1.00 |    0.00 |  765.6250 |  765.6250 |  765.6250 |  7346.22 KB |        1.00 |
+| Streaming | 1048576 | dot-leading  |  3,239.982 μs |   109.1758 μs |  16.8951 μs |  0.50 |    0.00 | 1000.0000 |  996.0938 |  996.0938 |  4066.76 KB |        0.55 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 1048576 | multi-header |  1,656.466 μs |   259.2856 μs |  40.1247 μs |  1.00 |    0.03 |  468.7500 |  464.8438 |  464.8438 |   6308.9 KB |        1.00 |
+| Streaming | 1048576 | multi-header |    398.292 μs |    12.8850 μs |   0.7063 μs |  0.24 |    0.01 |  671.3867 |  665.5273 |  664.5508 |  4066.08 KB |        0.64 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 1048576 | normal       |  1,632.394 μs |    81.5010 μs |  12.6124 μs |  1.00 |    0.01 |  455.0781 |  449.2188 |  449.2188 |  6307.26 KB |        1.00 |
+| Streaming | 1048576 | normal       |    419.548 μs |    25.5580 μs |   3.9551 μs |  0.26 |    0.00 |  672.8516 |  666.9922 |  666.0156 |   4064.3 KB |        0.64 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 5242880 | dot-leading  | 34,134.180 μs | 3,389.8053 μs | 524.5761 μs |  1.00 |    0.02 | 1133.3333 | 1066.6667 | 1000.0000 |  45658.7 KB |        1.00 |
+| Streaming | 5242880 | dot-leading  | 20,015.264 μs |   754.0468 μs |  41.3319 μs |  0.59 |    0.01 |  687.5000 |  656.2500 |  531.2500 | 19031.03 KB |        0.42 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 5242880 | multi-header |  8,283.566 μs |    81.0343 μs |   4.4418 μs |  1.00 |    0.00 | 1125.0000 | 1078.1250 |  984.3750 | 33040.58 KB |        1.00 |
+| Streaming | 5242880 | multi-header |  4,603.698 μs |   840.4265 μs | 130.0569 μs |  0.56 |    0.01 |  570.3125 |  515.6250 |  429.6875 | 18510.05 KB |        0.56 |
+|           |         |              |               |               |             |       |         |           |           |           |             |             |
+| Legacy    | 5242880 | normal       |  8,325.721 μs |   374.4987 μs |  57.9541 μs |  1.00 |    0.01 | 1125.0000 | 1062.5000 |  984.3750 | 33039.04 KB |        1.00 |
+| Streaming | 5242880 | normal       |  4,432.924 μs | 1,970.0366 μs | 304.8653 μs |  0.53 |    0.03 |  570.3125 |  523.4375 |  429.6875 | 18508.17 KB |        0.56 |
+
+// * Hints *
+Outliers
+  PostStreamingBench.Legacy: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1    -> 1 outlier  was  removed (8.05 μs)
+  PostStreamingBench.Legacy: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1    -> 1 outlier  was  removed (5.89 μs)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  removed (3.65 μs)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  detected (227.15 μs)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  detected (46.66 μs)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  removed (174.57 μs)
+  PostStreamingBench.Legacy: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1    -> 1 outlier  was  removed (6.53 ms)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  removed (402.45 μs)
+  PostStreamingBench.Streaming: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1 -> 1 outlier  was  removed (20.24 ms)
+  PostStreamingBench.Legacy: Runtime=.NET 10.0, IterationCount=4, WarmupCount=1    -> 1 outlier  was  removed (8.48 ms)
+
+// * Legends *
+  Size        : Value of the 'Size' parameter
+  Shape       : Value of the 'Shape' parameter
+  Mean        : Arithmetic mean of all measurements
+  Error       : Half of 99.9% confidence interval
+  StdDev      : Standard deviation of all measurements
+  Ratio       : Mean of the ratio distribution ([Current]/[Baseline])
+  RatioSD     : Standard deviation of the ratio distribution ([Current]/[Baseline])
+  Gen0        : GC Generation 0 collects per 1000 operations
+  Gen1        : GC Generation 1 collects per 1000 operations
+  Gen2        : GC Generation 2 collects per 1000 operations
+  Allocated   : Allocated memory per single operation (managed only, inclusive, 1KB = 1024B)
+  Alloc Ratio : Allocated memory ratio distribution ([Current]/[Baseline])
+  1 μs        : 1 Microsecond (0.000001 sec)
+
+// * Diagnostic Output - MemoryDiagnoser *
+
+
+// ***** BenchmarkRunner: End *****
+Run time: 00:03:48 (228.44 sec), executed benchmarks: 36
+
+Global total time: 00:03:58 (238.62 sec), executed benchmarks: 36
+// * Artifacts cleanup *
+Artifacts cleanup is finished

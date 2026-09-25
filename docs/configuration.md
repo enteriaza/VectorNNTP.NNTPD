@@ -31,11 +31,15 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
 | `HistoryTime` | `TimeSpan` | `02:00:00` | no | HistoryDB retention for local memory and Redis key TTL (`1s`–`7d`) |
-| `IdleTime` | int (seconds) | `300` | no | Disconnect an established NNTP session after this many seconds with no executed NNTP command (`1`–`86400`). `0` is invalid (not disabled). Resets when a command is accepted; in-flight CHECK/TAKETHIS keep the session non-idle. Not TCP/TLS/socket receive idle. |
+| `IdleTime` | int (seconds) | `300` | no | Disconnect an established NNTP session after this many seconds with no executed NNTP command (`1`–`86400`). `0` is invalid (not disabled). Resets when a command is accepted; in-flight CHECK/TAKETHIS/POST (including article receive and validation) keep the session non-idle. Not TCP/TLS/socket receive idle. |
+| `MaxArticleSize` | int | `5242880` (5 MiB) | no | Maximum destuffed POST article size in bytes (`1`–`104857600`). Enforced during streaming receive (headers + blank separator + body; terminator excluded; stuffing dots are not counted). Exceeding the limit ends reception and returns `441 Posting failed`. Distinct from `ArticleIngestion:MaxArticleBytes` (IHAVE/TAKETHIS). |
+| `MailComplaintsTo` | string | `abuse@usenet.ninja` | no | Mailbox emitted as `mail-complaints-to` on server-generated POST `Injection-Info`. Must be a plausible mailbox. Client `Injection-Info` is discarded. |
+| `XTraceKey` | string | _(none)_ | **yes** (secret) | 32-byte AES-256 key that protects POST `X-Trace` (64 hex characters or Base64). Supply via `nntpd__XTraceKey` or secrets. Never commit. |
+| `XTracePreviousKey` | string | _(none)_ | no (secret) | Optional previous AES-256 key retained for one-generation decrypt after rotation. Supply via `nntpd__XTracePreviousKey`. |
 | `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
-| `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max unstuffed article size (`1–104857600`) |
+| `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
 | `SpeedTest:MaxDurationSeconds` | int | `10` | no | Maximum SPEEDTEST payload duration (`1–60`) |
 | `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
@@ -49,6 +53,77 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
 
 CHECK in-flight depth is **not configurable**. Per-session overlap is the architectural constant `CheckPipeline.Depth` = 16 (see `docs/architecture.md`). A leftover `Nntpd:CheckPipelineDepth` key is ignored.
+
+## POST article size (`MaxArticleSize`)
+
+`Nntpd:MaxArticleSize` is the maximum destuffed POST article size in bytes. Default is `5242880` (exactly 5 MiB). Zero and negative values fail startup validation. The accepted range is `1`–`104857600` (100 MiB).
+
+The count is the destuffed client article: header block, the blank header/body separator, and body. The NNTP multiline terminator (`CRLF . CRLF`) is not included. Stuffing dots (`..` on the wire for a destuffed `.` line) are not counted. The limit is enforced while the article is streamed; exceeding it ends reception and returns `441 Posting failed`. The server does not buffer an oversized article merely because the terminator has not arrived yet.
+
+This setting is distinct from `ArticleIngestion:MaxArticleBytes`, which bounds IHAVE/TAKETHIS receive and IHAVE worker destuff (default 4 MiB). A valid 5 MiB POST is not re-checked against `MaxArticleBytes`. The spool worker destuffs POST using the queued stuffed payload length so server-owned headers added after receive cannot cause a second size reject.
+
+Example:
+
+```json
+"Nntpd": {
+  "MaxArticleSize": 5242880,
+  "MailComplaintsTo": "abuse@usenet.ninja"
+}
+```
+
+## POST complaint mailbox (`MailComplaintsTo`)
+
+`Nntpd:MailComplaintsTo` is the mailbox written as `mail-complaints-to` on the server-generated POST `Injection-Info` header. Default is `abuse@usenet.ninja`. Empty, whitespace-only, and implausible mailbox values fail startup validation. Client-supplied `Injection-Info` is discarded.
+
+Example:
+
+```json
+"Nntpd": {
+  "MailComplaintsTo": "abuse@usenet.ninja"
+}
+```
+
+## POST injection metadata
+
+VectorNNTP treats the following headers as server-owned for locally POSTed articles. Client-supplied values are discarded and replaced; they are never accepted as this server’s posting path or injection identity.
+
+| Header | Server value |
+|--------|----------------|
+| `Path` | exactly `.POSTED` |
+| `Injection-Date` | UTC RFC date-time captured once at the injection boundary |
+| `Injection-Info` | `{Fqdn}; logging-data="{Message-ID}"; mail-complaints-to="{MailComplaintsTo}"` |
+| `X-Trace` | opaque AES-256-GCM token (`v1.` + Base64url of nonce, ciphertext, and tag) |
+| `Xref` | discarded (not emitted on POST) |
+| `NNTP-Posting-Date` | discarded (not generated) |
+| `NNTP-Posting-Host` | discarded (not generated) |
+
+The client transport IP address is never written in plaintext article headers. `Injection-Info` does not include `posting-host`. Transport identity (peer address, port, injection timestamp, and a unique trace id) is retained only inside the authenticated-encrypted `X-Trace` payload for trusted server-side diagnostics. Base64 encoding of the IP is not used as protection; AES-GCM provides confidentiality and tamper detection.
+
+`Fqdn` is the generated `nntpd{ServerId:00}.{DnsSuffix}` identity (for example `nntpd01.usenet.ninja`). The client `Date:` is preserved. A missing `Message-ID:` is synthesized as `<MD5(UUID())@usenet.ninja>` for that posting attempt.
+
+## POST X-Trace protection (`XTraceKey`)
+
+`Nntpd:XTraceKey` is the persisted AES-256 key used by `AesGcmPostingTraceProtector` to generate POST `X-Trace` values. The process does not generate a random key at startup. Restarting with the same key keeps previously issued tokens decryptable.
+
+Rotation:
+
+1. Generate a new 32-byte key and store it as `XTraceKey`.
+2. Move the previous current key to `XTracePreviousKey`.
+3. New articles use the current key. Trusted decrypt tries the current key, then the previous key.
+4. After the previous key is removed, tokens produced only with that retired key cannot be decrypted.
+
+Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs.
+
+Example environment:
+
+```text
+nntpd__XTraceKey=<64-hex-or-base64-32-byte-key>
+nntpd__XTracePreviousKey=<optional-previous-key>
+```
+
+POST returns `240 Article received OK` only after the article has been streamed into one stuffed IHAVE/TAKETHIS queue representation (dot-stuffed wire, NNTP terminator omitted) and admitted with `IArticleIngestionQueue.TryAdmit`. POST does not persist, deliver, or propagate the article; existing ingestion workers own that work after admission. Admission failure returns `441 Posting failed`.
+
+Newsgroup existence and moderation state are not available. POST validates newsgroup-name syntax and consults `INewsgroupPostingPolicy`. The current `SyntaxOnlyNewsgroupPostingPolicy` authorizes syntax-valid groups without asserting that the groups exist.
 
 ## Transit article-queue memory (`TransitQueueMemoryLimit`)
 

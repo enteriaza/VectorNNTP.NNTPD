@@ -11,8 +11,11 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// Start order: after listeners may accept connections is acceptable; the queue is a singleton
 /// that buffers until this service is running. Stop completes the queue writer and drains
-/// already-accepted articles before exiting. IHAVE items are destuffed once via
-/// <see cref="IhaveArticleInterpreter"/> before persist. TAKETHIS payloads are unchanged.
+/// already-accepted articles before exiting. IHAVE items are destuffed once
+/// under <c>ArticleIngestion:MaxArticleBytes</c>. POST items are destuffed once
+/// using the queued stuffed payload length (POST receive already enforced
+/// <c>Nntpd:MaxArticleSize</c> on destuffed client bytes). TAKETHIS payloads
+/// are unchanged.
 /// Production starts exactly one drain loop. The queue supports concurrent
 /// <see cref="IArticleIngestionQueue.DequeueAsync"/> callers; this service does not
 /// create additional consumers.
@@ -124,9 +127,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _feedDiagnostics.BeginSpoolWork();
             try
             {
-                if (article.Producer == InboundArticleProducer.IHave)
+                if (article.Producer is InboundArticleProducer.IHave or InboundArticleProducer.Post)
                 {
-                    article = IhaveArticleInterpreter.Interpret(article, _queue.MaxArticleBytes);
+                    article = IhaveArticleInterpreter.Interpret(article, DestuffLimit(article));
                 }
 
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
@@ -153,5 +156,23 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         }
 
         SpoolLogMessages.WriterStopped(_logger);
+    }
+
+    /// <summary>
+    /// Destuff ceiling for one queued item. IHAVE uses
+    /// <c>ArticleIngestion:MaxArticleBytes</c>. POST uses the queued stuffed
+    /// payload length, which is an upper bound on destuffed size and already
+    /// includes server-owned headers written after <c>Nntpd:MaxArticleSize</c>
+    /// was enforced on the client destuffed article.
+    /// </summary>
+    internal int DestuffLimit(InboundArticle article)
+    {
+        ArgumentNullException.ThrowIfNull(article);
+        if (article.Producer == InboundArticleProducer.Post)
+        {
+            return Math.Max(1, article.Payload.Length);
+        }
+
+        return _queue.MaxArticleBytes;
     }
 }

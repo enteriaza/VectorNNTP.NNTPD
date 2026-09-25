@@ -206,6 +206,18 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> IhaveSendArticle =
         Line("335 Send article to be transferred\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> ArticleReceivedOk =
+        Line("240 Article received OK\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> PostSendArticle =
+        Line("340 Input article; end with <CR-LF>.<CR-LF>\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> PostingProhibited =
+        Line("440 Posting not permitted\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> PostingFailed =
+        Line("441 Posting failed\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> IhaveTransferredOk =
         Line("235 Article transferred OK\r\n"u8);
 

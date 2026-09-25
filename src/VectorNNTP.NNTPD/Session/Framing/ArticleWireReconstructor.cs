@@ -27,16 +27,22 @@ public static class ArticleWireReconstructor
     private static readonly byte[] Terminator = ".\r\n"u8.ToArray();
 
     /// <summary>
-    /// Re-stuffs a de-stuffed stored article into multiline wire form (body + terminator; no status line).
+    /// Re-stuffs a de-stuffed stored article into multiline wire form (no status line).
     /// </summary>
-    public static byte[] RestuffArticle(ReadOnlySpan<byte> storedDestuffed)
+    /// <param name="storedDestuffed">Destuffed article bytes (terminator not present).</param>
+    /// <param name="includeTerminator">
+    /// When <see langword="true"/>, appends the NNTP multiline terminator <c>.CRLF</c>
+    /// (TX / client transfer). When <see langword="false"/>, omits it so the result matches
+    /// the IHAVE/TAKETHIS ingestion-queue contract.
+    /// </param>
+    public static byte[] RestuffArticle(ReadOnlySpan<byte> storedDestuffed, bool includeTerminator = true)
     {
         if (storedDestuffed.IsEmpty)
         {
-            return Terminator.ToArray();
+            return includeTerminator ? Terminator.ToArray() : [];
         }
 
-        var estimated = EstimateRestuffedWireBytes(storedDestuffed);
+        var estimated = EstimateRestuffedWireBytes(storedDestuffed, includeTerminator);
         var writer = new ArrayBufferWriter<byte>((int)Math.Min(estimated, int.MaxValue));
         var offset = 0;
         while (offset < storedDestuffed.Length)
@@ -64,18 +70,24 @@ public static class ArticleWireReconstructor
             writer.Write(Crlf);
         }
 
-        writer.Write(Terminator);
+        if (includeTerminator)
+        {
+            writer.Write(Terminator);
+        }
+
         return writer.WrittenSpan.ToArray();
     }
 
     /// <summary>
     /// Estimates wire article bytes (restuffed body + terminator) without allocating the full buffer.
     /// </summary>
-    public static long EstimateRestuffedWireBytes(ReadOnlySpan<byte> storedDestuffed)
+    public static long EstimateRestuffedWireBytes(
+        ReadOnlySpan<byte> storedDestuffed,
+        bool includeTerminator = true)
     {
         if (storedDestuffed.IsEmpty)
         {
-            return Terminator.Length;
+            return includeTerminator ? Terminator.Length : 0;
         }
 
         long extraDots = 0;
@@ -90,7 +102,8 @@ public static class ArticleWireReconstructor
                 line = remaining;
                 // Missing trailing CRLF will be added on the wire.
                 extraDots += line.Length > 0 && line[0] == (byte)'.' ? 1 : 0;
-                return storedDestuffed.Length + 2 + extraDots + Terminator.Length;
+                var withoutTerminator = storedDestuffed.Length + 2 + extraDots;
+                return includeTerminator ? withoutTerminator + Terminator.Length : withoutTerminator;
             }
 
             line = remaining[..crlfAt];
@@ -102,7 +115,8 @@ public static class ArticleWireReconstructor
             offset += crlfAt + 2;
         }
 
-        return storedDestuffed.Length + extraDots + Terminator.Length;
+        var complete = storedDestuffed.Length + extraDots;
+        return includeTerminator ? complete + Terminator.Length : complete;
     }
 
     /// <summary>

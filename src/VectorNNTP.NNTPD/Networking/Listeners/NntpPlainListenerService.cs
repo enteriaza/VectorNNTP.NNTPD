@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -40,6 +41,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IFeedDiagnostics _feedDiagnostics;
     private readonly INntpSessionCensus? _sessionCensus;
     private readonly ITransitPeerMetrics? _peerMetrics;
+    private readonly IPostingTraceProtector? _postingTraceProtector;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
@@ -66,7 +68,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IFeedDiagnostics? feedDiagnostics = null,
         IListenSocketBinder? listenBinder = null,
         INntpSessionCensus? sessionCensus = null,
-        ITransitPeerMetrics? peerMetrics = null)
+        ITransitPeerMetrics? peerMetrics = null,
+        IPostingTraceProtector? postingTraceProtector = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -88,6 +91,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
         _sessionCensus = sessionCensus;
         _peerMetrics = peerMetrics;
+        _postingTraceProtector = postingTraceProtector;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -304,7 +308,11 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 speedTest: _speedTest,
                 sessionCensus: _sessionCensus,
                 peerMetrics: _peerMetrics,
-                commandIdleTimeout: TimeSpan.FromSeconds(_options.Value.IdleTime));
+                commandIdleTimeout: TimeSpan.FromSeconds(_options.Value.IdleTime),
+                maxArticleSize: _options.Value.MaxArticleSize,
+                injectionIdentity: _options.Value.Fqdn,
+                mailComplaintsTo: _options.Value.MailComplaintsTo,
+                postingTraceProtector: _postingTraceProtector);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))

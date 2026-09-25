@@ -162,7 +162,16 @@ public sealed class NntpCommandLoggingTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("POST");
-        Assert.StartsWith("500 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientBytesAsync(
+            Encoding.ASCII.GetBytes(
+                "Date: " + DateTimeOffset.UtcNow.ToString("dd MMM yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + " +0000\r\n" +
+                "From: poster@example.com\r\n" +
+                "Newsgroups: misc.test\r\n" +
+                "Subject: logging\r\n" +
+                "Message-ID: <post-log@example.com>\r\n" +
+                "\r\nbody\r\n.\r\n"));
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -171,8 +180,8 @@ public sealed class NntpCommandLoggingTests
         Assert.Equal(
             1,
             recording.Messages.Count(m =>
-                m.Contains("TX: POST [500 Command not implemented] executed in", StringComparison.Ordinal)));
-        Assert.Contains(recording.Messages, m => m.Contains("[not implemented]", StringComparison.Ordinal));
+                m.Contains("TX: POST [441 Posting failed] executed in", StringComparison.Ordinal)));
+        Assert.Contains(recording.Messages, m => m.Contains("[posting failed]", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -271,6 +280,11 @@ public sealed class NntpCommandLoggingTests
         {
             await duplex.WriteClientLineAsync(line);
             await DrainResponseAsync(duplex);
+            if (line == "POST")
+            {
+                await duplex.WriteClientBytesAsync(".\r\n"u8.ToArray());
+                await DrainResponseAsync(duplex);
+            }
         }
 
         await duplex.WriteClientLineAsync("QUIT");

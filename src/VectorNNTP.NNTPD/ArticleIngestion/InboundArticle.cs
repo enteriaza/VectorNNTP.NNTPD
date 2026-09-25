@@ -16,6 +16,10 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// STREAM TAKETHIS supplies framed wire bytes (no destuff). MODE READER multiline
 /// fallback destuffs per RFC 3977 §3.1.1. TAKETHIS enqueue is unchanged.
 /// </para>
+/// <para>
+/// POST <see cref="Payload"/> uses the same stuffed-wire, terminator-omitted contract
+/// as IHAVE after server-owned header normalization.
+/// </para>
 /// </remarks>
 public sealed class InboundArticle
 {

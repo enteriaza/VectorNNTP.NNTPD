@@ -14,7 +14,11 @@ internal static class NntpResponseStatus
     internal const string ConnectionClosing = "205 Connection closing";
     internal const string CompressionActive = "206 Compression active";
     internal const string IhaveTransferredOk = "235 Article transferred OK";
+    internal const string ArticleReceivedOk = "240 Article received OK";
     internal const string IhaveSendArticle = "335 Send article to be transferred";
+    internal const string PostSendArticle = "340 Input article; end with <CR-LF>.<CR-LF>";
+    internal const string PostingProhibited = "440 Posting not permitted";
+    internal const string PostingFailed = "441 Posting failed";
     internal const string AuthenticationAccepted = "281 Authentication accepted";
     internal const string PasswordRequired = "381 Password required";
     internal const string ContinueWithTls = "382 Continue with TLS negotiation";

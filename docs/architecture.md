@@ -490,7 +490,7 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
 
 Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), and `Redis:Host`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs; either failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
@@ -504,4 +504,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP article/group data plane, posting, AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; raw wire receive, destuff downstream), and the session authorization gates are in place.
+NNTP article/group data plane (catalogue, reader retrieval), AUTHINFO SASL, and account backends beyond `INntpAuthenticationProvider` remain deferred. AUTHINFO USER/PASS, COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; raw wire receive, destuff downstream), POST (RFC 3977 §6.3.1; streaming receive into one stuffed IHAVE/TAKETHIS queue buffer, strict article validation, server-owned injection metadata, HistoryDB duplicate detection after the terminator, TryAdmit only), and the session authorization gates are in place. Newsgroup existence/moderation lookup is not implemented; POST uses an explicit syntax-only policy boundary until a catalogue exists.

@@ -7,13 +7,14 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// Downstream IHAVE interpretation: destuff wire bytes once and build <see cref="Article"/>.
 /// </summary>
 /// <remarks>
-/// The IHAVE receive path queues stuffed wire (terminator omitted). This type is the single
-/// destuff point for that producer. TAKETHIS is not interpreted here.
+/// The IHAVE and POST receive paths queue stuffed wire (terminator omitted). This type is the
+/// single destuff point for those producers. TAKETHIS is not interpreted here.
 /// </remarks>
 public static class IhaveArticleInterpreter
 {
     /// <summary>
-    /// Destuffs <paramref name="inbound"/> once when <see cref="InboundArticleProducer.IHave"/>
+    /// Destuffs <paramref name="inbound"/> once when the producer queued stuffed wire
+    /// (<see cref="InboundArticleProducer.IHave"/> or <see cref="InboundArticleProducer.Post"/>)
     /// and returns a new item whose <see cref="InboundArticle.Payload"/> is the destuffed
     /// complete article (headers + blank line + body). TAKETHIS items are returned unchanged.
     /// </summary>
@@ -21,7 +22,7 @@ public static class IhaveArticleInterpreter
     {
         ArgumentNullException.ThrowIfNull(inbound);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
-        if (inbound.Producer != InboundArticleProducer.IHave)
+        if (inbound.Producer is not (InboundArticleProducer.IHave or InboundArticleProducer.Post))
         {
             return inbound;
         }
@@ -33,7 +34,7 @@ public static class IhaveArticleInterpreter
             inbound.ClientIdentity,
             inbound.ReceivedAtUtc,
             article,
-            InboundArticleProducer.IHave);
+            inbound.Producer);
     }
 
     /// <summary>

@@ -113,6 +113,142 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_Succeeds_ForDefaultMaxArticleSize()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(NntpdOptions.DefaultMaxArticleSize, options.MaxArticleSize);
+        Assert.Equal(5_242_880, new NntpdOptions().MaxArticleSize);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_Fails_ForNonPositiveMaxArticleSize(int size)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.MaxArticleSize = size;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.MaxArticleSize), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_Fails_ForMaxArticleSizeAboveCeiling()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.MaxArticleSize = NntpdOptions.MaxMaxArticleSize + 1;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.MaxArticleSize), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursMaxArticleSize()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:MaxArticleSize"] = "1048576",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(1_048_576, options.MaxArticleSize);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForDefaultMailComplaintsTo()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(NntpdOptions.DefaultMailComplaintsTo, options.MailComplaintsTo);
+        Assert.Equal("abuse@usenet.ninja", new NntpdOptions().MailComplaintsTo);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-mailbox")]
+    [InlineData("abuse@localhost")]
+    public void Validate_Fails_ForInvalidMailComplaintsTo(string value)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.MailComplaintsTo = value;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.MailComplaintsTo), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursMailComplaintsTo()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:MailComplaintsTo"] = "ops@usenet.ninja",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal("ops@usenet.ninja", options.MailComplaintsTo);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForDefaultXTraceKeyWhenConfigured()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(TestHostFactory.TestXTraceKey, options.XTraceKey);
+        Assert.True(XTraceKeyParser.TryDecode(options.XTraceKey, out var key));
+        Assert.Equal(32, key!.Length);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-key")]
+    [InlineData("0123456789abcdef")]
+    public void Validate_Fails_ForInvalidXTraceKey(string value)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.XTraceKey = value;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(NntpdOptions.XTraceKeyConfigurationKey, StringComparison.Ordinal));
+        var joined = NntpdOptionsValidator.JoinFailures(result);
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            Assert.DoesNotContain(value.Trim(), joined, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Validate_Fails_ForInvalidXTracePreviousKey()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.XTracePreviousKey = "short";
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(NntpdOptions.XTracePreviousKeyConfigurationKey, StringComparison.Ordinal));
+        Assert.DoesNotContain("short", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursXTraceKey()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:XTraceKey"] = TestHostFactory.TestXTraceKey,
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(TestHostFactory.TestXTraceKey, options.XTraceKey);
+    }
+
+    [Fact]
     public void Validate_Fails_ForHistoryTimeBelowOneSecond()
     {
         var options = TestHostFactory.CreateValidOptions();
@@ -358,6 +494,35 @@ public sealed class NntpdConfigurationTests
         var path = FindProductionAppsettings();
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         Assert.Equal(NntpdOptions.DefaultIdleTime, doc.RootElement.GetProperty("Nntpd").GetProperty("IdleTime").GetInt32());
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresMaxArticleSizeDefault()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(
+            NntpdOptions.DefaultMaxArticleSize,
+            doc.RootElement.GetProperty("Nntpd").GetProperty("MaxArticleSize").GetInt32());
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresMailComplaintsToDefault()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(
+            NntpdOptions.DefaultMailComplaintsTo,
+            doc.RootElement.GetProperty("Nntpd").GetProperty("MailComplaintsTo").GetString());
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DoesNotDeclareXTraceKey()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("XTraceKey", out _));
+        Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("XTracePreviousKey", out _));
     }
 
     [Fact]

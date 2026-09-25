@@ -18,7 +18,8 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// </para>
 /// <para>
 /// Never log complete <see cref="NntpdOptions"/> instances:
-/// <see cref="CloudFlareApiKey"/> and <see cref="AcmeCertificatePassword"/> are secrets.
+/// <see cref="CloudFlareApiKey"/>, <see cref="AcmeCertificatePassword"/>, and
+/// <see cref="XTraceKey"/> / <see cref="XTracePreviousKey"/> are secrets.
 /// </para>
 /// </remarks>
 public sealed class NntpdOptions
@@ -58,6 +59,24 @@ public sealed class NntpdOptions
     /// (<c>nntpd__ServerId</c>).
     /// </summary>
     public const string ServerIdEnvironmentVariable = "nntpd__ServerId";
+
+    /// <summary>Configuration key for the POST <c>X-Trace</c> AES-256 key secret.</summary>
+    public const string XTraceKeyConfigurationKey = "XTraceKey";
+
+    /// <summary>Configuration key for the optional previous POST <c>X-Trace</c> AES-256 key.</summary>
+    public const string XTracePreviousKeyConfigurationKey = "XTracePreviousKey";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="XTraceKey"/>
+    /// (<c>nntpd__XTraceKey</c>).
+    /// </summary>
+    public const string XTraceKeyEnvironmentVariable = "nntpd__XTraceKey";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="XTracePreviousKey"/>
+    /// (<c>nntpd__XTracePreviousKey</c>).
+    /// </summary>
+    public const string XTracePreviousKeyEnvironmentVariable = "nntpd__XTracePreviousKey";
 
     /// <summary>Gets or sets the application display name used in logs and service registration metadata.</summary>
     [Required(AllowEmptyStrings = false)]
@@ -391,6 +410,62 @@ public sealed class NntpdOptions
     /// and TAKETHIS) keep the session non-idle.
     /// </remarks>
     public int IdleTime { get; set; } = DefaultIdleTime;
+
+    /// <summary>Default POST article size limit: 5 MiB.</summary>
+    public const int DefaultMaxArticleSize = 5 * 1024 * 1024;
+
+    /// <summary>Minimum accepted <see cref="MaxArticleSize"/> in bytes.</summary>
+    public const int MinMaxArticleSize = 1;
+
+    /// <summary>Maximum accepted <see cref="MaxArticleSize"/> in bytes (100 MiB).</summary>
+    public const int MaxMaxArticleSize = 100 * 1024 * 1024;
+
+    /// <summary>
+    /// Gets or sets the maximum destuffed POST article size in bytes.
+    /// </summary>
+    /// <remarks>
+    /// Default is <see cref="DefaultMaxArticleSize"/> (5,242,880). Valid range is
+    /// <see cref="MinMaxArticleSize"/>–<see cref="MaxMaxArticleSize"/>. The limit is
+    /// enforced while the multiline article is streamed (destuffed headers + blank
+    /// separator + body; NNTP terminator excluded; stuffing dots are not counted).
+    /// Distinct from <c>ArticleIngestion:MaxArticleBytes</c>, which bounds
+    /// IHAVE/TAKETHIS ingest and IHAVE worker destuff only.
+    /// </remarks>
+    public int MaxArticleSize { get; set; } = DefaultMaxArticleSize;
+
+    /// <summary>Default POST <c>Injection-Info</c> complaint mailbox.</summary>
+    public const string DefaultMailComplaintsTo = "abuse@usenet.ninja";
+
+    /// <summary>
+    /// Gets or sets the mailbox emitted as <c>mail-complaints-to</c> on server-owned
+    /// POST <c>Injection-Info</c>.
+    /// </summary>
+    /// <remarks>
+    /// Default is <see cref="DefaultMailComplaintsTo"/>. Required; must be a plausible
+    /// mailbox. Client-supplied <c>Injection-Info</c> is never used.
+    /// </remarks>
+    public string MailComplaintsTo { get; set; } = DefaultMailComplaintsTo;
+
+    /// <summary>
+    /// Gets or sets the persisted AES-256 key used to protect POST <c>X-Trace</c> values.
+    /// </summary>
+    /// <remarks>
+    /// Required secret. Supply 32 bytes as 64 hex characters or Base64 via
+    /// <see cref="XTraceKeyEnvironmentVariable"/> or deployment secrets — never commit
+    /// this value. The process does not generate a key at startup; restarting with the
+    /// same key keeps previously issued tokens decryptable.
+    /// </remarks>
+    public string XTraceKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the previous AES-256 key retained for one-generation <c>X-Trace</c> rotation.
+    /// </summary>
+    /// <remarks>
+    /// Optional. When set, trusted decrypt accepts tokens produced with this key.
+    /// New tokens always use <see cref="XTraceKey"/>. After this value is removed,
+    /// tokens produced only with the retired key cannot be decrypted.
+    /// </remarks>
+    public string XTracePreviousKey { get; set; } = string.Empty;
 
     /// <summary>
     /// Default Transit article-queue memory budget: 1 GiB (1,073,741,824 bytes).

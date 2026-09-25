@@ -39,6 +39,18 @@ public static class NntpReplyCodes
     /// <summary>Article exists / selected (STAT; RFC 3977 §6.2.4).</summary>
     public const int ArticleExists = 223;
 
+    /// <summary>Article received OK (POST second stage; RFC 3977 §6.3.1).</summary>
+    public const int ArticleReceivedOk = 240;
+
+    /// <summary>Send article to be posted (POST first stage; RFC 3977 §6.3.1).</summary>
+    public const int PostSendArticle = 340;
+
+    /// <summary>Posting not permitted (POST first stage; RFC 3977 §6.3.1).</summary>
+    public const int PostingNotPermitted = 440;
+
+    /// <summary>Posting failed (POST second stage; RFC 3977 §6.3.1).</summary>
+    public const int PostingFailed = 441;
+
     /// <summary>Article transferred OK (IHAVE second stage; RFC 3977 §6.3.2).</summary>
     public const int IhaveTransferredOk = 235;
 

@@ -15,6 +15,7 @@ using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Telemetry;
@@ -165,6 +166,8 @@ public static class NntpdServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, HistoryMaintenanceService>(static sp =>
                 sp.GetRequiredService<HistoryMaintenanceService>()));
 
+        services.TryAddSingleton<IPostingTraceProtector>(static sp =>
+            AesGcmPostingTraceProtector.Create(sp.GetRequiredService<IOptions<NntpdOptions>>()));
         services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
         services.TryAddSingleton<IncomingSpoolWriterService>();

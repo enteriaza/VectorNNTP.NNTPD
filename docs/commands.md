@@ -25,9 +25,12 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] CHECK
 [x] IHAVE
 [x] SPEEDTEST
+[x] POST
 ```
 
 CHECK (RFC 4644 §2.4) uses HistoryDB `PeekAsync` (`438` local/Redis hit, `238` double miss without recording the identifier, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
+
+POST (RFC 3977 §6.3.1) is not pipelined. `440` is returned when the session is not permitted to post and no article is read. After `340`, the article is streamed under command-work accounting (`Nntpd:MaxArticleSize` destuffed). Client headers that are accepted are written through; server-owned headers (`Path: .POSTED`, `Injection-Date`, `Injection-Info` without a plaintext peer IP, and authenticated-encrypted `X-Trace`) are generated at the header/body boundary. `NNTP-Posting-Date` and `NNTP-Posting-Host` are discarded and are not generated. The body is copied with stuffing preserved into one owned stuffed buffer (IHAVE/TAKETHIS queue representation) and admitted with `TryAdmit`. History Peek stays after the terminator. `240` is sent only after queue admission; POST does not await spool or worker processing. Newsgroup existence is not looked up; see `docs/configuration.md`.
 
 ## Placeholder (registered, not implemented)
 
@@ -46,7 +49,6 @@ CHECK (RFC 4644 §2.4) uses HistoryDB `PeekAsync` (`438` local/Redis hit, `238` 
 [ ] NEXT
 [ ] OVER
 [ ] HDR
-[ ] POST
 ```
 
 ## File map

@@ -54,6 +54,15 @@ public sealed class ArticleWireReconstructorTests
     }
 
     [Fact]
+    public void Restuff_WithoutTerminator_MatchesIngestQueueContract()
+    {
+        var stored = "Subject: t\r\n\r\n.hidden\r\n"u8.ToArray();
+        var wire = ArticleWireReconstructor.RestuffArticle(stored, includeTerminator: false);
+        Assert.Equal("Subject: t\r\n\r\n..hidden\r\n"u8.ToArray(), wire);
+        Assert.False(wire.AsSpan().EndsWith("\r\n.\r\n"u8));
+    }
+
+    [Fact]
     public async Task RoundTrip_DestuffThenRestuff_MatchesOriginalWire()
     {
         var originalWire = Encoding.ASCII.GetBytes(

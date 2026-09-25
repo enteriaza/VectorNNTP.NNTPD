@@ -45,9 +45,14 @@ public sealed class ArticleIngestionOptions
     public int QueueCapacity { get; set; } = DefaultQueueCapacity;
 
     /// <summary>
-    /// Gets or sets the maximum accepted article size in bytes (after dot-unstuffing).
+    /// Gets or sets the maximum accepted IHAVE/TAKETHIS article size in bytes
+    /// (after dot-unstuffing).
     /// </summary>
-    /// <remarks>Valid range is <c>1–104857600</c> (100 MiB). Default is 4 MiB.</remarks>
+    /// <remarks>
+    /// Valid range is <c>1–104857600</c> (100 MiB). Default is 4 MiB.
+    /// This is not the POST destuffed limit; POST uses
+    /// <see cref="NntpdOptions.MaxArticleSize"/>.
+    /// </remarks>
     [Range(1, 100 * 1024 * 1024)]
     public int MaxArticleBytes { get; set; } = DefaultMaxArticleBytes;
 }

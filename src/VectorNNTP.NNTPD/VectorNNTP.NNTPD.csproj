@@ -15,6 +15,7 @@
     <!-- Bench-only visibility for Phase 3D data-plane timing around PrepareArticleChunks / EnqueueOwnedPayloadAsync. -->
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.CommandResponsePathBench" />
     <InternalsVisibleTo Include="DynamicResponseAllocBench" />
+    <InternalsVisibleTo Include="VectorNNTP.NNTPD.PostAllocBench" />
   </ItemGroup>
 
   <ItemGroup>

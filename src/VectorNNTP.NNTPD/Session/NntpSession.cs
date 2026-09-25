@@ -71,7 +71,12 @@ public sealed class NntpSession
         INntpSessionCensus? sessionCensus = null,
         ITransitPeerMetrics? peerMetrics = null,
         TimeSpan? commandIdleTimeout = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int? maxArticleSize = null,
+        string? injectionIdentity = null,
+        Commands.Posting.INewsgroupPostingPolicy? newsgroupPostingPolicy = null,
+        string? mailComplaintsTo = null,
+        Commands.Posting.IPostingTraceProtector? postingTraceProtector = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -103,6 +108,26 @@ public sealed class NntpSession
                 commandIdleTimeout,
                 $"Idle timeout must be between {NntpdOptions.MinIdleTime} and {NntpdOptions.MaxIdleTime} seconds.");
         }
+
+        MaxArticleSize = maxArticleSize ?? NntpdOptions.DefaultMaxArticleSize;
+        if (MaxArticleSize < NntpdOptions.MinMaxArticleSize
+            || MaxArticleSize > NntpdOptions.MaxMaxArticleSize)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxArticleSize),
+                maxArticleSize,
+                $"Max article size must be between {NntpdOptions.MinMaxArticleSize} and {NntpdOptions.MaxMaxArticleSize} bytes.");
+        }
+
+        InjectionIdentity = string.IsNullOrWhiteSpace(injectionIdentity)
+            ? NntpdOptions.FormatFqdn(1, "usenet.ninja")
+            : injectionIdentity.Trim();
+        NewsgroupPostingPolicy = newsgroupPostingPolicy
+            ?? Commands.Posting.SyntaxOnlyNewsgroupPostingPolicy.Instance;
+        MailComplaintsTo = string.IsNullOrWhiteSpace(mailComplaintsTo)
+            ? NntpdOptions.DefaultMailComplaintsTo
+            : mailComplaintsTo.Trim();
+        PostingTraceProtector = postingTraceProtector;
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -112,11 +137,32 @@ public sealed class NntpSession
     public ConnectionClientIdentity ClientIdentity { get; }
 
     /// <summary>
-    /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, <c>IHAVE</c>).
+    /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, <c>IHAVE</c>, <c>POST</c>).
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
 
-    /// <summary>Gets the HistoryDB used by CHECK, IHAVE, and TAKETHIS, or <see langword="null"/> when unset (tests).</summary>
+    /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
+    public int MaxArticleSize { get; }
+
+    /// <summary>
+    /// Gets the server injection identity used for POST metadata
+    /// (<c>nntpd{ServerId:00}.{DnsSuffix}</c>).
+    /// </summary>
+    public string InjectionIdentity { get; }
+
+    /// <summary>Gets the newsgroup existence/posting-authorization boundary used by POST.</summary>
+    public Commands.Posting.INewsgroupPostingPolicy NewsgroupPostingPolicy { get; }
+
+    /// <summary>Gets the configured POST <c>mail-complaints-to</c> mailbox.</summary>
+    public string MailComplaintsTo { get; }
+
+    /// <summary>Gets the POST <c>X-Trace</c> protector, or <see langword="null"/> when unset (tests).</summary>
+    public Commands.Posting.IPostingTraceProtector? PostingTraceProtector { get; }
+
+    /// <summary>Gets the clock used for idle accounting and POST injection timestamps.</summary>
+    public TimeProvider Time => _timeProvider;
+
+    /// <summary>Gets the HistoryDB used by CHECK, IHAVE, TAKETHIS, and POST, or <see langword="null"/> when unset (tests).</summary>
     public IHistoryDb? HistoryDb { get; }
 
     /// <summary>

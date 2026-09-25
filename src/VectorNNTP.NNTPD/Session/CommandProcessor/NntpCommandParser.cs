@@ -133,6 +133,7 @@ public static class NntpCommandParser
 
             case NntpVerb.Quit:
             case NntpVerb.Help:
+            case NntpVerb.Post:
                 return tokenCount == 0 ? NntpParseStatus.Ok : NntpParseStatus.ExtraArgument;
 
             case NntpVerb.Compress:

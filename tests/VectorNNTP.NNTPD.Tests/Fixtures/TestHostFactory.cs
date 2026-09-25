@@ -17,6 +17,9 @@ internal static class TestHostFactory
 {
     public const string TestCloudFlareApiKey = "unit-test-cloudflare-api-key";
 
+    /// <summary>64-hex AES-256 test key for POST <c>X-Trace</c> (not a production secret).</summary>
+    public const string TestXTraceKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     /// <summary>Shared parent for test file logs so hosts do not write under the repo <c>logs/</c>.</summary>
     public static readonly string SharedTestLogDir = Path.Combine(Path.GetTempPath(), "vectornntp-nntpd-testhost-logs");
 
@@ -53,6 +56,7 @@ internal static class TestHostFactory
             BindPortTls = 0,
             CloudFlareApiKey = TestCloudFlareApiKey,
             CloudFlareZoneId = "5811a29d39a0732afb5f160c9b137c3d",
+            XTraceKey = TestXTraceKey,
             DnsSuffix = "usenet.ninja",
             ServerId = 1,
         };
@@ -99,6 +103,7 @@ internal static class TestHostFactory
             new Dictionary<string, string?>
             {
                 [$"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareApiKeyConfigurationKey}"] = TestCloudFlareApiKey,
+                [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] = TestXTraceKey,
                 // Replace appsettings BindAddress entirely (in-memory must clear leftover indices).
                 [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,

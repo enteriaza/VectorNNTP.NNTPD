@@ -71,8 +71,7 @@ public static class DefaultNntpCommandCatalog
             NntpVerb.Check or NntpVerb.TakeThis or NntpVerb.Ihave or NntpVerb.SpeedTest
                 => NntpCommandAccess.RequiresTransit,
             NntpVerb.Post => NntpCommandAccess.RequiresAuthentication
-                | NntpCommandAccess.RequiresReader
-                | NntpCommandAccess.RequiresPosting,
+                | NntpCommandAccess.RequiresReader,
             NntpVerb.List or NntpVerb.ListGroup or NntpVerb.Group or NntpVerb.Newgroups
                 or NntpVerb.Newnews or NntpVerb.Article or NntpVerb.Head or NntpVerb.Body
                 or NntpVerb.Stat or NntpVerb.Last or NntpVerb.Next or NntpVerb.Over

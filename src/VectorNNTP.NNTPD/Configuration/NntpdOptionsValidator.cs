@@ -48,6 +48,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateTransit(options, failures);
         ValidateSpeedTest(options, failures);
         ValidateFeedDiagnostics(options, failures);
+        ValidateXTraceKeys(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -206,6 +207,39 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add(
                 $"{nameof(NntpdOptions.IdleTime)} must not exceed {NntpdOptions.MaxIdleTime} seconds.");
+        }
+
+        if (options.MaxArticleSize < NntpdOptions.MinMaxArticleSize
+            || options.MaxArticleSize > NntpdOptions.MaxMaxArticleSize)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.MaxArticleSize)} must be between {NntpdOptions.MinMaxArticleSize} and {NntpdOptions.MaxMaxArticleSize}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.MailComplaintsTo)
+            || !IsPlausibleEmail(options.MailComplaintsTo))
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.MailComplaintsTo)} must be a valid mailbox address.");
+        }
+    }
+
+    private static void ValidateXTraceKeys(NntpdOptions options, List<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(options.XTraceKey)
+            || !XTraceKeyParser.TryDecode(options.XTraceKey, out _))
+        {
+            failures.Add(
+                $"{NntpdOptions.XTraceKeyConfigurationKey} must be a 32-byte AES-256 key encoded as 64 hex characters or Base64 " +
+                $"(use environment variable {NntpdOptions.XTraceKeyEnvironmentVariable} or secrets; never commit the value).");
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.XTracePreviousKey)
+            && !XTraceKeyParser.TryDecode(options.XTracePreviousKey, out _))
+        {
+            failures.Add(
+                $"{NntpdOptions.XTracePreviousKeyConfigurationKey} must be a 32-byte AES-256 key encoded as 64 hex characters or Base64 " +
+                $"when set (use environment variable {NntpdOptions.XTracePreviousKeyEnvironmentVariable} or secrets; never commit the value).");
         }
     }
 
