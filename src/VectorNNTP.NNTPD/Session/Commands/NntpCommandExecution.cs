@@ -87,7 +87,6 @@ internal static class NntpCommandExecution
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
-        // Temporary benchmark exception: skip TAKETHIS TX INFO (timing still measured by callers).
         if (NntpCommandLogFormat.SuppressHotPathCommandLog(command))
         {
             return;

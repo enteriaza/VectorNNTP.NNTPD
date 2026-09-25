@@ -248,7 +248,6 @@ public sealed class NntpCommandLoggingTests
             ("POST", "RX: POST"),
             ("IHAVE", "RX: IHAVE"),
             ("CHECK", "RX: CHECK"),
-            // TAKETHIS RX is temporarily suppressed for feed benchmarks (see dedicated tests).
             ("MODE STREAM", "RX: MODE STREAM"),
             ("COMPRESS DEFLATE", "RX: COMPRESS DEFLATE"),
             ("AUTHINFO SASL", "RX: AUTHINFO SASL"),
@@ -271,7 +270,7 @@ public sealed class NntpCommandLoggingTests
     }
 
     [Fact]
-    public async Task TakeThis_SuppressesRxAndTxCompletion_Logs()
+    public async Task TakeThis_ProducesRxAndTxCompletion_Logs()
     {
         var recording = new RecordingLoggerFactory();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
@@ -301,10 +300,13 @@ public sealed class NntpCommandLoggingTests
         _ = await duplex.ReadClientLineAsync();
         await run;
 
+        // Authorized STREAM TAKETHIS is admitted by NntpStreamDataPlaneRx and never
+        // enters DispatchCommandAsync, so there is no RX: TAKETHIS line. TX completion
+        // (previously hot-path suppressed) is restored.
         Assert.DoesNotContain(
             recording.Messages,
             m => m.Contains("RX: TAKETHIS", StringComparison.Ordinal));
-        Assert.DoesNotContain(
+        Assert.Contains(
             recording.Messages,
             m => m.Contains("TX: TAKETHIS", StringComparison.Ordinal));
 

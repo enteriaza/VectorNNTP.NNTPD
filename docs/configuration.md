@@ -20,6 +20,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `AcmeEmail` | string | _(none)_ | **yes when TLS enabled** | ACME account contact email; ignored when `BindPortTls` is `0` |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state |
+| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs. Relative paths resolve with `Path.GetFullPath` of the trimmed value, matching `AcmeStateDir`. The Serilog File `path` in `appsettings.json` is a placeholder; startup overwrites it from this setting and `ApplicationName`. |
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
 | `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
@@ -393,6 +394,7 @@ TLS is controlled exclusively by `BindPortTls`:
 | `AcmeDirectoryUrl` | `https://acme-staging-v02.api.letsencrypt.org/directory` | **Staging** by default. Production requires an explicit override such as `https://acme-v02.api.letsencrypt.org/directory`. |
 | `AcmeEmail` | _(none)_ | Required only when TLS is enabled. Must be a plausible contact email. |
 | `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). |
+| `LogDir` | `logs/` | Serilog daily file-log root (relative or absolute path). Created at logging startup if missing. |
 | `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
 | `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
 
@@ -406,6 +408,7 @@ Example (TLS enabled against staging — values are illustrative; supply secrets
   "AcmeEmail": "ops@example.org",
   "AcmeDirectoryUrl": "https://acme-staging-v02.api.letsencrypt.org/directory",
   "AcmeStateDir": "certs/",
+  "LogDir": "logs/",
   "AcmeRenewalThresholdDays": 30
 }
 ```

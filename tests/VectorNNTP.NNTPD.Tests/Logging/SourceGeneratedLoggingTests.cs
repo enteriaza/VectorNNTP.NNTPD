@@ -28,7 +28,7 @@ public sealed class SourceGeneratedLoggingTests
 
         CommandLogMessages.CommandRx(logger, "198.18.0.70:49860", "HELP");
 
-        Assert.Equal(LogLevel.Information, logger.Level);
+        Assert.Equal(LogLevel.Debug, logger.Level);
         Assert.Equal(1600, logger.EventId.Id);
         Assert.Equal("[198.18.0.70:49860] RX: HELP", logger.Formatted);
         Assert.Equal("198.18.0.70:49860", logger.GetString("Client"));
@@ -50,7 +50,7 @@ public sealed class SourceGeneratedLoggingTests
             NntpParseStatus.UnknownVerb,
             "empty command");
 
-        Assert.Equal(LogLevel.Information, logger.Level);
+        Assert.Equal(LogLevel.Debug, logger.Level);
         Assert.Equal(1601, logger.EventId.Id);
         Assert.Contains("RX rejected:", logger.Formatted, StringComparison.Ordinal);
         Assert.Equal("198.18.0.70:49860", logger.GetString("Client"));
@@ -82,7 +82,7 @@ public sealed class SourceGeneratedLoggingTests
 
         CommandLogMessages.CommandTx(logger, "198.18.0.70:49860", "HELP", 0.012);
 
-        Assert.Equal(LogLevel.Information, logger.Level);
+        Assert.Equal(LogLevel.Debug, logger.Level);
         Assert.Equal(1602, logger.EventId.Id);
         Assert.Equal("[198.18.0.70:49860] TX: HELP executed in 0.012s", logger.Formatted);
         Assert.Equal(0.012, logger.GetValue<double>("ElapsedSeconds"));

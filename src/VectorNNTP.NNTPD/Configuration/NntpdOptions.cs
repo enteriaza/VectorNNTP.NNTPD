@@ -195,6 +195,9 @@ public sealed class NntpdOptions
     /// <summary>Default relative ACME state directory.</summary>
     public const string DefaultAcmeStateDir = "certs/";
 
+    /// <summary>Default relative Serilog file-log directory.</summary>
+    public const string DefaultLogDir = "logs/";
+
     /// <summary>Default certificate renewal lead time in days.</summary>
     public const int DefaultAcmeRenewalThresholdDays = 30;
 
@@ -225,6 +228,16 @@ public sealed class NntpdOptions
     /// private key is stored separately as PKCS#8 DER. The Windows Certificate Store is not used.
     /// </remarks>
     public string AcmeStateDir { get; set; } = DefaultAcmeStateDir;
+
+    /// <summary>
+    /// Gets or sets the filesystem directory for Serilog daily rolling application logs.
+    /// </summary>
+    /// <remarks>
+    /// Default is <c>logs/</c>. Relative paths resolve with
+    /// <see cref="System.IO.Path.GetFullPath(string)"/> of the trimmed value, matching
+    /// <see cref="AcmeStateDir"/>.
+    /// </remarks>
+    public string LogDir { get; set; } = DefaultLogDir;
 
     /// <summary>
     /// Gets or sets how many days before <c>NotAfter</c> a certificate is considered due for renewal.

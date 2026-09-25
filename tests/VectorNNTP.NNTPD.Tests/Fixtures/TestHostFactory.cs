@@ -17,6 +17,17 @@ internal static class TestHostFactory
 {
     public const string TestCloudFlareApiKey = "unit-test-cloudflare-api-key";
 
+    /// <summary>Shared parent for test file logs so hosts do not write under the repo <c>logs/</c>.</summary>
+    public static readonly string SharedTestLogDir = Path.Combine(Path.GetTempPath(), "vectornntp-nntpd-testhost-logs");
+
+    /// <summary>Unique <c>Nntpd:LogDir</c> so parallel hosts do not share a Serilog file lock.</summary>
+    public static string NewTestLogDir()
+    {
+        var dir = Path.Combine(SharedTestLogDir, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
     public static readonly IPAddress TestIpv4 = IPAddress.Parse("198.18.0.10");
     public static readonly IPAddress TestIpv6 = IPAddress.Parse("2001:db8::10");
 
@@ -93,6 +104,7 @@ internal static class TestHostFactory
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["Redis:Port"] = "6379",
+                [$"{NntpdOptions.SectionName}:LogDir"] = NewTestLogDir(),
             });
 
         var localAssignee = assignee ?? new FakeLocalIpAddressAssignee(TestIpv4, TestIpv6);

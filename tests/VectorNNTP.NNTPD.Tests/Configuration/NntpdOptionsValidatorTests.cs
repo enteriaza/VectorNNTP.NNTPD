@@ -168,6 +168,25 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void LogDir_DefaultsToLogsSlash()
+    {
+        Assert.Equal("logs/", NntpdOptions.DefaultLogDir);
+        Assert.Equal(NntpdOptions.DefaultLogDir, new NntpdOptions().LogDir);
+        Assert.Equal(NntpdOptions.DefaultLogDir, TestHostFactory.CreateValidOptions().LogDir);
+        Assert.True(CreateValidator().Validate(null, TestHostFactory.CreateValidOptions()).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Fails_ForEmptyLogDir()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.LogDir = " ";
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, f => f.Contains(nameof(NntpdOptions.LogDir), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_Fails_ForEmptyApplicationName()
     {
         var options = TestHostFactory.CreateValidOptions();
@@ -260,6 +279,65 @@ public sealed class NntpdConfigurationTests
         Assert.Equal("usenet.ninja", options.DnsSuffix);
         Assert.Equal(1, options.ServerId);
         Assert.Equal("nntpd01.usenet.ninja", options.Fqdn);
+    }
+
+    [Fact]
+    public void Bind_HonoursConfiguredLogDir()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:LogDir"] = "D:/nntp-logs/",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal("D:/nntp-logs/", options.LogDir);
+        var valid = TestHostFactory.CreateValidOptions();
+        valid.LogDir = options.LogDir;
+        var validator = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true));
+        Assert.True(validator.Validate(null, valid).Succeeded);
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresLogDirDefault()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal("logs/", doc.RootElement.GetProperty("Nntpd").GetProperty("LogDir").GetString());
+        Assert.Equal(
+            "Information",
+            doc.RootElement.GetProperty("Serilog").GetProperty("WriteTo")[0]
+                .GetProperty("Args").GetProperty("restrictedToMinimumLevel").GetString());
+        Assert.Equal(
+            "Verbose",
+            doc.RootElement.GetProperty("Serilog").GetProperty("MinimumLevel")
+                .GetProperty("Override").GetProperty("VectorNNTP.NNTPD").GetString());
+        var async = doc.RootElement.GetProperty("Serilog").GetProperty("WriteTo")[1];
+        Assert.Equal("Async", async.GetProperty("Name").GetString());
+        Assert.Equal(50000, async.GetProperty("Args").GetProperty("bufferSize").GetInt32());
+        Assert.True(async.GetProperty("Args").GetProperty("blockWhenFull").GetBoolean());
+        Assert.Equal(
+            "Verbose",
+            async.GetProperty("Args").GetProperty("configure")[0].GetProperty("Args")
+                .GetProperty("restrictedToMinimumLevel").GetString());
+    }
+
+    private static string FindProductionAppsettings()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.NNTPD", "appsettings.json");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate src/VectorNNTP.NNTPD/appsettings.json.");
     }
 
     [Fact]
@@ -959,6 +1037,11 @@ public sealed class NntpdConfigurationTests
         });
 
         builder.Configuration.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
+        builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
+            });
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
@@ -989,6 +1072,7 @@ public sealed class NntpdConfigurationTests
                     TestHostFactory.TestCloudFlareApiKey,
                 [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
+                [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
             });
 

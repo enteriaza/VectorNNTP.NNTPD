@@ -172,12 +172,12 @@ public sealed class LoggingPipelineTests
     }
 
     [Fact]
-    public void Date_IsNotHotPathSuppressed()
+    public void DateAndTakeThis_AreNotHotPathSuppressed()
     {
         Assert.False(NntpCommandLogFormat.SuppressHotPathCommand(NntpVerb.Date));
         Assert.False(NntpCommandLogFormat.SuppressHotPathCommandLog("DATE"));
-        Assert.True(NntpCommandLogFormat.SuppressHotPathCommand(NntpVerb.TakeThis));
-        Assert.True(NntpCommandLogFormat.SuppressHotPathCommandLog("TAKETHIS <id@ex.com>"));
+        Assert.False(NntpCommandLogFormat.SuppressHotPathCommand(NntpVerb.TakeThis));
+        Assert.False(NntpCommandLogFormat.SuppressHotPathCommandLog("TAKETHIS <id@ex.com>"));
     }
 
     [Fact]
@@ -255,25 +255,33 @@ public sealed class LoggingPipelineTests
     }
 
     [Fact]
-    public void ProductionAssembly_DoesNotReferenceFileSink()
+    public void ProductionAssembly_ReferencesArchiveHooksAndConsole()
     {
         var names = typeof(NntpdLoggingExtensions).Assembly
             .GetReferencedAssemblies()
-            .Select(static a => a.Name);
-        Assert.DoesNotContain("Serilog.Sinks.File", names, StringComparer.Ordinal);
-        Assert.Contains("Serilog.Sinks.Console", names, StringComparer.Ordinal);
+            .Select(static a => a.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("Serilog.Sinks.Console", names);
+        Assert.Contains("Serilog.Sinks.File.Archive", names);
+        Assert.NotNull(NntpdSerilogHooks.DailyGzipFastest);
     }
 
     [Fact]
-    public void ProductionSerilogSection_WritesOnlyToConsole()
+    public void ProductionSerilogSection_ConsoleIsInformationOnly()
     {
         var section = ProductionSerilogSection();
         Assert.Equal("Serilog.Sinks.Console", section["Serilog:Using:0"]);
         Assert.Equal("Console", section["Serilog:WriteTo:0:Name"]);
-        Assert.DoesNotContain(section, static kv =>
-            kv.Value is not null
-            && (kv.Value.Contains("File", StringComparison.Ordinal)
-                || kv.Key.Contains("File", StringComparison.Ordinal)));
+        Assert.Equal("Information", section["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"]);
+        Assert.Equal("Verbose", section["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"]);
+        Assert.Equal("Async", section["Serilog:WriteTo:1:Name"]);
+        Assert.Equal("50000", section["Serilog:WriteTo:1:Args:bufferSize"]);
+        Assert.Equal("true", section["Serilog:WriteTo:1:Args:blockWhenFull"]);
+        Assert.Equal("File", section["Serilog:WriteTo:1:Args:configure:0:Name"]);
+        Assert.Equal("Verbose", section["Serilog:WriteTo:1:Args:configure:0:Args:restrictedToMinimumLevel"]);
+        Assert.Equal("Day", section["Serilog:WriteTo:1:Args:configure:0:Args:rollingInterval"]);
+        Assert.Equal("1", section["Serilog:WriteTo:1:Args:configure:0:Args:retainedFileCountLimit"]);
+        Assert.Null(section["Serilog:WriteTo:1:Args:configure:0:Args:fileSizeLimitBytes"]);
     }
 
     [Fact]
@@ -363,8 +371,8 @@ public sealed class LoggingPipelineTests
 
         var output = captured.ToString();
         Assert.Contains("Plain connection accepted", output, StringComparison.Ordinal);
-        Assert.Contains("RX: DATE", output, StringComparison.Ordinal);
-        Assert.Contains("TX: DATE executed in", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("RX: DATE", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("TX: DATE executed in", output, StringComparison.Ordinal);
         Assert.DoesNotContain("TAKETHIS", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("password", output, StringComparison.OrdinalIgnoreCase);
     }
@@ -387,17 +395,30 @@ public sealed class LoggingPipelineTests
         return builder.Build();
     }
 
-    private static Dictionary<string, string?> ProductionSerilogSection() => new()
+    private static Dictionary<string, string?> ProductionSerilogSection()
     {
-        ["Serilog:Using:0"] = "Serilog.Sinks.Console",
-        ["Serilog:MinimumLevel:Default"] = "Debug",
-        ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
-        ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",
-        ["Serilog:MinimumLevel:Override:System"] = "Warning",
-        ["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"] = "Debug",
-        ["Serilog:WriteTo:0:Name"] = "Console",
-        ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,
-        ["Serilog:Enrich:0"] = "FromLogContext",
-        ["Serilog:Properties:Application"] = "VectorNNTP.NNTPD",
-    };
+        var section = new Dictionary<string, string?>
+        {
+            ["Serilog:Using:0"] = "Serilog.Sinks.Console",
+            ["Serilog:Using:1"] = "Serilog.Sinks.File",
+            ["Serilog:Using:2"] = "Serilog.Sinks.Async",
+            ["Serilog:Using:3"] = "Serilog.Sinks.File.Archive",
+            ["Serilog:MinimumLevel:Default"] = "Information",
+            ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
+            ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",
+            ["Serilog:MinimumLevel:Override:System"] = "Warning",
+            ["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"] = "Verbose",
+            ["Serilog:WriteTo:0:Name"] = "Console",
+            ["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Information",
+            ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,
+            ["Serilog:Enrich:0"] = "FromLogContext",
+            ["Serilog:Properties:Application"] = "VectorNNTP.NNTPD",
+        };
+        foreach (var pair in NntpdFileLogging.AsyncFileWriteToKeys())
+        {
+            section[pair.Key] = pair.Value;
+        }
+
+        return section;
+    }
 }

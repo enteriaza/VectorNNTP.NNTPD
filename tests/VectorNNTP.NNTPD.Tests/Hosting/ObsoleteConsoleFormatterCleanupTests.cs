@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
@@ -31,6 +32,11 @@ public sealed class ObsoleteConsoleFormatterCleanupTests
     public void PlatformHosting_AfterAddSystemd_DoesNotRetainMicrosoftConsoleFormatterConfiguration()
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Nntpd:LogDir"] = TestHostFactory.NewTestLogDir(),
+            });
         builder.ConfigureNntpdLogging();
         builder.ConfigureNntpdPlatformHosting();
 
@@ -59,6 +65,11 @@ public sealed class ObsoleteConsoleFormatterCleanupTests
     public void PlatformHosting_PreservesSerilogConsoleSinkConfiguration()
     {
         var builder = Host.CreateApplicationBuilder();
+        builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Nntpd:LogDir"] = TestHostFactory.NewTestLogDir(),
+            });
         builder.ConfigureNntpdLogging();
         builder.ConfigureNntpdPlatformHosting();
 

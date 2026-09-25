@@ -14,8 +14,18 @@ internal static class NntpCommandLogFormat
             $"{session.ClientAddress}:{session.ClientPort}");
     }
 
-    /// <summary>Returns whether TAKETHIS RX/TX INFO should be suppressed.</summary>
-    public static bool SuppressHotPathCommand(NntpVerb verb) => verb == NntpVerb.TakeThis;
+    /// <summary>
+    /// Returns whether per-command RX logging should be skipped for <paramref name="verb"/>.
+    /// </summary>
+    /// <remarks>
+    /// Previously suppressed <see cref="NntpVerb.TakeThis"/> because console Information
+    /// could not keep up. File logging is now Debug/Verbose; TAKETHIS diagnostics are restored.
+    /// </remarks>
+    public static bool SuppressHotPathCommand(NntpVerb verb)
+    {
+        _ = verb;
+        return false;
+    }
 
     /// <summary>
     /// Logging-boundary representation of a command. AUTHINFO secrets are redacted.
@@ -118,13 +128,13 @@ internal static class NntpCommandLogFormat
     /// command name or raw command line.
     /// </summary>
     /// <remarks>
-    /// Temporary benchmark exception: <c>TAKETHIS</c> is suppressed so feed benchmarks are not
-    /// dominated by Serilog. Other commands are unaffected. Stopwatches still run.
+    /// Previously suppressed <c>TAKETHIS</c> so feed volume did not flood the console.
+    /// Console is now Information-only; TAKETHIS Debug/Trace is restored for the file sink.
     /// </remarks>
     public static bool SuppressHotPathCommandLog(string commandOrRawLine)
     {
         ArgumentNullException.ThrowIfNull(commandOrRawLine);
-        return StartsWithCommand(commandOrRawLine, "TAKETHIS");
+        return false;
     }
 
     private static bool StartsWithCommand(string line, string command)

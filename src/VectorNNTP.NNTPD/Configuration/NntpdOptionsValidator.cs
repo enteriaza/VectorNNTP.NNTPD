@@ -42,6 +42,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateCloudFlare(options, failures);
         ValidateDnsSuffixAndServerId(options, failures);
         ValidateAcme(options, failures);
+        ValidateLogDir(options, failures);
         ValidateArticleIngestion(options, failures);
         ValidateTransitQueueMemoryLimit(options, failures);
         ValidateTransit(options, failures);
@@ -368,6 +369,14 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             {
                 failures.Add(ex.Message);
             }
+        }
+    }
+
+    private static void ValidateLogDir(NntpdOptions options, List<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(options.LogDir))
+        {
+            failures.Add($"{nameof(NntpdOptions.LogDir)} must be a non-empty filesystem path.");
         }
     }
 

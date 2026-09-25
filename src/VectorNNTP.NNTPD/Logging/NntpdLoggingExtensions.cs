@@ -83,6 +83,8 @@ public static class NntpdLoggingExtensions
         builder.Services.RemoveAll<ILoggerFactory>();
         builder.Services.RemoveAll<ILoggerProvider>();
 
+        NntpdFileLogging.BindResolvedFilePath(builder.Configuration);
+
         builder.Services.AddSerilog(
             (services, loggerConfiguration) =>
             {
@@ -96,7 +98,9 @@ public static class NntpdLoggingExtensions
                 // so interactive and systemd journal collection always have an output path.
                 if (!builder.Configuration.GetSection("Serilog:WriteTo").GetChildren().Any())
                 {
-                    loggerConfiguration.WriteTo.Console(outputTemplate: ConsoleOutputTemplate);
+                    loggerConfiguration.WriteTo.Console(
+                        restrictedToMinimumLevel: NntpdFileLogging.ConsoleMinimumLevel,
+                        outputTemplate: ConsoleOutputTemplate);
                 }
 
                 configure?.Invoke(loggerConfiguration);
