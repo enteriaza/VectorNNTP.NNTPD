@@ -67,6 +67,25 @@ internal sealed class NntpStreamDataPlaneRx
             return false;
         }
 
+        if (_session.HasSaslExchange)
+        {
+            _session.BeginCommandWork();
+            try
+            {
+                await _session.TakeThisWindow!.DrainAsync(cancellationToken).ConfigureAwait(false);
+                await _session.Pipeline!.DrainAsync(cancellationToken).ConfigureAwait(false);
+                await Commands.AuthInfo
+                    .ContinueSaslAsync(_session, response, _parser.CurrentCommandLine, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _session.EndCommandWork();
+            }
+
+            return true;
+        }
+
         if (unit.Command.IsValid
             && unit.Command.Verb == NntpVerb.TakeThis
             && _session.Authorization.AuthorizedTransit)

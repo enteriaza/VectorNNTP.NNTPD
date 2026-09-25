@@ -1,9 +1,8 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// One configured moderator route: an NNTP wildmat, a routing mailbox or INN
-/// <c>%s</c> address template, and an optional AUTHINFO principal authorized
-/// to inject that approval.
+/// Leftover static moderator-route shape retained only so a non-empty
+/// <c>Moderation:Moderators</c> list can fail startup validation.
 /// </summary>
 /// <remarks>
 /// <para>

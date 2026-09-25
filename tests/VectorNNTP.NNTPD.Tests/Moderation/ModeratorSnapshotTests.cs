@@ -1,18 +1,17 @@
 using System.Text;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Moderation;
 
-public sealed class ConfiguredModeratorAuthorizationTests
+public sealed class ModeratorSnapshotTests
 {
     [Fact]
     public void FirstMatch_WinsOverLaterGeneralPattern()
     {
-        var auth = Create(
-            new ModeratorMappingOptions { Pattern = "comp.example.moderated", Address = "specific@example.com", Username = "mod-specific" },
-            new ModeratorMappingOptions { Pattern = "comp.example.*", Address = "general@example.com", Username = "mod-general" });
+        var auth = ModeratorTestSnapshot.Create(
+            ("comp.example.moderated", "specific@example.com", "mod-specific"),
+            ("comp.example.*", "general@example.com", "mod-general"));
 
         Assert.True(auth.TryResolve(Bytes("comp.example.moderated"), out var identity));
         Assert.Equal("specific@example.com", identity.Address);
@@ -22,8 +21,7 @@ public sealed class ConfiguredModeratorAuthorizationTests
     [Fact]
     public void Resolve_UnknownGroup_Fails()
     {
-        var auth = Create(
-            new ModeratorMappingOptions { Pattern = "group.a", Address = "a@example.com", Username = "moderator-a" });
+        var auth = ModeratorTestSnapshot.Create(("group.a", "a@example.com", "moderator-a"));
         Assert.False(auth.TryResolve(Bytes("group.b"), out _));
     }
 
@@ -87,9 +85,9 @@ public sealed class ConfiguredModeratorAuthorizationTests
     [Fact]
     public void TryAuthorizeApproval_SameModeratorOnTwoPatterns_Succeeds()
     {
-        var auth = Create(
-            new ModeratorMappingOptions { Pattern = "group.a", Address = "shared@example.com", Username = "moderator-a" },
-            new ModeratorMappingOptions { Pattern = "group.b", Address = "shared@example.com", Username = "moderator-a" });
+        var auth = ModeratorTestSnapshot.Create(
+            ("group.a", "shared@example.com", "moderator-a"),
+            ("group.b", "shared@example.com", "moderator-a"));
         Assert.True(auth.TryAuthorizeApproval(
             MapNntpAuthenticationProvider.ModeratorA,
             ["shared@example.com"],
@@ -100,7 +98,7 @@ public sealed class ConfiguredModeratorAuthorizationTests
     [Fact]
     public void EmptyCatalogue_ResolvesNothing()
     {
-        var auth = new ConfiguredModeratorAuthorization(Array.Empty<ModeratorMappingOptions>());
+        var auth = ModeratorSnapshot.Empty;
         Assert.False(auth.TryResolve(Bytes("group.a"), out _));
         Assert.False(auth.TryAuthorizeApproval("moderator-a", ["a@example.com"], ["group.a"], out var detail));
         Assert.Equal("unresolved moderator", detail);
@@ -146,35 +144,63 @@ public sealed class ConfiguredModeratorAuthorizationTests
     [Fact]
     public void RoutingOnlyEntry_CompileDoesNotDropMissingUsername()
     {
-        var auth = Create(new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" });
+        var auth = ModeratorTestSnapshot.Create(("fido7.*", "%s@fido7.org", string.Empty));
         Assert.True(auth.TryResolve(Bytes("fido7.announce"), out var identity));
         Assert.Equal("fido7-announce@fido7.org", identity.Address);
         Assert.Equal(string.Empty, identity.Username);
     }
 
-    private static ConfiguredModeratorAuthorization InnRouting() =>
-        Create(
-            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
-            new ModeratorMappingOptions { Pattern = "fj.*", Address = "%s@moderators.fj-news.org" },
-            new ModeratorMappingOptions { Pattern = "medlux.*", Address = "%s@news.medlux.ru" },
-            new ModeratorMappingOptions { Pattern = "nl.*", Address = "%s@nl.news-admin.org" },
-            new ModeratorMappingOptions { Pattern = "perl.*", Address = "news-moderator-%s@perl.org" },
-            new ModeratorMappingOptions { Pattern = "relcom.*", Address = "%s@moderators.relcom.ru" },
-            new ModeratorMappingOptions { Pattern = "si.*", Address = "%s@arnes.si" },
-            new ModeratorMappingOptions { Pattern = "*", Address = "%s@moderators.isc.org" });
+    [Fact]
+    public void StaticMailbox_IsUsedLiterally()
+    {
+        var auth = ModeratorTestSnapshot.Create(("comp.foo.*", "moderator@example.org", "MODERATOR01"));
+        Assert.True(auth.TryResolve(Bytes("comp.foo.test"), out var identity));
+        Assert.Equal("moderator@example.org", identity.Address);
+        Assert.True(auth.CanApprove("MODERATOR01", Bytes("moderator@example.org"), Bytes("comp.foo.test")));
+    }
+
+    [Fact]
+    public void Create_PreservesModeratorIdOrder_NotAlphabetical()
+    {
+        var auth = ModeratorSnapshot.Create(
+        [
+            new NntpModeratorRow(2, "zzz.*", "later@example.com", "later"),
+            new NntpModeratorRow(1, "aaa.*", "first@example.com", "first"),
+        ]);
+        Assert.True(auth.TryResolve(Bytes("zzz.group"), out var identity));
+        Assert.Equal("later@example.com", identity.Address);
+    }
+
+    [Fact]
+    public void DatabaseFailureDoesNotAuthorize_EmptySnapshot()
+    {
+        Assert.False(ModeratorSnapshot.Empty.TryAuthorizeApproval(
+            "moderator-a",
+            ["a@example.com"],
+            ["group.a"],
+            out _));
+    }
+
+    private static ModeratorSnapshot InnRouting() =>
+        ModeratorTestSnapshot.Create(
+            ("fido7.*", "%s@fido7.org", string.Empty),
+            ("fj.*", "%s@moderators.fj-news.org", string.Empty),
+            ("medlux.*", "%s@news.medlux.ru", string.Empty),
+            ("nl.*", "%s@nl.news-admin.org", string.Empty),
+            ("perl.*", "news-moderator-%s@perl.org", string.Empty),
+            ("relcom.*", "%s@moderators.relcom.ru", string.Empty),
+            ("si.*", "%s@arnes.si", string.Empty),
+            ("*", "%s@moderators.isc.org", string.Empty));
 
     private static string AddressFor(string group) =>
         group.StartsWith("fido7.", StringComparison.Ordinal) ? "%s@fido7.org"
         : group.StartsWith("perl.", StringComparison.Ordinal) ? "news-moderator-%s@perl.org"
         : "%s@moderators.isc.org";
 
-    private static ConfiguredModeratorAuthorization Standard() =>
-        Create(
-            new ModeratorMappingOptions { Pattern = "group.a", Address = "moderator-a@example.com", Username = MapNntpAuthenticationProvider.ModeratorA },
-            new ModeratorMappingOptions { Pattern = "group.b", Address = "moderator-b@example.com", Username = MapNntpAuthenticationProvider.ModeratorB });
-
-    private static ConfiguredModeratorAuthorization Create(params ModeratorMappingOptions[] mappings) =>
-        new(mappings);
+    private static ModeratorSnapshot Standard() =>
+        ModeratorTestSnapshot.Create(
+            ("group.a", "moderator-a@example.com", MapNntpAuthenticationProvider.ModeratorA),
+            ("group.b", "moderator-b@example.com", MapNntpAuthenticationProvider.ModeratorB));
 
     private static byte[] Bytes(string value) => Encoding.ASCII.GetBytes(value);
 }

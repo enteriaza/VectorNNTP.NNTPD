@@ -15,7 +15,7 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </remarks>
 internal static class Capabilities
 {
-    private const int MaxCapabilityParts = 14;
+    private const int MaxCapabilityParts = 16;
 
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Capabilities));
 
@@ -67,19 +67,29 @@ internal static class Capabilities
 
         // RFC 4643: MUST NOT return AUTHINFO after successful authentication.
         // RFC 8054 §2.2.2 / §7: after COMPRESS, advertise AUTHINFO with no arguments (or omit).
+        // SASL is advertised only when NntpSaslService is registered and AUTHINFO is permitted.
         if (!authenticated)
         {
+            var saslAvailable = context.Session.SaslService is not null;
             if (compressed)
             {
                 parts[n++] = NntpResponses.CapabilityAuthinfo;
             }
             else if (context.Session.IsAuthinfoPassPermitted)
             {
-                parts[n++] = NntpResponses.CapabilityAuthinfoUser;
+                if (saslAvailable)
+                {
+                    parts[n++] = NntpResponses.CapabilityAuthinfoUserSasl;
+                    parts[n++] = NntpResponses.CapabilitySasl;
+                }
+                else
+                {
+                    parts[n++] = NntpResponses.CapabilityAuthinfoUser;
+                }
             }
             else
             {
-                // Policy forbids cleartext AUTHINFO and TLS is inactive — do not advertise USER.
+                // Policy forbids cleartext AUTHINFO and TLS is inactive — do not advertise USER or SASL.
                 parts[n++] = NntpResponses.CapabilityAuthinfo;
             }
         }

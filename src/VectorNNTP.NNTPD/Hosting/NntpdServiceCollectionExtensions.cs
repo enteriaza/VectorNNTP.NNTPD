@@ -16,6 +16,7 @@ using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -57,10 +58,20 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
-        // Newsmaster AUTHINFO when configured; otherwise deny-all. A real account backend
-        // may replace this registration.
+        // Newsmaster (when configured) then MySQL nntpusers. Transit peer AUTHINFO is
+        // handled in the AUTHINFO command and never falls through to this provider.
+        services.TryAddSingleton<INntpUserRecordStore, MySqlUserRecordStore>();
+        services.TryAddSingleton<MySqlNntpCredentialValidator>();
+        services.TryAddSingleton<INntpSessionAdmissionTracker, InMemoryNntpSessionAdmissionTracker>();
+        services.TryAddSingleton<NntpSaslService>();
         services.TryAddSingleton<INntpAuthenticationProvider>(static sp =>
-            NewsmasterNntpAuthenticationProvider.Create(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
+        {
+            var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
+            return new CompositeNntpAuthenticationProvider(
+                NewsmasterNntpAuthenticationProvider.Create(options),
+                options.NewsmasterUser,
+                sp.GetRequiredService<MySqlNntpCredentialValidator>());
+        });
         services.TryAddSingleton<TransitConfigurationStore>();
         services.TryAddSingleton<ITransitDnsResolver, TransitDnsClientResolver>();
         services.TryAddSingleton<ITransitDnsAddressCache, TransitDnsAddressCache>();
@@ -177,7 +188,12 @@ public static class NntpdServiceCollectionExtensions
             })
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<ModerationOptions>, ModerationOptionsValidator>();
-        services.TryAddSingleton<IModeratorAuthorization, ConfiguredModeratorAuthorization>();
+        services.TryAddSingleton<INntpModeratorRepository, MySqlNntpModeratorRepository>();
+        services.TryAddSingleton<ModeratorCatalogueService>();
+        services.TryAddSingleton<IModeratorCatalogue>(static sp =>
+            sp.GetRequiredService<ModeratorCatalogueService>());
+        services.TryAddSingleton<IModeratorAuthorization>(static sp =>
+            sp.GetRequiredService<ModeratorCatalogueService>());
         services
             .AddOptions<EmailOptions>()
             .BindConfiguration(EmailOptions.SectionName)
@@ -216,7 +232,8 @@ public static class NntpdServiceCollectionExtensions
 
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) →
-        // newsgroup catalogue (initial snapshot before RUNNING) → HistoryDB writer →
+        // newsgroup catalogue (initial snapshot before RUNNING) →
+        // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
         // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
         // Transit AllowFrom DNS refresh →
         // plain NNTP listener → ACME → TLS NNTP listener →
@@ -243,6 +260,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NewsgroupCatalogueService>(static sp =>
                 sp.GetRequiredService<NewsgroupCatalogueService>()));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, ModeratorCatalogueService>(static sp =>
+                sp.GetRequiredService<ModeratorCatalogueService>()));
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());

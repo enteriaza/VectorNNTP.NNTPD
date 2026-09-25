@@ -71,7 +71,7 @@ internal static class Post
                         AuthenticatedUsername = context.Session.Authentication.IsAuthenticated
                             ? context.Session.Authentication.Username
                             : null,
-                        ModeratorAuthorization = context.Session.ModeratorAuthorization,
+                        ModeratorAuthorization = context.Session.CaptureModeratorAuthorization(),
                     },
                     cancellationToken)
                 .ConfigureAwait(false);

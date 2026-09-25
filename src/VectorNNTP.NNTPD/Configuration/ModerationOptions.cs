@@ -10,12 +10,9 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// authorities do not authorize moderated-newsgroup approval.
 /// </para>
 /// <para>
-/// An omitted or empty section is valid. Missing moderator routes reject moderated
-/// POST; they do not bypass moderation. Malformed mappings fail startup validation.
-/// </para>
-/// <para>
-/// Pattern matching is first-match in configuration order (RFC 6048 §3 moderators
-/// list). List more specific wildmats before general ones.
+/// An omitted or empty section is valid. Runtime authorization is loaded from
+/// <c>nntpmoderators</c>. A leftover <see cref="Moderators"/> list fails startup.
+/// Missing database routes reject moderated POST; they do not bypass moderation.
 /// </para>
 /// </remarks>
 public sealed class ModerationOptions
@@ -29,8 +26,8 @@ public sealed class ModerationOptions
     public ModerationSourceOptions Source { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets the moderator mappings. First matching <see cref="ModeratorMappingOptions.Pattern"/>
-    /// wins.
+    /// Gets or sets a leftover static mapping list. Must be empty.
+    /// Runtime authorization is loaded from <c>nntpmoderators</c>.
     /// </summary>
     public ModeratorMappingOptions[] Moderators { get; set; } = [];
 }

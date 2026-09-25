@@ -60,6 +60,15 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> AuthenticationFailed =
         Line("481 Authentication failed\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> AuthenticationCancelled =
+        Line("481 Authentication cancelled\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> TooManySessions =
+        Line("481 Too many sessions\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> TooManySourceAddresses =
+        Line("481 Too many source addresses\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> AuthenticationOutOfSequence =
         Line("482 Authentication commands issued out of sequence\r\n"u8);
 
@@ -92,6 +101,42 @@ internal static class NntpResponses
 
     internal static readonly ReadOnlyMemory<byte> AuthinfoSaslNotImplemented =
         Line("501 AUTHINFO SASL not implemented\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslMechanismRequired =
+        Line("501 SASL mechanism required\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslInvalidBase64 =
+        Line("504 Base64 encoding error\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslLoginUsernameChallenge =
+        Line("383 VXNlcm5hbWU6\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslLoginPasswordChallenge =
+        Line("383 UGFzc3dvcmQ6\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslEmptyChallenge =
+        Line("383 =\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslProtocolError =
+        Line("482 SASL protocol error\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslMechanismNotSupported =
+        Line("503 Mechanism not supported\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslContinuationNotSupported =
+        Line("503 SASL continuation not supported\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> NoSaslExchangeInProgress =
+        Line("503 No SASL exchange in progress\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> TemporaryAuthenticationFailure =
+        Line("503 Temporary authentication failure\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslScramUnavailable =
+        Line("503 SCRAM not available\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> SaslCramUnavailable =
+        Line("503 CRAM-MD5 not available\r\n"u8);
 
     internal static readonly ReadOnlyMemory<byte> AlreadyAuthenticated =
         Line("502 Already authenticated\r\n"u8);
@@ -162,6 +207,12 @@ internal static class NntpResponses
 
     internal static readonly ReadOnlyMemory<byte> CapabilityAuthinfoUser =
         Multiline("AUTHINFO USER\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CapabilityAuthinfoUserSasl =
+        Multiline("AUTHINFO USER SASL\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CapabilitySasl =
+        Multiline("SASL PLAIN LOGIN SCRAM-SHA-256 CRAM-MD5\r\n"u8);
 
     internal static readonly ReadOnlyMemory<byte> CapabilityStartTls =
         Multiline("STARTTLS\r\n"u8);

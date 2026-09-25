@@ -155,6 +155,9 @@ public static class NntpCommandParser
             case NntpVerb.AuthInfo when qualifier is NntpVerb.User or NntpVerb.Pass:
                 return argument.IsEmpty ? NntpParseStatus.MissingArgument : NntpParseStatus.Ok;
 
+            case NntpVerb.AuthInfo when qualifier is NntpVerb.Sasl:
+                return argument.IsEmpty ? NntpParseStatus.MissingArgument : NntpParseStatus.Ok;
+
             case NntpVerb.Group:
                 if (tokenCount == 0)
                 {

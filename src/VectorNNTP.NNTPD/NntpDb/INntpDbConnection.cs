@@ -18,4 +18,22 @@ public interface INntpDbConnection : IAsyncDisposable
     /// <param name="cancellationToken">Token used to cancel the query.</param>
     /// <returns>The complete result set. The caller must not retain this connection.</returns>
     ValueTask<IReadOnlyList<NntpGroupRow>> QueryNewsgroupsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Looks up one <c>nntpusers</c> row for reader authentication.
+    /// </summary>
+    /// <param name="accountName">Plaintext wire username. Bound as <c>@account_name</c>.</param>
+    /// <param name="cancellationToken">Token used to cancel the query.</param>
+    /// <returns>The mapped account, or <see langword="null"/> when no row exists.</returns>
+    ValueTask<Authentication.NntpUserRecord?> QueryUserAccountAsync(
+        string accountName,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Executes <see cref="NntpModeratorQueries.SelectEnabledModerators"/> and returns every row.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel the query.</param>
+    /// <returns>Enabled moderator rows in <c>moderator_id</c> order.</returns>
+    ValueTask<IReadOnlyList<Moderation.NntpModeratorRow>> QueryEnabledModeratorsAsync(
+        CancellationToken cancellationToken);
 }

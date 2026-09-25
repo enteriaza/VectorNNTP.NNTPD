@@ -222,11 +222,9 @@ public sealed class ModeratedPostCommandTests
     [Fact]
     public async Task CrossPost_MM_SameModerator_Returns240()
     {
-        var authorization = new ConfiguredModeratorAuthorization(
-        [
-            new ModeratorMappingOptions { Pattern = "group.a", Address = "shared@example.com", Username = MapNntpAuthenticationProvider.ModeratorA },
-            new ModeratorMappingOptions { Pattern = "group.shared", Address = "shared@example.com", Username = MapNntpAuthenticationProvider.ModeratorA },
-        ]);
+        var authorization = ModeratorTestSnapshot.Create(
+            ("group.a", "shared@example.com", MapNntpAuthenticationProvider.ModeratorA),
+            ("group.shared", "shared@example.com", MapNntpAuthenticationProvider.ModeratorA));
         var snapshot = Snapshot(
             Allowed("group.y"),
             Group("group.a", NewsgroupPostingStatus.Moderated),
@@ -273,6 +271,19 @@ public sealed class ModeratedPostCommandTests
     public async Task CrossPost_MWithRejectedStatus_Returns441(string groups)
     {
         var outcome = await PostAsync(groups, extraHeaders: "", user: MapNntpAuthenticationProvider.ModeratorA);
+        AssertRejected(outcome);
+    }
+
+    [Theory]
+    [InlineData("group.a,group.n")]
+    [InlineData("group.a,group.x")]
+    [InlineData("group.a,group.j")]
+    public async Task CrossPost_ApprovedDoesNotBypassRejectedStatus(string groups)
+    {
+        var outcome = await PostAsync(
+            groups,
+            extraHeaders: "Approved: moderator-a@example.com\r\n",
+            user: MapNntpAuthenticationProvider.ModeratorA);
         AssertRejected(outcome);
     }
 
@@ -513,6 +524,113 @@ public sealed class ModeratedPostCommandTests
     }
 
     [Fact]
+    public async Task MessageId_LookingLikeModerator_DoesNotAuthorize()
+    {
+        var outcome = await PostAsync(
+            "group.a",
+            extraHeaders: string.Empty,
+            user: MapNntpAuthenticationProvider.NormalUser,
+            messageId: "<moderator-a@example.com>");
+        AssertRejected(outcome);
+    }
+
+    [Fact]
+    public async Task ModeratorA_CannotApproveModeratorBGroup()
+    {
+        var outcome = await PostAsync(
+            "group.b",
+            extraHeaders: "Approved: moderator-b@example.com\r\n",
+            user: MapNntpAuthenticationProvider.ModeratorA);
+        AssertRejected(outcome);
+    }
+
+    [Fact]
+    public async Task AuthenticatedModerator_DoesNotGrantControlCancel()
+    {
+        await using var duplex = new PostDuplex();
+        var queue = new RecordingIngestionQueue(NewQueue());
+        var history = new RecordingHistoryDb();
+        var session = duplex.CreateSession(
+            queue,
+            history,
+            new StaticNewsgroupCatalogue(DefaultSnapshot()),
+            StandardAuthorization(),
+            new RecordingModerationSubmissionService(ModerationSubmissionStatus.Unavailable, "unused"),
+            MapNntpAuthenticationProvider.CreateStandard());
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+        await AuthenticateAsync(duplex, MapNntpAuthenticationProvider.ModeratorA, PasswordFor(MapNntpAuthenticationProvider.ModeratorA));
+        Assert.False(session.Authorization.ControlCancelPermitted);
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            Article(
+                "group.a",
+                extraHeaders: "Approved: moderator-a@example.com\r\nControl: cancel <victim@example.com>\r\n")
+            + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.TryAdmitCalls);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task Post_DoesNotQueryModeratorRepository()
+    {
+        var repository = new MemoryNntpModeratorRepository();
+        repository.Add(new MemoryModeratorRecord
+        {
+            ModeratorId = 1,
+            GroupPattern = "group.a",
+            ModeratorAddress = "moderator-a@example.com",
+            AccountName = MapNntpAuthenticationProvider.ModeratorA,
+        });
+        await using var catalogue = new ModeratorCatalogueService(
+            repository,
+            NullLogger<ModeratorCatalogueService>.Instance,
+            TimeProvider.System,
+            TimeSpan.FromHours(1));
+        await catalogue.StartAsync(CancellationToken.None);
+        Assert.Equal(1, repository.QueryCount);
+
+        await using var duplex = new PostDuplex();
+        var queue = new RecordingIngestionQueue(NewQueue());
+        var history = new RecordingHistoryDb();
+        var session = duplex.CreateSession(
+            queue,
+            history,
+            new StaticNewsgroupCatalogue(DefaultSnapshot()),
+            catalogue.Current,
+            new RecordingModerationSubmissionService(ModerationSubmissionStatus.Accepted),
+            MapNntpAuthenticationProvider.CreateStandard(),
+            catalogue);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+        await AuthenticateAsync(duplex, MapNntpAuthenticationProvider.ModeratorA, PasswordFor(MapNntpAuthenticationProvider.ModeratorA));
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            Article("group.a", extraHeaders: "Approved: moderator-a@example.com\r\n") + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            Article("group.a", extraHeaders: "Approved: moderator-a@example.com\r\n", messageId: "<second@example.com>") + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, repository.QueryCount);
+
+        await catalogue.StopAsync(CancellationToken.None);
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
     public async Task From_CannotImpersonateModerator_NormalUser_Returns441()
     {
         var outcome = await PostAsync(
@@ -564,15 +682,8 @@ public sealed class ModeratedPostCommandTests
         Assert.Equal("moderator-a@example.com", control.PgpAuthorities.Authorities[0].Authorizations[0].From);
         Assert.True(new ControlOptionsValidator().Validate(null, control).Succeeded);
 
-        var authorization = new ConfiguredModeratorAuthorization(
-        [
-            new ModeratorMappingOptions
-            {
-                Pattern = "group.a",
-                Address = "moderator-a@example.com",
-                Username = MapNntpAuthenticationProvider.ModeratorA,
-            },
-        ]);
+        var authorization = ModeratorTestSnapshot.Create(
+            ("group.a", "moderator-a@example.com", MapNntpAuthenticationProvider.ModeratorA));
         var outcome = await PostAsync(
             "group.a",
             extraHeaders: "Approved: moderator-a@example.com\r\n",
@@ -638,12 +749,10 @@ public sealed class ModeratedPostCommandTests
     [Fact]
     public async Task InnRoutingTemplate_UnapprovedUsesExpandedAddress_DoesNotAuthorize()
     {
-        var authorization = new ConfiguredModeratorAuthorization(
-        [
-            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
-            new ModeratorMappingOptions { Pattern = "perl.*", Address = "news-moderator-%s@perl.org" },
-            new ModeratorMappingOptions { Pattern = "*", Address = "%s@moderators.isc.org" },
-        ]);
+        var authorization = ModeratorTestSnapshot.Create(
+            ("fido7.*", "%s@fido7.org", string.Empty),
+            ("perl.*", "news-moderator-%s@perl.org", string.Empty),
+            ("*", "%s@moderators.isc.org", string.Empty));
         var snapshot = Snapshot(
             Group("fido7.some.group", NewsgroupPostingStatus.Moderated),
             Group("perl.foo.bar", NewsgroupPostingStatus.Moderated),
@@ -696,10 +805,7 @@ public sealed class ModeratedPostCommandTests
     {
         using var harness = new EmailSpoolHarness();
         var submission = EmailModerationSubmissionServiceTests.Create(harness, enabled: true);
-        var authorization = new ConfiguredModeratorAuthorization(
-        [
-            new ModeratorMappingOptions { Pattern = "fido7.*", Address = "%s@fido7.org" },
-        ]);
+        var authorization = ModeratorTestSnapshot.Create(("fido7.*", "%s@fido7.org", string.Empty));
         var snapshot = Snapshot(Group("fido7.some.group", NewsgroupPostingStatus.Moderated));
         var outcome = await PostAsync(
             "fido7.some.group",
@@ -998,11 +1104,9 @@ public sealed class ModeratedPostCommandTests
         new(new ArticleIngestionOptions { QueueCapacity = 8, MaxArticleBytes = NntpdOptions.DefaultMaxArticleSize });
 
     private static IModeratorAuthorization StandardAuthorization() =>
-        new ConfiguredModeratorAuthorization(
-        [
-            new ModeratorMappingOptions { Pattern = "group.a", Address = "moderator-a@example.com", Username = MapNntpAuthenticationProvider.ModeratorA },
-            new ModeratorMappingOptions { Pattern = "group.b", Address = "moderator-b@example.com", Username = MapNntpAuthenticationProvider.ModeratorB },
-        ]);
+        ModeratorTestSnapshot.Create(
+            ("group.a", "moderator-a@example.com", MapNntpAuthenticationProvider.ModeratorA),
+            ("group.b", "moderator-b@example.com", MapNntpAuthenticationProvider.ModeratorB));
 
     private static NewsgroupSnapshot DefaultSnapshot() =>
         Snapshot(
@@ -1166,7 +1270,8 @@ public sealed class ModeratedPostCommandTests
             INewsgroupCatalogue catalogue,
             IModeratorAuthorization authorization,
             IModerationSubmissionService submission,
-            INntpAuthenticationProvider? authenticationProvider)
+            INntpAuthenticationProvider? authenticationProvider,
+            IModeratorCatalogue? moderatorCatalogue = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -1181,6 +1286,7 @@ public sealed class ModeratedPostCommandTests
                 postingTraceProtector: AesGcmPostingTraceProtector.Create(
                     new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey }),
                 newsgroupCatalogue: catalogue,
+                moderatorCatalogue: moderatorCatalogue,
                 moderatorAuthorization: authorization,
                 moderationSubmission: submission);
         }

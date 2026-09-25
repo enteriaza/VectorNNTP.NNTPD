@@ -6,6 +6,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -40,6 +41,9 @@ public sealed class NntpSession
     private NntpAuthorization _authorization;
     private NntpAuthenticationState _authentication;
     private string? _pendingAuthUsername;
+    private NntpAccountPolicy? _accountPolicy;
+    private string? _admittedAccountName;
+    private NntpSaslExchange? _saslExchange;
     private NntpSessionMode _mode;
     private int _closeRequested;
     private int _activityState;
@@ -81,8 +85,11 @@ public sealed class NntpSession
         string? mailComplaintsTo = null,
         Commands.Posting.IPostingTraceProtector? postingTraceProtector = null,
         INewsgroupCatalogue? newsgroupCatalogue = null,
+        IModeratorCatalogue? moderatorCatalogue = null,
         IModeratorAuthorization? moderatorAuthorization = null,
-        IModerationSubmissionService? moderationSubmission = null)
+        IModerationSubmissionService? moderationSubmission = null,
+        INntpSessionAdmissionTracker? sessionAdmission = null,
+        NntpSaslService? saslService = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -137,8 +144,14 @@ public sealed class NntpSession
             : mailComplaintsTo.Trim();
         PostingTraceProtector = postingTraceProtector;
         NewsgroupCatalogue = newsgroupCatalogue;
-        ModeratorAuthorization = moderatorAuthorization ?? EmptyModeratorAuthorization.Instance;
+        ModeratorCatalogue = moderatorCatalogue;
+        ModeratorAuthorization = moderatorAuthorization
+            ?? (IModeratorAuthorization?)moderatorCatalogue
+            ?? EmptyModeratorAuthorization.Instance;
         ModerationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
+        SessionAdmission = sessionAdmission;
+        SaslService = saslService;
+        SessionId = Guid.NewGuid().ToString("N");
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -179,9 +192,18 @@ public sealed class NntpSession
     public INewsgroupCatalogue? NewsgroupCatalogue { get; }
 
     /// <summary>
+    /// Gets the process-wide moderator catalogue, or <see langword="null"/> when unset (tests).
+    /// </summary>
+    public IModeratorCatalogue? ModeratorCatalogue { get; }
+
+    /// <summary>
     /// Gets the moderator authorization table used by POST for <c>Approved:</c> decisions.
     /// </summary>
     public IModeratorAuthorization ModeratorAuthorization { get; }
+
+    /// <summary>Captures the current moderator snapshot once for a POST command.</summary>
+    public IModeratorAuthorization CaptureModeratorAuthorization() =>
+        ModeratorCatalogue?.Current ?? ModeratorAuthorization;
 
     /// <summary>
     /// Gets the moderation submission boundary used when an unapproved moderated
@@ -248,6 +270,24 @@ public sealed class NntpSession
     /// <summary>Gets the authentication provider used by AUTHINFO handlers.</summary>
     public INntpAuthenticationProvider AuthenticationProvider { get; }
 
+    /// <summary>Gets the process-local authenticated-session admission tracker, if registered.</summary>
+    public INntpSessionAdmissionTracker? SessionAdmission { get; }
+
+    /// <summary>Gets the AUTHINFO SASL service, if registered.</summary>
+    public NntpSaslService? SaslService { get; }
+
+    /// <summary>Gets the unique id used for admission tracking.</summary>
+    public string SessionId { get; }
+
+    /// <summary>Gets the authenticated account policy, or <see langword="null"/> when none applies.</summary>
+    public NntpAccountPolicy? AccountPolicy => _accountPolicy;
+
+    /// <summary>Gets whether an AUTHINFO SASL exchange is waiting for a continuation line.</summary>
+    internal bool HasSaslExchange => _saslExchange is not null;
+
+    /// <summary>Gets the in-progress SASL exchange, or <see langword="null"/>.</summary>
+    internal NntpSaslExchange? CurrentSaslExchange => _saslExchange;
+
     /// <summary>Gets the TLS certificate provider used by STARTTLS, if configured.</summary>
     public ITlsCertificateContextProvider? CertificateProvider { get; }
 
@@ -301,6 +341,8 @@ public sealed class NntpSession
         if (!authorization.IsAuthenticated)
         {
             _authentication = NntpAuthenticationState.Unauthenticated;
+            _accountPolicy = null;
+            _saslExchange = null;
         }
     }
 
@@ -321,13 +363,18 @@ public sealed class NntpSession
     /// Applies a successful authentication atomically: identity + authorization, pending USER cleared.
     /// Forces <see cref="NntpAuthorization.IsAuthenticated"/> to <see langword="true"/>.
     /// </summary>
-    public void ApplySuccessfulAuthentication(string username, NntpAuthorization authorization)
+    public void ApplySuccessfulAuthentication(
+        string username,
+        NntpAuthorization authorization,
+        NntpAccountPolicy? policy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         ArgumentNullException.ThrowIfNull(authorization);
         _pendingAuthUsername = null;
+        _saslExchange = null;
         _authentication = NntpAuthenticationState.ForUser(username);
         _authorization = authorization.With(isAuthenticated: true);
+        _accountPolicy = policy;
     }
 
     /// <summary>
@@ -339,6 +386,62 @@ public sealed class NntpSession
     {
         _authentication = NntpAuthenticationState.Unauthenticated;
         _authorization = _connectionAuthorization;
+        _accountPolicy = null;
+        _saslExchange = null;
+        ReleaseAdmission();
+    }
+
+    /// <summary>Abandons an in-progress SASL exchange without changing identity.</summary>
+    internal void AbandonSaslExchange() => _saslExchange = null;
+
+    /// <summary>Stores in-progress SASL state for the next continuation line.</summary>
+    internal void SetSaslExchange(NntpSaslExchange exchange)
+    {
+        ArgumentNullException.ThrowIfNull(exchange);
+        _saslExchange = exchange;
+    }
+
+    /// <summary>Admits this session for <paramref name="policy"/> after credential success.</summary>
+    internal NntpAuthenticationResult AdmitAuthenticatedSession(NntpAccountPolicy? policy)
+    {
+        ReleaseAdmission();
+        if (policy is null || !policy.RequiresAdmission || SessionAdmission is null)
+        {
+            return NntpAuthenticationResult.Success(
+                policy?.Username ?? Authentication.Username ?? "unknown",
+                Authorization,
+                policy);
+        }
+
+        var outcome = SessionAdmission.TryAdmit(
+            policy.Username,
+            SessionId,
+            ClientAddress,
+            policy.SessionLimit,
+            policy.SrcIpLimit);
+        if (outcome == NntpSessionAdmissionResult.MaxSessionsExceeded)
+        {
+            return NntpAuthenticationResult.TooManySessions;
+        }
+
+        if (outcome == NntpSessionAdmissionResult.IpLimitExceeded)
+        {
+            return NntpAuthenticationResult.TooManySourceAddresses;
+        }
+
+        _admittedAccountName = policy.Username;
+        return NntpAuthenticationResult.Success(policy.Username, Authorization, policy);
+    }
+
+    /// <summary>Releases any admission slot held by this session.</summary>
+    internal void ReleaseAdmission()
+    {
+        if (_admittedAccountName is { } account && SessionAdmission is not null)
+        {
+            SessionAdmission.Release(account, SessionId);
+        }
+
+        _admittedAccountName = null;
     }
 
     /// <summary>Records a successful inbound admission for this session's Transit peer, if any.</summary>
@@ -578,6 +681,7 @@ public sealed class NntpSession
             }
 
             SessionCensus?.Unregister(this);
+            ReleaseAdmission();
             if (TakeThisWindow is not null)
             {
                 try

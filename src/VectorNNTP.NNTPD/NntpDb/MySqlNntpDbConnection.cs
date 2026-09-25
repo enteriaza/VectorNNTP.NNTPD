@@ -1,4 +1,6 @@
 using MySqlConnector;
+using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.Moderation;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
@@ -57,7 +59,162 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     }
 
     /// <inheritdoc />
+    public async ValueTask<NntpUserRecord?> QueryUserAccountAsync(
+        string accountName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        try
+        {
+            await using var command = _connection.CreateCommand();
+            command.CommandText = NntpUserQueries.SelectUserByName;
+            command.Parameters.AddWithValue("@account_name", accountName);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            return MapUserRecord(reader, accountName);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
+        {
+            throw new NntpDbUnavailableException("MySQL nntpusers lookup failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<NntpModeratorRow>> QueryEnabledModeratorsAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = _connection.CreateCommand();
+            command.CommandText = NntpModeratorQueries.SelectEnabledModerators;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var rows = new List<NntpModeratorRow>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rows.Add(MapModeratorRow(reader));
+            }
+
+            return rows;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
+        {
+            throw new NntpDbUnavailableException("MySQL nntpmoderators catalogue query failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
+
+    /// <summary>Maps one enabled <c>nntpmoderators</c> row. CHAR columns are trimmed.</summary>
+    internal static NntpModeratorRow MapModeratorRow(MySqlDataReader reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        var id = Convert.ToInt64(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture);
+        var pattern = reader.IsDBNull(1) ? string.Empty : reader.GetString(1).Trim();
+        var address = reader.IsDBNull(2) ? string.Empty : reader.GetString(2).Trim();
+        var account = reader.IsDBNull(3) ? string.Empty : reader.GetString(3).Trim();
+        return new NntpModeratorRow(id, pattern, address, account);
+    }
+
+    /// <summary>Maps one <c>nntpusers</c> row. Flag columns are true only for <c>Y</c>.</summary>
+    internal static NntpUserRecord MapUserRecord(MySqlDataReader reader, string accountName)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        var password = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+        var scramSalt = ReadBinaryColumn(reader, 1);
+        var scramIterations = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
+        var scramStoredKey = ReadBinaryColumn(reader, 3);
+        var scramServerKey = ReadBinaryColumn(reader, 4);
+        var allowAuthPlain = IsYesFlag(reader, 5);
+        var allowAuthScram256 = IsYesFlag(reader, 6);
+        var accountType = ReadAccountType(reader, 7);
+        var rateLimit = reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8));
+        var byteLimit = reader.IsDBNull(9) ? 0L : Convert.ToInt64(reader.GetValue(9));
+        var sessionLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
+        var srcIpLimit = reader.IsDBNull(11) ? 0 : Convert.ToInt32(reader.GetValue(11));
+        var isEnabled = IsYesFlag(reader, 12);
+        var customerId = ReadCustomerId(reader, 13);
+        return new NntpUserRecord(
+            accountName,
+            password,
+            allowAuthPlain,
+            allowAuthScram256,
+            scramSalt,
+            scramIterations,
+            scramStoredKey,
+            scramServerKey,
+            accountType,
+            rateLimit,
+            byteLimit,
+            sessionLimit,
+            srcIpLimit,
+            isEnabled,
+            customerId);
+    }
+
+    private static bool IsYesFlag(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(Convert.ToString(reader.GetValue(ordinal)), "Y", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static char ReadAccountType(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return 'R';
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            char ch => ch,
+            string text when text.Length > 0 => text[0],
+            byte b => (char)b,
+            _ => 'R',
+        };
+    }
+
+    private static string ReadCustomerId(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return string.Empty;
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            Guid guid => guid.ToString("D"),
+            string text => text,
+            _ => Convert.ToString(value) ?? string.Empty,
+        };
+    }
+
+    private static ReadOnlyMemory<byte> ReadBinaryColumn(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return ReadOnlyMemory<byte>.Empty;
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            byte[] bytes when bytes.Length == 0 => ReadOnlyMemory<byte>.Empty,
+            byte[] bytes => bytes,
+            ReadOnlyMemory<byte> memory => memory,
+            _ => ReadOnlyMemory<byte>.Empty,
+        };
+    }
 
     /// <summary>Reads one <c>nntpgroups</c> row, preserving unsigned integer width.</summary>
     internal static NntpGroupRow ReadGroupRow(MySqlDataReader reader, int index)

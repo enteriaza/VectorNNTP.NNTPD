@@ -130,14 +130,15 @@ public sealed class CloudflareDnsReconciliationServiceTests
         Assert.Equal(typeof(VectorNNTP.NNTPD.Redis.RedisService), services[1].GetType());
         Assert.Equal(typeof(NntpDbService), services[2].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService), services[3].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[4].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[5].GetType());
-        Assert.Equal(typeof(IncomingSpoolWriterService), services[6].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[7].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[8].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[9].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[10].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[11].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService), services[4].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[5].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[6].GetType());
+        Assert.Equal(typeof(IncomingSpoolWriterService), services[7].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[8].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[9].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[10].GetType());
+        Assert.Equal(typeof(AcmeCertificateService), services[11].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[12].GetType());
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

@@ -14,6 +14,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists, or because a LIST keyw
 [x] CAPABILITIES
 [x] AUTHINFO USER
 [x] AUTHINFO PASS
+[x] AUTHINFO SASL
 [x] MODE READER
 [x] HELP
 [x] DATE
@@ -35,6 +36,8 @@ Do **not** mark `[x]` solely because a `.cs` file exists, or because a LIST keyw
 [x] GROUP
 ```
 
+AUTHINFO USER/PASS (RFC 4643 §2.3) caches a username then authenticates. AUTHINFO SASL (RFC 4643 §2.4) implements PLAIN, LOGIN, CRAM-MD5, and SCRAM-SHA-256 only. DIGEST-MD5, SCRAM-SHA-1, SCRAM-SHA-256-PLUS, EXTERNAL, and GSSAPI are not implemented and are not advertised. Challenges use `383` plus Base64 (`383 =` for an empty PLAIN challenge; LOGIN uses Base64 `Username:` / `Password:`; CRAM-MD5 Base64-encodes the RFC 2195 `<random.timestamp@Fqdn>` challenge, where `Fqdn` is the generated Nntpd identity). Success is `281`, or `283` plus Base64 when the mechanism returns additional SASL data (SCRAM server-final). A syntactically valid SCRAM-SHA-256 client-first always receives `383` server-first; unknown, disabled, and non-SCRAM accounts use a process-local dummy verifier and still fail with `481`. Dummy material cannot authenticate. Reader identity comes only from a successful AUTHINFO/SASL exchange. MySQL `nntpusers` is loaded through the existing NntpDB pool. CAPABILITIES advertises `AUTHINFO USER SASL` and `SASL PLAIN LOGIN SCRAM-SHA-256 CRAM-MD5` when SASL is registered and cleartext AUTHINFO is permitted.
+
 CHECK (RFC 4644 §2.4) uses HistoryDB `PeekAsync` (`438` local/Redis hit, `238` double miss without recording the identifier, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
 
 LIST / LIST ACTIVE / LIST COUNTS / LIST NEWSGROUPS (RFC 3977 §7.6 / RFC 6048 §2.2) and GROUP (RFC 3977 §6.1.1) read one captured in-memory `NewsgroupSnapshot`. The NNTP command path does not query MySQL. LIST ACTIVE, LIST COUNTS, and LIST NEWSGROUPS write precomputed UTF-8 lines; a wildmat filters by group name only and an empty match is still `215`. LIST ACTIVE and LIST COUNTS status is exactly the stored octet `y` / `n` / `m` / `x` / `j` (RFC 3977 §7.6.3 plus RFC 6048 §3.1 single-letter values). The RFC 6048 `=<newsgroup>` status form is not supported; this is not complete RFC 6048 LIST ACTIVE status support. LIST COUNTS lines are `group high low estimated status` with a single ASCII space between fields. The estimate is the same GROUP watermark estimate already stored on the snapshot (`high − low + 1` when `high >= low`, except the empty `0 0` case; `0` when `high < low`). It is not an exact stored-article count. LISTGROUP remains a registered placeholder (`500`) until an article-number source exists; it does not consult the catalogue and does not invent article numbers from `count_low`/`count_high`. LIST OVERVIEW.FMT and LIST HEADERS are static field-list descriptions (RFC 3977 §8.4 / §8.6), not article-data operations. Both write an immortal precomputed `215` multiline response and do not read the catalogue, NntpDb, or articles. OVERVIEW.FMT uses the RFC 3977 §8.4.2 compatibility names `Bytes:` and `Lines:` (not `:bytes` / `:lines`) and does not invent extra fields. LIST HEADERS, LIST HEADERS MSGID, and LIST HEADERS RANGE return the same static field list because HDR forms are not distinguished; metadata items use the RFC HEADERS names `:bytes` and `:lines`. This is not an implementation of OVER, HDR, or article overview storage. LIST MOTD remains recognized without stored information (`503 Data item not stored`). Unknown LIST keywords (ACTIVE.TIMES, DISTRIB.PATS, DISTRIBUTIONS, MODERATORS, SUBSCRIPTIONS, and any unregistered token) remain `501 Unknown command variant`. Extra arguments on MOTD/OVERVIEW.FMT, invalid HEADERS arguments, extra LIST tokens, and invalid wildmats remain `501`. CAPABILITIES advertises `LIST ACTIVE COUNTS HEADERS NEWSGROUPS OVERVIEW.FMT` with READER. OVER and HDR are not advertised.
@@ -47,14 +50,14 @@ RFC 3977 does not expose the article `Newsgroups:` list before `340`, so group-p
 |------------------|------------|
 | `y` | Ordinary local posting (when every other target is also `y`, or `y` plus authorized/forwarded `m`) |
 | `n` | Rejected — local posting prohibited |
-| `m` | Moderated. No `Approved:` → proto-article is offered to `IModerationSubmissionService` for the leftmost moderated group (RFC 5537 §3.5.1) and is not injected. `Approved:` → ordinary injection only when the authenticated AUTHINFO principal is configured in `Moderation:Moderators` for every moderated target and the header identities match those routes. |
+| `m` | Moderated. No `Approved:` → proto-article is offered to `IModerationSubmissionService` for the leftmost moderated group (RFC 5537 §3.5.1) and is not injected. `Approved:` → ordinary injection only when the authenticated AUTHINFO principal is authorized by the `nntpmoderators` catalogue for every moderated target and the header identities match those routes. |
 | `x` | Rejected — closed: local posting and peer articles are prohibited |
 | `j` | Rejected — peer-only: local posting is not accepted |
 | unknown name | Rejected — the group is not in the captured snapshot |
 
 `Approved:` is an assertion (RFC 5536 mailbox-list), not a boolean and not trust by itself. Header-name comparison is case-insensitive. Mailbox identities compare ASCII case-insensitively. Conflicting identities are rejected; identical duplicates collapse. `Approved: 1` / `true` are malformed. `Control:PgpAuthorities` is not a moderator catalogue.
 
-`Moderation:Moderators[].Address` is a routing destination (static mailbox or INN `%s` template: matched newsgroup name with `.` → `-`). That address is where an unapproved proto-article would be submitted. It does not authenticate a client. `Username` is the optional AUTHINFO principal required for local reinjection. The imported INN `samples/moderators` snapshot is routing-only and does not invent local credentials.
+`nntpmoderators.moderator_address` is a routing destination (static mailbox or INN `%s` template: matched newsgroup name with `.` → `-`). That address is where an unapproved proto-article would be submitted. It does not authenticate a client. `account_name` is the AUTHINFO principal required for local reinjection. The INN `samples/moderators` URL in `Moderation:Source` is provenance only.
 
 Moderator reinjection is a normal POST: `AUTHINFO USER/PASS`, then `POST` with `Approved: moderator@example.com`. There is no `MODERATE` command. The authenticated session identity plus a configured `Username` mapping is the authorization.
 
@@ -73,7 +76,6 @@ LIST MOTD
 ## Placeholder (registered, not implemented)
 
 ```text
-[ ] AUTHINFO SASL
 [ ] LISTGROUP
 [ ] ARTICLE
 [ ] HEAD

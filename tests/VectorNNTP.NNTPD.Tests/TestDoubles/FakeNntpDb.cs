@@ -1,3 +1,5 @@
+using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
@@ -29,6 +31,14 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
     public IReadOnlyList<NntpGroupRow> Newsgroups { get; set; } = [];
 
     public Exception? QueryNewsgroupsException { get; set; }
+
+    public Dictionary<string, NntpUserRecord> Users { get; } = new(StringComparer.Ordinal);
+
+    public Exception? QueryUserException { get; set; }
+
+    public IReadOnlyList<NntpModeratorRow> Moderators { get; set; } = [];
+
+    public Exception? QueryModeratorsException { get; set; }
 
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
 
@@ -91,6 +101,10 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             SelectOneStarted = SelectOneStarted,
             Newsgroups = Newsgroups,
             QueryNewsgroupsException = QueryNewsgroupsException,
+            Users = Users,
+            QueryUserException = QueryUserException,
+            Moderators = Moderators,
+            QueryModeratorsException = QueryModeratorsException,
             BlockQueryNewsgroups = BlockQueryNewsgroups,
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
         };
@@ -123,11 +137,23 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
 
     public Exception? QueryNewsgroupsException { get; set; }
 
+    public Dictionary<string, NntpUserRecord> Users { get; set; } = new(StringComparer.Ordinal);
+
+    public Exception? QueryUserException { get; set; }
+
+    public IReadOnlyList<NntpModeratorRow> Moderators { get; set; } = [];
+
+    public Exception? QueryModeratorsException { get; set; }
+
+    public int QueryModeratorsCount { get; private set; }
+
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
 
     public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
 
     public int QueryNewsgroupsCount { get; private set; }
+
+    public int QueryUserCount { get; private set; }
 
     public async ValueTask<int> SelectOneAsync(CancellationToken cancellationToken)
     {
@@ -163,6 +189,34 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         }
 
         return Newsgroups;
+    }
+
+    public ValueTask<NntpUserRecord?> QueryUserAccountAsync(string accountName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        cancellationToken.ThrowIfCancellationRequested();
+        QueryUserCount++;
+        if (QueryUserException is not null)
+        {
+            throw QueryUserException;
+        }
+
+        return Users.TryGetValue(accountName, out var record)
+            ? ValueTask.FromResult<NntpUserRecord?>(record)
+            : ValueTask.FromResult<NntpUserRecord?>(null);
+    }
+
+    public ValueTask<IReadOnlyList<NntpModeratorRow>> QueryEnabledModeratorsAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        QueryModeratorsCount++;
+        if (QueryModeratorsException is not null)
+        {
+            throw QueryModeratorsException;
+        }
+
+        return ValueTask.FromResult(Moderators);
     }
 
     public ValueTask DisposeAsync()

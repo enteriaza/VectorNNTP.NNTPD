@@ -1,8 +1,8 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Provenance for the INN <c>samples/moderators</c> snapshot that populated
-/// <see cref="ModerationOptions.Moderators"/>.
+/// Provenance for the historical INN <c>samples/moderators</c> import.
+/// Runtime authorization is <c>nntpmoderators</c>, not this metadata.
 /// </summary>
 public sealed class ModerationSourceOptions
 {

@@ -43,6 +43,33 @@ internal sealed class NntpReaderCommandRx
         }
 
         var line = _commandScratch.AsMemory(0, length);
+        if (_session.HasSaslExchange)
+        {
+            _session.BeginCommandWork();
+            try
+            {
+                if (_session.TakeThisWindow is not null)
+                {
+                    await _session.TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                if (_session.Pipeline is not null)
+                {
+                    await _session.Pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                await Commands.AuthInfo
+                    .ContinueSaslAsync(_session, response, line, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                _session.EndCommandWork();
+            }
+
+            return true;
+        }
+
         var command = NntpCommandParser.Parse(line.Span);
         await _session
             .ProcessParsedCommandAsync(

@@ -16,7 +16,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `BindAddress` | string array | omitted → `["*"]` after normalize | no | Local listen addresses (see below) |
 | `BindPort` | int | `119` | no | Cleartext NNTP TCP port (`1–65535`) |
 | `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. |
-| `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` when the connection is not TLS-protected (see below) |
+| `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` and AUTHINFO SASL when the connection is not TLS-protected (see below) |
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `AcmeEmail` | string | _(none)_ | **yes when TLS enabled** | ACME account contact email; ignored when `BindPortTls` is `0` |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state |
@@ -52,7 +52,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
 | `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
 | `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). Not a moderator list. |
-| `Moderation:Moderators` | array | INN routing snapshot | no | Ordinary moderated-newsgroup routes (wildmat → routing mailbox/template, optional AUTHINFO username). See below. |
+| `Moderation:Source` | object | _(none)_ | no | Provenance for the imported INN `samples/moderators` URL. Not a runtime authorization source. |
+| `Moderation:Moderators` | array | `[]` | no | Leftover static list. Must be empty. Runtime authorization is `nntpmoderators`. |
 | `Email:*` | object | disabled | no | Generic outbound email subsystem (SMTP + durable filesystem spool). See below. |
 | `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
 | `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
@@ -137,7 +138,7 @@ Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings
 
 When both `Nntpd:NewsmasterUser` and `Nntpd:NewsmasterPassword` are set, AUTHINFO USER/PASS for that account grants posting plus `ControlCancelPermitted`. That flag allows only a well-formed `Control: cancel <message-id>` header on POST (RFC 5536 Control syntax; RFC 5537 §5.3 CANCEL). It does not permit `newgroup`, `rmgroup`, `checkgroups`, or any other Control verb. Ordinary authenticated users still receive `441` for every `Control` header. RFC 1036 is historical only.
 
-When either value is omitted, both must be omitted and AUTHINFO remains deny-all unless another `INntpAuthenticationProvider` is registered.
+When either value is omitted, both must be omitted and the newsmaster path is inactive. Reader AUTHINFO still uses MySQL `nntpusers` through the existing NntpDB pool (`CompositeNntpAuthenticationProvider`). Transit peer AUTHINFO remains a separate peer-credential check and never falls through to MySQL.
 
 Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
 
@@ -236,12 +237,12 @@ The policy captures `NewsgroupCatalogue.Current` once for that POST evaluation a
 |------------------|------------|
 | `y` | Ordinary local posting |
 | `n` | Rejected — posting prohibited |
-| `m` | Moderated. Unapproved posts are submitted for moderator forwarding (or `441` when forwarding is unavailable). Approved posts inject only after AUTHINFO + `Moderation:Moderators` authorization for every moderated target. |
+| `m` | Moderated. Unapproved posts are submitted for moderator forwarding (or `441` when forwarding is unavailable). Approved posts inject only after AUTHINFO + `nntpmoderators` authorization for every moderated target. |
 | `x` | Rejected — closed: local posting and peer articles are prohibited |
 | `j` | Rejected — peer-only: local posting is not accepted |
 | unknown name | Rejected — the group is not in the captured snapshot |
 
-`Approved:` is a claimed mailbox identity. It is not trusted by itself. See `Moderation:Moderators`.
+`Approved:` is a claimed mailbox identity. It is not trusted by itself. See `nntpmoderators` below.
 
 Malformed or empty `Newsgroups:` remain existing parser syntax failures (`441`) and do not consult the snapshot. See `docs/commands.md` and `docs/architecture.md`.
 
@@ -322,73 +323,88 @@ Example:
 }
 ```
 
-## Moderation (`Moderation:Moderators`)
+### Live MySQL moderator integration tests
 
-Top-level `Moderation` section (not nested under `Nntpd`, and **not** `Control:PgpAuthorities`). This is the ordinary moderated-newsgroup catalogue. PGP control authorities do not authorize `Approved:` and are not used to derive moderator addresses.
+Ordinary `VectorNNTP.NNTPD.Tests` runs do not open MySQL and do not read `ConnectionStrings:NntpDB` or the committed production target.
 
-Two distinct fields exist on each route:
+To exercise `MySqlNntpModeratorRepository` against a real `nntpmoderators` table, set a dedicated connection string:
 
-| Concept | Config key | Meaning |
-|---------|------------|---------|
-| Moderator routing address | `Address` | Where an unapproved proto-article would be submitted. A static mailbox, or an INN template containing `%s`. |
-| Authenticated moderator username | `Username` | Optional AUTHINFO principal authorized to reinject an approved article. Omitted for public INN routing destinations. |
+```text
+VECTORNNTP_NNTPDB_INTEGRATION=Server=...;Port=3306;Database=...;User ID=...;Password=...;
+```
 
-The imported INN `samples/moderators` snapshot supplies **routing addresses only**. It does not create local VectorNNTP moderator accounts, passwords, or AUTHINFO identities. VectorNNTP cannot authenticate against those external mailboxes.
+Requirements:
+
+- The target already has the production `nntpmoderators` schema (do not point this at an arbitrary production writer unless you accept uniquely prefixed test rows).
+- The tests insert rows under `test.vnntp.modcat.{run-id}...` and delete only those `moderator_id` values / that prefix.
+- When the variable is unset, the tests skip.
+- When the variable is set and MySQL is unreachable, the tests fail.
+
+Do not commit the connection string. Diagnostics must not print passwords or the full string.
+
+## Moderation (`nntpmoderators`)
+
+Top-level `Moderation` section (not nested under `Nntpd`, and **not** `Control:PgpAuthorities`). Runtime moderator authorization is loaded from MySQL `nntpmoderators` into an immutable in-memory snapshot (`ModeratorCatalogueService`). PGP control authorities do not authorize `Approved:` and are not used to derive moderator addresses.
+
+A leftover `Moderation:Moderators` array fails startup validation. Do not keep a second static authorization list in configuration.
+
+`Moderation:Source` is provenance only (the imported INN `samples/moderators` URL). It does not create local VectorNNTP moderator accounts, passwords, or AUTHINFO identities.
+
+Each enabled `nntpmoderators` row (`is_enabled = 'Y'`, `moderator_id ASC`) is one first-match rule:
+
+| Column | Meaning |
+|--------|---------|
+| `group_pattern` | RFC 3977 wildmat matched in the application (not by MySQL). |
+| `moderator_address` | Routing mailbox or INN `%s` template. Where an unapproved proto-article is submitted. |
+| `account_name` | AUTHINFO principal required for local approved reinjection. Empty is routing-only. |
 
 `%s` is replaced with the matched newsgroup name after converting `.` to `-`. Example: `fido7.some.group` + `%s@fido7.org` → `fido7-some-group@fido7.org`. The `perl.*` exception keeps its literal prefix: `news-moderator-%s@perl.org`. Expansion is for submission routing only; it does not grant POST authorization.
 
-Matching is first-match in configuration order (RFC 6048 §3 / INN `moderators`). The catch-all `*` must remain last.
+Matching is first-match in `moderator_id` order. Do not sort alphabetically or prefer the most specific pattern.
 
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
 | `Source:Url` | string | _(none)_ | no | Human-facing INN `samples/moderators` URL |
 | `Source:InnUrl` | string | _(none)_ | no | INN GitHub raw `samples/moderators` URL |
 | `Source:RetrievedFrom` | string | _(none)_ | no | Which URL was actually retrieved (`InnUrl` for the current snapshot) |
-| `Moderators` | array | `[]` | no | First-match wildmat routes (RFC 6048 §3 / INN order) |
-| `Moderators[].Pattern` | string | _(none)_ | yes when the entry exists | RFC 3977 wildmat matched against the newsgroup name. List more specific patterns before general ones. |
-| `Moderators[].Address` | string | _(none)_ | yes when the entry exists | Routing mailbox or INN `%s` template. Not derived from Control. |
-| `Moderators[].Username` | string | _(empty)_ | no | AUTHINFO username authorized to inject that approval. Omit for routing-only INN destinations. Not assumed equal to the mailbox. |
+| `Moderators` | array | `[]` | no | Must be empty. A non-empty list fails startup. |
 
-Passwords are **not** stored here. AUTHINFO secrets remain `Nntpd:NewsmasterPassword` / the authentication provider. Environment-variable overrides use the Generic Host convention `Moderation__Moderators__0__Pattern` (and `Address` / `Username`).
-
-Duplicate exact patterns (ASCII case-insensitive) fail startup. Empty pattern/address and malformed wildmats or address templates fail startup. An omitted username is valid (routing-only). Overlapping distinct wildmats are allowed; the earlier entry wins. One username may cover multiple patterns. One pattern has one routing address.
+Passwords are **not** stored in this section. AUTHINFO secrets remain `Nntpd:NewsmasterPassword` / `nntpusers`. The initial catalogue load fails host startup when the query cannot complete. A later refresh failure keeps the last known-good snapshot. POST captures `Current` once and does not query MySQL.
 
 Trust model:
 
 ```text
-Address / %s template               ← routing destination (unapproved submission)
+moderator_address / %s template     ← routing destination (unapproved submission)
 Approved: moderator@example.com     ← assertion
-AUTHINFO USER moderator-example     ← authenticated principal
-Moderation Username mapping         ← authorization
+AUTHINFO USER MODERATOR01           ← authenticated principal
+nntpmoderators.account_name         ← authorization
 ```
 
-`Approved` alone is not sufficient. A routing template match alone is not sufficient. A normal authenticated user with a copied `Approved:` header is rejected. An unauthenticated client with `Approved:` is rejected. A moderator for group A cannot approve group B unless a mapping says so.
+`Approved` alone is not sufficient. `From:` and `Message-ID` never authorize. A routing template match alone is not sufficient. A normal authenticated user with a copied `Approved:` header is rejected. An unauthenticated client with `Approved:` is rejected. A moderator for group A cannot approve group B unless a later-or-same row authorizes that account for that group (first matching pattern still wins).
 
-Moderator reinjection is a normal NNTP POST after AUTHINFO. There is no `MODERATE` command.
+Moderator reinjection is a normal NNTP POST after AUTHINFO. There is no `MODERATE` command. Reader AUTHINFO does not grant `ControlCancelPermitted`.
 
 Cross-posting: an unapproved article is forwarded to the leftmost moderated group only (RFC 5537 §3.5.1). Further sequential moderator forwarding is the moderators' duty (RFC 5537 §3.9). Reinjection is accepted only when every remaining moderated target is authorized for the authenticated principal and the `Approved:` identities.
 
 `IModerationSubmissionService` is the forwarding boundary. POST does not speak SMTP. The production implementation (`EmailModerationSubmissionService`) composes a moderator email and calls `IEmailService.SendAsync`. Acceptance is **durable local spool acceptance**, not remote SMTP delivery. When `Email:Enabled` is `false` (default) the service reports unavailable and unapproved moderated POST returns `441`. Enable email and supply SMTP settings (host, envelope sender, credentials via secrets) to persist moderator mail under `spool/smtp`. Spool-write or encode failures also return `441`.
 
-The current `appsettings.json` snapshot was taken from the INN source (`https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators`, retrieved 2026-09-25) as routing-only entries. `Control:PgpAuthorities` is a separate catalogue.
+`Control:PgpAuthorities` is a separate catalogue.
 
-Example (local authenticated moderator, not an INN public route):
+Example provenance-only configuration (runtime rows live in `nntpmoderators`):
 
 ```json
 "Moderation": {
-  "Moderators": [
-    {
-      "Pattern": "comp.example.*",
-      "Address": "moderator@example.com",
-      "Username": "moderator-example"
-    }
-  ]
+  "Source": {
+    "InnUrl": "https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators",
+    "RetrievedFrom": "InnUrl",
+    "Url": "https://github.com/InterNetNews/inn/blob/main/samples/moderators"
+  }
 }
 ```
 
 ## Outbound email (`Email`)
 
-`Email` is a generic application email subsystem. Moderation is one producer. SMTP settings never belong on POST or on `Moderation:Moderators`.
+`Email` is a generic application email subsystem. Moderation is one producer. SMTP settings never belong on POST or on `nntpmoderators`.
 
 The filesystem spool (`spool/smtp` by default) is the durable outbound email queue. `IEmailService.SendAsync` validates, MIME-encodes, and atomically writes the complete message plus SMTP envelope. It does **not** wait for remote SMTP. Acceptance means the complete message has been durably written to the local spool. SMTP delivery is asynchronous. Successful SMTP delivery removes the spool file. Undelivered files survive process restart. SMTP acceptance followed by filesystem deletion is at-least-once and cannot be exactly-once. `240` after moderated POST means this local spool acceptance only. Disk/permission/serialization failures fail the write; there is no in-memory fallback and no queue-capacity limit.
 
@@ -741,7 +757,7 @@ Negative values and values above `65535` fail validation. Dependents use `BindPo
 
 ## Cleartext AUTHINFO (`AllowCleartextAuth`)
 
-`AUTHINFO USER/PASS` presents clear-text credentials at the NNTP protocol layer. RFC 4643 requires implementations that offer AUTHINFO PASS to also support TLS, and deprecates using the password command without a strong encryption layer. It does **not** prohibit cleartext use; servers SHOULD offer configuration to disable weak authentication without TLS.
+`AUTHINFO USER/PASS` and password-oriented SASL (PLAIN, LOGIN) present clear-text credentials at the NNTP protocol layer. RFC 4643 requires implementations that offer AUTHINFO PASS to also support TLS, and deprecates using the password command without a strong encryption layer. It does **not** prohibit cleartext use; servers SHOULD offer configuration to disable weak authentication without TLS. When `AllowCleartextAuth` is `false` and TLS is inactive, AUTHINFO SASL is also rejected with `483` and is not advertised.
 
 VectorNNTP policy:
 

@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
@@ -47,8 +48,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ITransitPeerMetrics? _peerMetrics;
     private readonly IPostingTraceProtector? _postingTraceProtector;
     private readonly INewsgroupCatalogue? _newsgroupCatalogue;
+    private readonly IModeratorCatalogue? _moderatorCatalogue;
     private readonly IModeratorAuthorization _moderatorAuthorization;
     private readonly IModerationSubmissionService _moderationSubmission;
+    private readonly INntpSessionAdmissionTracker? _sessionAdmission;
+    private readonly NntpSaslService? _saslService;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -78,8 +82,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ITransitPeerMetrics? peerMetrics = null,
         IPostingTraceProtector? postingTraceProtector = null,
         INewsgroupCatalogue? newsgroupCatalogue = null,
+        IModeratorCatalogue? moderatorCatalogue = null,
         IModeratorAuthorization? moderatorAuthorization = null,
-        IModerationSubmissionService? moderationSubmission = null)
+        IModerationSubmissionService? moderationSubmission = null,
+        INntpSessionAdmissionTracker? sessionAdmission = null,
+        NntpSaslService? saslService = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -103,8 +110,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _peerMetrics = peerMetrics;
         _postingTraceProtector = postingTraceProtector;
         _newsgroupCatalogue = newsgroupCatalogue;
+        _moderatorCatalogue = moderatorCatalogue;
         _moderatorAuthorization = moderatorAuthorization ?? EmptyModeratorAuthorization.Instance;
         _moderationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
+        _sessionAdmission = sessionAdmission;
+        _saslService = saslService;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -344,8 +354,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 mailComplaintsTo: _options.Value.MailComplaintsTo,
                 postingTraceProtector: _postingTraceProtector,
                 newsgroupCatalogue: _newsgroupCatalogue,
+                moderatorCatalogue: _moderatorCatalogue,
                 moderatorAuthorization: _moderatorAuthorization,
-                moderationSubmission: _moderationSubmission);
+                moderationSubmission: _moderationSubmission,
+                sessionAdmission: _sessionAdmission,
+                saslService: _saslService);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

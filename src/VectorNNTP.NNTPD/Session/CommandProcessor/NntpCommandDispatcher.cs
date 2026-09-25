@@ -286,6 +286,9 @@ public sealed class NntpCommandDispatcher
             NntpParseStatus.MissingArgument when command.Verb == NntpVerb.AuthInfo
                 && command.Qualifier == NntpVerb.Pass =>
                 (NntpResponses.AuthinfoPassRequiresPassword, "syntax error", NntpResponseStatus.AuthinfoPassRequiresPassword),
+            NntpParseStatus.MissingArgument when command.Verb == NntpVerb.AuthInfo
+                && command.Qualifier == NntpVerb.Sasl =>
+                (NntpResponses.SaslMechanismRequired, "syntax error", NntpResponseStatus.SaslMechanismRequired),
             NntpParseStatus.MissingArgument when command.Verb == NntpVerb.Compress =>
                 (NntpResponses.CompressRequiresAlgorithm, "syntax error", NntpResponseStatus.CompressRequiresAlgorithm),
             NntpParseStatus.InvalidArgument when command.Verb == NntpVerb.Compress =>

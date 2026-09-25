@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace VectorNNTP.NNTPD.Session.Authentication;
 
 /// <summary>
@@ -15,4 +17,15 @@ public interface INntpAuthenticationProvider
         string username,
         string password,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Verifies username/password with the effective client address for diagnostics and admission.
+    /// Default implementation ignores <paramref name="clientIp"/>.
+    /// </summary>
+    ValueTask<NntpAuthenticationResult> AuthenticateAsync(
+        string username,
+        string password,
+        IPAddress clientIp,
+        CancellationToken cancellationToken = default) =>
+        AuthenticateAsync(username, password, cancellationToken);
 }

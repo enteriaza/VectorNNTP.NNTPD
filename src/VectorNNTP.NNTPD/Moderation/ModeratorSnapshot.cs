@@ -1,33 +1,30 @@
 using System.Text;
-using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.Moderation;
 
 /// <summary>
-/// Immutable first-match moderator catalogue compiled from <see cref="ModerationOptions"/>.
+/// Immutable first-match moderator catalogue compiled from <c>nntpmoderators</c>.
 /// </summary>
 /// <remarks>
 /// Lookups do not query MySQL. The compiled table is safe for concurrent POST use.
 /// Username comparison is ordinal (same as AUTHINFO). Approved identities compare
 /// ASCII case-insensitively after mailbox extraction.
 /// </remarks>
-public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
+public sealed class ModeratorSnapshot : IModeratorAuthorization
 {
+    /// <summary>Empty catalogue. Every resolve and approval fails.</summary>
+    public static ModeratorSnapshot Empty { get; } = new([]);
+
     private readonly ModeratorRule[] _rules;
 
-    /// <summary>Initializes a new instance from bound options.</summary>
-    public ConfiguredModeratorAuthorization(IOptions<ModerationOptions> options)
-        : this(options?.Value.Moderators)
+    private ModeratorSnapshot(ModeratorRule[] rules)
     {
+        _rules = rules;
     }
 
-    /// <summary>Initializes a new instance from an explicit mapping list.</summary>
-    public ConfiguredModeratorAuthorization(IReadOnlyList<ModeratorMappingOptions>? mappings)
-    {
-        _rules = Compile(mappings);
-    }
+    /// <summary>Gets the number of compiled rules (tests).</summary>
+    public int Count => _rules.Length;
 
     /// <inheritdoc />
     public bool IsAuthenticatedModerator(string? authenticatedUsername)
@@ -155,6 +152,44 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
         return true;
     }
 
+    /// <summary>Compiles enabled rows in the supplied order (must already be <c>moderator_id ASC</c>).</summary>
+    public static ModeratorSnapshot Create(IReadOnlyList<NntpModeratorRow> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (rows.Count == 0)
+        {
+            return Empty;
+        }
+
+        var rules = new List<ModeratorRule>(rows.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row is null)
+            {
+                continue;
+            }
+
+            var pattern = row.GroupPattern.Trim();
+            var address = row.ModeratorAddress.Trim();
+            var username = row.AccountName.Trim();
+            if (pattern.Length == 0 || address.Length == 0)
+            {
+                continue;
+            }
+
+            var patternBytes = Encoding.ASCII.GetBytes(pattern);
+            if (!NntpWildmat.TryValidate(patternBytes) || !ModeratorAddressTemplate.TryValidate(address))
+            {
+                continue;
+            }
+
+            rules.Add(new ModeratorRule(pattern, patternBytes, address, username));
+        }
+
+        return rules.Count == 0 ? Empty : new ModeratorSnapshot([.. rules]);
+    }
+
     private bool IdentityCoversAModeratedGroup(string approvedIdentity, ReadOnlySpan<string> moderatedGroups)
     {
         Span<byte> groupBytes = stackalloc byte[128];
@@ -269,42 +304,6 @@ public sealed class ConfiguredModeratorAuthorization : IModeratorAuthorization
 
     private static char FoldByte(byte b) =>
         (char)(b is >= (byte)'a' and <= (byte)'z' ? b - 32 : b);
-
-    private static ModeratorRule[] Compile(IReadOnlyList<ModeratorMappingOptions>? mappings)
-    {
-        if (mappings is null || mappings.Count == 0)
-        {
-            return [];
-        }
-
-        var rules = new List<ModeratorRule>(mappings.Count);
-        for (var i = 0; i < mappings.Count; i++)
-        {
-            var mapping = mappings[i];
-            if (mapping is null)
-            {
-                continue;
-            }
-
-            var pattern = mapping.Pattern?.Trim() ?? string.Empty;
-            var address = mapping.Address?.Trim() ?? string.Empty;
-            var username = mapping.Username?.Trim() ?? string.Empty;
-            if (pattern.Length == 0 || address.Length == 0)
-            {
-                continue;
-            }
-
-            var patternBytes = Encoding.ASCII.GetBytes(pattern);
-            if (!NntpWildmat.TryValidate(patternBytes) || !ModeratorAddressTemplate.TryValidate(address))
-            {
-                continue;
-            }
-
-            rules.Add(new ModeratorRule(pattern, patternBytes, address, username));
-        }
-
-        return [.. rules];
-    }
 
     private readonly record struct ModeratorRule(
         string Pattern,
