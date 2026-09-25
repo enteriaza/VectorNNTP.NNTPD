@@ -89,15 +89,15 @@ Article ingestion (TAKETHIS and IHAVE → byte-budgeted queue → `spool/incomin
 
 Registration lives in `Session/CommandProcessor/DefaultNntpCommandCatalog.cs` (descriptors + authorization metadata only).
 
-## VectorNNTP.NNTPAdmin
+## NNTPCancelMessage
 
-`src/VectorNNTP.NNTPAdmin` is a separate newsmaster client. It is not part of the NNTP server runtime.
+`src/VectorNNTP.NNTPCancelMessage` is a separate newsmaster client. It is not part of the NNTP server runtime.
 
 ```text
-VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+NNTPCancelMessage --host nntpd01.usenet.ninja --port 563 --tls \
   --username newsmaster --password 'secret' <message-id>
 
-VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+NNTPCancelMessage --host nntpd01.usenet.ninja --port 563 --tls \
   --username newsmaster --password 'secret' --cancel <message-id>
 ```
 

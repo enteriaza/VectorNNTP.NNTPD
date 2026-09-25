@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VectorNNTP.NNTPCancelMessage</RootNamespace>
+    <AssemblyName>NNTPCancelMessage</AssemblyName>
+    <Description>Newsmaster utility: HEAD an article by Message-ID, decrypt X-Trace, optionally POST a cancel control article.</Description>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VectorNNTP.NNTPD\VectorNNTP.NNTPD.csproj" />
+    <InternalsVisibleTo Include="VectorNNTP.NNTPCancelMessage.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.12" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <!-- Certes (via NNTPD) brings Portable.BouncyCastle 1.9.0; same OpenPGP namespaces, different assembly. -->
+    <PackageReference Include="Portable.BouncyCastle" Version="1.9.0">
+      <ExcludeAssets>compile</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

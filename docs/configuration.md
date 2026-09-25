@@ -126,7 +126,7 @@ Rotation:
 3. New articles use the current key. Trusted decrypt tries the current key, then the previous key.
 4. After the previous key is removed, tokens produced only with that retired key cannot be decrypted.
 
-Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs. The newsmaster utility `VectorNNTP.NNTPAdmin` decrypts `X-Trace` with the same keys and prints the payload to the terminal only.
+Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs. The newsmaster utility `NNTPCancelMessage` decrypts `X-Trace` with the same keys and prints the payload to the terminal only.
 
 ## Newsmaster AUTHINFO (`NewsmasterUser`)
 
@@ -141,20 +141,20 @@ nntpd__NewsmasterUser=newsmaster
 nntpd__NewsmasterPassword=<secret>
 ```
 
-## Newsmaster utility (`VectorNNTP.NNTPAdmin`)
+## Newsmaster utility (`NNTPCancelMessage`)
 
-`src/VectorNNTP.NNTPAdmin` is a separate executable. It is not part of the NNTP server runtime.
+`src/VectorNNTP.NNTPCancelMessage` is a separate executable. It is not part of the NNTP server runtime.
 
 ```text
-VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+NNTPCancelMessage --host nntpd01.usenet.ninja --port 563 --tls \
   --username newsmaster --password 'secret' <message-id>
-VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+NNTPCancelMessage --host nntpd01.usenet.ninja --port 563 --tls \
   --username newsmaster --password 'secret' --cancel <message-id>
 ```
 
 Command-line `--host`, `--port`, `--username`, `--password`, `--tls` / `--plaintext`, and `--cancel` / `-cancel` override `appsettings.json`. Without `--cancel` the utility never POSTs. Credentials are mandatory for `--cancel`. If credentials are supplied for inspect, AUTHINFO runs before HEAD. Failed AUTHINFO stops the utility.
 
-`--password` can appear in OS process listings and shell history. Prefer `NntpAdmin:Password` / `Nntpd:NewsmasterPassword` via environment or secrets. The password is never printed, logged, or included in exception messages.
+`--password` can appear in OS process listings and shell history. Prefer `NntpCancelMessage:Password` / `Nntpd:NewsmasterPassword` via environment or secrets. The password is never printed, logged, or included in exception messages.
 
 Cancel is refused when authentication fails, HEAD fails, the article is missing (`430`), `X-Trace` cannot be decrypted, the original `Newsgroups` header is absent/invalid, or PGPVERIFY signing cannot be configured or used. There is no `--no-sign` / `--unsigned` / `--skip-signature` option. Inspection (`HEAD` + decrypt) does not require PGP.
 
@@ -166,12 +166,12 @@ The admin utility signs the FORMAT header set `Subject,Control,Message-ID,Date,F
 
 VectorNNTP.NNTPD `HEAD` is still a placeholder (no article catalogue). The utility targets a peer/upstream server that implements RFC 3977 HEAD.
 
-Client settings bind from `NntpAdmin` (`Host`, `Port`, `UseTls`, `From`, `Username`, `Password`, `Pgp`) plus `Nntpd:BindPort` / `BindPortTls` when `Port` is `0`, and the same `XTraceKey` / `XTracePreviousKey` / newsmaster secrets as the server. TLS never falls back to plaintext.
+Client settings bind from `NntpCancelMessage` (`Host`, `Port`, `UseTls`, `From`, `Username`, `Password`, `Pgp`) plus `Nntpd:BindPort` / `BindPortTls` when `Port` is `0`, and the same `XTraceKey` / `XTracePreviousKey` / newsmaster secrets as the server. TLS never falls back to plaintext.
 
-### `NntpAdmin:Pgp`
+### `NntpCancelMessage:Pgp`
 
 ```json
-"NntpAdmin": {
+"NntpCancelMessage": {
   "Pgp": {
     "Enabled": true,
     "PrivateKeyPath": "",
@@ -183,10 +183,10 @@ Client settings bind from `NntpAdmin` (`Host`, `Port`, `UseTls`, `From`, `Userna
 
 | Setting | Env | Notes |
 |---------|-----|--------|
-| `Enabled` | `NntpAdmin__Pgp__Enabled` | Must be `true` for `--cancel`. Inspection still works when this is `true` but `PrivateKeyPath` is empty. |
-| `PrivateKeyPath` | `NntpAdmin__Pgp__PrivateKeyPath` | ASCII-armored OpenPGP secret key or keyring **outside Git**. On Unix the file must not be group- or world-accessible. On Windows restrict the NTFS ACL to the newsmaster account. |
-| `PrivateKeyPassphrase` | `NntpAdmin__Pgp__PrivateKeyPassphrase` | Unlocks the secret key. Never commit this. Prefer environment or secrets. Never logged. |
-| `KeyId` | `NntpAdmin__Pgp__KeyId` | Full fingerprint (preferred) or 16-hex Key ID. Required when the file contains more than one signing-capable secret key. The utility never chooses a key from the command line. |
+| `Enabled` | `NntpCancelMessage__Pgp__Enabled` | Must be `true` for `--cancel`. Inspection still works when this is `true` but `PrivateKeyPath` is empty. |
+| `PrivateKeyPath` | `NntpCancelMessage__Pgp__PrivateKeyPath` | ASCII-armored OpenPGP secret key or keyring **outside Git**. On Unix the file must not be group- or world-accessible. On Windows restrict the NTFS ACL to the newsmaster account. |
+| `PrivateKeyPassphrase` | `NntpCancelMessage__Pgp__PrivateKeyPassphrase` | Unlocks the secret key. Never commit this. Prefer environment or secrets. Never logged. |
+| `KeyId` | `NntpCancelMessage__Pgp__KeyId` | Full fingerprint (preferred) or 16-hex Key ID. Required when the file contains more than one signing-capable secret key. The utility never chooses a key from the command line. |
 
 Do not put a real private key or passphrase in `appsettings.json`. `Enabled: true` with empty path/passphrase is the safe committed sample.
 

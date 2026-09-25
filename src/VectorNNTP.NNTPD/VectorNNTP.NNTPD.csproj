@@ -11,8 +11,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
-    <InternalsVisibleTo Include="VectorNNTP.NNTPAdmin" />
-    <InternalsVisibleTo Include="VectorNNTP.NNTPAdmin.Tests" />
+    <InternalsVisibleTo Include="NNTPCancelMessage" />
+    <InternalsVisibleTo Include="VectorNNTP.NNTPCancelMessage.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.CheckHistoryDbBench" />
     <!-- Bench-only visibility for Phase 3D data-plane timing around PrepareArticleChunks / EnqueueOwnedPayloadAsync. -->
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.CommandResponsePathBench" />

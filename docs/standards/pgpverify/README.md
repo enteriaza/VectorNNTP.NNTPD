@@ -6,7 +6,7 @@ It is **not** standardized by RFC 5537.
 RFC 5537 §5.1 states that there is no standardized means of authenticating
 control-message senders, and cites `[PGPVERIFY]` as an unstandardized
 mechanism in common use. VectorNNTP implements PGPVERIFY so CANCEL articles
-posted by `VectorNNTP.NNTPAdmin` can be verified by INN `pgpverify` and
+posted by `NNTPCancelMessage` can be verified by INN `pgpverify` and
 other Netnews infrastructure that already understands this convention.
 
 Do not describe PGPVERIFY as RFC-compliant. The CANCEL article itself follows
