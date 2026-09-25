@@ -168,4 +168,14 @@ internal static partial class NetworkingLogMessages
         string ListenerType,
         string Endpoint,
         int Port);
+
+    [LoggerMessage(
+        EventId = 1425,
+        Level = LogLevel.Information,
+        Message = "TCP connection disconnected: remote={Remote} local={Local} reason={Reason}")]
+    public static partial void TcpConnectionDisconnected(
+        ILogger logger,
+        string Remote,
+        string Local,
+        string Reason);
 }

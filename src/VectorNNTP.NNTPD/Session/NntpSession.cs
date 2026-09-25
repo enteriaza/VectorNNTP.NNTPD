@@ -282,6 +282,11 @@ public sealed class NntpSession
     public void RequestClose()
     {
         Interlocked.Exchange(ref _closeRequested, 1);
+        if (Connection is NntpConnection nntpConnection)
+        {
+            nntpConnection.NoteDisconnectReason(TcpDisconnectReason.ProtocolClose);
+        }
+
         try
         {
             _closeCts.Cancel();
@@ -296,6 +301,11 @@ public sealed class NntpSession
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
+        if (Connection is NntpConnection nntpConnection)
+        {
+            nntpConnection.AttachInputReaderConsumer();
+        }
+
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             Connection.ConnectionClosed,
@@ -387,6 +397,22 @@ public sealed class NntpSession
             catch
             {
                 // Best-effort.
+            }
+
+            try
+            {
+                if (Connection is NntpConnection inputOwner)
+                {
+                    await inputOwner.CompleteInputReaderAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    await Connection.Input.CompleteAsync().ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Best-effort; reader may already be completed.
             }
 
             try

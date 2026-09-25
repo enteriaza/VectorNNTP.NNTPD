@@ -26,7 +26,7 @@ Do **not** mark `[x]` solely because a `.cs` file exists.
 [x] SPEEDTEST
 ```
 
-CHECK (RFC 4644 §2.4) uses HistoryDB (`438` local/Redis hit, `238` double miss, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
+CHECK (RFC 4644 §2.4) uses HistoryDB `PeekAsync` (`438` local/Redis hit, `238` double miss without recording the identifier, `431` Redis unavailable). Consecutive transit-authorized CHECK commands may overlap Redis lookups in a per-session window of **16** (`CheckPipeline.Depth`; architectural constant, not configurable). Responses are emitted in send order. Every other command is a serial barrier: outstanding CHECK replies are drained first. See `docs/architecture.md` (Redis and HistoryDB).
 
 ## Placeholder (registered, not implemented)
 

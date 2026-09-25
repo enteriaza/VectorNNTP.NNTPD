@@ -36,7 +36,7 @@ internal static class TakeThis
     public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
         NntpCommandExecution.RunAsync(Logger, context, "TAKETHIS", ExecuteAsync, cancellationToken);
 
-    /// <summary>HistoryDB peek without miss reservation (same contract as IHAVE).</summary>
+    /// <summary>HistoryDB peek without miss reservation (same contract as CHECK and IHAVE).</summary>
     internal static ValueTask<HistoryLookupResult> PeekAsync(
         NntpSession session,
         ReadOnlyMemory<byte> messageId,

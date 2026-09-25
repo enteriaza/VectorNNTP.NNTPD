@@ -202,6 +202,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                if (connection is NntpConnection nntpConnection)
+                {
+                    nntpConnection.NoteDisconnectReason(TcpDisconnectReason.Shutdown);
+                }
+
                 await connection.CompleteAsync().ConfigureAwait(false);
             }
             catch (Exception ex)

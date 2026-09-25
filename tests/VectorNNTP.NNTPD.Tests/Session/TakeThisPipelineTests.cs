@@ -558,13 +558,10 @@ public sealed class TakeThisPipelineTests
     [Fact]
     public async Task TakeThisInFlight_CheckDoesNotLookupUntilDrain()
     {
-        var checkHistory = new GatedHistoryDb();
-        checkHistory.Force("<bar-chk@ex.com>", HistoryLookupResult.Unseen);
-        var takeThisHistory = new GatedHistoryDb();
-        var composed = new CheckThenTakeThisHistory(checkHistory, takeThisHistory);
+        var history = new GatedHistoryDb();
         var queue = NewQueue();
         await using var duplex = new TakeThisPipelineDuplex();
-        var session = duplex.CreateSession(queue, composed);
+        var session = duplex.CreateSession(queue, history);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
@@ -576,16 +573,16 @@ public sealed class TakeThisPipelineTests
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(
-            () => takeThisHistory.PeekStarted == 2 && session.TakeThisWindow is { Occupied: 2 },
+            () => history.PeekStarted == 2 && session.TakeThisWindow is { Occupied: 2 },
             safety.Token);
-        Assert.Equal(0, checkHistory.PeekStarted);
+        Assert.True(session.Pipeline is null || session.Pipeline.Occupied == 0);
         Assert.Null(duplex.TryReadClientLine());
 
-        takeThisHistory.Release.TrySetResult(HistoryLookupResult.Unseen);
+        history.Release.TrySetResult(HistoryLookupResult.Unseen);
         Assert.Equal("239 <bar-a@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal("239 <bar-b@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal("238 <bar-chk@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
-        Assert.Equal(1, checkHistory.PeekStarted);
+        Assert.Equal(3, history.PeekStarted);
 
         await QuitAsync(duplex, run);
     }
@@ -743,6 +740,34 @@ public sealed class TakeThisPipelineTests
         Assert.Equal("239 <dup@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal(0, queue.Count);
         Assert.Empty(history.Remembered);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task RememberedId_TakeThis_RemainsAcceptedDuplicate()
+    {
+        var redis = new FakeRedisService();
+        var history = new HistoryDb(
+            redis,
+            TimeSpan.FromHours(2),
+            NullLogger<HistoryDb>.Instance,
+            TimeProvider.System,
+            new HistoryWriteQueue());
+        history.Remember("<dup@ex.com>"u8.ToArray());
+        var queue = NewQueue();
+        await using var duplex = new TakeThisPipelineDuplex();
+        var session = duplex.CreateSession(queue, history);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientAsync(BuildTakeThis("<dup@ex.com>", "Subject: d\r\n\r\nz\r\n"));
+        Assert.Equal("239 <dup@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await duplex.WriteClientLineAsync("CHECK <dup@ex.com>");
+        Assert.Equal("438 <dup@ex.com>", await duplex.ReadClientLineAsync());
 
         await QuitAsync(duplex, run);
     }
@@ -946,11 +971,9 @@ public sealed class TakeThisPipelineTests
             NullLogger<HistoryDb>.Instance,
             TimeProvider.System,
             new HistoryWriteQueue());
-        var takeThisHistory = new GatedHistoryDb();
-        var composed = new CheckThenTakeThisHistory(history, takeThisHistory);
         var queue = NewQueue();
         await using var duplex = new TakeThisPipelineDuplex();
-        var session = duplex.CreateSession(queue, composed);
+        var session = duplex.CreateSession(queue, history);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
@@ -960,16 +983,17 @@ public sealed class TakeThisPipelineTests
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => session.Pipeline is { Occupied: >= 1 }, safety.Token);
-        Assert.Equal(0, takeThisHistory.PeekStarted);
         Assert.True(session.TakeThisWindow is null || session.TakeThisWindow.Occupied == 0);
+        Assert.Equal(1, redis.Database.ExistsStartedCount);
         Assert.Null(duplex.TryReadClientLine());
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(checkId)));
 
         block.TrySetResult();
         Assert.Equal("238 <chk@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
-
-        await WaitUntilAsync(() => takeThisHistory.PeekStarted == 1, safety.Token);
-        takeThisHistory.Release.TrySetResult(HistoryLookupResult.Unseen);
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(checkId)));
         Assert.Equal("239 <after-check@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, queue.Count);
+        Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId("<after-check@ex.com>"u8)));
 
         await QuitAsync(duplex, run);
     }
@@ -1067,24 +1091,6 @@ public sealed class TakeThisPipelineTests
                 return _local.Contains(digest);
             }
         }
-    }
-
-    private sealed class CheckThenTakeThisHistory(IHistoryDb check, IHistoryDb takeThis) : IHistoryDb
-    {
-        public ValueTask<HistoryLookupResult> LookupAsync(
-            ReadOnlyMemory<byte> messageId,
-            CancellationToken cancellationToken = default) =>
-            check.LookupAsync(messageId, cancellationToken);
-
-        public ValueTask<HistoryLookupResult> PeekAsync(
-            ReadOnlyMemory<byte> messageId,
-            CancellationToken cancellationToken = default) =>
-            takeThis.PeekAsync(messageId, cancellationToken);
-
-        public void Remember(ReadOnlyMemory<byte> messageId) => takeThis.Remember(messageId);
-
-        public bool ContainsLocal(in HistoryDigest digest) =>
-            check.ContainsLocal(digest) || takeThis.ContainsLocal(digest);
     }
 
     private sealed class TakeThisPipelineDuplex : IAsyncDisposable

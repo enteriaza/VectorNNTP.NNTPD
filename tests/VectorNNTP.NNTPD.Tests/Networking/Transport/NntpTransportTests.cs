@@ -6,6 +6,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
@@ -242,30 +243,27 @@ public sealed class NntpPlainTransportTests
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        // 1) Inbound side must complete: EOF ReadResult, or reader already completed by teardown.
-        //    Do not wait on ConnectionClosed first — it is cancelled at the start of CompleteAsync,
-        //    before a pending ReadAsync is guaranteed to have settled.
+        // Writer completion (receive EOF) must unblock ReadAsync as IsCompleted.
+        // CompleteAsync must not complete Input.Reader while this consumer is still reading.
+        ReadResult result;
         try
         {
-            var result = await inboundRead.WaitAsync(timeout.Token);
-            Assert.True(result.IsCompleted);
-            try
-            {
-                server.Input.AdvanceTo(result.Buffer.End);
-            }
-            catch (InvalidOperationException)
-            {
-                // Teardown completed the reader after the EOF read returned.
-            }
+            result = await inboundRead.WaitAsync(timeout.Token);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            // Ordering B: PipeReader was completed by CompleteAsync before/during ReadAsync.
+            Assert.Fail(
+                "Input.Reader was completed while ReadAsync was outstanding: " + ex.Message);
+            return;
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested)
         {
             Assert.Fail("Timed out waiting for inbound completion after remote FIN.");
+            return;
         }
+
+        Assert.True(result.IsCompleted);
+        server.Input.AdvanceTo(result.Buffer.End);
 
         // 2) Connection lifecycle must reach closed (may already be cancelled).
         if (!server.ConnectionClosed.IsCancellationRequested)
@@ -556,7 +554,8 @@ internal sealed class TransportTestHost : IAsyncDisposable
 
     public TlsCertificateContextProvider? CertificateProvider => _certs;
 
-    public static Task<TransportTestHost> StartPlainAsync() => StartAsync(tls: false, pfx: null);
+    public static Task<TransportTestHost> StartPlainAsync(ILogger<NntpConnection>? connectionLogger = null) =>
+        StartAsync(tls: false, pfx: null, connectionLogger: connectionLogger);
 
     /// <summary>Plain accept path with a certificate provider available for <see cref="INntpConnection.UpgradeToTlsAsync"/>.</summary>
     public static Task<TransportTestHost> StartPlainWithCertificateAsync(byte[] pfx) =>
@@ -580,7 +579,8 @@ internal sealed class TransportTestHost : IAsyncDisposable
     private static Task<TransportTestHost> StartAsync(
         bool tls,
         byte[]? pfx,
-        ITrustedProxyHosts? trustedProxyHosts = null)
+        ITrustedProxyHosts? trustedProxyHosts = null,
+        ILogger<NntpConnection>? connectionLogger = null)
     {
         TlsCertificateContextProvider? certs = null;
         if (pfx is not null)
@@ -595,6 +595,7 @@ internal sealed class TransportTestHost : IAsyncDisposable
         }
 
         trustedProxyHosts ??= new TrustedProxyHosts(Options.Create(new NntpdOptions { ProxyHosts = [] }));
+        var logger = connectionLogger ?? NullLogger<NntpConnection>.Instance;
 
         TransportTestHost? host = null;
         var binding = new ListenBinding(IPAddress.Loopback, 0, DualMode: false);
@@ -626,14 +627,14 @@ internal sealed class TransportTestHost : IAsyncDisposable
                             socket,
                             certs!,
                             preamble.Identity,
-                            NullLogger<NntpConnection>.Instance,
+                            logger,
                             ct,
                             preamble.Leftover)
                         .ConfigureAwait(false)
                     : NntpConnection.StartPlain(
                         socket,
                         preamble.Identity,
-                        NullLogger<NntpConnection>.Instance,
+                        logger,
                         preamble.Leftover);
 
                 lock (host!._gate)

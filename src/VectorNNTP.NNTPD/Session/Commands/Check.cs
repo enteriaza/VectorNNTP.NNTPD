@@ -6,10 +6,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// CHECK command as defined by RFC 4644, Section 2.4.
 /// </summary>
 /// <remarks>
-/// Advises whether the server wants an article (STREAMING) using HistoryDB:
+/// Advises whether the server wants an article (STREAMING) using HistoryDB
+/// <see cref="IHistoryDb.PeekAsync"/> (no miss reservation):
 /// local memory hit → 438; Redis hit → 438 and warm local memory; double miss → 238
-/// with immediate local insert and asynchronous Redis persistence. Redis infrastructure
-/// failure returns 431 (try again later) and is never treated as a 238 miss.
+/// without recording the identifier. Redis infrastructure failure returns 431
+/// (try again later) and is never treated as a 238 miss.
 /// The Message-ID is copied from session scratch into one owned wire buffer; it is not
 /// converted to a string for response construction. A completed local-hit lookup
 /// writes the 438 response without an extra async state machine.
@@ -26,7 +27,9 @@ internal static class Check
     public static ValueTask HandleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
         NntpCommandExecution.RunAsync(Logger, context, "CHECK", ExecuteAsync, cancellationToken);
 
-    /// <summary>Looks up <paramref name="messageId"/> without composing a response.</summary>
+    /// <summary>
+    /// Looks up <paramref name="messageId"/> without composing a response or recording a miss.
+    /// </summary>
     internal static ValueTask<HistoryLookupResult> LookupAsync(
         NntpSession session,
         ReadOnlyMemory<byte> messageId,
@@ -38,7 +41,7 @@ internal static class Check
             return new ValueTask<HistoryLookupResult>(HistoryLookupResult.Unseen);
         }
 
-        return history.LookupAsync(messageId, cancellationToken);
+        return history.PeekAsync(messageId, cancellationToken);
     }
 
     /// <summary>Composes the RFC 4644 CHECK wire line for <paramref name="result"/>.</summary>

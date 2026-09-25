@@ -8,6 +8,7 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
@@ -61,6 +62,10 @@ public sealed class NntpConnection : INntpConnection
     private int _completed;
     private int _outputWriterCompleted;
     private int _outputReaderCompleted;
+    private int _inputReaderCompleted;
+    private int _inputReaderConsumer;
+    private int _disconnectReason;
+    private int _disconnectedLogged;
     private int _disposed;
     private int _sendPumpAwaitingOutput;
     private long _outboundIdleVersion;
@@ -152,6 +157,9 @@ public sealed class NntpConnection : INntpConnection
 
     /// <summary>Test-only: whether <c>Output.Reader</c> has been completed exactly once.</summary>
     internal bool OutputReaderCompletedForTests => Volatile.Read(ref _outputReaderCompleted) == 1;
+
+    /// <summary>Test-only: whether <c>Input.Reader</c> has been completed exactly once.</summary>
+    internal bool InputReaderCompletedForTests => Volatile.Read(ref _inputReaderCompleted) == 1;
 
     /// <summary>Test-only: 1 when the send pump is awaiting more <see cref="Output"/>.</summary>
     internal int SendPumpAwaitingOutputForTests => Volatile.Read(ref _sendPumpAwaitingOutput);
@@ -547,11 +555,20 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     /// <remarks>
+    /// <para>
     /// <see cref="Output"/> writer completion and connection cancellation may unblock
     /// <c>SendAsync</c>. <c>Output.Reader</c> is owned exclusively by the send pump: this
     /// method must not complete that reader while <c>SendAsync</c> can still
     /// <c>AdvanceTo</c> an examined buffer. After the send pump returns, a best-effort
     /// reader complete runs only when the pump did not complete the reader itself.
+    /// </para>
+    /// <para>
+    /// <see cref="Input"/> writer completion and connection cancellation unblock the session
+    /// RX loop. <c>Input.Reader</c> is owned exclusively by that consumer
+    /// (<c>NntpSession</c> / <c>NntpContinuousRxReader</c>): this method must not complete
+    /// the reader while <c>ReadAsync</c> / <c>AdvanceTo</c> can still run. The session
+    /// completes the reader after the RX loop has stopped.
+    /// </para>
     /// </remarks>
     public async Task CompleteAsync(Exception? exception = null)
     {
@@ -559,6 +576,9 @@ public sealed class NntpConnection : INntpConnection
         {
             return;
         }
+
+        NoteDisconnectReason(ClassifyCompleteReason(exception));
+        LogTcpDisconnectedOnce();
 
         try
         {
@@ -589,15 +609,6 @@ public sealed class NntpConnection : INntpConnection
         finally
         {
             Interlocked.Exchange(ref _outputWriterCompleted, 1);
-        }
-
-        try
-        {
-            await _inputPipe.Reader.CompleteAsync(exception).ConfigureAwait(false);
-        }
-        catch
-        {
-            // Best-effort.
         }
 
         var receive = _receiveTask;
@@ -687,9 +698,86 @@ public sealed class NntpConnection : INntpConnection
         }
 
         await CompleteAsync().ConfigureAwait(false);
+        if (Volatile.Read(ref _inputReaderConsumer) == 0)
+        {
+            await CompleteInputReaderAsync().ConfigureAwait(false);
+        }
+
         _connectionCts.Dispose();
         _certificateLease?.Dispose();
         _certificateLease = null;
+    }
+
+    /// <summary>
+    /// Records the first known disconnect cause. Later notes do not overwrite.
+    /// </summary>
+    internal void NoteDisconnectReason(TcpDisconnectReason reason)
+    {
+        if (reason == TcpDisconnectReason.Unspecified)
+        {
+            return;
+        }
+
+        Interlocked.CompareExchange(ref _disconnectReason, (int)reason, (int)TcpDisconnectReason.Unspecified);
+    }
+
+    /// <summary>Test-only: first-wins disconnect reason recorded for this connection.</summary>
+    internal TcpDisconnectReason DisconnectReasonForTests =>
+        (TcpDisconnectReason)Volatile.Read(ref _disconnectReason);
+
+    private static TcpDisconnectReason ClassifyCompleteReason(Exception? exception) =>
+        exception switch
+        {
+            null => TcpDisconnectReason.LocalClose,
+            OperationCanceledException => TcpDisconnectReason.Cancellation,
+            _ => TcpDisconnectReason.ConnectionClosed,
+        };
+
+    private void LogTcpDisconnectedOnce()
+    {
+        if (Interlocked.Exchange(ref _disconnectedLogged, 1) == 1)
+        {
+            return;
+        }
+
+        var reason = (TcpDisconnectReason)Volatile.Read(ref _disconnectReason);
+        if (reason == TcpDisconnectReason.Unspecified)
+        {
+            reason = TcpDisconnectReason.ConnectionClosed;
+        }
+
+        ConnectionAcceptanceLogging.LogDisconnected(
+            _logger,
+            RemoteEndPoint,
+            LocalEndPoint,
+            reason.ToString());
+    }
+
+    /// <summary>
+    /// Marks the session RX loop as the exclusive <see cref="Input"/> reader owner.
+    /// </summary>
+    internal void AttachInputReaderConsumer() => Interlocked.Exchange(ref _inputReaderConsumer, 1);
+
+    /// <summary>
+    /// Completes <see cref="Input"/> after the application consumer has stopped reading.
+    /// Safe to call multiple times.
+    /// </summary>
+    internal async Task CompleteInputReaderAsync()
+    {
+        Interlocked.Exchange(ref _inputReaderConsumer, 0);
+        if (Interlocked.Exchange(ref _inputReaderCompleted, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            await _inputPipe.Reader.CompleteAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Best-effort; reader may already be completed by a test host.
+        }
     }
 
     /// <summary>Shared server TLS options (server auth only; no client certificates).</summary>
@@ -749,6 +837,10 @@ public sealed class NntpConnection : INntpConnection
         {
             error = ex;
             TransportLogMessages.PumpEndedWithError(_logger, ex, name);
+            NoteDisconnectReason(
+                string.Equals(name, "send", StringComparison.Ordinal)
+                    ? TcpDisconnectReason.SendError
+                    : TcpDisconnectReason.ReceiveError);
         }
         finally
         {
@@ -880,6 +972,11 @@ public sealed class NntpConnection : INntpConnection
             var bytes = await transport.ReadAsync(memory, token).ConfigureAwait(false);
             if (bytes == 0)
             {
+                if (!token.IsCancellationRequested)
+                {
+                    NoteDisconnectReason(TcpDisconnectReason.RemoteClosed);
+                }
+
                 break;
             }
 

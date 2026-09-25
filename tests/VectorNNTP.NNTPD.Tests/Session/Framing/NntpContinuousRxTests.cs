@@ -223,6 +223,86 @@ public sealed class NntpContinuousRxTests
     }
 
     [Fact]
+    public async Task WriterComplete_ThenReaderComplete_DoesNotReadAfterCompletion()
+    {
+        var pipe = new Pipe(new PipeOptions(useSynchronizationContext: false));
+        var parser = new NntpContinuousRxParser();
+        await pipe.Writer.WriteAsync("DATE\r\n"u8.ToArray());
+        await pipe.Writer.CompleteAsync();
+
+        var date = await NntpContinuousRxReader.ReadUnitAsync(
+            pipe.Reader,
+            parser,
+            consumeTakeThisArticle: false,
+            maxArticleBytes: 1024,
+            CancellationToken.None);
+        Assert.Equal(NntpVerb.Date, date.Command.Verb);
+
+        var eof = await NntpContinuousRxReader.ReadUnitAsync(
+            pipe.Reader,
+            parser,
+            consumeTakeThisArticle: false,
+            maxArticleBytes: 1024,
+            CancellationToken.None);
+        Assert.Equal(NntpContinuousRxKind.NeedMore, eof.Kind);
+
+        await pipe.Reader.CompleteAsync();
+        var completed = false;
+        try
+        {
+            _ = await NntpContinuousRxReader.ReadUnitAsync(
+                pipe.Reader,
+                parser,
+                consumeTakeThisArticle: false,
+                maxArticleBytes: 1024,
+                CancellationToken.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            completed = ex.Message.Contains(
+                "Reading is not allowed after reader was completed",
+                StringComparison.Ordinal);
+        }
+
+        Assert.True(completed);
+    }
+
+    [Fact]
+    public async Task CancelPendingRead_ThenCompleteWriterAndReader_DoesNotReadAfterCompletion()
+    {
+        var pipe = new Pipe(new PipeOptions(useSynchronizationContext: false));
+        var parser = new NntpContinuousRxParser();
+        using var cts = new CancellationTokenSource();
+        var pending = NntpContinuousRxReader
+            .ReadUnitAsync(pipe.Reader, parser, consumeTakeThisArticle: false, 1024, cts.Token)
+            .AsTask();
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        await pipe.Writer.CompleteAsync();
+        await pipe.Reader.CompleteAsync();
+
+        var completed = false;
+        try
+        {
+            _ = await NntpContinuousRxReader.ReadUnitAsync(
+                pipe.Reader,
+                parser,
+                consumeTakeThisArticle: false,
+                maxArticleBytes: 1024,
+                CancellationToken.None);
+        }
+        catch (InvalidOperationException ex)
+        {
+            completed = ex.Message.Contains(
+                "Reading is not allowed after reader was completed",
+                StringComparison.Ordinal);
+        }
+
+        Assert.True(completed);
+    }
+
+    [Fact]
     public async Task StreamScanner_PreservesStuffedWire_WhileMultilineReaderDestuffs()
     {
         var article = FramingWireFactory.WithTerminator("Hello.\r\n..foo\r\nbar\r\n");

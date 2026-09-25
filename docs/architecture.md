@@ -151,7 +151,7 @@ IhaveArticleInterpreter (destuff exactly once → Article)
 - **Article.Headers / Body:** destuffed owned copies produced **after** queue admission. Not Pipe spans.
 - **Article.Size:** destuffed complete article (headers + blank line + body). Terminator excluded. Same meaning as `MaxArticleBytes` (“after dot-unstuffing”).
 - **Body representation:** destuffed received bytes. yEnc/BASE64/uuencode are **not** decoded.
-- **HistoryDB:** IHAVE uses `PeekAsync` (no miss reservation) then `Remember` after a successful enqueue. CHECK still uses `LookupAsync`.
+- **HistoryDB:** CHECK, IHAVE, and TAKETHIS use `PeekAsync` (no miss reservation). IHAVE and TAKETHIS call `Remember` after a successful enqueue.
 - **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis` and may wait for byte-budget capacity. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after receive. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
 
 AUTHINFO flow:
@@ -419,7 +419,7 @@ CHECK lookup order (RFC 4644 §2.4):
 
 1. Local HistoryDB hit → `438` immediately (no Redis).
 2. Local miss, Redis hit → `438`; warm local memory. No Redis write.
-3. Double miss → `238`; insert local immediately; enqueue a bounded background Redis `SET` with TTL. The CHECK response does not wait for Redis persistence.
+3. Double miss → `238`. CHECK does not insert locally or enqueue a Redis write. Presence is recorded only by `Remember` after a successful IHAVE or TAKETHIS accept.
 4. Redis infrastructure failure (timeout, disconnect, error) → `431`. A Redis error is not a HistoryDB miss and must not become a false `238`. After a failure, `RedisService` enters a short cooldown: further CHECK misses return `431` without calling Redis until one recovery probe succeeds.
 
 CHECK execution is a **per-session bounded pipeline** (`CheckPipeline.Depth`, architectural constant **16**, not configurable). Consecutive authorized CHECK commands may overlap Redis lookups so remote RTT is not paid serially. A slot is occupied from admission until the existing response writer accepts the line (`EnqueueLineAsync`); lookup completion alone does not free the slot. Every CHECK response passes through one emit gate and is enqueued **in send order**; the writer itself is FIFO-of-enqueue and does not reorder. When the window is full the session stops reading the next command so the input Pipe (64 KiB pause) applies TCP backpressure — including when Redis is fast and the client/TX is slow. CHECK commands are not dropped. Any non-CHECK command (including TAKETHIS, QUIT, STARTTLS, COMPRESS, AUTHINFO, MODE) drains outstanding CHECK responses first, then runs on the existing serial dispatcher. General NNTP command execution remains serial. HistoryDB and Redis remain process-wide and concurrency-safe; CHECK pipelining does not add a second multiplexer or per-request connection.

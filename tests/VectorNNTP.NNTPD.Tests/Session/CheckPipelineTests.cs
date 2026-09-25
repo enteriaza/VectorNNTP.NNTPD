@@ -616,7 +616,9 @@ public sealed class CheckPipelineTests
         redis.Database.BlockExists.TrySetResult();
         Assert.Equal("238 <a@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
         Assert.Equal("238 <a@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
-        Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId(IdA)));
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(IdA)));
+        Assert.Equal(0, history.Writes.Count);
+        Assert.Equal(0, redis.Database.SetCount);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();

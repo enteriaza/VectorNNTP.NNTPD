@@ -64,4 +64,29 @@ internal static class ConnectionAcceptanceLogging
         ArgumentNullException.ThrowIfNull(endpoint);
         return $"{endpoint.Address}:{endpoint.Port}";
     }
+
+    /// <summary>Formats a TCP endpoint for accept/disconnect logs, or <c>unknown</c>.</summary>
+    public static string FormatEndpoint(EndPoint? endpoint) =>
+        endpoint switch
+        {
+            IPEndPoint ip => FormatEndpoint(ip),
+            not null => endpoint.ToString() ?? "unknown",
+            _ => "unknown",
+        };
+
+    /// <summary>Logs the single Information disconnect summary for an established TCP connection.</summary>
+    public static void LogDisconnected(
+        ILogger logger,
+        EndPoint? remote,
+        EndPoint? local,
+        string reason)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        NetworkingLogMessages.TcpConnectionDisconnected(
+            logger,
+            FormatEndpoint(remote),
+            FormatEndpoint(local),
+            reason);
+    }
 }

@@ -2,6 +2,8 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -43,6 +45,9 @@ public sealed class HistoryCheckCommandTests
         _ = await duplex.ReadClientLineAsync();
         await run;
         Assert.Equal(1, redis.Database.KeyExistsCount);
+        Assert.Equal(0, redis.Database.SetCount);
+        Assert.Equal(0, history.Writes.Count);
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
     }
 
     [Fact]
@@ -115,7 +120,7 @@ public sealed class HistoryCheckCommandTests
     }
 
     [Fact]
-    public async Task RedisRecovery_Returns238Then438()
+    public async Task RedisRecovery_Returns238Then238_WithoutRecording()
     {
         var redis = new FakeRedisService();
         redis.Database.ExistsException = new RedisUnavailableException("down");
@@ -137,7 +142,12 @@ public sealed class HistoryCheckCommandTests
             await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
-        Assert.Equal("438 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal(
+            "238 <i.am.an.article.you.will.want@example.com> send article to be transferred",
+            await duplex.ReadClientLineAsync());
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
+        Assert.Equal(0, history.Writes.Count);
+        Assert.Equal(0, redis.Database.SetCount);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -161,11 +171,75 @@ public sealed class HistoryCheckCommandTests
         var line = await duplex.ReadClientLineAsync();
         Assert.Equal("238 <i.am.an.article.you.will.want@example.com> send article to be transferred", line);
         Assert.Equal(0, redis.Database.SetCount);
+        Assert.Equal(0, history.Writes.Count);
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
         redis.Database.BlockSet.SetResult();
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
         await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task RepeatedUnknownCheck_Remains238_AndDoesNotMutateHistory()
+    {
+        var redis = new FakeRedisService();
+        var history = CreateHistory(redis);
+        await using var duplex = await HistoryCheckDuplex.CreateAsync();
+        var session = duplex.CreateSession(history);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string wanted = "238 <i.am.an.article.you.will.want@example.com> send article to be transferred";
+        await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
+        Assert.Equal(wanted, await duplex.ReadClientLineAsync());
+        await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
+        Assert.Equal(wanted, await duplex.ReadClientLineAsync());
+        await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
+        Assert.Equal(wanted, await duplex.ReadClientLineAsync());
+
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
+        Assert.Equal(0, history.Writes.Count);
+        Assert.Equal(0, redis.Database.SetCount);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task UnknownCheck_ThenTakeThis_AcceptsAndRemembers()
+    {
+        var redis = new FakeRedisService();
+        var history = CreateHistory(redis);
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await HistoryCheckDuplex.CreateAsync();
+        var session = duplex.CreateSession(history, queue);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
+        Assert.Equal(
+            "238 <i.am.an.article.you.will.want@example.com> send article to be transferred",
+            await duplex.ReadClientLineAsync());
+        Assert.False(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
+        Assert.Equal(0, history.Writes.Count);
+
+        await duplex.WriteClientAsync(
+            "TAKETHIS <i.am.an.article.you.will.want@example.com>\r\nSubject: t\r\n\r\nbody\r\n.\r\n");
+        Assert.Equal(
+            "239 <i.am.an.article.you.will.want@example.com>",
+            await duplex.ReadClientLineAsync());
+        Assert.Equal(1, queue.Count);
+        Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
+        Assert.Equal(1, history.Writes.Count);
+
+        await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
+        Assert.Equal("438 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
     }
 
     private static HistoryDb CreateHistory(FakeRedisService redis) =>
@@ -178,7 +252,7 @@ public sealed class HistoryCheckCommandTests
 
         public static Task<HistoryCheckDuplex> CreateAsync() => Task.FromResult(new HistoryCheckDuplex());
 
-        public NntpSession CreateSession(IHistoryDb history)
+        public NntpSession CreateSession(IHistoryDb history, IArticleIngestionQueue? queue = null)
         {
             var peers = TransitTestPeers.ForAllowFrom(TransitPeer);
             var connection = new PipeNntpConnection(
@@ -188,8 +262,16 @@ public sealed class HistoryCheckCommandTests
             return new NntpSession(
                 connection,
                 NullLogger<NntpSession>.Instance,
+                articleIngestion: queue,
                 transitPeerAuthorization: peers,
                 historyDb: history);
+        }
+
+        public async Task WriteClientAsync(string payload)
+        {
+            var bytes = Encoding.ASCII.GetBytes(payload);
+            await _clientToServer.Writer.WriteAsync(bytes);
+            await _clientToServer.Writer.FlushAsync();
         }
 
         public async Task WriteClientLineAsync(string line)
