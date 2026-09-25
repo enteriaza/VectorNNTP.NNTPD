@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session;
@@ -52,6 +53,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IModerationSubmissionService _moderationSubmission;
     private readonly ISessionStateTracker? _sessionAdmission;
     private readonly NntpSaslService? _saslService;
+    private readonly IAccountByteAccountant _accountBytes;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
@@ -85,7 +87,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IModeratorAuthorization? moderatorAuthorization = null,
         IModerationSubmissionService? moderationSubmission = null,
         ISessionStateTracker? sessionAdmission = null,
-        NntpSaslService? saslService = null)
+        NntpSaslService? saslService = null,
+        IAccountByteAccountant? accountBytes = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -114,6 +117,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _moderationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
         _sessionAdmission = sessionAdmission;
         _saslService = saslService;
+        _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -340,7 +344,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 moderatorAuthorization: _moderatorAuthorization,
                 moderationSubmission: _moderationSubmission,
                 sessionAdmission: _sessionAdmission,
-                saslService: _saslService);
+                saslService: _saslService,
+                accountBytes: _accountBytes);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             TransitInboundAdmitResult admission;

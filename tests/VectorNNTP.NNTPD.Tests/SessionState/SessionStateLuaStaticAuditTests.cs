@@ -27,6 +27,18 @@ public sealed class SessionStateLuaStaticAuditTests
         _ = await store.RenewAsync("alice", "nntpd01:a", 1, [("192.0.2.10", 1)], now, ttl);
         Assert.Same(SessionStateScripts.Renew, redis.LastScript);
 
+        _ = await store.RenewAndApplyAsync(
+            "alice",
+            "nntpd01:a",
+            1,
+            [("192.0.2.10", 1)],
+            now,
+            ttl,
+            "batch-a",
+            10,
+            90);
+        Assert.Same(SessionStateScripts.RenewAndApply, redis.LastScript);
+
         await store.ReleaseOwnerAsync("alice", "nntpd01:a");
         Assert.Same(SessionStateScripts.ReleaseOwner, redis.LastScript);
     }
@@ -52,6 +64,7 @@ public sealed class SessionStateLuaStaticAuditTests
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
             "HGETALL", "HGET", "HSET", "HDEL", "HLEN", "DEL",
+            "EXISTS", "HEXISTS", "HKEYS",
         };
         foreach (var script in AllScripts())
         {
@@ -265,6 +278,8 @@ public sealed class SessionStateLuaStaticAuditTests
         Assert.Contains("return SessionStateEngine.TryAdmit(", source, StringComparison.Ordinal);
         Assert.Contains("return SessionStateEngine.Release(", source, StringComparison.Ordinal);
         Assert.Contains("return SessionStateEngine.Renew(", source, StringComparison.Ordinal);
+        Assert.Contains("SessionStateScripts.RenewAndApply", source, StringComparison.Ordinal);
+        Assert.Contains("AccountByteEngine.Apply(", source, StringComparison.Ordinal);
         Assert.Contains("return SessionStateEngine.ReleaseOwner(", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ConnectionMultiplexer", source, StringComparison.Ordinal);
     }
@@ -282,6 +297,7 @@ public sealed class SessionStateLuaStaticAuditTests
         yield return SessionStateScripts.TryAdmit;
         yield return SessionStateScripts.Release;
         yield return SessionStateScripts.Renew;
+        yield return SessionStateScripts.RenewAndApply;
         yield return SessionStateScripts.ReleaseOwner;
     }
 

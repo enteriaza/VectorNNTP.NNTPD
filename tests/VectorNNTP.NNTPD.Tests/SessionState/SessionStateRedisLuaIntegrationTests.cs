@@ -359,6 +359,56 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
     }
 
     [SessionStateRedisIntegrationFact]
+    public async Task RenewAndApply_FloorsBytesEvenWhenRenewIsLost_AndReplayIsIdempotent()
+    {
+        var account = await _redis.CreateAccountAsync();
+        Assert.True((await _redis.TryAdmitAsync(account, IpA, O1, 10, 4, 1, 1, Now, Lease)).Accepted);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(Now);
+        var ttl = TimeSpan.FromMilliseconds(Lease);
+        var applied = await _redis.Store.RenewAndApplyAsync(
+            account,
+            O1,
+            1,
+            [(IpA, 1)],
+            now,
+            ttl,
+            "live-batch-1",
+            consumed: 25,
+            mysqlRemainingAfter: 50_000);
+        Assert.Equal(SessionStateRenewStatus.Renewed, applied.Renew);
+        Assert.Equal(50_000, applied.Remaining);
+        AssertOwnership(await _redis.ReadSessionAsync(account, O1), Now + Lease, 1, 1);
+
+        await _redis.Store.ReleaseOwnerAsync(account, O1);
+        var lost = await _redis.Store.RenewAndApplyAsync(
+            account,
+            O1,
+            1,
+            [(IpA, 1)],
+            now,
+            ttl,
+            "live-batch-2",
+            consumed: 25,
+            mysqlRemainingAfter: 800);
+        Assert.Equal(SessionStateRenewStatus.Lost, lost.Renew);
+        Assert.Equal(800, lost.Remaining);
+
+        var replay = await _redis.Store.RenewAndApplyAsync(
+            account,
+            O1,
+            1,
+            [(IpA, 1)],
+            now,
+            ttl,
+            "live-batch-2",
+            consumed: 25,
+            mysqlRemainingAfter: 800);
+        Assert.Equal(SessionStateRenewStatus.Lost, replay.Renew);
+        Assert.Equal(800, replay.Remaining);
+        await _redis.DeleteKeysAsync(account);
+    }
+
+    [SessionStateRedisIntegrationFact]
     public async Task Cleanup_RemovesOnlyThisSuiteAccounts()
     {
         var account = await _redis.CreateAccountAsync();

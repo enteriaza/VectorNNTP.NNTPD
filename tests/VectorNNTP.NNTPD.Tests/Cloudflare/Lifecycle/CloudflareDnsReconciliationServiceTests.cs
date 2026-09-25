@@ -142,6 +142,8 @@ public sealed class CloudflareDnsReconciliationServiceTests
         Assert.Equal(typeof(NntpPlainListenerService), services[12].GetType());
         Assert.Equal(typeof(AcmeCertificateService), services[13].GetType());
         Assert.Equal(typeof(NntpTlsListenerService), services[14].GetType());
+        Assert.DoesNotContain(services, static s => s.GetType().Name == "AccountByteService");
+        Assert.Equal(1, services.Count(static s => s is SessionStateService));
 
         await host.StartAsync();
         Assert.Equal(ApplicationState.Running, host.Services.GetRequiredService<ApplicationLifecycle>().State);

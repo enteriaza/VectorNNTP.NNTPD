@@ -36,4 +36,29 @@ public interface INntpDbConnection : IAsyncDisposable
     /// <returns>Enabled moderator rows in <c>moderator_id</c> order.</returns>
     ValueTask<IReadOnlyList<Moderation.NntpModeratorRow>> QueryEnabledModeratorsAsync(
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Atomically subtracts <paramref name="bytes"/> from a B-account
+    /// <c>account_byte_limit</c>, clamping at zero. Remaining is never negative.
+    /// </summary>
+    /// <param name="accountName">Plaintext wire username. Bound as <c>@account_name</c>.</param>
+    /// <param name="bytes">Non-negative byte count to subtract.</param>
+    /// <param name="cancellationToken">Token used to cancel the transaction.</param>
+    /// <returns>
+    /// Found/B-account status, bytes actually subtracted, and remaining after the update.
+    /// </returns>
+    ValueTask<AccountByteConsumeResult> ConsumeAccountBytesAsync(
+        string accountName,
+        long bytes,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reads remaining <c>account_byte_limit</c> without mutating. Does not use the
+    /// AUTHINFO user-record cache.
+    /// </summary>
+    /// <param name="accountName">Plaintext wire username. Bound as <c>@account_name</c>.</param>
+    /// <param name="cancellationToken">Token used to cancel the query.</param>
+    ValueTask<AccountByteConsumeResult> QueryAccountByteRemainingAsync(
+        string accountName,
+        CancellationToken cancellationToken);
 }

@@ -47,6 +47,24 @@ public interface ISessionStateStore
         TimeSpan leaseTtl,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Atomically refreshes this owner's session/source leases and APPLYs one
+    /// MySQL-committed byte batch for the same account. APPLY runs even when
+    /// renewal is lost. <see cref="SessionStateRenewAndApplyResult.Remaining"/>
+    /// is <see langword="null"/> when this store cannot apply byte state.
+    /// </summary>
+    ValueTask<SessionStateRenewAndApplyResult> RenewAndApplyAsync(
+        string accountName,
+        string ownerId,
+        long sessionGeneration,
+        IReadOnlyList<(string Ip, long Generation)> sources,
+        DateTimeOffset now,
+        TimeSpan leaseTtl,
+        string batchId,
+        long consumed,
+        long mysqlRemainingAfter,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Deletes leftover ownership for this process incarnation.</summary>
     ValueTask ReleaseOwnerAsync(
         string accountName,

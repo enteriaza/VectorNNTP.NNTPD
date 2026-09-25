@@ -107,6 +107,109 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     }
 
     /// <inheritdoc />
+    public async ValueTask<AccountByteConsumeResult> ConsumeAccountBytesAsync(
+        string accountName,
+        long bytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+        try
+        {
+            await using var transaction = await _connection
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                var locked = await ReadByteQuotaAsync(
+                        NntpUserQueries.SelectByteQuotaForUpdate,
+                        accountName,
+                        transaction,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (locked is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    return new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0);
+                }
+
+                if (!locked.Value.IsByteAccount)
+                {
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    return new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0);
+                }
+
+                var current = ClampNonNegative(locked.Value.Remaining);
+                var consumed = bytes > current ? current : bytes;
+                await using (var update = _connection.CreateCommand())
+                {
+                    update.Transaction = transaction;
+                    update.CommandText = NntpUserQueries.ConsumeAccountBytes;
+                    update.Parameters.AddWithValue("@account_name", accountName);
+                    update.Parameters.AddWithValue("@bytes", bytes);
+                    await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                var after = await ReadByteQuotaAsync(
+                        NntpUserQueries.SelectAccountByteRemaining,
+                        accountName,
+                        transaction,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                var remaining = after is { IsByteAccount: true } row
+                    ? ClampNonNegative(row.Remaining)
+                    : 0L;
+                return new AccountByteConsumeResult(AccountByteConsumeStatus.Consumed, remaining, consumed);
+            }
+            catch
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
+        {
+            throw new NntpDbUnavailableException("MySQL account byte-quota consume failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<AccountByteConsumeResult> QueryAccountByteRemainingAsync(
+        string accountName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        try
+        {
+            var row = await ReadByteQuotaAsync(
+                    NntpUserQueries.SelectAccountByteRemaining,
+                    accountName,
+                    transaction: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (row is null)
+            {
+                return new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0);
+            }
+
+            if (!row.Value.IsByteAccount)
+            {
+                return new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0);
+            }
+
+            return new AccountByteConsumeResult(
+                AccountByteConsumeStatus.Consumed,
+                ClampNonNegative(row.Value.Remaining),
+                0);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
+        {
+            throw new NntpDbUnavailableException("MySQL account byte-quota query failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
 
     /// <summary>Maps one enabled <c>nntpmoderators</c> row. CHAR columns are trimmed.</summary>
@@ -133,7 +236,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         var allowAuthScram256 = IsYesFlag(reader, 6);
         var accountType = ReadAccountType(reader, 7);
         var rateLimit = reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8));
-        var byteLimit = reader.IsDBNull(9) ? 0L : Convert.ToInt64(reader.GetValue(9));
+        var byteLimit = reader.IsDBNull(9) ? 0L : ConvertByteLimit(reader.GetValue(9));
         var sessionLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
         var srcIpLimit = reader.IsDBNull(11) ? 0 : Convert.ToInt32(reader.GetValue(11));
         var isEnabled = IsYesFlag(reader, 12);
@@ -155,6 +258,56 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             isEnabled,
             customerId);
     }
+
+    private async ValueTask<ByteQuotaRow?> ReadByteQuotaAsync(
+        string commandText,
+        string accountName,
+        MySqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        command.Parameters.AddWithValue("@account_name", accountName);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var accountType = ReadAccountType(reader, 0);
+        var remaining = reader.IsDBNull(1) ? 0L : ConvertByteLimit(reader.GetValue(1));
+        return new ByteQuotaRow(IsByteAccountType(accountType), remaining);
+    }
+
+    /// <summary>
+    /// Converts a MySQL integer <c>account_byte_limit</c> to a non-negative <see cref="long"/>.
+    /// Unsigned values above <see cref="long.MaxValue"/> saturate rather than wrap.
+    /// Negative signed values become <c>0</c> (exhausted / never allowed).
+    /// </summary>
+    internal static long ConvertByteLimit(object? value) =>
+        value switch
+        {
+            null or DBNull => 0,
+            long signed64 => ClampNonNegative(signed64),
+            ulong unsigned64 => unsigned64 > long.MaxValue ? long.MaxValue : (long)unsigned64,
+            int signed32 => ClampNonNegative(signed32),
+            uint unsigned32 => unsigned32,
+            short signed16 => ClampNonNegative(signed16),
+            ushort unsigned16 => unsigned16,
+            sbyte signed8 => ClampNonNegative(signed8),
+            byte unsigned8 => unsigned8,
+            decimal dec when dec < 0 => 0,
+            decimal dec when dec > long.MaxValue => long.MaxValue,
+            decimal dec => (long)dec,
+            _ => ClampNonNegative(Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture)),
+        };
+
+    private static long ClampNonNegative(long value) => value < 0 ? 0 : value;
+
+    private static bool IsByteAccountType(char accountType) => accountType is 'B' or 'b';
+
+    private readonly record struct ByteQuotaRow(bool IsByteAccount, long Remaining);
 
     private static bool IsYesFlag(MySqlDataReader reader, int ordinal)
     {

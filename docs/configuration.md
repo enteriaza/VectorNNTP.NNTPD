@@ -140,6 +140,29 @@ When both `Nntpd:NewsmasterUser` and `Nntpd:NewsmasterPassword` are set, AUTHINF
 
 When either value is omitted, both must be omitted and the newsmaster path is inactive. Reader AUTHINFO still uses MySQL `nntpusers` through the existing NntpDB pool (`CompositeNntpAuthenticationProvider`). Transit peer AUTHINFO remains a separate peer-credential check and never falls through to MySQL.
 
+### `nntpusers` byte quota (`account_type` B)
+
+`account_type = 'B'` (or `'b'`) is byte-oriented. `account_byte_limit` is **remaining** download quota, not an original configured cap:
+
+| Remaining | Meaning |
+|-----------|---------|
+| `> 0` | Bytes remain |
+| `0` | Exhausted |
+| `< 0` | Invalid / never allowed |
+
+There is no `0 = unlimited` meaning for B accounts. An effectively unlimited B account is provisioned with a sufficiently large positive remaining value (for example 10 TB). R accounts are rate-oriented and are not subject to this byte-quota accounting. Newsmaster/admin identities (`AccountPolicy` null) and unauthenticated or Transit-only sessions do not participate.
+
+**Quota top-up is not automatic.** `account_byte_limit` is remaining quota. Redis is conservative and will never autonomously increase an existing remaining-byte value. Changing MySQL remaining while `nntpd:bytes:{sha256hex(accountName)}` exists leaves effective remaining at `min(Redis, MySQL)`. An exhausted account (`MySQL=0`, `Redis=0`) that is topped up in MySQL stays exhausted until AccountBytes Redis state is deleted. This repository has no account-management writer for `account_byte_limit` (the only SQL write is consume). After an external MySQL top-up the operator must invalidate cluster state:
+
+1. Update `nntpusers.account_byte_limit` to the new remaining value.
+2. Call `IAccountByteAccountant.DeleteAccountByteStateAsync(accountName)`, or `DEL nntpd:bytes:{sha256hex(UTF-8 accountName)}` on the cluster Redis.
+
+The next observe/APPLY then sees a missing Redis key and may initialize from current MySQL remaining. Do not expect AUTHINFO or APPLY to publish the top-up while the Redis key still exists.
+
+Live remaining is **not** the 10-second AUTHINFO user-record cache. `AccountBytes` observes Redis cluster state when present and otherwise the durable MySQL remaining. Effective remaining is `min(Redis, MySQL)` when Redis exists. Redis (`nntpd:bytes:{sha256(accountName)}`, HASH `remaining` plus per-batch `b:{batchId}` marks, at most 256 marks) never has a key TTL and is never reconstructed from an original provisioned quota when the key is missing. Redis APPLY is idempotent per batch id: remaining is floored to `min(current, mysqlRemainingAfter)` and `consumed` is not subtracted. The same batch id is a no-op. `Redis < MySQL` is a valid conservative state and is **never repaired upward**. After APPLY is idempotent, a duplicate retry cannot create an artificial Redis-low. Redis-low can still occur when a later node's lower `mysqlRemainingAfter` arrived first, or when an operator raises MySQL remaining while the Redis key still exists. A MySQL top-up is visible on Redis only after the key is deleted so the next APPLY can initialize from current durable remaining. APPLY is not a sync-from-MySQL.
+
+Accounting is batched on the `SessionStateService` ~10-second cycle (lease renewal and byte APPLY share that scheduler; there is no second AccountBytes timer). It is not byte-exact at the instant of exhaustion. Expected overshoot is roughly the bytes those B sessions can send in one interval plus one in-flight NNTP response (for example about 1.25 GiB for one 1 Gbit/s session). MySQL stores durable remaining (`CASE`/`GREATEST`-style clamp at zero). Redis stores cluster-wide live remaining and may only initialize from durable remaining, decrease, or reconcile downward. When an account has both SessionState ownership and a committed byte batch, one Redis EVAL performs renewal and APPLY.
+
 Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
 
 ```text
@@ -319,6 +342,25 @@ Requirements:
 
 - `198.18.0.70:6379` is the authorized TransitPeerState integration-test Redis (same dedicated test instance as SessionState; not localhost and not an application-configured production endpoint).
 - Tests create uniquely named peer identifiers (`vnntp.tconn.lua.{guid}`) and delete only those identifiers' `nntpd:tconn:*` keys. They do not run `FLUSHDB` or `FLUSHALL`.
+- When the variable is unset, the tests skip.
+- When the variable is set and Redis is unreachable, the tests fail.
+
+Do not commit credentials. Redis options have no password field; the unauthenticated connection path is used.
+
+### Live AccountBytes Redis Lua tests
+
+Ordinary `VectorNNTP.NNTPD.Tests` runs do not open Redis and do not read `Redis:Host` or the application-configured production endpoint.
+
+To execute the production AccountBytes Lua scripts (`APPLY`, `OBSERVE`) through `RedisAccountByteStore` against the dedicated test Redis:
+
+```text
+VECTORNNTP_REDIS_INTEGRATION=198.18.0.70:6379
+```
+
+Requirements:
+
+- `198.18.0.70:6379` is the authorized AccountBytes integration-test Redis (same dedicated test instance as SessionState; not localhost and not an application-configured production endpoint).
+- Tests create uniquely named accounts (`vnntp.bytes.lua.{guid}`) and delete only those `nntpd:bytes:` keys. They do not run `FLUSHDB` or `FLUSHALL`.
 - When the variable is unset, the tests skip.
 - When the variable is set and Redis is unreachable, the tests fail.
 

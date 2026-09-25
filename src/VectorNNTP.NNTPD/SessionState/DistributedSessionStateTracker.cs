@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 namespace VectorNNTP.NNTPD.SessionState;
 
@@ -22,6 +23,7 @@ namespace VectorNNTP.NNTPD.SessionState;
 public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISessionStateLeaseManager
 {
     private readonly ISessionStateStore _membership;
+    private readonly IAccountByteAccountant? _bytes;
     private readonly ILogger<DistributedSessionStateTracker> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly string _nodeId;
@@ -38,7 +40,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         ISessionStateStore membership,
         ILogger<DistributedSessionStateTracker> logger,
         string nodeId)
-        : this(membership, logger, nodeId, TimeProvider.System, SessionStateDefaults.LeaseTtl, SessionStateDefaults.HotPathSkew)
+        : this(membership, logger, nodeId, TimeProvider.System, SessionStateDefaults.LeaseTtl, SessionStateDefaults.HotPathSkew, incarnation: null, bytes: null)
     {
     }
 
@@ -50,13 +52,15 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         TimeProvider timeProvider,
         TimeSpan? leaseTtl = null,
         TimeSpan? hotPathSkew = null,
-        string? incarnation = null)
+        string? incarnation = null,
+        IAccountByteAccountant? bytes = null)
     {
         ArgumentNullException.ThrowIfNull(membership);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
         ArgumentNullException.ThrowIfNull(timeProvider);
         _membership = membership;
+        _bytes = bytes;
         _logger = logger;
         _nodeId = nodeId;
         _ownerId = string.Concat(nodeId, ":", string.IsNullOrWhiteSpace(incarnation) ? Guid.NewGuid().ToString("N") : incarnation);
@@ -345,13 +349,11 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
             SessionStateRenewStatus status;
             try
             {
-                status = await _membership.RenewAsync(
+                status = await RenewAccountAsync(
                     accountName,
-                    _ownerId,
                     sessionGeneration,
                     sources,
                     now,
-                    _leaseTtl,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -396,6 +398,45 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 SessionStateLogMessages.SessionStateLeaseLost(_logger, accountName, ip, _nodeId);
             }
         }
+    }
+
+    private async ValueTask<SessionStateRenewStatus> RenewAccountAsync(
+        string accountName,
+        long sessionGeneration,
+        IReadOnlyList<(string Ip, long Generation)> sources,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (_bytes is not null
+            && _bytes.TryGetCommittedBatch(accountName, out var batch))
+        {
+            var combined = await _membership.RenewAndApplyAsync(
+                accountName,
+                _ownerId,
+                sessionGeneration,
+                sources,
+                now,
+                _leaseTtl,
+                batch.BatchId,
+                batch.Consumed,
+                batch.MysqlRemaining,
+                cancellationToken).ConfigureAwait(false);
+            if (combined.Remaining is { } remaining)
+            {
+                _bytes.CompleteApply(accountName, remaining);
+            }
+
+            return combined.Renew;
+        }
+
+        return await _membership.RenewAsync(
+            accountName,
+            _ownerId,
+            sessionGeneration,
+            sources,
+            now,
+            _leaseTtl,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

@@ -260,6 +260,167 @@ internal static class SessionStateScripts
         return 1
         """;
 
+    /// <summary>
+    /// Renews this owner's unexpired matching leases, then APPLYs one byte batch.
+    /// APPLY always runs; a lost renewal does not skip quota reconciliation.
+    /// </summary>
+    /// <remarks>
+    /// KEYS[1] source hash, KEYS[2] session hash, KEYS[3] remaining-quota HASH.
+    /// ARGV: owner, sessionGen, nowMs, leaseMs, ipCount, ip1, gen1, ...,
+    /// batchId, consumed, mysqlRemainingAfter.
+    /// Returns packed <see cref="SessionStateBytePack"/>: remaining when renewed,
+    /// <c>-remaining - 1</c> when lost. APPLY is floor-only and idempotent.
+    /// </remarks>
+    public const string RenewAndApply =
+        """
+        -- nntpd-admit-renew-and-apply
+        local srcKey = KEYS[1]
+        local sessKey = KEYS[2]
+        local bytesKey = KEYS[3]
+        local owner = ARGV[1]
+        local sessionGen = ARGV[2]
+        local now = tonumber(ARGV[3])
+        local lease = tonumber(ARGV[4])
+        local ipCount = tonumber(ARGV[5]) or 0
+
+        local function parse_value(v)
+          local p1 = string.find(v, '|', 1, true)
+          if not p1 then
+            return nil, nil, nil
+          end
+          local p2 = string.find(v, '|', p1 + 1, true)
+          if not p2 then
+            return nil, nil, nil
+          end
+          return tonumber(string.sub(v, 1, p1 - 1)), string.sub(v, p1 + 1, p2 - 1), tonumber(string.sub(v, p2 + 1))
+        end
+
+        local function can_renew(key, field, gen)
+          local cur = redis.call('HGET', key, field)
+          if not cur then
+            return false
+          end
+          local exp, storedGen, count = parse_value(cur)
+          if storedGen ~= gen or exp == nil or exp <= now then
+            return false
+          end
+          return true, count
+        end
+
+        local function renew_field(key, field, gen, count)
+          redis.call('HSET', key, field, tostring(now + lease) .. '|' .. gen .. '|' .. tostring(count or 1))
+        end
+
+        local function trim_marks(key, batchField)
+          if redis.call('HLEN', key) <= 257 then
+            return
+          end
+          local fields = redis.call('HKEYS', key)
+          for i = 1, #fields do
+            local f = fields[i]
+            if f ~= 'remaining' and f ~= batchField then
+              redis.call('HDEL', key, f)
+              if redis.call('HLEN', key) <= 257 then
+                return
+              end
+            end
+          end
+        end
+
+        local function apply_bytes()
+          local batchId = ARGV[6 + (ipCount * 2)]
+          local mysql = tonumber(ARGV[8 + (ipCount * 2)])
+          if mysql == nil or mysql < 0 then
+            mysql = 0
+          end
+          if batchId == nil or batchId == '' then
+            batchId = ''
+          end
+          local batchField = 'b:' .. batchId
+          if redis.call('EXISTS', bytesKey) == 0 then
+            if batchId ~= '' then
+              redis.call('HSET', bytesKey, 'remaining', tostring(mysql), batchField, '1')
+              trim_marks(bytesKey, batchField)
+            else
+              redis.call('HSET', bytesKey, 'remaining', tostring(mysql))
+            end
+            return mysql
+          end
+          if batchId ~= '' and redis.call('HEXISTS', bytesKey, batchField) == 1 then
+            local cur = tonumber(redis.call('HGET', bytesKey, 'remaining'))
+            if cur == nil or cur < 0 then
+              return 0
+            end
+            return cur
+          end
+          local current = tonumber(redis.call('HGET', bytesKey, 'remaining'))
+          if current == nil or current < 0 then
+            current = 0
+          end
+          local next = current
+          if next > mysql then
+            next = mysql
+          end
+          if batchId ~= '' then
+            redis.call('HSET', bytesKey, 'remaining', tostring(next), batchField, '1')
+            trim_marks(bytesKey, batchField)
+          else
+            redis.call('HSET', bytesKey, 'remaining', tostring(next))
+          end
+          return next
+        end
+
+        local renewed = 1
+        if sessionGen ~= '0' then
+          local ok = can_renew(sessKey, owner, sessionGen)
+          if not ok then
+            renewed = 0
+          end
+        end
+
+        if renewed == 1 then
+          local i = 0
+          while i < ipCount do
+            local ip = ARGV[6 + (i * 2)]
+            local gen = ARGV[7 + (i * 2)]
+            local ok = can_renew(srcKey, ip .. '\31' .. owner, gen)
+            if not ok then
+              renewed = 0
+              break
+            end
+            i = i + 1
+          end
+        end
+
+        if renewed == 1 then
+          if sessionGen ~= '0' then
+            local ok, count = can_renew(sessKey, owner, sessionGen)
+            if ok then
+              renew_field(sessKey, owner, sessionGen, count)
+            end
+          end
+          local i = 0
+          while i < ipCount do
+            local ip = ARGV[6 + (i * 2)]
+            local gen = ARGV[7 + (i * 2)]
+            local ok, count = can_renew(srcKey, ip .. '\31' .. owner, gen)
+            if ok then
+              renew_field(srcKey, ip .. '\31' .. owner, gen, count)
+            end
+            i = i + 1
+          end
+        end
+
+        local remaining = apply_bytes()
+        if remaining == nil or remaining < 0 then
+          remaining = 0
+        end
+        if renewed == 1 then
+          return remaining
+        end
+        return -remaining - 1
+        """;
+
     /// <summary>Deletes every field owned by this process incarnation.</summary>
     /// <remarks>KEYS[1] source hash, KEYS[2] session hash. ARGV: owner. Always returns 1.</remarks>
     public const string ReleaseOwner =

@@ -1,25 +1,32 @@
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 namespace VectorNNTP.NNTPD.SessionState;
 
 /// <summary>
-/// Periodic distributed session-state maintenance for locally authenticated NNTP sessions.
+/// Sole periodic scheduler for SessionState: lease renewal, source-address
+/// ownership, and B-account byte-quota reconciliation.
 /// </summary>
 /// <remarks>
 /// This service is a scheduler. It does not accept connections, authenticate clients,
-/// or keep its own session registry. Every renewal interval it asks
-/// <see cref="ISessionStateLeaseManager"/> to renew currently active local ownership.
-/// Each account with distributed ownership is one Redis RENEW EVAL covering session
-/// count and every locally owned source IP. Renewal is node liveness, not client
-/// activity: idle authenticated sessions continue to consume cluster capacity while
-/// this process can renew. <see cref="StopAsync"/> stops the loop and then releases
-/// leftover incarnation ownership. Listeners are registered after this service so
-/// they stop first and sessions can finalize before renewal ends. Process crash is
-/// detected by lease expiry after renewals stop.
+/// or keep its own session registry. Every renewal interval it commits account-wide
+/// MySQL remaining-quota consumes, then asks <see cref="ISessionStateLeaseManager"/>
+/// to renew currently active local ownership. When an account has both distributed
+/// ownership and a committed byte batch, renewal and Redis APPLY share one EVAL.
+/// B accounts with pending bytes but no SessionState ownership receive APPLY-only.
+/// Each account with distributed ownership is one Redis operation covering session
+/// count, every locally owned source IP, and byte state when present. Renewal is
+/// node liveness, not client activity: idle authenticated sessions keep consuming
+/// cluster capacity while this process can renew. <see cref="StopAsync"/> stops the
+/// loop, performs a bounded two-pass final byte reconcile, then releases leftover incarnation
+/// ownership. Listeners are registered after this service so they stop first and
+/// sessions can finalize before renewal ends. Process crash is detected by lease
+/// expiry after renewals stop. Unreconciled process-memory pending bytes are lost.
 /// </remarks>
 public sealed class SessionStateService : IApplicationService
 {
     private readonly ISessionStateLeaseManager _leases;
+    private readonly IAccountByteAccountant _bytes;
     private readonly ILogger<SessionStateService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _interval;
@@ -30,8 +37,9 @@ public sealed class SessionStateService : IApplicationService
     /// <summary>Initializes a new instance of the <see cref="SessionStateService"/> class.</summary>
     public SessionStateService(
         ISessionStateLeaseManager leases,
+        IAccountByteAccountant bytes,
         ILogger<SessionStateService> logger)
-        : this(leases, logger, TimeProvider.System, SessionStateDefaults.RenewalPeriod)
+        : this(leases, bytes, logger, TimeProvider.System, SessionStateDefaults.RenewalPeriod)
     {
     }
 
@@ -41,12 +49,25 @@ public sealed class SessionStateService : IApplicationService
         ILogger<SessionStateService> logger,
         TimeProvider timeProvider,
         TimeSpan interval)
+        : this(leases, NullAccountByteAccountant.Instance, logger, timeProvider, interval)
+    {
+    }
+
+    /// <summary>Initializes a new instance with byte accounting and an explicit interval (tests).</summary>
+    internal SessionStateService(
+        ISessionStateLeaseManager leases,
+        IAccountByteAccountant bytes,
+        ILogger<SessionStateService> logger,
+        TimeProvider timeProvider,
+        TimeSpan interval)
     {
         ArgumentNullException.ThrowIfNull(leases);
+        ArgumentNullException.ThrowIfNull(bytes);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
         _leases = leases;
+        _bytes = bytes;
         _logger = logger;
         _timeProvider = timeProvider;
         _interval = interval;
@@ -86,6 +107,22 @@ public sealed class SessionStateService : IApplicationService
             }
         }
 
+        AccountByteLogMessages.FinalReconciliationStarted(_logger);
+        try
+        {
+            await _bytes.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+            // Pending observed while a MySQL-committed batch was still awaiting APPLY
+            // stays in Pending. A second pass consumes it after the first APPLY completes.
+            await _bytes.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            AccountByteLogMessages.FinalReconciliationFailed(_logger, ex);
+        }
+
         try
         {
             await _leases.ReleaseAllOwnershipAsync(cancellationToken).ConfigureAwait(false);
@@ -105,7 +142,7 @@ public sealed class SessionStateService : IApplicationService
                 await Task.Delay(_interval, _timeProvider, cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    await _leases.RenewLeasesAsync(cancellationToken).ConfigureAwait(false);
+                    await ReconcileOnceAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -122,5 +159,12 @@ public sealed class SessionStateService : IApplicationService
         }
 
         SessionStateLogMessages.SessionStateRenewalStopped(_logger);
+    }
+
+    private async Task ReconcileOnceAsync(CancellationToken cancellationToken)
+    {
+        await _bytes.CommitDurableAsync(cancellationToken).ConfigureAwait(false);
+        await _leases.RenewLeasesAsync(cancellationToken).ConfigureAwait(false);
+        await _bytes.ApplyCommittedAsync(cancellationToken).ConfigureAwait(false);
     }
 }

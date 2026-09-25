@@ -16,6 +16,7 @@ using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
@@ -71,7 +72,9 @@ public static class NntpdServiceCollectionExtensions
             return new DistributedSessionStateTracker(
                 sp.GetRequiredService<ISessionStateStore>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedSessionStateTracker>>(),
-                nodeId);
+                nodeId,
+                TimeProvider.System,
+                bytes: sp.GetRequiredService<IAccountByteAccountant>());
         });
         services.TryAddSingleton<ISessionStateTracker>(static sp =>
             sp.GetRequiredService<DistributedSessionStateTracker>());
@@ -105,6 +108,11 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITransitPeerStateLeaseManager>(static sp =>
             sp.GetRequiredService<DistributedTransitPeerStateTracker>());
         services.TryAddSingleton<TransitPeerStateService>();
+        services.TryAddSingleton<IAccountByteStore, RedisAccountByteStore>();
+        services.TryAddSingleton<IAccountByteDurableStore, MysqlAccountByteDurableStore>();
+        services.TryAddSingleton<AccountByteTracker>();
+        services.TryAddSingleton<IAccountByteAccountant>(static sp =>
+            sp.GetRequiredService<AccountByteTracker>());
         services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
         services.TryAddSingleton<IFeedDiagnostics>(static sp =>
         {

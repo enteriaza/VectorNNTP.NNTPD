@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -63,6 +64,7 @@ public sealed class SessionStateServiceTests
         var leases = new FakeLeaseManager();
         var service = new SessionStateService(
             leases,
+            NullAccountByteAccountant.Instance,
             NullLogger<SessionStateService>.Instance);
         await service.StartAsync(CancellationToken.None);
         await service.StartAsync(CancellationToken.None);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Configuration;
@@ -89,6 +90,8 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
     internal SessionStateEngine SessionStateEngine { get; } = new();
 
     internal TransitPeerStateEngine TransitPeerStateEngine { get; } = new();
+
+    internal AccountByteEngine AccountByteEngine { get; } = new();
 
     public Task<TimeSpan> PingAsync(CancellationToken cancellationToken = default)
     {
@@ -179,7 +182,28 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
 
         if (keys.Length == 1)
         {
-            return EvaluateTransit(script, Encoding.UTF8.GetString(keys[0].Span), values);
+            var key = Encoding.UTF8.GetString(keys[0].Span);
+            if (script == AccountByteScripts.Apply)
+            {
+                return AccountByteEngine.Apply(key, Utf8(values[0]), ParseLong(values[1]), ParseLong(values[2]));
+            }
+
+            if (script == AccountByteScripts.Observe)
+            {
+                return AccountByteEngine.Observe(key);
+            }
+
+            if (script == AccountByteScripts.Delete)
+            {
+                return AccountByteEngine.Delete(key);
+            }
+
+            return EvaluateTransit(script, key, values);
+        }
+
+        if (keys.Length >= 3 && script == SessionStateScripts.RenewAndApply)
+        {
+            return EvaluateRenewAndApply(keys, values);
         }
 
         if (keys.Length < 2)
@@ -240,6 +264,34 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         }
 
         throw new NotSupportedException("FakeRedis only evaluates cluster admission scripts.");
+    }
+
+    private long EvaluateRenewAndApply(ReadOnlyMemory<byte>[] keys, ReadOnlyMemory<byte>[] values)
+    {
+        var sourceKey = Encoding.UTF8.GetString(keys[0].Span);
+        var sessionKey = Encoding.UTF8.GetString(keys[1].Span);
+        var bytesKey = Encoding.UTF8.GetString(keys[2].Span);
+        var ipCount = ParseInt(values[4]);
+        var sources = new (string Ip, long Generation)[ipCount];
+        for (var i = 0; i < ipCount; i++)
+        {
+            sources[i] = (Utf8(values[5 + (i * 2)]), ParseLong(values[6 + (i * 2)]));
+        }
+
+        var renewed = SessionStateEngine.Renew(
+            sourceKey,
+            sessionKey,
+            Utf8(values[0]),
+            ParseLong(values[1]),
+            ParseLong(values[2]),
+            ParseLong(values[3]),
+            sources);
+        var remaining = AccountByteEngine.Apply(
+            bytesKey,
+            Utf8(values[5 + (ipCount * 2)]),
+            ParseLong(values[6 + (ipCount * 2)]),
+            ParseLong(values[7 + (ipCount * 2)]));
+        return SessionStateBytePack.Encode(renewed == 1, remaining);
     }
 
     private long EvaluateTransit(string script, string connectionKey, ReadOnlyMemory<byte>[] values)

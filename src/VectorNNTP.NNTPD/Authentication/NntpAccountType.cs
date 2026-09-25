@@ -5,8 +5,8 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// </summary>
 /// <remarks>
 /// This is not a reader-versus-transit role. Successful reader authentication grants
-/// reader and posting privileges for both types. Rate and byte enforcement belong to
-/// a later accounting subsystem; authentication only exposes the policy.
+/// reader and posting privileges for both types. Rate enforcement is not implemented
+/// here. B-account remaining-byte quota is owned by AccountBytes.
 /// </remarks>
 public enum NntpAccountType
 {

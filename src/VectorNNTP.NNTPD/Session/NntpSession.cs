@@ -6,6 +6,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Authentication;
@@ -95,7 +96,8 @@ public sealed class NntpSession
         IModerationSubmissionService? moderationSubmission = null,
         ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
-        ITransitPeerAuthenticator? transitAuthenticator = null)
+        ITransitPeerAuthenticator? transitAuthenticator = null,
+        IAccountByteAccountant? accountBytes = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -159,6 +161,7 @@ public sealed class NntpSession
         ModerationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
         SessionAdmission = sessionAdmission;
         SaslService = saslService;
+        AccountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -292,6 +295,9 @@ public sealed class NntpSession
     /// <summary>Gets the AUTHINFO SASL service, if registered.</summary>
     public NntpSaslService? SaslService { get; }
 
+    /// <summary>Gets the B-account byte-quota accountant. No-op when the identity is not a B account.</summary>
+    public IAccountByteAccountant AccountBytes { get; }
+
     /// <summary>Gets the unique id used for admission tracking.</summary>
     public string SessionId { get; }
 
@@ -408,6 +414,59 @@ public sealed class NntpSession
         _authentication = NntpAuthenticationState.ForUser(username);
         _authorization = authorization.With(isAuthenticated: true);
         _accountPolicy = policy;
+    }
+
+    /// <summary>
+    /// Attaches B-account output accounting after AUTHINFO success and before the 281.
+    /// Live remaining is observed from Redis/MySQL, not from the cached policy snapshot.
+    /// </summary>
+    internal async ValueTask AttachByteAccountingAsync(
+        NntpResponseWriter response,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        var policy = _accountPolicy;
+        if (policy is null || policy.AccountType != NntpAccountType.ByteLimited)
+        {
+            return;
+        }
+
+        long? remaining;
+        try
+        {
+            remaining = await AccountBytes.ObserveRemainingAsync(policy.Username, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            remaining = null;
+        }
+
+        if (remaining is <= 0)
+        {
+            AccountBytes.MarkExhausted(policy.Username);
+        }
+        else if (remaining is > 0)
+        {
+            AccountBytes.ClearExhausted(policy.Username);
+        }
+
+        response.SetByteSink(AccountBytes.CreateSink(policy.Username));
+    }
+
+    /// <summary>Gets whether this B-account session must reject the next command.</summary>
+    internal bool IsByteQuotaExhausted
+    {
+        get
+        {
+            var policy = _accountPolicy;
+            return policy is { AccountType: NntpAccountType.ByteLimited }
+                && AccountBytes.IsExhausted(policy.Username);
+        }
     }
 
     /// <summary>
@@ -964,6 +1023,15 @@ public sealed class NntpSession
         BeginCommandWork();
         try
         {
+            if (IsByteQuotaExhausted)
+            {
+                await response
+                    .WriteLineAsync(NntpResponses.ServiceTemporarilyUnavailable, cancellationToken)
+                    .ConfigureAwait(false);
+                RequestClose();
+                return;
+            }
+
             if (command.IsValid
                 && command.Verb == NntpVerb.Check
                 && Authorization.AuthorizedTransit)

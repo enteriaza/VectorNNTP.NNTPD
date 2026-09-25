@@ -206,6 +206,33 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
     }
 
     /// <inheritdoc />
+    public async ValueTask<SessionStateRenewAndApplyResult> RenewAndApplyAsync(
+        string accountName,
+        string ownerId,
+        long sessionGeneration,
+        IReadOnlyList<(string Ip, long Generation)> sources,
+        DateTimeOffset now,
+        TimeSpan leaseTtl,
+        string batchId,
+        long consumed,
+        long mysqlRemainingAfter,
+        CancellationToken cancellationToken = default)
+    {
+        _ = batchId;
+        _ = consumed;
+        _ = mysqlRemainingAfter;
+        var status = await RenewAsync(
+            accountName,
+            ownerId,
+            sessionGeneration,
+            sources,
+            now,
+            leaseTtl,
+            cancellationToken).ConfigureAwait(false);
+        return new SessionStateRenewAndApplyResult(status, remaining: null);
+    }
+
+    /// <inheritdoc />
     public ValueTask ReleaseOwnerAsync(
         string accountName,
         string ownerId,

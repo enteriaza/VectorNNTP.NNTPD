@@ -6,6 +6,7 @@ using StackExchange.Redis;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 
@@ -139,6 +140,7 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
         EnsureConfigured();
         _ = await Database.KeyDeleteAsync((RedisKey)SessionStateKeys.CreateSession(accountName));
         _ = await Database.KeyDeleteAsync((RedisKey)SessionStateKeys.CreateSource(accountName));
+        _ = await Database.KeyDeleteAsync((RedisKey)AccountByteKeys.Create(accountName));
     }
 
     public async Task<IReadOnlyList<string>> RemainingTestKeysAsync()
@@ -155,6 +157,11 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
             if (await Database.KeyExistsAsync((RedisKey)SessionStateKeys.CreateSource(account)))
             {
                 remaining.Add(Encoding.UTF8.GetString(SessionStateKeys.CreateSource(account)));
+            }
+
+            if (await Database.KeyExistsAsync((RedisKey)AccountByteKeys.Create(account)))
+            {
+                remaining.Add(Encoding.UTF8.GetString(AccountByteKeys.Create(account)));
             }
         }
 

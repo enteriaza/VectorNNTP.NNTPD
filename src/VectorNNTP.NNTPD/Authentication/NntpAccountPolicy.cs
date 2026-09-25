@@ -40,7 +40,13 @@ public sealed class NntpAccountPolicy
     /// <summary>Gets <c>account_rate_limit</c> in decimal SI megabits per second. <c>0</c> is unlimited.</summary>
     public int RateLimitMbps { get; }
 
-    /// <summary>Gets <c>account_byte_limit</c>. <c>0</c> is unlimited.</summary>
+    /// <summary>
+    /// Gets the AUTHINFO-time snapshot of <c>account_byte_limit</c>.
+    /// For B accounts this is remaining bytes at last user-record load: <c>0</c> is
+    /// exhausted, not unlimited. Live remaining is observed by
+    /// <see cref="VectorNNTP.NNTPD.SessionState.BytesAccounting.IAccountByteAccountant"/> and must not
+    /// be taken from this cached snapshot. R accounts do not participate in byte accounting.
+    /// </summary>
     public long ByteLimit { get; }
 
     /// <summary>Gets the cluster-wide authenticated session cap. <c>0</c> is unlimited.</summary>

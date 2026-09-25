@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using VectorNNTP.NNTPD.Redis;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 namespace VectorNNTP.NNTPD.SessionState;
 
@@ -34,6 +35,7 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         ExecuteAsync(
             SessionStateScripts.TryAdmit,
             accountName,
+            MembershipKeys(accountName),
             [
                 Utf8(normalizedSourceIp),
                 Utf8(ownerId),
@@ -69,6 +71,7 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         _ = await ExecuteAsync(
             SessionStateScripts.Release,
             accountName,
+            MembershipKeys(accountName),
             [
                 Utf8(normalizedSourceIp),
                 Utf8(ownerId),
@@ -106,11 +109,60 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         return ExecuteAsync(
             SessionStateScripts.Renew,
             accountName,
+            MembershipKeys(accountName),
             values,
             result => result == 1
                 ? SessionStateRenewStatus.Renewed
                 : SessionStateRenewStatus.Lost,
             SessionStateRenewStatus.Unavailable,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<SessionStateRenewAndApplyResult> RenewAndApplyAsync(
+        string accountName,
+        string ownerId,
+        long sessionGeneration,
+        IReadOnlyList<(string Ip, long Generation)> sources,
+        DateTimeOffset now,
+        TimeSpan leaseTtl,
+        string batchId,
+        long consumed,
+        long mysqlRemainingAfter,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentException.ThrowIfNullOrWhiteSpace(batchId);
+        var values = new ReadOnlyMemory<byte>[8 + (sources.Count * 2)];
+        values[0] = Utf8(ownerId);
+        values[1] = Utf8(sessionGeneration.ToString(CultureInfo.InvariantCulture));
+        values[2] = Utf8(now.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+        values[3] = Utf8(((long)leaseTtl.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
+        values[4] = Utf8(sources.Count.ToString(CultureInfo.InvariantCulture));
+        for (var i = 0; i < sources.Count; i++)
+        {
+            values[5 + (i * 2)] = Utf8(sources[i].Ip);
+            values[6 + (i * 2)] = Utf8(sources[i].Generation.ToString(CultureInfo.InvariantCulture));
+        }
+
+        values[5 + (sources.Count * 2)] = Utf8(batchId);
+        values[6 + (sources.Count * 2)] = Utf8(
+            AccountByteEngine.ClampNonNegative(consumed).ToString(CultureInfo.InvariantCulture));
+        values[7 + (sources.Count * 2)] = Utf8(
+            AccountByteEngine.ClampNonNegative(mysqlRemainingAfter)
+                .ToString(CultureInfo.InvariantCulture));
+
+        return ExecuteAsync(
+            SessionStateScripts.RenewAndApply,
+            accountName,
+            CombinedKeys(accountName),
+            values,
+            packed =>
+            {
+                var (status, remaining) = SessionStateBytePack.Decode(packed);
+                return new SessionStateRenewAndApplyResult(status, remaining);
+            },
+            new SessionStateRenewAndApplyResult(SessionStateRenewStatus.Unavailable, remaining: null),
             cancellationToken);
     }
 
@@ -123,6 +175,7 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         _ = await ExecuteAsync(
             SessionStateScripts.ReleaseOwner,
             accountName,
+            MembershipKeys(accountName),
             [Utf8(ownerId)],
             static _ => true,
             fallback: true,
@@ -132,6 +185,7 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
     private async ValueTask<T> ExecuteAsync<T>(
         string script,
         string accountName,
+        ReadOnlyMemory<byte>[] keys,
         ReadOnlyMemory<byte>[] values,
         Func<long, T> map,
         T fallback,
@@ -158,7 +212,7 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         {
             var result = await database.ScriptEvaluateAsync(
                 script,
-                [SessionStateKeys.CreateSource(accountName), SessionStateKeys.CreateSession(accountName)],
+                keys,
                 values,
                 cancellationToken).ConfigureAwait(false);
             _redis.CompleteOperation(isRecoveryProbe, succeeded: true);
@@ -180,6 +234,16 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
             return fallback;
         }
     }
+
+    private static ReadOnlyMemory<byte>[] MembershipKeys(string accountName) =>
+        [SessionStateKeys.CreateSource(accountName), SessionStateKeys.CreateSession(accountName)];
+
+    private static ReadOnlyMemory<byte>[] CombinedKeys(string accountName) =>
+        [
+            SessionStateKeys.CreateSource(accountName),
+            SessionStateKeys.CreateSession(accountName),
+            AccountByteKeys.Create(accountName),
+        ];
 
     private static byte[] Utf8(string value) => Encoding.UTF8.GetBytes(value);
 }

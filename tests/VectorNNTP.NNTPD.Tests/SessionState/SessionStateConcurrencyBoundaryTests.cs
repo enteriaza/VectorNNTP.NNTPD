@@ -430,6 +430,29 @@ public sealed class SessionStateConcurrencyBoundaryTests
             CancellationToken cancellationToken = default) =>
             _inner.RenewAsync(accountName, ownerId, sessionGeneration, sources, now, leaseTtl, cancellationToken);
 
+        public ValueTask<SessionStateRenewAndApplyResult> RenewAndApplyAsync(
+            string accountName,
+            string ownerId,
+            long sessionGeneration,
+            IReadOnlyList<(string Ip, long Generation)> sources,
+            DateTimeOffset now,
+            TimeSpan leaseTtl,
+            string batchId,
+            long consumed,
+            long mysqlRemainingAfter,
+            CancellationToken cancellationToken = default) =>
+            _inner.RenewAndApplyAsync(
+                accountName,
+                ownerId,
+                sessionGeneration,
+                sources,
+                now,
+                leaseTtl,
+                batchId,
+                consumed,
+                mysqlRemainingAfter,
+                cancellationToken);
+
         public ValueTask ReleaseOwnerAsync(
             string accountName,
             string ownerId,

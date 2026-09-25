@@ -7,8 +7,10 @@ namespace VectorNNTP.NNTPD.SessionState;
 /// Renewal proves this node is still responsible for its authenticated sessions.
 /// It is independent of NNTP traffic. One renew operation per account extends
 /// session and source-IP ownership together, or extends none of them.
-/// The background <see cref="SessionStateService"/> is the scheduler; this
-/// abstraction owns the actual ownership snapshot and Redis operations.
+/// The background <see cref="SessionStateService"/> is the sole scheduler; this
+/// abstraction owns the actual ownership snapshot and Redis operations. When a
+/// MySQL-committed byte batch exists for an owned account, renewal and APPLY
+/// share one Redis EVAL.
 /// </remarks>
 public interface ISessionStateLeaseManager
 {

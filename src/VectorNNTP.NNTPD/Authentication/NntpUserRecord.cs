@@ -77,7 +77,10 @@ public sealed class NntpUserRecord
     /// <summary>Gets <c>account_rate_limit</c>.</summary>
     public int RateLimit { get; }
 
-    /// <summary>Gets <c>account_byte_limit</c>.</summary>
+    /// <summary>
+    /// Gets <c>account_byte_limit</c>. For B accounts this is remaining bytes
+    /// (<c>0</c> = exhausted). This snapshot is not live cluster remaining.
+    /// </summary>
     public long ByteLimit { get; }
 
     /// <summary>Gets <c>account_session_limit</c>. <c>0</c> is unlimited.</summary>

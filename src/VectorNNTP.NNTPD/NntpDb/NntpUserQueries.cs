@@ -17,4 +17,33 @@ public static class NntpUserQueries
         + "is_enabled, customer_id "
         + "FROM nntpusers "
         + "WHERE account_name = MD5(@account_name)";
+
+    /// <summary>
+    /// Locks one <c>nntpusers</c> row so a consume can read remaining and type atomically.
+    /// </summary>
+    public const string SelectByteQuotaForUpdate =
+        "SELECT account_type, account_byte_limit "
+        + "FROM nntpusers "
+        + "WHERE account_name = MD5(@account_name) "
+        + "FOR UPDATE";
+
+    /// <summary>
+    /// Subtracts consumed bytes from a B-account, clamping at zero.
+    /// Uses <c>CASE</c> rather than unchecked subtraction so an unsigned column
+    /// cannot wrap before the floor is applied.
+    /// </summary>
+    public const string ConsumeAccountBytes =
+        "UPDATE nntpusers "
+        + "SET account_byte_limit = CASE "
+        + "WHEN account_byte_limit IS NULL THEN 0 "
+        + "WHEN account_byte_limit > @bytes THEN account_byte_limit - @bytes "
+        + "ELSE 0 END "
+        + "WHERE account_name = MD5(@account_name) "
+        + "AND account_type IN ('B', 'b')";
+
+    /// <summary>Reads remaining quota and type without locking.</summary>
+    public const string SelectAccountByteRemaining =
+        "SELECT account_type, account_byte_limit "
+        + "FROM nntpusers "
+        + "WHERE account_name = MD5(@account_name)";
 }

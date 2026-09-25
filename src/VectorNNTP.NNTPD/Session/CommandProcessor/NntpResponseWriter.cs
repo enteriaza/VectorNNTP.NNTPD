@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Text;
 using System.Threading.Channels;
+using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -57,6 +58,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     private int _coalescedUnflushed;
     private int _directExclusive;
     private long _directPipeFlushCount;
+    private IAccountByteSink _byteSink = NullAccountByteSink.Instance;
 
     private readonly struct WriteRequest
     {
@@ -113,6 +115,16 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     /// Gets the TX response Channel AllowSynchronousContinuations value applied at construction.
     /// </summary>
     internal bool ChannelAllowsSynchronousContinuations { get; }
+
+    /// <summary>
+    /// Installs the B-account byte sink. Counting starts after the next successful
+    /// <c>PipeWriter.Advance</c>, never at Channel enqueue.
+    /// </summary>
+    public void SetByteSink(IAccountByteSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        Volatile.Write(ref _byteSink, sink);
+    }
 
     /// <summary>Gets the number of Channel items accepted (diagnostics / tests).</summary>
     internal long ChannelEnqueueCount => Volatile.Read(ref _channelEnqueueCount);
@@ -548,6 +560,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             var toCopy = Math.Min(memory.Length, remaining.Length);
             remaining.Span[..toCopy].CopyTo(memory.Span);
             _output.Advance(toCopy);
+            Volatile.Read(ref _byteSink).ObserveCopied(toCopy);
             remaining = remaining[toCopy..];
 
             if (_output.UnflushedBytes >= 64 * 1024)
@@ -757,6 +770,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             var toCopy = Math.Min(memory.Length, remaining.Length);
             remaining.Span[..toCopy].CopyTo(memory.Span);
             _output.Advance(toCopy);
+            Volatile.Read(ref _byteSink).ObserveCopied(toCopy);
             remaining = remaining[toCopy..];
 
             if (_output.UnflushedBytes >= 64 * 1024)

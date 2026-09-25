@@ -374,6 +374,7 @@ internal static class AuthInfo
         }
 
         session.ApplySuccessfulAuthentication(result.Username, result.Authorization, result.Policy);
+        await session.AttachByteAccountingAsync(response, cancellationToken).ConfigureAwait(false);
         var wireSuccess = successWire.IsEmpty ? NntpResponses.AuthenticationAccepted : successWire;
         var statusSuccess = successStatus ?? NntpResponseStatus.AuthenticationAccepted;
         await WriteAsync(context, response, wireSuccess, statusSuccess, cancellationToken).ConfigureAwait(false);
