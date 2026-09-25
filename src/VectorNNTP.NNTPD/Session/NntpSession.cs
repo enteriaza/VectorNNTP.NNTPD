@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -24,6 +25,9 @@ namespace VectorNNTP.NNTPD.Session;
 /// Authentication and authorization are distinct; AUTHINFO success applies only provider-returned privileges.
 /// Connection-time <see cref="ITransitPeerAuthorization"/> may grant transit/streaming peer privileges
 /// without authentication and retains the named Transit peer policy.
+/// An established session that executes no NNTP command for <c>Nntpd:IdleTime</c> is disconnected
+/// via the existing close path (reason <c>IdleTimeout</c>). In-flight commands including
+/// pipelined CHECK and TAKETHIS keep the session non-idle.
 /// </remarks>
 public sealed class NntpSession
 {
@@ -37,7 +41,19 @@ public sealed class NntpSession
     private NntpSessionMode _mode;
     private int _closeRequested;
     private int _activityState;
+    private int _commandWork;
+    private long _lastCommandTimestamp;
+    /// <summary>
+    /// Low 63 bits: activity epoch, incremented when <see cref="BeginCommandWork"/> commits.
+    /// High bit set: idle waiter has committed <see cref="TcpDisconnectReason.IdleTimeout"/>.
+    /// </summary>
+    private long _idleState;
+    private readonly TimeSpan _commandIdleTimeout;
+    private readonly TimeProvider _timeProvider;
+    private readonly TaskCompletionSource _idleWatchArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _closeCts = new();
+    private Task? _idleWatchTask;
+    private int _closeReason;
 
     /// <summary>Initializes a new instance of the <see cref="NntpSession"/> class.</summary>
     public NntpSession(
@@ -53,7 +69,9 @@ public sealed class NntpSession
         IHistoryDb? historyDb = null,
         ISpeedTestCoordinator? speedTest = null,
         INntpSessionCensus? sessionCensus = null,
-        ITransitPeerMetrics? peerMetrics = null)
+        ITransitPeerMetrics? peerMetrics = null,
+        TimeSpan? commandIdleTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -75,6 +93,16 @@ public sealed class NntpSession
         PeerMetrics = peerMetrics;
         StreamArticleTx = new NntpStreamArticleTxScheduler(streamOutstandingArticleDepth);
         _dispatcher = new NntpCommandDispatcher(loggerFactory);
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _commandIdleTimeout = commandIdleTimeout ?? TimeSpan.FromSeconds(NntpdOptions.DefaultIdleTime);
+        if (_commandIdleTimeout < TimeSpan.FromSeconds(NntpdOptions.MinIdleTime)
+            || _commandIdleTimeout > TimeSpan.FromSeconds(NntpdOptions.MaxIdleTime))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(commandIdleTimeout),
+                commandIdleTimeout,
+                $"Idle timeout must be between {NntpdOptions.MinIdleTime} and {NntpdOptions.MaxIdleTime} seconds.");
+        }
     }
 
     /// <summary>Gets the underlying transport connection.</summary>
@@ -279,14 +307,24 @@ public sealed class NntpSession
     /// Cancels a pending RX <c>ReadAsync</c> so a close requested off the RX stack still ends
     /// the session.
     /// </summary>
-    public void RequestClose()
+    public void RequestClose() => RequestCloseWithReason(TcpDisconnectReason.ProtocolClose);
+
+    /// <summary>
+    /// Notes <paramref name="reason"/> (first-wins on the transport) and cancels the session loop.
+    /// </summary>
+    internal void RequestCloseWithReason(TcpDisconnectReason reason)
     {
-        Interlocked.Exchange(ref _closeRequested, 1);
         if (Connection is NntpConnection nntpConnection)
         {
-            nntpConnection.NoteDisconnectReason(TcpDisconnectReason.ProtocolClose);
+            nntpConnection.NoteDisconnectReason(reason);
         }
 
+        Interlocked.CompareExchange(
+            ref _closeReason,
+            (int)reason,
+            (int)TcpDisconnectReason.Unspecified);
+
+        Interlocked.Exchange(ref _closeRequested, 1);
         try
         {
             _closeCts.Cancel();
@@ -295,6 +333,87 @@ public sealed class NntpSession
         {
         }
     }
+
+    /// <summary>
+    /// Marks that an NNTP command has been accepted for processing.
+    /// Timestamp and work count are published before the idle-epoch CAS so a waiter
+    /// that has not yet committed close observes activity and cannot close on stale idle.
+    /// </summary>
+    /// <remarks>
+    /// Ownership: if this method increments the epoch while the high bit of
+    /// <see cref="_idleState"/> is still clear, idle-timeout close must not win.
+    /// If the high bit is already set, this command loses and runs on the closing session.
+    /// </remarks>
+    internal void BeginCommandWork()
+    {
+        Volatile.Write(ref _lastCommandTimestamp, _timeProvider.GetTimestamp());
+        Interlocked.Increment(ref _commandWork);
+        CommitCommandActivityEpoch();
+    }
+
+    /// <summary>
+    /// Increments the idle activity epoch unless idle-timeout close has already committed.
+    /// </summary>
+    private void CommitCommandActivityEpoch()
+    {
+        while (true)
+        {
+            var current = Interlocked.Read(ref _idleState);
+            if ((current & IdleClosedFlag) != 0)
+            {
+                return;
+            }
+
+            var next = current + 1;
+            if (Interlocked.CompareExchange(ref _idleState, next, current) == current)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>High bit of <see cref="_idleState"/>: idle waiter committed close.</summary>
+    private const long IdleClosedFlag = unchecked((long)0x8000_0000_0000_0000);
+
+    /// <summary>
+    /// Marks that one accepted NNTP command (or pipeline slot) has finished.
+    /// Timestamp is published before the work count drops to zero so a waiter
+    /// cannot treat a just-finished long command as already idle.
+    /// </summary>
+    internal void EndCommandWork()
+    {
+        Volatile.Write(ref _lastCommandTimestamp, _timeProvider.GetTimestamp());
+        Interlocked.Decrement(ref _commandWork);
+    }
+
+    /// <summary>Signaled once the per-session idle waiter is armed after the greeting.</summary>
+    internal Task IdleWatchArmed => _idleWatchArmed.Task;
+
+    /// <summary>The idle-watch task, or <see langword="null"/> before <see cref="RunAsync"/> starts it.</summary>
+    internal Task? IdleWatchTaskForTests => _idleWatchTask;
+
+    /// <summary>Session-requested close reason (first-wins); tests and idle timeout.</summary>
+    internal TcpDisconnectReason CloseReasonForTests =>
+        (TcpDisconnectReason)Volatile.Read(ref _closeReason);
+
+    /// <summary>In-flight accepted command / pipeline-slot count (tests).</summary>
+    internal int CommandWorkForTests => Volatile.Read(ref _commandWork);
+
+    /// <summary>Gets whether the idle waiter has committed <see cref="TcpDisconnectReason.IdleTimeout"/>.</summary>
+    internal bool IdleCloseCommittedForTests =>
+        (Interlocked.Read(ref _idleState) & IdleClosedFlag) != 0;
+
+    /// <summary>
+    /// Test-only: set when the idle waiter has observed a due deadline and is about to
+    /// CAS-commit close. Production never sets this.
+    /// </summary>
+    internal TaskCompletionSource? IdleAboutToCommit { get; set; }
+
+    /// <summary>
+    /// Test-only: when set, the idle waiter awaits this after <see cref="IdleAboutToCommit"/>
+    /// and before the close CAS. Production never sets this.
+    /// </summary>
+    internal Task? IdleCommitHold { get; set; }
 
     /// <summary>
     /// Sends the initial greeting and runs the command loop until QUIT, EOF, or cancellation.
@@ -319,6 +438,7 @@ public sealed class NntpSession
             Pipeline = new CheckPipeline(this, response);
             TakeThisWindow = new TakeThisPipeline(this, response);
             await SendGreetingAsync(response, token).ConfigureAwait(false);
+            _idleWatchTask = WatchIdleAsync(token);
 
             var readerRx = new NntpReaderCommandRx(this, _dispatcher, _logger);
             var streamRx = new NntpStreamDataPlaneRx(this, _dispatcher, _logger);
@@ -353,6 +473,25 @@ public sealed class NntpSession
         }
         finally
         {
+            try
+            {
+                _closeCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            if (_idleWatchTask is not null)
+            {
+                try
+                {
+                    await _idleWatchTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
             SessionCensus?.Unregister(this);
             if (TakeThisWindow is not null)
             {
@@ -485,29 +624,103 @@ public sealed class NntpSession
         ArgumentNullException.ThrowIfNull(Pipeline);
         ArgumentNullException.ThrowIfNull(TakeThisWindow);
 
-        if (command.IsValid
-            && command.Verb == NntpVerb.Check
-            && Authorization.AuthorizedTransit)
+        BeginCommandWork();
+        try
         {
-            await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
-            if (command.Verb != NntpVerb.BenchIt
-                && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
-                && logger.IsEnabled(LogLevel.Information))
+            if (command.IsValid
+                && command.Verb == NntpVerb.Check
+                && Authorization.AuthorizedTransit)
             {
-                CommandLogMessages.CommandRx(
-                    logger,
-                    NntpCommandLogFormat.Client(this),
-                    NntpCommandLogFormat.RedactRxCommand(command, line.Span));
+                await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
+                if (command.Verb != NntpVerb.BenchIt
+                    && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
+                    && logger.IsEnabled(LogLevel.Information))
+                {
+                    CommandLogMessages.CommandRx(
+                        logger,
+                        NntpCommandLogFormat.Client(this),
+                        NntpCommandLogFormat.RedactRxCommand(command, line.Span));
+                }
+
+                await Pipeline.SubmitAsync(command, line, cancellationToken).ConfigureAwait(false);
+                return;
             }
 
-            await Pipeline.SubmitAsync(command, line, cancellationToken).ConfigureAwait(false);
-            return;
+            await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
+            await Pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
+            await DispatchCommandAsync(dispatcher, response, logger, command, line, preReadArticle, cancellationToken)
+                .ConfigureAwait(false);
         }
+        finally
+        {
+            EndCommandWork();
+        }
+    }
 
-        await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
-        await Pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
-        await DispatchCommandAsync(dispatcher, response, logger, command, line, preReadArticle, cancellationToken)
-            .ConfigureAwait(false);
+    /// <summary>
+    /// Waits until <c>lastCommandActivity + IdleTime</c> with no accepted command work,
+    /// then closes the session. One Delay per wait; no per-command timer or lock.
+    /// </summary>
+    private async Task WatchIdleAsync(CancellationToken cancellationToken)
+    {
+        Volatile.Write(ref _lastCommandTimestamp, _timeProvider.GetTimestamp());
+        _idleWatchArmed.TrySetResult();
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && Volatile.Read(ref _closeRequested) == 0)
+            {
+                if (Volatile.Read(ref _commandWork) > 0)
+                {
+                    await Task.Delay(_commandIdleTimeout, _timeProvider, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                var last = Volatile.Read(ref _lastCommandTimestamp);
+                var epochAtIdle = Interlocked.Read(ref _idleState);
+                if ((epochAtIdle & IdleClosedFlag) != 0)
+                {
+                    return;
+                }
+
+                var elapsed = _timeProvider.GetElapsedTime(last, _timeProvider.GetTimestamp());
+                var remaining = _commandIdleTimeout - elapsed;
+                if (remaining > TimeSpan.Zero)
+                {
+                    await Task.Delay(remaining, _timeProvider, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Ownership snapshot: CAS this epoch later. BeginCommandWork increments
+                // the epoch before publishing work; if that increment lands first,
+                // CompareExchange(epochAtIdle) fails and this stale idle decision cannot close.
+                // Re-reading _idleState after the hold would observe the new epoch and
+                // incorrectly close after activity had already committed.
+                var aboutToCommit = IdleAboutToCommit;
+                aboutToCommit?.TrySetResult();
+                if (IdleCommitHold is { } hold)
+                {
+                    await hold.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                if (Volatile.Read(ref _commandWork) > 0
+                    || Volatile.Read(ref _lastCommandTimestamp) != last)
+                {
+                    continue;
+                }
+
+                if (Interlocked.CompareExchange(ref _idleState, epochAtIdle | IdleClosedFlag, epochAtIdle)
+                    != epochAtIdle)
+                {
+                    continue;
+                }
+
+                RequestCloseWithReason(TcpDisconnectReason.IdleTimeout);
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
     }
 
     /// <summary>Waits until the CHECK window can accept another command (RX backpressure).</summary>

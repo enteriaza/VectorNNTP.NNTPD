@@ -32,4 +32,7 @@ internal enum TcpDisconnectReason
 
     /// <summary>Completed with an exception that is not a receive/send pump fault.</summary>
     ConnectionClosed = 8,
+
+    /// <summary>No NNTP command was executed within <c>Nntpd:IdleTime</c>.</summary>
+    IdleTimeout = 9,
 }

@@ -31,6 +31,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
 | `HistoryTime` | `TimeSpan` | `02:00:00` | no | HistoryDB retention for local memory and Redis key TTL (`1s`–`7d`) |
+| `IdleTime` | int (seconds) | `300` | no | Disconnect an established NNTP session after this many seconds with no executed NNTP command (`1`–`86400`). `0` is invalid (not disabled). Resets when a command is accepted; in-flight CHECK/TAKETHIS keep the session non-idle. Not TCP/TLS/socket receive idle. |
 | `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |

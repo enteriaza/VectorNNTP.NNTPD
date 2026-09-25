@@ -490,7 +490,7 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section.
 
 Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), and `Redis:Host`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs; either failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 

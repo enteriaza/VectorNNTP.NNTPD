@@ -322,7 +322,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 historyDb: _historyDb,
                 speedTest: _speedTest,
                 sessionCensus: _sessionCensus,
-                peerMetrics: _peerMetrics);
+                peerMetrics: _peerMetrics,
+                commandIdleTimeout: TimeSpan.FromSeconds(_options.Value.IdleTime));
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

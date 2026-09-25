@@ -60,6 +60,59 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_Succeeds_ForDefaultIdleTime()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(NntpdOptions.DefaultIdleTime, options.IdleTime);
+        Assert.Equal(300, new NntpdOptions().IdleTime);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForConfiguredIdleTime()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.IdleTime = 120;
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_Fails_ForIdleTimeBelowOneSecond(int idleTime)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.IdleTime = idleTime;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.IdleTime), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_Fails_ForIdleTimeAboveOneDay()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.IdleTime = NntpdOptions.MaxIdleTime + 1;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.IdleTime), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursIdleTimeSeconds()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:IdleTime"] = "120",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(120, options.IdleTime);
+    }
+
+    [Fact]
     public void Validate_Fails_ForHistoryTimeBelowOneSecond()
     {
         var options = TestHostFactory.CreateValidOptions();
@@ -297,6 +350,14 @@ public sealed class NntpdConfigurationTests
         valid.LogDir = options.LogDir;
         var validator = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true));
         Assert.True(validator.Validate(null, valid).Succeeded);
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresIdleTimeDefault()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(NntpdOptions.DefaultIdleTime, doc.RootElement.GetProperty("Nntpd").GetProperty("IdleTime").GetInt32());
     }
 
     [Fact]

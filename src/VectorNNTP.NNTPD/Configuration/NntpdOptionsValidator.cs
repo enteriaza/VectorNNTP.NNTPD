@@ -195,6 +195,18 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add($"{nameof(NntpdOptions.HistoryTime)} must not exceed 7 days.");
         }
+
+        if (options.IdleTime < NntpdOptions.MinIdleTime)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.IdleTime)} must be at least {NntpdOptions.MinIdleTime} second.");
+        }
+
+        if (options.IdleTime > NntpdOptions.MaxIdleTime)
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.IdleTime)} must not exceed {NntpdOptions.MaxIdleTime} seconds.");
+        }
     }
 
     private static void ValidateSystemd(NntpdOptions options, List<string> failures)

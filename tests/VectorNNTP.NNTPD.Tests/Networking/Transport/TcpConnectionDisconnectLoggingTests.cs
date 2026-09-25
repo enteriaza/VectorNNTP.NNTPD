@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.Networking.Transport;
 
@@ -159,6 +160,35 @@ public sealed class TcpConnectionDisconnectLoggingTests
 
         Assert.Single(logger.Disconnects);
         Assert.Equal(TcpDisconnectReason.LocalClose, server.DisconnectReasonForTests);
+    }
+
+    [Fact]
+    public async Task IdleTimeout_EmitsDisconnect_WithIdleTimeoutReason()
+    {
+        var logger = new CapturingConnectionLogger();
+        var clock = new ControllableTimeProvider();
+        await using var host = await TransportTestHost.StartPlainAsync(logger);
+        using var client = await host.ConnectPlainClientAsync();
+        await using var server = Assert.IsType<NntpConnection>(await host.AcceptAsync());
+        var session = new NntpSession(
+            server,
+            NullLogger<NntpSession>.Instance,
+            commandIdleTimeout: TimeSpan.FromSeconds(2),
+            timeProvider: clock);
+        var run = session.RunAsync();
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await session.IdleWatchArmed.WaitAsync(timeout.Token);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await run.WaitAsync(timeout.Token);
+
+        Assert.Equal(TcpDisconnectReason.IdleTimeout, session.CloseReasonForTests);
+        Assert.Equal(TcpDisconnectReason.IdleTimeout, server.DisconnectReasonForTests);
+        var line = Assert.Single(logger.Disconnects);
+        AssertSingleLineDisconnect(line, server, "IdleTimeout");
+        Assert.Empty(logger.DisconnectExceptions);
+        Assert.Null(logger.LastException);
+        Assert.Equal(LogLevel.Information, logger.LastLevel);
     }
 
     [Fact]

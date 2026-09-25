@@ -368,6 +368,30 @@ public sealed class NntpdOptions
     /// </remarks>
     public TimeSpan HistoryTime { get; set; } = TimeSpan.FromHours(2);
 
+    /// <summary>Default NNTP command idle timeout in seconds.</summary>
+    public const int DefaultIdleTime = 300;
+
+    /// <summary>Minimum accepted <see cref="IdleTime"/> in seconds.</summary>
+    public const int MinIdleTime = 1;
+
+    /// <summary>Maximum accepted <see cref="IdleTime"/> in seconds (24 hours).</summary>
+    public const int MaxIdleTime = 86_400;
+
+    /// <summary>
+    /// Gets or sets how many seconds an established NNTP session may remain without
+    /// executing an NNTP command before the session is disconnected.
+    /// </summary>
+    /// <remarks>
+    /// Unit is seconds. Default is <see cref="DefaultIdleTime"/>. Valid range is
+    /// <see cref="MinIdleTime"/>–<see cref="MaxIdleTime"/>. <c>0</c> is invalid
+    /// (not “disabled”); it follows the same minimum-1-second rule as other
+    /// required timeouts such as <see cref="HistoryTime"/>.
+    /// The timer starts after session setup (greeting) and resets when a command
+    /// is accepted for processing. In-flight commands (including pipelined CHECK
+    /// and TAKETHIS) keep the session non-idle.
+    /// </remarks>
+    public int IdleTime { get; set; } = DefaultIdleTime;
+
     /// <summary>
     /// Default Transit article-queue memory budget: 1 GiB (1,073,741,824 bytes).
     /// </summary>

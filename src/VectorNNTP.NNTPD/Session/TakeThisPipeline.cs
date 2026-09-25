@@ -195,6 +195,7 @@ internal sealed class TakeThisPipeline
             };
             _slots[slot.Index] = slot;
             _count++;
+            _session.BeginCommandWork();
             if (_count > _peakOccupied)
             {
                 _peakOccupied = _count;
@@ -215,62 +216,76 @@ internal sealed class TakeThisPipeline
             _maxActiveArticleReads = reads;
         }
 
-        IHaveArticleReadResult read;
         try
         {
-            if (HoldReceive is { } holdReceive)
+            IHaveArticleReadResult read;
+            try
             {
-                await holdReceive.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (HoldReceive is { } holdReceive)
+                {
+                    await holdReceive.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                read = await IHaveArticleReader
+                    .ReadAsync(_session.Connection.Input, _session.ArticleIngestion.MaxArticleBytes, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested
+                || _session.Connection.ConnectionClosed.IsCancellationRequested)
+            {
+                Interlocked.Decrement(ref _activeArticleReads);
+                AfterReceiveCompleted?.Invoke();
+                CancelAndRelease(slot);
+                return;
             }
 
-            read = await IHaveArticleReader
-                .ReadAsync(_session.Connection.Input, _session.ArticleIngestion.MaxArticleBytes, cancellationToken)
-                .ConfigureAwait(false);
+            Interlocked.Decrement(ref _activeArticleReads);
+            AfterReceiveCompleted?.Invoke();
+
+            if (marks is not null)
+            {
+                marks.ReceiveCompleteTs = System.Diagnostics.Stopwatch.GetTimestamp();
+                marks.ArticleBytes = read.Payload.Length;
+            }
+
+            if (probe is not null)
+            {
+                var receiveStart = marks?.ReceiveStartTs ?? started;
+                probe.RecordArticleReceived(
+                    read.Payload.Length,
+                    System.Diagnostics.Stopwatch.GetTimestamp() - receiveStart);
+            }
+
+            _session.RecordPeerArticleReceived(read.Payload.Length);
+            _session.SetActivityState(FeedSessionState.WaitingHistory);
+
+            lock (_gate)
+            {
+                if (!IsPresentNoLock(slot))
+                {
+                    return;
+                }
+
+                slot.Read = read;
+                slot.ArticleReady = true;
+                SignalProgressNoLock();
+            }
+
+            AfterArticleDetached?.Invoke(read.Payload);
+            _ = CompleteWhenAsync(slot, lookup, cancellationToken);
         }
         catch (OperationCanceledException) when (
             cancellationToken.IsCancellationRequested
             || _session.Connection.ConnectionClosed.IsCancellationRequested)
         {
-            Interlocked.Decrement(ref _activeArticleReads);
-            AfterReceiveCompleted?.Invoke();
             CancelAndRelease(slot);
-            return;
         }
-
-        Interlocked.Decrement(ref _activeArticleReads);
-        AfterReceiveCompleted?.Invoke();
-
-        if (marks is not null)
+        catch
         {
-            marks.ReceiveCompleteTs = System.Diagnostics.Stopwatch.GetTimestamp();
-            marks.ArticleBytes = read.Payload.Length;
+            CancelAndRelease(slot);
+            throw;
         }
-
-        if (probe is not null)
-        {
-            var receiveStart = marks?.ReceiveStartTs ?? started;
-            probe.RecordArticleReceived(
-                read.Payload.Length,
-                System.Diagnostics.Stopwatch.GetTimestamp() - receiveStart);
-        }
-
-        _session.RecordPeerArticleReceived(read.Payload.Length);
-        _session.SetActivityState(FeedSessionState.WaitingHistory);
-
-        lock (_gate)
-        {
-            if (!IsPresentNoLock(slot))
-            {
-                return;
-            }
-
-            slot.Read = read;
-            slot.ArticleReady = true;
-            SignalProgressNoLock();
-        }
-
-        AfterArticleDetached?.Invoke(read.Payload);
-        _ = CompleteWhenAsync(slot, lookup, cancellationToken);
     }
 
     /// <summary>Waits until every slot has been accepted by the TX writer (or cancelled).</summary>
@@ -418,7 +433,15 @@ internal sealed class TakeThisPipeline
                 {
                     CancelAndRelease(slot);
                 }
+                catch (Exception)
+                {
+                    CancelAndRelease(slot);
+                }
             }
+        }
+        catch (Exception)
+        {
+            CancelAndRelease(slot);
         }
         finally
         {
@@ -462,7 +485,7 @@ internal sealed class TakeThisPipeline
                         SignalProgressNoLock();
                     }
                 }
-                catch (OperationCanceledException)
+                catch (Exception)
                 {
                     lock (_gate)
                     {
@@ -756,6 +779,7 @@ internal sealed class TakeThisPipeline
         _slots[_head] = null;
         _head = (_head + 1) % Depth;
         _count--;
+        _session.EndCommandWork();
         slot.Emitting = false;
     }
 
@@ -790,6 +814,7 @@ internal sealed class TakeThisPipeline
             _slots[_head] = null;
             _head = (_head + 1) % Depth;
             _count--;
+            _session.EndCommandWork();
         }
     }
 

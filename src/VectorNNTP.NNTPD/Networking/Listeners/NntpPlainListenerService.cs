@@ -303,7 +303,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 historyDb: _historyDb,
                 speedTest: _speedTest,
                 sessionCensus: _sessionCensus,
-                peerMetrics: _peerMetrics);
+                peerMetrics: _peerMetrics,
+                commandIdleTimeout: TimeSpan.FromSeconds(_options.Value.IdleTime));
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             if (!TransitConnectionAdmission.TryAdmit(_inboundConnectionLimiter, session, out var lease))

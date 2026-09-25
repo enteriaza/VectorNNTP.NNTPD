@@ -134,6 +134,7 @@ internal sealed class CheckPipeline
             };
             _slots[slot.Index] = slot;
             _count++;
+            _session.BeginCommandWork();
             if (_count > _peakOccupied)
             {
                 _peakOccupied = _count;
@@ -305,7 +306,15 @@ internal sealed class CheckPipeline
                 {
                     CancelAndRelease(slot);
                 }
+                catch (Exception)
+                {
+                    CancelAndRelease(slot);
+                }
             }
+        }
+        catch (Exception)
+        {
+            CancelAndRelease(slot);
         }
         finally
         {
@@ -360,7 +369,7 @@ internal sealed class CheckPipeline
 
                     emitted++;
                 }
-                catch (OperationCanceledException)
+                catch (Exception)
                 {
                     lock (_gate)
                     {
@@ -442,6 +451,7 @@ internal sealed class CheckPipeline
         _slots[_head] = null;
         _head = (_head + 1) % Depth;
         _count--;
+        _session.EndCommandWork();
         slot.Emitting = false;
     }
 
@@ -475,6 +485,7 @@ internal sealed class CheckPipeline
             _slots[_head] = null;
             _head = (_head + 1) % Depth;
             _count--;
+            _session.EndCommandWork();
         }
     }
 
