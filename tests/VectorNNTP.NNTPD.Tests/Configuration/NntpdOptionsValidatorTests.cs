@@ -235,6 +235,37 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_Succeeds_WhenNewsmasterCredentialsArePaired()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.NewsmasterUser = "newsmaster";
+        options.NewsmasterPassword = "unit-test-newsmaster-password";
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenOnlyNewsmasterUserIsSet()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.NewsmasterUser = "newsmaster";
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(NntpdOptions.NewsmasterPasswordConfigurationKey, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenOnlyNewsmasterPasswordIsSet()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.NewsmasterPassword = "unit-test-newsmaster-password";
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        var joined = NntpdOptionsValidator.JoinFailures(result);
+        Assert.Contains(NntpdOptions.NewsmasterUserConfigurationKey, joined, StringComparison.Ordinal);
+        Assert.DoesNotContain("unit-test-newsmaster-password", joined, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BindConfiguration_HonoursXTraceKey()
     {
         var configuration = new ConfigurationBuilder()
@@ -523,6 +554,8 @@ public sealed class NntpdConfigurationTests
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("XTraceKey", out _));
         Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("XTracePreviousKey", out _));
+        Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("NewsmasterUser", out _));
+        Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("NewsmasterPassword", out _));
     }
 
     [Fact]

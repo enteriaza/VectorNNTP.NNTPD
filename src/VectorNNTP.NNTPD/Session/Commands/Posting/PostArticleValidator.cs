@@ -35,7 +35,8 @@ internal static class PostArticleValidator
         ParsedPostArticle article,
         DateTimeOffset injectionUtc,
         INewsgroupPostingPolicy newsgroupPolicy,
-        out PostingFailure failure)
+        out PostingFailure failure,
+        bool controlCancelPermitted = false)
     {
         ArgumentNullException.ThrowIfNull(article);
         ArgumentNullException.ThrowIfNull(newsgroupPolicy);
@@ -103,7 +104,7 @@ internal static class PostArticleValidator
             article.MessageIdSynthesized = true;
         }
 
-        if (!TryValidateOptionalFields(article, out failure))
+        if (!TryValidateOptionalFields(article, controlCancelPermitted, out failure))
         {
             return false;
         }
@@ -147,7 +148,10 @@ internal static class PostArticleValidator
         return true;
     }
 
-    private static bool TryValidateOptionalFields(ParsedPostArticle article, out PostingFailure failure)
+    private static bool TryValidateOptionalFields(
+        ParsedPostArticle article,
+        bool controlCancelPermitted,
+        out PostingFailure failure)
     {
         failure = default;
         var ids = new List<ReadOnlyMemory<byte>>(8);
@@ -209,10 +213,14 @@ internal static class PostArticleValidator
             article.ApprovedPresent = true;
         }
 
-        if (article.TryGetHeader("CONTROL"u8, out _))
+        if (article.TryGetHeader("CONTROL"u8, out var control))
         {
-            failure = new PostingFailure(PostingFailureCategory.InvalidControl, "unsupported Control");
-            return false;
+            if (!controlCancelPermitted
+                || !IsAuthorizedCancelControl(control.UnfoldedValue.Span))
+            {
+                failure = new PostingFailure(PostingFailureCategory.InvalidControl, "unsupported Control");
+                return false;
+            }
         }
 
         if (article.TryGetHeader("SUPERSEDES"u8, out var supersedes)
@@ -289,6 +297,49 @@ internal static class PostArticleValidator
         }
 
         return count > 0;
+    }
+
+    /// <summary>
+    /// Accepts only <c>cancel &lt;message-id&gt;</c> (optional surrounding WSP).
+    /// Other Control verbs stay rejected even for the newsmaster.
+    /// </summary>
+    internal static bool IsAuthorizedCancelControl(ReadOnlySpan<byte> value)
+    {
+        var i = 0;
+        while (i < value.Length && PostFieldSyntax.IsWsp(value[i]))
+        {
+            i++;
+        }
+
+        if (i + 6 > value.Length || !PostFieldSyntax.EqualsFolded(value.Slice(i, 6), "CANCEL"u8))
+        {
+            return false;
+        }
+
+        i += 6;
+        if (i >= value.Length || !PostFieldSyntax.IsWsp(value[i]))
+        {
+            return false;
+        }
+
+        while (i < value.Length && PostFieldSyntax.IsWsp(value[i]))
+        {
+            i++;
+        }
+
+        var idStart = i;
+        while (i < value.Length && !PostFieldSyntax.IsWsp(value[i]))
+        {
+            i++;
+        }
+
+        var messageId = value[idStart..i];
+        while (i < value.Length && PostFieldSyntax.IsWsp(value[i]))
+        {
+            i++;
+        }
+
+        return i == value.Length && PostFieldSyntax.IsMessageId(messageId);
     }
 
     private static bool TryRequire(

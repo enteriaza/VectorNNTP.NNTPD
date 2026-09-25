@@ -164,6 +164,60 @@ public sealed class PostArticleValidationTests
     }
 
     [Fact]
+    public void ControlHeader_AuthorizedCancel_IsAccepted()
+    {
+        var parsed = Parse(Build(
+            messageId: "<cancel-article@example.com>",
+            extraHeaders: "Control: cancel <original@example.com>\r\n"));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _,
+            controlCancelPermitted: true));
+        Assert.Equal("<cancel-article@example.com>", parsed.MessageId);
+    }
+
+    [Fact]
+    public void ControlHeader_Authorized_RejectsOtherVerb()
+    {
+        var parsed = Parse(Build(extraHeaders: "Control: newgroup misc.test\r\n"));
+        Assert.False(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out var failure,
+            controlCancelPermitted: true));
+        Assert.Equal(PostingFailureCategory.InvalidControl, failure.Category);
+    }
+
+    [Fact]
+    public void ControlHeader_Authorized_RejectsMalformedCancel()
+    {
+        var parsed = Parse(Build(extraHeaders: "Control: cancel not-an-id\r\n"));
+        Assert.False(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out var failure,
+            controlCancelPermitted: true));
+        Assert.Equal(PostingFailureCategory.InvalidControl, failure.Category);
+    }
+
+    [Fact]
+    public void ControlHeader_Authorized_RejectsCancelWithExtraArgument()
+    {
+        var parsed = Parse(Build(extraHeaders: "Control: cancel <a@example.com> extra\r\n"));
+        Assert.False(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out var failure,
+            controlCancelPermitted: true));
+        Assert.Equal(PostingFailureCategory.InvalidControl, failure.Category);
+    }
+
+    [Fact]
     public void MalformedApproved_IsRejected()
     {
         AssertRejected(Build(extraHeaders: "Approved: not-a-mailbox\r\n"), PostingFailureCategory.InvalidApproved);
@@ -260,6 +314,38 @@ public sealed class PostArticleValidationTests
         Assert.Equal(1, CountOccurrences(text, "Path:"));
         Assert.Equal(1, CountOccurrences(text, "Injection-Date:"));
         Assert.Equal(1, CountOccurrences(text, "X-Trace:"));
+    }
+
+    [Fact]
+    public void Normalize_PreservesClientXPgpSig_AndDoesNotTreatItAsServerOwned()
+    {
+        var date = PostRfcDate.Format(Now);
+        var parsed = Parse(Build(
+            date: date,
+            extraHeaders:
+                "Control: cancel <original@example.com>\r\n" +
+                "X-PGP-Sig: BouncyCastle Subject,Control,Message-ID,Date,From,Sender\r\n" +
+                "\tiQCVAwUBNhiHnsJdOtO4janBAQGFFwP/SCsq1Isgw8DXHDaRkr0cdkZidVH41N6d\r\n"));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _,
+            controlCancelPermitted: true));
+        var protector = AesGcmPostingTraceProtector.Create(
+            new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey });
+        var normalized = PostHeaderNormalizer.Normalize(
+            parsed,
+            Now,
+            "nntpd01.usenet.ninja",
+            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Parse("192.0.2.10"), 119)),
+            NntpdOptions.DefaultMailComplaintsTo,
+            protector);
+        var text = Encoding.ASCII.GetString(normalized.Span);
+        Assert.Contains("X-PGP-Sig: BouncyCastle Subject,Control,Message-ID,Date,From,Sender\r\n", text, StringComparison.Ordinal);
+        Assert.Contains("\tiQCVAwUBNhiHnsJdOtO4janBAQGFFwP/SCsq1Isgw8DXHDaRkr0cdkZidVH41N6d\r\n", text, StringComparison.Ordinal);
+        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.Contains("X-Trace: ", text, StringComparison.Ordinal);
     }
 
     private static void AssertRejected(string article, PostingFailureCategory category)

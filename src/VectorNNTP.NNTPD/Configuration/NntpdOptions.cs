@@ -18,8 +18,9 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// </para>
 /// <para>
 /// Never log complete <see cref="NntpdOptions"/> instances:
-/// <see cref="CloudFlareApiKey"/>, <see cref="AcmeCertificatePassword"/>, and
-/// <see cref="XTraceKey"/> / <see cref="XTracePreviousKey"/> are secrets.
+/// <see cref="CloudFlareApiKey"/>, <see cref="AcmeCertificatePassword"/>,
+/// <see cref="XTraceKey"/> / <see cref="XTracePreviousKey"/>, and
+/// <see cref="NewsmasterPassword"/> are secrets.
 /// </para>
 /// </remarks>
 public sealed class NntpdOptions
@@ -77,6 +78,24 @@ public sealed class NntpdOptions
     /// (<c>nntpd__XTracePreviousKey</c>).
     /// </summary>
     public const string XTracePreviousKeyEnvironmentVariable = "nntpd__XTracePreviousKey";
+
+    /// <summary>Configuration key for the optional newsmaster AUTHINFO username.</summary>
+    public const string NewsmasterUserConfigurationKey = "NewsmasterUser";
+
+    /// <summary>Configuration key for the optional newsmaster AUTHINFO password secret.</summary>
+    public const string NewsmasterPasswordConfigurationKey = "NewsmasterPassword";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="NewsmasterUser"/>
+    /// (<c>nntpd__NewsmasterUser</c>).
+    /// </summary>
+    public const string NewsmasterUserEnvironmentVariable = "nntpd__NewsmasterUser";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="NewsmasterPassword"/>
+    /// (<c>nntpd__NewsmasterPassword</c>).
+    /// </summary>
+    public const string NewsmasterPasswordEnvironmentVariable = "nntpd__NewsmasterPassword";
 
     /// <summary>Gets or sets the application display name used in logs and service registration metadata.</summary>
     [Required(AllowEmptyStrings = false)]
@@ -466,6 +485,26 @@ public sealed class NntpdOptions
     /// tokens produced only with the retired key cannot be decrypted.
     /// </remarks>
     public string XTracePreviousKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the AUTHINFO username that may POST a well-formed cancel control article.
+    /// </summary>
+    /// <remarks>
+    /// Optional. When omitted with <see cref="NewsmasterPassword"/>, AUTHINFO remains deny-all
+    /// (unless another provider is registered). When set, <see cref="NewsmasterPassword"/> is
+    /// required. Ordinary POST clients never receive this identity.
+    /// </remarks>
+    public string NewsmasterUser { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the AUTHINFO password for <see cref="NewsmasterUser"/>.
+    /// </summary>
+    /// <remarks>
+    /// Optional secret. Required when <see cref="NewsmasterUser"/> is set. Supply via
+    /// <see cref="NewsmasterPasswordEnvironmentVariable"/> or deployment secrets — never commit
+    /// this value. Do not log it or include it in exception messages.
+    /// </remarks>
+    public string NewsmasterPassword { get; set; } = string.Empty;
 
     /// <summary>
     /// Default Transit article-queue memory budget: 1 GiB (1,073,741,824 bytes).

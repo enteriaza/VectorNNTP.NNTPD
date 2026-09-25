@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -152,6 +153,39 @@ public sealed class NntpAuthinfoTests
         Assert.False(session.Authorization.AuthorizedTransit);
         Assert.False(session.Authorization.PostingPermitted);
         Assert.False(session.Authorization.StreamingPermitted);
+        Assert.False(session.Authorization.ControlCancelPermitted);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        await duplex.ReadClientLineAsync();
+        await sessionTask;
+    }
+
+    [Fact]
+    public async Task AuthinfoPass_Newsmaster_GrantsControlCancelOnly()
+    {
+        var options = new NntpdOptions
+        {
+            NewsmasterUser = "newsmaster",
+            NewsmasterPassword = "unit-test-newsmaster-password",
+        };
+        var provider = NewsmasterNntpAuthenticationProvider.Create(options);
+
+        await using var duplex = await AuthinfoDuplex.CreateAsync(provider);
+        var session = duplex.CreateSession();
+        var sessionTask = session.RunAsync();
+        await duplex.ReadGreetingAsync();
+
+        await duplex.WriteClientLineAsync("AUTHINFO USER newsmaster");
+        Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        await duplex.WriteClientLineAsync("AUTHINFO PASS unit-test-newsmaster-password");
+        Assert.StartsWith("281 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+
+        Assert.True(session.Authorization.IsAuthenticated);
+        Assert.True(session.Authorization.PostingPermitted);
+        Assert.True(session.Authorization.ControlCancelPermitted);
+        Assert.True(session.Authorization.AuthorizedReader);
+        Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.False(session.Authorization.StreamingPermitted);
 
         await duplex.WriteClientLineAsync("QUIT");
         await duplex.ReadClientLineAsync();
@@ -187,6 +221,7 @@ public sealed class NntpAuthinfoTests
         Assert.True(session.Authorization.PostingPermitted);
         Assert.False(session.Authorization.AuthorizedTransit);
         Assert.False(session.Authorization.StreamingPermitted);
+        Assert.False(session.Authorization.ControlCancelPermitted);
 
         await duplex.WriteClientLineAsync("ARTICLE");
         Assert.StartsWith("500 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);

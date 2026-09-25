@@ -49,6 +49,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateSpeedTest(options, failures);
         ValidateFeedDiagnostics(options, failures);
         ValidateXTraceKeys(options, failures);
+        ValidateNewsmaster(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -241,6 +242,48 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
                 $"{NntpdOptions.XTracePreviousKeyConfigurationKey} must be a 32-byte AES-256 key encoded as 64 hex characters or Base64 " +
                 $"when set (use environment variable {NntpdOptions.XTracePreviousKeyEnvironmentVariable} or secrets; never commit the value).");
         }
+    }
+
+    private static void ValidateNewsmaster(NntpdOptions options, List<string> failures)
+    {
+        var userSet = !string.IsNullOrWhiteSpace(options.NewsmasterUser);
+        var passwordSet = !string.IsNullOrEmpty(options.NewsmasterPassword);
+        if (userSet != passwordSet)
+        {
+            failures.Add(
+                $"{NntpdOptions.NewsmasterUserConfigurationKey} and {NntpdOptions.NewsmasterPasswordConfigurationKey} must both be set or both omitted " +
+                $"(use {NntpdOptions.NewsmasterPasswordEnvironmentVariable} or secrets for the password; never commit the value).");
+            return;
+        }
+
+        if (!userSet)
+        {
+            return;
+        }
+
+        var user = options.NewsmasterUser.Trim();
+        if (user.Length is < 1 or > 64 || ContainsControl(user))
+        {
+            failures.Add($"{NntpdOptions.NewsmasterUserConfigurationKey} must be 1–64 characters without control characters.");
+        }
+
+        if (options.NewsmasterPassword.Length > 256)
+        {
+            failures.Add($"{NntpdOptions.NewsmasterPasswordConfigurationKey} must not exceed 256 characters.");
+        }
+    }
+
+    private static bool ContainsControl(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsControl(ch))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ValidateSystemd(NntpdOptions options, List<string> failures)

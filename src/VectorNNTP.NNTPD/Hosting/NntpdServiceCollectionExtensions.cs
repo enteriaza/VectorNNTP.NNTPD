@@ -51,8 +51,10 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
         services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
-        // Real account backends replace this registration; default rejects all credentials.
-        services.TryAddSingleton<INntpAuthenticationProvider>(DenyAllNntpAuthenticationProvider.Instance);
+        // Newsmaster AUTHINFO when configured; otherwise deny-all. A real account backend
+        // may replace this registration.
+        services.TryAddSingleton<INntpAuthenticationProvider>(static sp =>
+            NewsmasterNntpAuthenticationProvider.Create(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
         services.TryAddSingleton<TransitConfigurationStore>();
         services.TryAddSingleton<ITransitDnsResolver, TransitDnsClientResolver>();
         services.TryAddSingleton<ITransitDnsAddressCache, TransitDnsAddressCache>();

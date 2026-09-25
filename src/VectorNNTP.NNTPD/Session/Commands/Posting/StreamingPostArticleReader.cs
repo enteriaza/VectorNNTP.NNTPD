@@ -261,7 +261,8 @@ internal static class StreamingPostArticleReader
                     _parsed,
                     _injectionUtc,
                     options.NewsgroupPolicy,
-                    out _failure))
+                    out _failure,
+                    options.ControlCancelPermitted))
             {
                 MarkRejected();
                 return false;
@@ -277,7 +278,8 @@ internal static class StreamingPostArticleReader
                     options.InjectionIdentity,
                     options.ClientIdentity,
                     options.MailComplaintsTo,
-                    options.TraceProtector);
+                    options.TraceProtector,
+                    options.AuthenticatedUsername);
             }
             catch (Exception)
             {

@@ -34,7 +34,11 @@ Primary path: `docs/standards/rfcs/` (see `docs/standards/rfcs/README.md`).
 | `rfc4644.txt` | Streaming feeds |
 | `rfc8054.txt` | Compression |
 | `rfc5538.txt` | `news` / `nntp` URI schemes |
+| `rfc5536.txt` | Netnews article format (Control syntax). Current. |
+| `rfc5537.txt` | Netnews architecture, including CANCEL. Current. |
+| `rfc1036.txt` | Historical Usenet messages only (obsoleted by 5536/5537) |
 | `rfc977.txt` | Historical only (obsoleted) |
+| [`docs/standards/pgpverify/`](../../../docs/standards/pgpverify/) | PGPVERIFY FORMAT/README: de-facto control-message authentication. **Not an RFC.** RFC 5537 §5.1 cites it as unstandardized. |
 
 Do **not** treat every file as applicable to every feature. Check obsolescence/updates in the README and RFC headers. Consult RFC Editor errata when behavior is ambiguous.
 

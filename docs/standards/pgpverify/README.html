@@ -1,0 +1,3848 @@
+<HTML><!-- -*- sgml -*- -->
+<HEAD>
+<TITLE>Authentication of Usenet Group Changes</TITLE>
+<LINK REV="made" HREF="mailto:tale@isc.org">
+</HEAD>
+
+<BODY>
+<H1>Authentication of Usenet Group Changes</H1>
+
+<P>This document addresses a method for the authentication of the special
+types of Usenet articles that are used to maintain the namespace of
+Usenet groups.  A basic familiarity with what the Usenet control
+message types "newgroup", "rmgroup" and "checkgroups" do is assumed;
+this is not a tutorial in namespace administration.</P>
+
+<P>Usenet articles are notoriously easy to forge, and control messages
+are no exception.  Since administrators often want to have their news
+systems automatically honor requests from some particular people to
+add or remove newsgroups, it is risky to trust the From: and Sender:
+headers to identify the real sender of a message, as has historically
+been done.  Thus a system using Philip Zimmerman's 
+<A HREF="#Getting PGP">Pretty Good Privacy</A> (PGP) was developed to
+provide a more secure means of authenticating the sender of a control
+message.</P>
+
+<P>Unlike traditional PGP authentication of messages, which just
+verifies that the contents of the body of a message are unchanged from
+when it was digitally "signed", this system also needed to sign a few
+headers of the control message to verify the action to be taken and
+to guard against certain other pitfalls.  Another goal was to make the
+signature as unobtrusive as possible and require minimal changes to
+existing software in order to work.</P>
+
+<H2>How to Verify Control Messages</H2>
+
+<P>Listed below are the steps you need to take to enable PGP
+authentication of control messages on your system.</P>
+
+<P><STRONG>WARNING:</STRONG> The instructions for INN below are only for
+very old versions of INN.  If you are using a current version of INN
+(2.0 or later), please see the documentation that comes with INN rather
+than following these instructions.</P>
+
+<P>Here is the short and simple version for someone who feels confident
+hacking around the news system and doesn't like to read a lot:</P>
+
+<OL>
+<LI>Get and configure the software:
+<UL>
+<LI>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/pgpverify">
+ftp://ftp.isc.org/pub/pgpcontrol/pgpverify</A>
+<LI>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/">
+ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/</A>
+</UL>
+<LI>Add
+<A HREF="#Keys">maintainers' PGP public keys</A>
+to the news system key ring.
+<LI>Enable verification through the news system authorization system.
+<DL>
+<DT>INN:
+<DD>Use the action <B>verify-<I>pgp_userid</I></B> (possibly appended
+<B>=<I>logfile</I></B>) in <I>control.ctl</I>.
+<DT>C News:
+<DD>Use the action <B>p</B> in the fourth field of <I>controlperm</I>
+followed by a suitable <I>pgp_userid</I> in the fifth field.
+<DT>D News:
+<DD>Use the action <B>doit,pgp</B> in <I>control.conf</I>.
+<DT>ANU News:
+<DD>Use the <B>HELP ADD FILE PGP_verification</B> ANU command.
+<DT>Other systems:
+<DD>Sorry, not implemented yet.
+</DL>
+<LI>Test <I>pgpverify</I>.
+If you have the news.announce.newgroups key in your key ring, run
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/sample.control">
+ftp://ftp.isc.org/pub/pgpcontrol/sample.control</A>
+through <I>pgpverify</I> on stdin.  It should spit out the
+string "news.announce.newgroups" on stdout.
+</OL>
+
+<P>Here is a more verbose version of the instructions:</P>
+
+<P>
+<OL>
+<LI>
+Get the software.
+
+<P>There are two pieces of code that will need to be added to a news
+server to make use of this authentication system: a stand-alone
+script that verifies an article is what it says it is, and a
+patch to hook it into the news server's processing of control messages.</P>
+
+<P>The stand-alone program, 
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/pgpverify">
+ftp://ftp.isc.org/pub/pgpcontrol/pgpverify</A>,
+is a
+<A HREF="#Getting Perl">Perl</A> script that should work with Perl version
+5.003 and up.  (I have not tested it with earlier versions.)  It does not
+contain any code making it dependent on any particular news server
+software.</P>
+
+<P>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/">
+ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/</A>
+has patches for hooking the system into existing news server software.
+Choose the one for your system from the list below.</P>
+<UL>
+<LI>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/inn1.4sec/pgpcontrol.pch">
+INN version 1.4sec</A>
+<LI>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/inn1.4unoff4/pgpcontrol.pch">
+INN version 1.4unoff4</A>
+<LI>
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/ARCHIVE/server-patches/cnews-CR.G/pgpcontrol.pch">
+C News version CR.G</A>
+(Courtesy of System Administrator &lt;root@hp9000.laafb.af.mil&gt; and
+Charles Lindsey &lt;chl@clw.cs.man.ac.uk&gt;)
+</UL>
+
+<P>Newer versions of INN (since 1.5), D News and ANU News (since 6.2.0)
+do not need to be patched, as they ship with built-in handling for pgp
+verification.  You can therefore skip past the "Install it on your
+news system" section to "Enable verification for the hierarchies that
+interest you".  I recommend that you upgrade to <I>at least</I>
+INN 1.5.1sec if you
+are running any prior INN version, because it has a few important
+security problems fixed.</P>
+
+<P>I regret that I do not have the time to develop more patches, but I
+will gladly add patches for other systems to this page as they are
+made available to me.  The INN version 1.4sec patch will apply to
+all INN "unoff" versions, albeit with a little bit of fuzz.  I am not
+positive what versions of C News will work with the C News CR.G
+patch; if you try it with other versions, please let me know how it goes.</P>
+
+<LI>
+Install it in your news system.
+
+<P>First you must ensure that the absolute paths to <I>perl</I> and to
+<I>pgp</I> are correct in the first few lines of the <I>pgpverify</I>
+program.  No other configuration of options or pathnames should be
+needed.</P>
+
+<P>Next, the following steps assume, solely for the sake of making it
+easy for me to write a simple recipe, that you have copied
+<I>pgpverify</I> and the patch for your system to your news server as
+<I>/tmp/pgpverify</I> and <I>/tmp/pgpcontrol.pch</I> respectively.  I
+have tried to format this so that you should be able to cut and paste
+any of the lines in italics directly to your shell.</P>
+
+<P>
+<UL>
+<LI>If you are running INN:
+
+<PRE>
+cd to the executable program directory that has <I>ctlinnd</I>.
+<I>mv /tmp/pgpverify pgpverify</I>
+
+cd to the root of your INN source tree.
+<I>cd site</I>
+<I>patch &lt /tmp/pgpcontrol.pch</I>
+<I>make install</I>
+</PRE>
+
+<P>It has been reported to me that at least one AIX system has problems
+with <I>patch</I> not applying the last section of
+<I>parsecontrol.pch</I>.  If you run AIX, double check it and apply by
+manually editing, if necessary.</P>
+
+<LI>If you are running C News:
+
+<PRE>
+cd to the C News program directory that has <I>spacefor</I>.
+<I>mv /tmp/pgpverify pgpverify</I>
+
+cd to the root of your C News source tree.
+<I>cd ctl</I>
+<I>patch &lt /tmp/pgpcontrol.pch</I>
+<I>make install</I>
+</PRE>
+
+<LI>If you are running some other system:
+
+<P>You're out of luck until someone writes a patch and instructions for
+your system and makes it available to me for redistribution.</P>
+</UL>
+
+<LI>
+Enable verification for the hierarchies that interest you.
+
+<P>To verify messages, you must have a 
+<A HREF="#Keys">PGP public key for each signer</A>
+that you wish to trust.  It should be entered in a key ring that is
+accessible to the user-id that runs the news system by running
+<I>pgp -ka</I> on a file containing the key to add.  For example, at a
+site that runs the news server software as <I>news</I>, the following
+command run by the <I>news</I> user-id should add the key bounded by
+BEGIN and END "PGP PUBLIC KEY BLOCK" lines in the file <I>/tmp/key</I>
+to the default key ring that would be used for authentication:</P>
+
+<PRE>
+<I>pgp -ka /tmp/key</I>
+</PRE>
+
+<P>As a general policy rule, control message signers will not use their
+control message keys to introduce other keys, so when PGP asks you a
+question similar to, "Would you trust this user to act as an
+introducer and certify other people's public keys to you?" answer that
+you would not.</P>
+
+<P>After you have added the appropriate key to your key ring, you need to
+tell the news software to validate the control messages received.
+As implemented, the system will perform the requested action if the
+message can be authenticated and it will mail the message to the news
+system administrator if it cannot.  Clearly there are other possible
+actions that could be implemented, but I wanted to keep the patches
+minimal.  Future releases of the server software will probably have
+increased flexibility.</P>
+
+<P>
+<UL>
+<LI>If you are running INN:
+
+<P>Automatic processing of control messages is handled by
+<I>control.ctl</I>, which you edit in the same <I>site</I>
+subdirectory where you patched <I>parsecontrol</I>.
+<I>control.ctl</I> has several lines at the beginning of it that
+describe the format of the file, and there is an even longer
+<I>control.ctl(5)</I> manual page.  To enable PGP verification in
+addition to the normal authorization done by <I>control.ctl</I>, use
+the action <B>verify-<I>pgp_userid</I></B> in the fourth field.
+<P>For example, if you trust group-admin@isc.org (currently Russ Allbery
+&lt;eagle@eyrie.org&gt;) to manage groups in the "Big 8" hierarchies, you
+could have lines like these (but don't use the backslash continuation,
+which I have used here for readability; keep it all on one line):</P>
+
+<PRE>
+newgroup:group-admin@isc.org:\
+comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*:\
+verify-news.announce.newgroups
+rmgroup:group-admin@isc.org:\
+comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*:\
+verify-news.announce.newgroups
+checkgroups:group-admin@isc.org:\
+comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*:\
+verify-news.announce.newgroups
+</PRE>
+
+<P>Additionally, if you like the logging feature available with the
+action <B>doit=<I>logfile</I></B>, you can get the same logging 
+by using <B>verify-<I>pgp_userid</I>=<I>logfile</I></B>.</P>
+
+<LI>If you are running C News:
+
+<P>Automatic processing of control messages is handled by
+<I>controlperm</I>, which you edit in the subdirectory where you
+patched the control message handling scripts.  There is a
+<I>controlperm(5)</I> manual page that describes its format.  To
+enable PGP verification in addition to the normal authorization done
+by <I>controlperm</I>, use the action <B>p</B> in the fourth field
+instead of <B>y</B> and add a fifth field for the <I>pgp_userid</I>.</P>
+
+<P>For example, if you trust group-admin@isc.org (currently Russ Allbery
+&lt;eagle@eyrie.org&gt;) to manage groups in the "Big 8" hierarchies, you
+could have lines like these (but don't use the backslash continuation,
+which I have used here for readability; keep it all on one line):</P>
+
+<PRE>
+comp,sci,misc,news,rec,soc,talk,humanities group-admin@isc.org nrc pv \
+news.announce.newgroups
+</PRE>
+
+<P>You could then remove the line that follows the comment, "but his name
+can be forged, so don't let him rmgroup..."</P>
+
+<LI>If you are running D News:
+
+<P>Automatic processing of control messages is handled by
+<I>control.conf</I>.  To enable PGP verification in addition to the
+normal authorization done by <I>control.conf</I>, use the action
+<B>pgp</B> in the fourth field, in addition to whatever action you
+want to happen.  For example, if you trust group-admin@isc.org
+to manage groups in the "Big 8"
+hierarchies, you could have lines like these (but don't use the
+backslash continuation, which I have used here for readability; keep
+it all on one line):</P>
+
+<PRE>
+newgroup:group-admin@isc.org:\
+comp.*,misc.*,news.*,rec.*,sci.*,soc.*,talk.*,humanities.*:doit,pgp
+rmgroup:group-admin@isc.org:\
+comp.*,misc.*,news.*,rec.*,sci.*,soc.*,talk.*,humanities.*:doit,pgp
+checkgroups:group-admin@isc.org:\
+comp.*,misc.*,news.*,rec.*,sci.*,soc.*,talk.*,humanities.*:doit,pgp
+</PRE>
+
+<P>Note that there is no provision, with the current D News
+implementation, for checking that the signature matches a particular
+string, just that it has a valid signature.  This is probably
+adequate security as long as you keep the news user's PGP key ring
+limited only to people you trust to maintain newsgroup hierarchies.</P>
+
+<P>Finally, if you have not installed pgp on your system in a
+directory where D News normally looks for auxiliary programs, you will
+need to add a pointer to it in <I>dnews.conf</I>, like this:
+
+<PRE>
+pgp /path/to/pgp
+</PRE>
+
+<P>See
+<A HREF="http://www.netwinsite.com/pgp.htm">
+http://www.netwinsite.com/pgp.htm</A>
+for documentation by the D News authors that might supersede
+this document.</P>
+
+<LI>If you are running ANU News (V6.2.0 or later):
+
+<P>Instructions will (hopefully) soon appear here.  In the meantime,
+consult the <B>HELP ADD FILE PGP_verification</B> server command.
+
+<LI>If you are running some other system:
+
+<P>You're out of luck until someone writes a patch and instructions for
+your system and makes it available to me for redistribution.</P>
+</UL>
+
+<LI>
+Test the system.
+
+<P>Get
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/sample.control">
+ftp://ftp.isc.org/pub/pgpcontrol/sample.control</A>
+and save it to a file on your system; <I>/tmp/sample.control</I> will
+be used for this example.  You'll use it to make sure things will work
+as expected.</P>
+
+<P>To verify the control message, you will need the 
+<A HREF="#comp">key for news.announce.newgroups</A>
+and authorization in your news system for group-admin@isc.org to
+automatically perform "newgroup".  Go ahead and enable it for the test
+even if you don't want to really allow this, because it is easy enough
+to rescind after the test by editing the control message authorization
+file and removing the key with <I>pgp -kr news.announce.newgroups</I>.</P>
+
+<P>You can check that the <I>pgpverify</I> part of the system will work
+properly simply by feeding it the sample control message on stdin:
+
+<PRE>
+pgpverify &lt /tmp/sample.control
+</PRE>
+
+<P>If if could run pgp and find the correct key in the default key ring,
+the string <B>news.announce.newgroups</B> should be printed.  The exit
+status of the script, found in most shells with the command <I>echo
+$?</I> as the next command after <I>pgpverify</I>, should be 0 (zero).</P>
+
+<P>If it doesn't work, then
+
+<PRE>
+pgpverify -test &lt /tmp/sample.control
+</PRE>
+
+might give you some enlightment.  It will print out the input that is
+used for pgp (which is a reconstructed version of the input that
+supposedly created the control message) as well as the output of PGP's
+analysis of the message.  Look especially closely at the latter, since
+it can give you important information such as which keyring is being
+used.</P>
+
+<P>If it still doesn't work and you've tried and tried to figure out why, 
+<A HREF="mailto:eagle@eyrie.org">email me</A> a complete description of
+the problem you are having and how you have tried to remedy it.  At a bare
+minimum, your mail should include a copy of the message you are trying to
+verify, a typescript of the attempted execution of <I>pgpverify -test</I>,
+and the output of <I>pgp -kc</I> and <I>pgp -kvc
+news.announce.newgroups</I>.</P>
+
+<P>When <I>pgpverify</I> passes its test, use the appropriate procedure
+below for you news server to verify the authorization system.</P>
+
+<P>
+<UL>
+<LI>If you are running INN:
+
+<P>First, cd to the directory where <I>parsecontrol</I> is installed.
+Then execute the following four lines, in order, as the user who owns
+the news system:</P>
+
+<PRE>
+/bin/sh
+PROG=newgroup
+set "--" group-admin@isc.org "" /tmp/sample.control
+(. ./parsecontrol "$@"; echo $ACTION)
+</PRE>
+
+<P>If the message verified correctly, the <I>echo</I> command should
+output <B>doit</B>; otherwise, verification failed and the output
+should be <B>mail</B>.</P>
+
+<P>Edit <I>/tmp/sample.control</I> and change all occurences of
+<B>newusers</B> to <B>newgroups</B>.  Then repeat the
+<I>parsecontrol</I> and <I>echo</I> lines.  This time verification
+should fail.</P>
+
+<LI>If you are running C News:
+
+<P>Because of the way C News is implemented, I have not taken the trouble
+to find out how it can be tested without running through the whole
+<I>newgroup</I> script.  If you are testing with <I>sample.control</I>,
+I think this should let you know whether things will work:</P>
+
+<PRE>
+newsflag news.announce.newusers y
+newgroup news.announce.newusers moderated &lt /tmp/sample.control
+</PRE>
+
+<P>(newsflag is the C News program <I>maint</I> subdirectory; newgroup is
+in the <I>ctl</I> subdirectory.)</P>
+
+<P>You should get a mail message telling you that news.announce.newusers
+was changed to moderated.  If it didn't appear to work, doublecheck
+the <I>active</I> file.  If it really didn't work, fix the status of
+the group with the following command then let me know about.</P>
+
+<PRE>
+newsflag news.announce.newusers m
+</PRE>
+
+<P>If the message did verify correctly, edit <I>/tmp/sample.control</I>
+and change all occurences of <B>newusers</B> to <B>newgroups</B>.
+Then repeat the <I>newgroup</I> line with an <B>unmoderated</B>
+argument instead of <B>moderated</B>; the argument is unused in the
+PGP verification code and doing it this way saves you the effort of
+<I>newsflag</I>ging things again.</P>
+
+<P>With the changes to <I>sample.control</I> you should now get a mail
+message saying, "authentication failed".</P>
+
+<P>When you are all done, make sure news.announce.newusers is really
+marked moderated in your <I>active</I> file.</P>
+
+<LI>If you are running D News:
+
+<P>It appears to me that currently you'll have to wait for a control
+message to come in and see whether it does what you want.  If it
+doesn't, and you can't readily tell why, contact D News's customer
+support staff.</P>
+
+<LI>If you are running ANU News (V6.2.0 or later):
+
+<P>Instructions will (hopefully) soon appear here.  In the meantime,
+consult the <B>HELP ADD FILE PGP_verification</B> server command.</P>
+
+<LI>If you are running some other system:
+
+<P>You're out of luck until someone writes a patch and instructions for
+your system and makes it available to me for redistribution.</P>
+</UL>
+</OL>
+
+<H2>Format of Signed Control Messages</H2>
+
+<P>The format of the input to PGP for signing and verifying messages
+is described in a separate document,
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/FORMAT">
+ftp://ftp.isc.org/pub/pgpcontrol/FORMAT</A>.
+It is intended for people who want to implement their own signing
+and/or verifying programs instead of using pgpverify or signcontrol.</P>
+
+<H2>Frequently Asked Questions</H2>
+
+<OL>
+<H3><LI>How come this presumably valid messages doesn't check out with
+pgpverify?</H3>
+
+<UL>
+<LI>You don't have the latest version of <I>pgpverify</I>, which fixed
+whatever bug is causing authentication of the message to fail.
+<LI>You don't have your PGP configuration files and keyrings in the
+default path used by <I>pgp</I> and <B>PGPPATH</B> is not correctly
+set in your environment.  Either move your PGP directory to the
+default location or set the <B>$ENV{'PGPPATH'}</B> line in <I>pgpverify</I>.
+(Warning: some INN versions set <B>$HOME</B> to <B>_PATH_NEWSLIB</B>,
+so this might be the source of your trouble.)
+<LI>You don't have the correct key for the user that signed it in your
+key ring.
+<LI>You are using a non-English version of <I>pgp</I>, set up with
+a "<B>Language</B> = " line in your PGP <I>config.txt</I> file.  This
+means pgpverify can't find the string it is looking for in
+the <I>pgp</I> output.  <I>pgpverify</I> tries to overcome a non-English
+language specification by setting <B>LANGUAGE</B> in the 
+environment before calling <I>pgp</I>, but <I>pgp</I> overrides the
+runtime environment with the <I>config.txt</I> variables.
+<LI>You cut-and-pasted the message in your window system, which
+converted the tab characters in the original message into spaces in
+the message you are trying to decode.  Having this handled completely
+correctly by the signing/verifying code is harder than you might first
+think.
+<LI>You are running <I>pgpverify</I> on a saved
+copy of the article that includes an extraneous trailing newline, such
+as might be inserted by saving the message from a mail handler or news
+reader, that was not present in the original message. 
+<LI>You cut-and-pasted the sample INN <I>control.ctl</I> lines above
+and left the continuation lines in, instead of joining each group of
+three physical lines comprising one logical line to just one physical line.
+</UL>
+</OL>
+
+<HR><HR>
+<H2><A NAME="Keys">List of PGP Public Keys for Newsgroup Administration</A></H2>
+
+<P>This is a list of keys known to be used for maintaining various parts
+of the newsgroup namespace.  They are listed alphabetically by the
+hierarchies they are used for, along with the email address they are
+sent by and the pgp key userid of the signature (both for use in
+<I>control.ctl</I>).  The group that people should follow if they are
+interested in tracking announcements about the hierarchy is also
+listed.  The "Check also" references point to locations that should
+have identical public key blocks; it is best if you confirm the block
+listed here by checking against the others.</P>
+
+<P>The existence of key here only means that we trust the
+person who uses it to be a responsible maintainer of that particular
+hierarchy of groups.  You are solely responsible for deciding whether
+you will use the keys here at your own site.</P>
+
+<A NAME="aioe"><HR></A>
+<H3>AIOE</H3>
+
+Control message sender: usenet@aioe.org<BR>
+Key User ID: usenet@aioe.org<BR>
+Administrative group: <A HREF="news:aioe.system">aioe.system</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.aioe.org/hierarchy/aioe.txt">http://news.aioe.org/hierarchy/aioe.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+mQGiBEbun1oRBADlKELhfZgTCJcjssOTpmUqXEyUt+IKBzcOf8AYefcof3uzRJDH
+gqrEtKhQ8b0fp2+UUBpYGb6L27dBNAz0Zv6yNJzL0fiaNJrp781kXms69GSCB8sa
+we7BGtaVe0fHbJb2ry/wLmx+dzIBe5q2yvRIHlDssQKPOo6Co0BRyZwOrwCgvRR9
+bAcYzzOpwYlC6IHU+q57zVED/39RQSk9vxCLIeSes6v2ToXapdsYgeb7I4ta3bs6
+AcSaTDdXoUBQJK9Xd1sm571wXOKd1NYWSpOMw8J7yst8RooAm1wFDl956AuTKbKL
+I7EFJvInonsOLn5o5gsi+8K7VvRqGiP+Agku/mDSuJv0gRi4X7MaEnGFxm6DkYr5
+JQbCA/4+G87lUlQGHhEh4BOxyUmPIfeQqFP33DNf+Ajf8598KkXy5dfZlKbLLzj9
+bHDiO3U7Averv8/7r3YRTf4nFqAp6J9f1N7mJEwzaS9LUpOdyvmfUi64/YRYGVI3
+uUqA9xtijKj07FFWUjqi9wDJI6p8EH0ArYq+P2AsBeILehoVk7Q7dXNlbmV0QGFp
+b2Uub3JnIChBaW9lLm9yZyBTdGVlcmluZyBHcm91cCkgPHVzZW5ldEBhaW9lLm9y
+Zz6IZgQTEQIAJgUCRu6fWgIbAwUJBaOagAYLCQgHAwIEFQIIAwQWAgMBAh4BAheA
+AAoJEJDfbHEjIqf49ysAn3dbS97yxqUy58GcVWYT3WPifAysAJ45rwGyfMWjPzqP
+soNjdoSc5z1TLLkCDQRG7p9jEAgAjUtJvWyFkmk1zzrAVos3lcAB57aIzubmsgeg
+Iif/CHoRRPXGwGGgYTTxqjizv4RszdVI4uIlUYqxJS4K9hyX/nnKdN9lv0bW2HDJ
+JsSGQmdG+qD4+La6FcVmwibYUDtLciZ0jabj2qZjfWUP4Qgf70jIotzBVSV58WAD
+4OBDMLlzWabeRNTz1D1E1DvhLCIVlojuJJxSHA8FDKG3KInC4Yh0n0ZrEd8XY3mZ
+wceT07XucKS+bDjcTGYwR3B4afypmd8Qxggp+XsR3E7prkRZWnspjuGU1TZDdMjC
+KiIpjK1oAK7LFPCjDYcaZEdApybCIDljMalGI7K7sNBdouGS4wADBQf/Ukj6nMBj
+RYOkU5ug9uk1FN4sQdxNVJ2TCQ+EmYOzdRCmCOnkcQgvNyGBnSO8mEFXZePPM2yx
+vYrhdO9v9jfSGdc4ASielt9jhkWjd/tXw8Mnwy3/4Idr/yY9uF8suyeinGjLq7dZ
+6BENxE5KePQXfbw6NSV63ragmYt4xOgrh2EW0GN30KFkbBcH2QDScO+57V+1MItI
+jCW6H7AqlYmRvJDVZWH5LfnNneJK3dB0ZyV7UufRubszZGn+AaX15Mcd3oCnlXBn
+1GT2l443cqiCC5pb51MN7qERJNVFCF1cXfAnkvQJDex1JEXGhHpyyDAFt0m9j8Ot
+cJxd+sxZY/nobYhPBBgRAgAPBQJG7p9jAhsMBQkFo5qAAAoJEJDfbHEjIqf4/yMA
+oIz/ubTxNqW+DWjiEJxQAkdiDxgBAKCfsjw/Oi3iEDtRyQYj2fIemYs8Nw==
+=YBys
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="at"><HR></A>
+<H3>AT</H3>
+
+Control message sender: control@usenet.backbone.at<BR>
+Key User ID: control@usenet.backbone.at<BR>
+Administrative group: <A HREF="news:at.usenet.gruppen">at.usenet.gruppen</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.at/pgpkey.asc">http://www.usenet.at/pgpkey.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/AE548CCD 1997/04/10 austrian usenet coordinator <control@usenet.backbone.at>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzNNWQ4AAAEEAOhRTCZgt0kmugOwd4JspTOnKEY4wQ61kYMY51OCothRV+VY
+Jjd0vwG/76NuXmTJtTkrIQ93yiuPfiEcJAsk7FuLfREJPMgqXd1bXpza47+9xtOz
+qzFhZc/s0bGVtbf1ueoM4XK1L2HaWfb/jhesJH4NCVVgsw07u+u+HJWuVIzNAAUR
+tDhhdXN0cmlhbiB1c2VuZXQgY29vcmRpbmF0b3IgPGNvbnRyb2xAdXNlbmV0LmJh
+Y2tib25lLmF0PokAlQMFEDVnDjywIEo7Q/KVIQEBoCwEAIyDGO29583NMFBEEcZ1
+7SfT/PltJ24nFXcyyLlJkocVHzeTEGB5m2ey+wImR1v15x86aZuypjBEHehiRjIW
+zhtL5jLpvfgX2z2/9gYnstcLmJVPnnxT3zNogrC4EyTc9W+T6xR27sGEgfStEH+o
+puHRJOKdLV7bZl/fo55lwJ0siQCTAwUQM1R8w09+5qT1sJq1AQFi4APpAV6+gXCX
+jjRM0C6BBW/oZ+5pZwbyzbbA5Qbm1QLU43r5sqndmnflbjP67JMs106aB3tTdtFo
+kxEAb7GBRNbVngVWAkfLQ2voRLHaG8BClwSUIVezMs2bROy8vqvYvaCcW2iD9tIn
+7UhTo4+Hiq5itVgNNwALjjoyt7ZAlUlgiQCVAwUQM01ZDuu+HJWuVIzNAQE9fgP/
+dnzDLnQ3RC5QpjshJe3D+qBOkKnctxN/BO/zqPoqCJYPVYRu5jWVSV3kCBfDYh/Y
+MQfmS4jf9lsGxC5xQ2G0n0YFP7ejqXAi8YoUovWunUE097fmdqkL6RV44QmBF0ZQ
+7yH+LR1HM1US77DXF4ssG2bFi3nruSgQ7Y/6NXs/ajA=
+=q/ay
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="aus"><HR></A>
+<H3>AUS</H3>
+
+Control message sender: ausadmin@aus.news-admin.org<BR>
+Key User ID: ausadmin@aus.news-admin.org<BR>
+Administrative group: <A HREF="news:aus.net.news">aus.net.news</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://aus.news-admin.org/ausadmin.asc">http://aus.news-admin.org/ausadmin.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/CB522BD1 1998/06/05 ausadmin@aus.news-admin.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzV3rngAAAEEALmKaSxOB2MpJWPRzbDuYh1vOlE2qdtHIJvk9qKfE3ER8yAP
+PVlHxs2aUYxpgFDt9ShVqcP3457zGUnbDQbzH3F9jVQKDIryYUvQHN3Saayr2pv9
+17KXQmGK1TtDF2qSknyZeUubPjGSVYaNeVxALG35y2ZtMvtw2FL4gcrLUivRAAUR
+tBthdXNhZG1pbkBhdXMubmV3cy1hZG1pbi5vcmeJAJUDBRA1iH+1UviBystSK9EB
+AVfZBACCtHCzFS59eYCkpVwpSD+MfYnUQCr5B9QAn0sQoh+SauCAispP8nuObPd3
+P+gV59T+fQoTda1IEUSeGtQaVZaJ/5p77C0vJOHt2sg5hOdSYdoa03cy3CxuqZtR
+T3CwZN4GJkmHrcWcApIMnZS0GoIu5Ixt9tIpVkv6tEhbZehx4g==
+=c+AC
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="be"><HR></A>
+<H3>BE</H3>
+
+Control message sender: group-admin@usenet.be<BR>
+Key User ID: be.announce.newgroups<BR>
+Administrative group: <A HREF="news:be.announce">be.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://usenet.be/be.announce.newgroups.asc">http://usenet.be/be.announce.newgroups.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/BA8601A1 1997/01/19 be.announce.newgroups
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzLiE1oAAAEEAMx8KAOO9TJzY8A9scImT1CFTZHe7gzynsvlzDprmGRoWYBa
+xf1z61buwk24WnC/hXcHwKKxTi2gZ2UaFlrJLcsgtCo1+7000UYY1OrVSuojD5i6
+0Senfi45cTqD/I5UH6qrGgfs6dacWXk6Fauw7ivvWMcvKys6Tx4Em/q6hgGhAAUR
+tBViZS5hbm5vdW5jZS5uZXdncm91cHOJAJUDBRAy4hNaHgSb+rqGAaEBASoyA/sE
+nEec3XRO9CnycCUYlw6Ls38+rW4KZZws/saeXuzSC5YF0mKM0LewuvQ53eogepYD
+ybubtfdMjb2qvMQYHUvJzKiGymq02WTB6X+gZRKxywCroSU3057wLIAfX/GBe/zy
+EMJV16sienUOFC5kjkkMEde4MA/QohlEKnGyt7xlWA==
+=kCY2
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="belwue"><HR></A>
+<H3>BELWUE</H3>
+
+Control message sender: news@news.belwue.de<BR>
+Key User ID: belwue-hir-control<BR>
+Administrative group: <A HREF="news:belwue.infos">belwue.infos</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.belwue.de/fileadmin/belwue/Dokumente/Newsserver/belwue-hir-control.asc">http://www.belwue.de/fileadmin/belwue/Dokumente/Newsserver/belwue-hir-control.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP Key Server 0.9.5
+
+mQCNAzyWNPkAAAEEANPl3LDEDsxJ7ZE+pz9Lh5j0JNGmy3KO8dDMH1G/3aw1LnEW
+Pt2PZ/Z00tmOyhb0H5a/c2m/WHG2tT0BssA/bqJMFax6tKvrMcm0qcbSksfqPhMz
+654Ci6ZfKuDdPN/XhqBDsDaUEQmiVSbQr1/JAnsyh9v+4xh0LfUAYCxJwwbhAAUR
+tBJiZWx3dWUtaGlyLWNvbnRyb2yJAJUDBRA8ljT59QBgLEnDBuEBAbLbA/9NVtWF
+RxWuqclD6ofHPmnoSTCYajhMglDVFe9Li0ROA9e2VyivzfXSag8+S1UTc+W0JASu
+ju4Xxqow9EGqCGn1n8IeLoTE5y75WijFZPgeqjmn0Aom3Bi41uYM1Wdqkbmgq+Rr
+j86b0nvSqCNqBHbJzlJNMwjVQcItZ/VpP2iDMA==
+=dNPR
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="bionet"><HR></A>
+<H3>BIONET</H3>
+
+Control message sender: Biosci-control-key@net.bio.net<BR>
+Key User ID: Biosci-control-key@net.bio.net<BR>
+Administrative group: <A HREF="news:bionet.general">bionet.general</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzi749YAAAEEAOeP5jfujltxaQt8eFqEebuPHBJUgDQsSTfoA4MaDvRfT3pq
+pm5kpjmuqcxkgAqBxCYiAYpiMfdHfHSaUfAxlXgDigKBPaA9MehFP+0oM4K3iC/i
+9rrdTuNt0SAUG73VBxV1xzMgTml6DstmjDvr3H1o6s1W/Tu9YUTvH+UXzHMBAAUT
+tB5CaW9zY2ktY29udHJvbC1rZXlAbmV0LmJpby5uZXSJAJUDBRA47ICHeSdEm13x
++NkBAWSqA/47yV2u0CrIagSADta03CnJu4HPVo3DbTjgB3+Wo9hWkc6HHcq3opBf
+ptbqqDo7A1P8gDvXmVimA5aVt7X/lQgOCT0qCnZX9+hLZpziYYGDptJFTUZ/bS9r
+kEThwgtSrjUOsYXeG9aZxcO2le4eL0xkvGOld9Bj2H4pwr2wAJwWeokAlQMFEDi7
+49ZE7x/lF8xzAQEBT6MD/iAnoxYSUMFlg90bbdLLsQTtKE9kHRZRSH+cCTs2YY6y
+mEujWnHybWPs+XT1tUaZKcNjYR93NwGBiBh630PLexQnX7m9OVb82EOTdr6bRAb+
+r5BiVh124UOVVZ8pZnXRVu+sqDlt4YnSFfsHL8Ub8BJQNzH+eFtAjidn5Xtiw6fL
+=KMOt
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="bit"><HR></A>
+<H3>BIT</H3>
+
+Control message sender: bit@newsadmin.com<BR>
+Key User ID: bit@newsadmin.com<BR>
+Administrative group: <A HREF="news:bit.admin">bit.admin</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK----- 
+Version: 2.6.2
+
+mQCNAzpA/JMAAAEEALUuDA4puig52BrpAIuAAtJw37qbiOc+Q86EZt3uw8UBlcO6 
+kCTyXaHYCLyEJWU/a7F87v6U/aMSGz2A/ehouv9ut2/TlXayT3rKSEbEmlkksxxg 
+uO5TbYMzyNeLX/QLNssnwwIrORhykc7KL7OvIP7P/NcK73fDMWZsol7EuJDpAAUR 
+tBFiaXRAbmV3c2FkbWluLmNvbYkAlQMFEDpA/WxmbKJexLiQ6QEBtgkD/2wYbaqU 
+U6JQppbXtZNCzfDUpMYZ+K+TSKW6DPmJo7IoAfVTUvnS4s4GbULz8QQHiaX5GC7W 
+DOK6xsbzudrM9HNbFWSevbQzuZ1YN2fIMUxQv9Zk1fwnYqu4DlRNCnjy325tpBn2 
+fCHC7vNZQoBU60SU073DJ0oda7Dg7nXpJmqj 
+=J6Dq 
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="bln"><HR></A>
+<H3>BLN</H3>
+
+Control message sender: news@fu-berlin.de<BR>
+Key User ID: news@fu-berlin.de<BR>
+Administrative group: <A HREF="news:bln.misc">bln.misc</A><BR>
+Check also:
+<UL>
+<LI><A HREF="https://ftp.fu-berlin.de/doc/news/bln/bln-key.txt">https://ftp.fu-berlin.de/doc/news/bln/bln-key.txt</A>
+</UL>
+
+<PRE>
+pub   4096R/3F368EA0 2023-05-24
+      Key fingerprint = 2B24 B5C7 8A48 6140 7BCD  5A88 281D 9076 3F36 8EA0
+uid                  news@fu-berlin.de
+sub   4096R/26630017 2023-05-24
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+=Qava
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="bofh"><HR></A>
+<H3>BOFH</H3>
+
+Control message sender: bofh-control@killfile.org<BR>
+Key User ID: bofh-control@lists.killfile.org<BR>
+
+<PRE>
+pub   4096R/7DC1A266 2012-01-23
+uid       bofh-control@lists.killfile.org
+sig 3        7DC1A266 2012-03-05  bofh-control@lists.killfile.org
+sig          0C2EE21D 2012-03-05  Tim Skirvin <tskirvin@killfile.org>
+sub   4096R/E982CBF2 2012-01-23
+sig          7DC1A266 2012-01-23  bofh-control@lists.killfile.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.12 (GNU/Linux)
+
+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
+0G+NlsRNgg5neWcumw2Vyio7RLLvEQ==
+=aevh
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ch"><HR></A>
+<H3>CH</H3>
+
+Control message sender: felix.rauch@nice.ch<BR>
+Key User ID: ch-news-admin@use-net.ch<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.use-net.ch/Usenet/adminkey.html">http://www.use-net.ch/Usenet/adminkey.html</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/EF6D6715 1997/06/25 ch-news-admin@use-net.ch
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzOxjWsAAAEEALEaVl7kSMbwlv85DA7HY23DwIQgIpgzIfklYpjW7lQgh8IA
+q2SI5JeB/xDPTybTA/+p0sWNBuR4b8BsTIKx/F1164WTU3Xz81CvraaiA8kp941s
+8Kn++CNa8VcQZCpYsDG2pLs6Rgoq0jxRa4wUy0qRxQOJAC07wNXMrG7vbWcVAAUR
+tBhjaC1uZXdzLWFkbWluQHVzZS1uZXQuY2iJAJUDBRAzsY1s1cysbu9tZxUBAZZr
+A/9xV8LidNqYPJDRB0BeSJrJVTJ8X3e88pEyxOO8r759kZyTC+1Bb98hAEHFlaqi
+rkfuCvaM/zbW4pbftbIBEeopm7eDj7qW0GFr4kBiKgPn7ugznh+yx0KrRqUpgEqk
+OO/PtUgGjGhGPg/Yycg1oE4OGq+hbsKJzQ1miwPO2VxWCQ==
+=S2AP
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="cl"><HR></A>
+<H3>CL</H3>
+
+Control message sender: koordination@cl-netz.de<BR>
+Key User ID: cl.netz.infos<BR>
+Administrative group: <A HREF="news:cl.admin.infos">cl.admin.infos</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+mQENAzfPVkEAAAEH/1/2E+E9DPNC5+R2+B3wlWfO2OhLVHdWRAKlY5B9IVdzeXS1
+4R0ymZglZfvfdtfvKOT4h4uqC1nBIaYuGssBObDqCdIhuq9DsaGEv/9GUlT/dEqd
+fX54XPlNj+OUfCVENPsh8IrptsDjBPQuIOYHwymOrMJs5pB6uAcCaxdaR6ZhLUuG
+TGH4F06/0SUJ5WPVLDAT4pnLxROs6KhWmm8beWrr7Jk5gOZOPZBcADRiMzsGv/Ha
+zCSPzS88di9gzYZe81WvBdC5D3g78ub6wU+iyuUTMWVlkIp8ywZPCwhTh1V/BB6J
+CINntHUv0k3yUoXdBL0svwOThP/wK2gdxAaGlA0ABRG0DWNsLm5ldHouaW5mb3OJ
+ARUDBRA3z1ZCK2gdxAaGlA0BATQwB/9Uv3YyguGzRCBgpCONbG9sm8X0P58+VRp/
+YOQ9Ce2JPdZ6W763QU+13/4L5v3WbOILKLG/EQqJz8rCV73fidVOlMYCXqSJgjy1
++FHCQa7j3SUPXUYQAlbtmwQMqWTaiFIvxBS3JSj810bdoBvbC5y8LgnWUOJnU1ok
+uH6BMJDRWH97vR7p++agS3L0zE335YFrW/l6+SoImU8js0QqfzGTuaWqXMxpBLvx
+tJcHEMeccmA6PqHzuwQYWcQtphEZSIQSqK0eY1XpkKbRowidhkw2Y/LIgQnoV+op
+3iCFUfDHtzr2Jid7ThF7u1cD/Yiswg5BFEiPczb4Ob4NFGthU0XjiQCVAwUQN89Y
+b+UVKCUzHNpdAQF7JAP9G6dTg8cdsXFkJri2yFUDXLQjzDbnGsBfvU3TTBaOIwMY
+lRxSea68iojdvD7+FKEVrDxfTBMPcC7rB+Zhp7caws5DWkI5B7AMIB8toIrSyYOd
+1pVFPjq/q9wy5k+1QTVfoHmP++qYx93Uym2WdFPEQ/P65P/VwQK92knDukEnuHM=
+=y3a6
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="clari"><HR></A>
+<H3>CLARI</H3>
+
+Control message sender: cl*@clarinet.com<BR>
+Key User ID: ClariNet.Group<BR>
+Administrative group: <A HREF="news:clari.net.admin">clari.net.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.clari.net/tech/clarikey.txt">http://www.clari.net/tech/clarikey.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2
+
+mQCNAzHhqEwAAAEEAK4YEXf3jB1ArKUs8bUMT666mjovSpCiuNGhTClxwLvSJrrB
+K4n5ibvAPqAKh8T1AxqDdprDPWPdm/uGAF6/3gFHD8YFA1wU2EayYNWlQ1kvDRI7
+bkmkq4QC2rtLnYpsOxwxyjTFsY1cvav+SSLziYauIlsOcHcix8rAq9eiL9vNAAUR
+tA5DbGFyaU5ldC5Hcm91cIkAlQMFEDKjVJHKwKvXoi/bzQEBEA4D/095q7TCeLji
+h1+qYHD52g2YuTRfL4NlGGmvEZjaHIe+Da6YBrCwKQVnZahckSv5VoHYhccKTtfz
+6BJ6+EfdcqvJdXoTkP1IqKFKr4yHL/QS6TWUrC4pjAF7WTg0jKdPMbwjFR983sIi
+KzhYhzUEfXdmNaooA+pYaDhl/SUGqh8q
+=stal
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="cn"><HR></A>
+<H3>CN</H3>
+
+Control message sender: control@bentium.com<BR>
+Key User ID: cn.admin.news.announce<BR>
+Administrative group: <A HREF="news:cn.announce">cn.announce</A><BR>
+
+<PRE>
+pub  1024R/E001A845 2001-07-28 cn.admin.news.announce
+     Key fingerprint = 62 97 EE 33 F7 16 25 C1  A4 9E 47 BA C5 3E 5E 9E
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.5 (GNU/Linux)
+
+mI0DO2JxdQAAAQQA62JWlMwVLSXdDAieRIhdl1XHuLBWXpXHJ6P0AFCzZJytc0Dc
+z9gf9EolG/LXYIxhcVW5MOHdhcqj6yhlsRbepLV++6nAGjpjLsGkAir2FfkMJNDl
+m3wqKTY9Z6sXUTa333o9Qz5VdTFNVR18+lx5E4vD4NkrRTdk8bagOeABqEUABRO0
+FmNuLmFkbWluLm5ld3MuYW5ub3VuY2WJAJUDBRA7YnF28bagOeABqEUBAShmBADj
+sM6L2NPIIqBeMm4TXfwy92VutRSmcw8leaksrUCyPaLDvG09mBTHCs/agL+aesFy
+pyjHxtFkzpD1c1UsuDfTtwGNEc3rgfEpUH7aYTwzx8kkK5G7dLaA2v42owZG7ubl
+1R6c730qO3DrSNkoTnykM2OXv89XuPq1EBUGjCFHQg==
+=j3d+
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="cn.bbs"><HR></A>
+<H3>CN.BBS</H3>
+
+Control message sender: control@cn-bbs.org<BR>
+Key User ID: cn.bbs.admin.announce<BR>
+Administrative group: <A HREF="news:cn.bbs.admin.announce">cn.bbs.admin.announce</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/D9662289 2002/08/04 cn.bbs.admin.announce
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAz1Ni60AAAEEAMLeta8FnOvjGdC+FjHGapnBD0li/ODyNWbI5w9l6KyZj4rV
+SVS+P3hpEL58S0cYVXfx1g9q5VuawMcDM1D0wwI74G7oBszq+aHrY8vsXabLkYV9
+U3xJywXAF+Yl2JYBD6CSBQnKy3UImLO8Hke/T62lRYkxQCdZqJj5a0vZZiKJAAUT
+tBVjbi5iYnMuYWRtaW4uYW5ub3VuY2WJAJUDBRA9TYutmPlrS9lmIokBARziA/9t
+zBku4vIfOldeEXzydMdKxQadetS3OnlCca4fZ85oAQQmEsPrI/6DrhO7GcPBGIpJ
+4Rar6DRrLbBf1aZI35qqRnP0UeL0gVLim4vZd6nY9COuP8mYUu1vf1QHB+TCp4iH
++yBI0I6qm7LZIj2Q3XtvS5oQsRe4NYP1pCBA1jGplg==
+=YJgN
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="comp"><HR></A>
+<H3>COMP, HUMANITIES, MISC, NEWS, REC, SCI, SOC, TALK</H3>
+
+Control message sender: group-admin@isc.org<BR>
+Key User ID: news.announce.newgroups<BR>
+Administrative group: <A HREF="news:news.announce.newgroups">news.announce.newgroups</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+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
+=oDzt
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="de"><HR></A>
+<H3>DE</H3>
+
+Control message sender: moderator@dana.de<BR>
+Key User ID: de.admin.news.announce<BR>
+Administrative group: <A HREF="news:de.admin.news.announce">de.admin.news.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.dana.de/pgp/dana.txt">http://www.dana.de/pgp/dana.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.1 (GNU/Linux)
+
+mQCNAzGeB/YAAAEEALZ+Xfm/WDCEMXM48gK1PlKG6TkV3SLbXt4CnzpGM0tOMxsT
+HjlHaU6Xco5ijAuqM1wEGUHD5hw/BL/heR5Tq+C5IEyXQQmYwkrgeVFMOz/rA3Rf
+rd9aKQk1bXBxmavi9WxdXP2zxuSglc395StvmO+WxXbBCg1POnU26rXTAzyZAAUT
+tBZkZS5hZG1pbi5uZXdzLmFubm91bmNliQEVAwUQMb1eM/jDdqGixRdJAQEZhAf+
+JYC4Re0TrO5NUNcQ7hO53exJzR8tkPInr2Zh1fUyVrohZLSHw4pmCsZAkDTuxM2G
+F5Uu3i1N0X4+OsGYitRku+BqI1VvaSMIuXzUzaI62yJgXmSehyr/BEONX/i8nu7J
+bbWnj8L5hturs3RY5tm/ASlhUi12kMVkU9BuFrJgUfelwOcStDweKKBZ6B++1XmG
+u73QrkghHIaLLz1CyOd4yJ1NarJCEsDERlxN8lLEXZDrKXINxkDW+k/hIWP16crh
+XD0HvmxO1XfbeP6NLAqzkziazVgriZ5t0JvaAZak8d3SbUN5HQ9D8lhkKiutOPUQ
+wrOnhP3WaRMux7eWFmsuXokAlQMFEDGhJ8PyovL2APDV6QEBe5ED/2DWiB8Wh86k
+EMH3ExviAnaIiGpJmop22csh8DmFepxvrD5UZ5D55QvUT9iPsBPdaFqzx0C5Wb9W
+u/lZF7LZh7c1vic82mkBmh9vhPcDlzDCPe/+xrbAn4xClovDmTwxBEpaGR/om7Mj
+1wpzm+yz1MnxrofESvWlAJ2VBJgM4ttPiQB1AwUQMZ+73H2Yg7MiRkIdAQEb/gL6
+AlafFFJkPlLOTisBjWXy4FYzmt6PavzDAke3hnUd66lIky9t2FQ9rI+Py9pwZ8GB
+dLy5Ij4YawFTuxqv89vQ+YNr0FyXR9DR3OAgFKbNFJbOsPJ+VMt17nweAwkMf3+1
+iQEVAwUQMZ4JwgnccDk5839dAQHClAf/RfKclMhimHPCPZY96FMXtj4s/tw7U6Qc
+b3980MMpcRZ1oGfWcLqoV5ss4QXVJhpk/MZpNYzjSWcq0ej9/A/oeRHbmkNpiimt
+4jYGDML+UM4eVApGuzS15H8pbLlzghQzYUmmOI1OBy4COZ4C/ICSdey5wuYXlMOs
+rzvMMlMh+HFvK27+Tr/ttrf/XePMeOIb3B2WeGTlr2IfnUBgB+POLbCuwl6rx+UG
+B8XrVEqv6dppRLMX9Lc4BAKEPU2dPwIvaOf+h+xIBkUz0SzMSXfvx8vYibOEESP4
+Ao3anL8x49cB7S3FVohvqkGcSF3l/7uuuUHu2kkkqxi6e0DphZwKNYkAlQMFEDGe
+B/d1Nuq10wM8mQEBNCID/3U5664LFS0QGuYCWFVpkIEqpF2HLFYGLYrAaWhiUltv
+uYnw+72j7vVY+Gjb6juM8s3QKFl4qkSf6ol4KHhuw1dNbcPLNfe0RyAfg0OoS7hd
+CF+HbWxo6Yro2qcF0NLN33Lv1LiwUb+VCbTVPYQ/LxhZI/ZmAcwPC147cE7kFXwX
+=Ct43
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="demon"><HR></A>
+<H3>DEMON</H3>
+
+Control message sender: newsmaster@demon.net<BR>
+Key User ID: demon.news<BR>
+Administrative group: <A HREF="news:demon.news">demon.news</A><BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.demon.co.uk/pub/news/doc/demon.news.txt">ftp://ftp.demon.co.uk/pub/news/doc/demon.news.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzQwCOYAAAEEAMnrmcoxEYJgPsujIZXbZHLt5yeyYjyepVW+E9F6FhzHimGd
+1IdDMMKqIo8/ygwZh2TmWLtCLBwBw7Tg35uBZ4O8EDs2XIbYc2gJwY66bEFjC9m2
+aJUrHxKYpRnyQRypULe2Hq9TO/z+x1oSwXjC5zGfaur4GbIea1Y+RptXNK8hAAUR
+tApkZW1vbi5uZXdziQCVAwUQNDAI6VY+RptXNK8hAQE2SwP/antm/oPnGYxWAV8v
+oSEIkxJqvAC0Zx8huqJJuO+M+PbZkbuRq3/aQKSZZrJE3rhONzSEONtwdBmZF1+Y
+qGv6TaWWSJ7kLdv0y2B3WwZGTl+4+jxCqxxYefHNV1fBemmRGsJ6Bqz46Kz/y475
+l1MJsawswRGkK/NR0gmYKiDvjtY=
+=1JWj
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="dk"><HR></A>
+<H3>DK</H3>
+
+Control message sender: news@news.dknet.dk<BR>
+Key User ID: news@news.dknet.dk<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.dk/dk-admin/pubkey.html">http://www.usenet.dk/dk-admin/pubkey.html</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzSoyLAAAAEEANs4Yb6Xdi2m5nJ9Ky+lS/DhXEU7drCouqCTLiOH1csVuEul
+5c2X2mFifcSBGUbNsJQ19TQXg1Bfp9neVBU9f3WimUp4fXVH60UJGmuMxgPXxVpu
+UuDrGrum+JaVhKhCXoYkbo8MOygWxiPPLfv4/q5LfX+lzp2Dw1A+Uwa6Eu1pAAUR
+tBJuZXdzQG5ld3MuZGtuZXQuZGuJAJUDBRA0vf8JUD5TBroS7WkBAd2KBADDKeFa
+nFvchkvS6Qdg5FznMyhl+fdRtEmG6fywXLPnvUWE6SDbey+9eGbLgmy/piOivbAm
+6TdvMSoxUis1V2nzjpEkAvbcdpTka4eAk4E1OftZ0xM5+zDyLPpvkmom5RUtvG3t
+pmy/EMI+5gxM/pBdYnHoCwiKxJ+obDeIYMHkI7QoVXNlbmV0IGF0IERLbmV0IEEv
+UyA8bmV3c0BuZXdzLmRrbmV0LmRrPokAlQMFEDSwxvko4J5eQPKqKQEBlAcD/1Zl
+86QpHJtjkfyNBx3k9lnOHUH2mkDBu27MsPEeO81huUJ2CsFFAbjG6ZXmXiwOY/9L
+kPqc5HvBvl3f2/4z6MLMTkX7jOD/5J7Rc5PmZJSiZ1z2QhqP51yZcoYNqGP1+A4r
+TKYiBDzc7reiuthuGpoS6tcxiYcyXVYEC0AbexPaiQCVAwUQNK0AkfqRupgHJQ5J
+AQFnZwP+JWTRdWdzrBzSDAWzYay52kXqngNAD6AVPvTc4ETNZlTU1efsoC4akOxR
+lgTP0J6g9nCVDxj8uoszcK+PGmcLnvZzQIXmCnEqpMT0Ci+/SCKLSETjHF8BFnkh
+gi7M9n0PCfRA8ARKibTTRwcbzrFuFblTP3eSGEyQlrzfZ3IX1J2JAJUDBRA0rPEr
+yZsYVEloQjkBATCWBACNa8mYljxQ7PzOHFNZX24+b3DSHTaHq5E+pGw+FnzdW8F8
+MGGbd1ZcPDsLCvSdA7OfMPvxr8jlmEWZLusG3dHNmb41zjkOR4rRLMgBS95NtRVR
+KzhmqljnoRFKC/iNYlvJK+8JQJQe0I202Yzf4eLWX8gEdmmUhgf1Cnrc1PuWG4kA
+lQMFEDSo04nRHo2ycsieAQEBOHsEAIJIUqdeYXMX4KBa0NL3/joSRO19vKJyddzc
+K7FUC6r4Mz5fyAIfGbYnY5SEJi4cCSLO/x4cVFxGj8ayNv3X/UcfCJBbIht1XO3G
+T0DGS9sLVUcXZNlDdVXq8Hi0vFBQ8B8LDJfJjlQk51yxZC9PhVWTRo4hKxQkpngQ
+Cko0vlyXiQCVAwUQNKjIslA+Uwa6Eu1pAQG0rgP6AgOl+8fdlZhSwPISp6aPB5PR
+1rjzO0MMi4b4hySHJWVLLwRGWCWjCE7ZyBDmVQ5oSxfSumdSKmwP6AT4PwJb9kjh
+N8m/iKwOwxUn54n8I9kkQeASytbeUKYJU6O7b3nrHVGMfEokCrR+AvE/YdJcRr/j
+WtPVceGJHSapj0/tspc=
+=SrO+
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="easynet"><HR></A>
+<H3>EASYNET</H3>
+
+Control message sender: newsmaster@easynet.net<BR>
+Key User ID: easynet.news<BR>
+Administrative group: <A HREF="news:easynet.support">easynet.support</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzcA310AAAEEAMHG4cqrO0lTV76f0HcEXIO2Sr1P3Fe+JRv7g1dpQB80Iewu
++b5QQkMisCJd53amQ1EL0pk1P5CEakH7cpaEPgnRKhZzMsBqdX4he6egKCXqm7VB
+hYkvMRH2qnrwolq1CuRrOTwIdDI9Yu7ciQjY22SZ56nU0QjiYo9vPoWy7GHVAAUR
+tCVlYXN5bmV0Lm5ld3MgPG5ld3NtYXN0ZXJAZWFzeW5ldC5uZXQ+iQCVAwUQNwDf
+XY9vPoWy7GHVAQFkNQP+O9C1onjq+Mb47znTNiFT3NMBVHcMrU71H5YH4qoyld4v
+u3gEr2Y+v4x+WbZQI4SB59xyAPIribd/r+z8FwrSDYYXfqmXTPxRXrmi4iKhniVP
+q9VUcIT/SARP8lvcCzTYAS7cxuHTXgdfNAasK2e37Ya7j+U8BA8hnbKTQZevK2o=
+=eYSV
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ee"><HR></A>
+<H3>EE</H3>
+
+Control message sender: news@news.ut.ee<BR>
+Key User ID: ee.news<BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.ut.ee/pubkey.asc">http://news.ut.ee/pubkey.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  2048/99C39705 1997/07/25 ee.news
+                              Usenet News <news@news.ut.ee>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQENAzPYu+UAAAEIAK1NNCYvPj5l/vd04qtf31Z5YsOj7ONqvoQ6M2zDoqeMz2EN
+8WuJOzGyoJYUF342p9NTh79qPz8vnUSZxKpIK6gvl8cYw76jDSjNbt27Ro/oY0T1
+sR3K6bk2xKq7+BhuXDA35DAVUyI5bEk3wJQTgpMaGGJi1rYol+ElCxguyzWX8m0R
+mV3hdEZUj6Xiniu2PnvhJcm/8HCq3CRWH0u1Y/IzC2/COaIlQU4aOB061McYKVJD
+bMoa7by1WPzkCFOLBsVrFMNjXezC1MjyLUjXtYCwtau8G1v8wl9jiGs+d5HjVB+y
+nLCkst4KlCwEDZcvH7vNCNyIzrCZU8oP/5nDlwUABRG0B2VlLm5ld3OJARUDBRA2
+AnlPU8oP/5nDlwUBAZU1B/9jmLOoZM5kLlE/VmVcuLxLRkkJaFgMawvdpYi5lzGR
+WXV6fpErVraEiWc1u+IpofydbdDtP50o02pfeYh73MvRs2RbztF+DLV5C94nFVbn
+W0ycxPc7EkJsJcsAwDBcVz7ZorOUKjFMJtxdstcTlMWbRhd/TuXjr6gSzVzfzFqf
+Mk/ImSsMWm5d/YOD1ZNKEE4yUUFUamxLU7N2/fa3IxBUAiAaNZpsuJ0gOXI4vx/m
+yXfc3THEgnQZ2McBZHxwPDanpfCZARAXxA6bO27lcVMBGYVGC2HUeZJ60G7VeOhK
+tqifSXlJ7pYIUNzXGSYItjQ9LPnchhnOXIY5ZdHfMGzltB1Vc2VuZXQgTmV3cyA8
+bmV3c0BuZXdzLnV0LmVlPokBFQMFEDPYu+VTyg//mcOXBQEBll4H/ieX/E25hzYO
+BgKB/YoPuS5s5nFMQv1wbnPV7rSrCpBlYI9o+H3XCbzRml3c+5TEfq4loqLbN7DC
+/SmVOvoUh2nqYFmitqxXXH/NMg3lL2Lk6qVd4TmzFWvjlq9G8XFiTqsDnu53wTcu
+xBbnwAQTsHUeefTy2jwSuf1/mBMOofouHtenKcWupQb/UyfaH1+usZoCfaxIpQF+
+ioLfqyfELHAbnuAEshhmvyNfnE/b7rj8vISFSZ9fdE9rLr+SAkuB+6mk4x7jq0tE
++1rZhVlutCixlA1KirjXB1bhXLcbRiOpNpz65cM4wtDKtzto0d2UPqZY6m+JJjVE
+C/P77Nd9h8Q=
+=Y45x
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="efn"><HR></A>
+<H3>EFN &amp; EUG</H3>
+
+Control message sender: newsadmin@efn.org<BR>
+Key User ID: eug.config<BR>
+Administrative group: <A HREF="news:eug.config">eug.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 4.0 Business Edition
+
+mQCNAzLXM7UAAAEEAMddVSqOf6hpg5YFwOvJYMZM0GvJut1IdM+ioq2ol1VrD5pN
+qykjqgn8dOCvM07r64yTRFHMG2iX13ibWrlRv0ot4Wf3K4ZPyGb97lUxz47x7XKB
+rYiNxZSo38YoecqpWXyAzKP98woBL3xzl1wc5muPssRlGPxBKawdUS4mXJCnAAUR
+tApldWcuY29uZmlniQCVAwUQMvzweawdUS4mXJCnAQGppQP+I8CYmfETXSP6gAbQ
+3hgcE9tgtPtewTgAlV4m0VconEtqwI3b8tjgzC0gtnprvcZ1vCfRkjVNl9kIA+sV
++dHLVy0EeAKXLqZaUlX3TKU8WA9U2VzABiHSPWpbkeNFUiR9hS/BBlh4WL/T8mqg
+N7GmwFYwYCGqcrvkFkFdIZKylOM=
+=cGP0
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="england"><HR></A>
+<H3>ENGLAND</H3>
+
+Control message sender: admin@england.news-admin.org<BR>
+Key User ID: england-usenet<BR>
+Administrative group: <A HREF="news:england.news.policy">england.news.policy</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/D88B01E1 2000/05/31 england-usenet
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzk1B30AAAEEAJOKxeP6Svlf64s8o3wKFUmV/7QqtJAjhy0TSqmV5C30INiz
+5yCehcoigJmy6egVK359rr9XIxti83jqwJ0EpV/aZHzhASIasrSpx8j6tl4JDPqI
+J3ZIeSE7EjpPJJF8ggq9lfHOyWLwrnM5QNtl7MubsWPQlecZAL7CAJ7YiwHhAAUR
+tA5lbmdsYW5kLXVzZW5ldIkAlQMFEDk1B32+wgCe2IsB4QEB3d4D+wfBTGm6k77c
+HVBC+uY24Oy0dpLkB8Cbd/fP1RhOl6k7m535g8V6iWC8Ki5EoK+lFkWPR/WDJnBf
+zKy78NTEBzWxTf94SzsMdcaAdW6MiPebrRdS0p9ubHrxKFc5NbURX76uaSRJVXUC
+EvHkaugFJcFOuhzReRXAAxaTLNwUVbAs
+=jgds
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="es"><HR></A>
+<H3>ES</H3>
+
+Control message sender: moderador@corus-es.org<BR>
+Key User ID: es.news<BR>
+Administrative group: <A HREF="news:es.news.anuncios">es.news.anuncios</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.corus-es.org/docs/esnews.asc">http://www.corus-es.org/docs/esnews.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzKltbIAAAEEAM9cNJJ8gJDDOA2mN9EDBlw4jOqFywOIUU8g+vBTJXnJi389
+TSfsZTneJAw2rROf/CyNVVpM5RKIN9QotvqQV80SkpMOnShGWbp4JgeYl2Mz1dki
+Rtcs4dZ2MrnAK62eresA9f0LpPktTqV6KaFvugRewAoNnl9GnZAe7JVtRX8ZAAUR
+tAdlcy5uZXdziQCVAwUQMqW1spAe7JVtRX8ZAQFBqgP/ddF/iolVGKNIoYLHVpb9
+KcmJ0q6zB3+JynSz8Bsugg9Ojh2NlujzGeDVN8eY2eOkrAqYt806LCUEsAZTVwGv
+VufAr3jVIIZrhdnTziMdJfq5GixzkJKwDNbOp/5z85wSGrmc5FlmoJ8lEvFznuP5
+nnVjbiyR9Tqc3Ny9omAR2z8=
+=LeAj
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="esp"><HR></A>
+<H3>ESP</H3>
+
+Control message sender: mod-ena@ennui.org<BR>
+Key User ID: esp.news.administracion<BR>
+Check also:
+<UL>
+<LI><A HREF="http://ennui.org/esp/mod-ena.asc">http://ennui.org/esp/mod-ena.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3in
+
+mQCNAzUynuoAAAEEAMcKpSjTfnoswTpNubS6p9W1OccFV0D/2LubRChwM1xvWJOK
+JMJdVZ6lEw816JLvl75U6AN+bYtvHrSnCjjfWh/6w08hNTY1aicLVQI5wNSo1qaf
+Oa6tYY/2cRtfvREuzR5rVDxWZXX+ZxsOsH4zsr/XL8ubv+Ti0/NpyDlK+D7NAAUR
+tBdlc3AubmV3cy5hZG1pbmlzdHJhY2lvbokAlQMFEz74ntnzacg5Svg+zQEB93UE
+AIg8ssk+aXm5Ngh5WxPHf9xGHCHSNnTBb9n5IHYdio8WYfBRCWlr6IInwgaRTlBO
+ZbwKcpC0pPPfIJtgrHoGjLEZbyFLdaF6rKIyHq2BHfSdwQTsgkuaJjXky5Zs9kfE
+hHqi6qZCbAn/MXp9wVI+5laIC9Y38RBtVaBmNa4DMUBziQCVAwUQNUkoE/dTeXaA
+/Eq1AQGUKgQAlqHmSbr39rB53ig6ae6aJR5OroI5ef27OdPtl3iGs0IDMi7+2Trc
+ojeuHDDPRfIKdd0qo1K5MZlD1d3L7A+jfy86PkvihLRTJfUry4RpCfp3IjbAAw3o
+aBUA8dwp0me8DKjaKEwr32F2v1+F9+x5gfs15/ZVSu8SnKOcQmTXo1Y=
+=gEsm
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="eternal-september"><HR></A>
+<H3>ETERNAL-SEPTEMBER</H3>
+
+Control message sender: news@eternal-september.org<BR>
+Key User ID: news@eternal-september.org<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.eternal-september.org/control/pgpkey.txt">http://www.eternal-september.org/control/pgpkey.txt</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/E7AF34AD 2010/01/02 news@eternal-september.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNA0s/HqcAAAEEANQD0+/zNogGP545f/EvPhEYHWhPe12CwdzF5/kNed0ntarr
+vafqNx3lvUkLObkFztZHSGz8demTMhq/AMWZ8F51jl0LhJPX2Y3JPuSufxRkezhg
+RjxB0oOrJv2+zhvgW9XNmDpzWi5jj0SDSd2IJTUwPG8R3kjM5aReRpDnrzStAAUR
+tBpuZXdzQGV0ZXJuYWwtc2VwdGVtYmVyLm9yZ4kAlQMFEEs/HqekXkaQ5680rQEB
+2TUEALkyrEWoQxakL2rycQDG46PVFkim4J1UtupxXKd0hLfVlC2108SphWJx3TBL
+1YLVOzoL3BcapkMMsR+PVKf431A3/ktJXLK+p8TrEmz7UxPuYBOE16QRpBaIKiSG
+K0sA2yVtgTxfKNWbSWgVl4Hho1dyeQtu6F8rH4oaF9qgHTUV
+=YZjq
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="europa"><HR></A>
+<H3>EUROPA</H3>
+
+Control message sender: group-admin@usenet.eu.org<BR>
+Key User ID: group-admin@usenet.eu.org<BR>
+Administrative group: <A HREF="news:europa.usenet.admin">europa.usenet.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.europa.usenet.eu.org/pgp/index.html">http://www.europa.usenet.eu.org/pgp/index.html</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/F5919CA3 2000/12/28 group-admin@usenet.eu.org
+                              group-admin <group-admin@usenet.eu.org>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzpLn5UAAAEEAM7SSRvbsrDw5J/kOkg/aWO2I9uZVt0B2qKcFSLUqWkcO+AJ
+GlSaioiAD7Ad7zcbauyCRiFxPHBl/OrOKh9qKLArOqUDr/ZlJpZJXUCabYWgB8rc
+RxqBhL1RaxOf7u+1GhizSnOWufZzv2iGI6nWNKlrGrhkV+fkm8f+GMD1kZyjAAUR
+tBlncm91cC1hZG1pbkB1c2VuZXQuZXUub3JniQCVAwUQOlZJhMf+GMD1kZyjAQHw
+AQP+PFGdojhoWpFbghNN8q6pa4D3GG2OGwbCz7KfOHzVnj90T54chAyCwLAQ212f
+WVv/3r/kXneFcCfyC8mAFeOWMpOi0BHA0JqAEwzSF/mw/LXy8C/WQmozkP9qiWu7
+eTKLFV4f6DfqcPj2z+CLC7rN1by14UoZ3zfIC2Xywx6237S0J2dyb3VwLWFkbWlu
+IDxncm91cC1hZG1pbkB1c2VuZXQuZXUub3JnPokAlQMFEDpLn5XH/hjA9ZGcowEB
+NaoD/26XKy9+JYUY4bab4xBbNvUlk0L9rmNa7WGAGLdbId8+dzbJFEhY6Q5mPTuq
+I9HlEgItuGIrnV+YGVdfoCq39SKhpDqjWmmehbkqy+UUMNopys22OVgUfvdkERks
+d02wRzEm8BPVo4gDycMcuDBrSF8KuzQ92vjqNL6HCd1jeAodiQCVAwUQOkunj684
+G+aJbDmvAQE7UgP9EgXupY+oRoA//YqgeAkuh8AUzv5aWKyMnjRvaHN9mbpfStWP
+qlnsmHJRVn7Y/8A2mMpEgOZxTQ+i2IYP1tkcbyQIt6gAr9D0nLD1TQgIcH8/zLVL
+8FdaIMWCXLTppYeEHOXoiVsDkenVSzLz93z/yK3/1ZPlVEXr7dA5ckm+PeI=
+=xb9/
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ffm"><HR></A>
+<H3>FFM</H3>
+
+Control message sender: ffm.admin@arcor.de<BR>
+Key User ID: ffm.admin<BR>
+Administrative group: <A HREF="news:ffm.admin">ffm.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.arcor-online.net/pub/news/PGPKEY.FFM">ftp://ftp.arcor-online.net/pub/news/PGPKEY.FFM</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/1B9E000D 2002/10/09 ffm.admin
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAz2klUYAAAEEAMspfkgifamjP74pIUa08HvLK97SM1jzDuHVl66UVuDwtS71
+YJj3KcD2q7b86EScHQbc16zM6BEilC55K/FcoD1vsNZtDRq8wXqFGgnhLGnbZS3n
+ohgc5sl9aOBOrvyDWcXsijmtbOwnOOd7MYU5SHf9U99Ao5OVegnIq6gbngANAAUR
+tAlmZm0uYWRtaW6JAJUDBRA9pJVGCcirqBueAA0BAVSdA/9wlyD/S6JX92yIh6t9
+0pzry5kSS+Zr4NK1lurPMflfK6KxTuJtD889zla8WajPekIPQ7gGMhoEb7i9dq5D
+S11wIwsCq/cczMHn/6LQFyf4iv9MysBMQZkRmt8sBJ9HdrfV1bvv0itbsHcYoQPw
+F9ZoFvKe1QlJoJA3AXnfBkEmsw==
+=fCY9
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="fido.belg"><HR></A>
+<H3>FIDO.BELG</H3>
+
+Control message sender: fidobelg@mail.z2.fidonet.org<BR>
+Key User ID: fido.belg.news<BR>
+Administrative group: <A HREF="news:fido.belg.news">fido.belg.news</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzPJJwAAAAEEALfkcZZHR5PhWqPXMf5qU7uf8D6cso4tzo5QfQWa7rZskmgZ
+yY/JIViT0TWc0uRuTuFtx/A5oAVsiqVWAVeUNtRN1aIJmI2nN0PDrV0kZhwHJ/O8
+Ztef6E8WOj9wkfoFcJ29g+bUrIwJZLSrdqfziq6onaWwseXd+bDMztimfbldAAUR
+tA5maWRvLmJlbGcubmV3c4kAlQMFEDPJKfTZ+PMFjw5JdQEB1DUD/R/+ypJuhyDy
+VHOIxb+jOn+5QplhdyKuOQbzzq5hO1u6wzKPVm43bdx3LKIX4pyv+SKTw3DSoEFR
+J7fYicrI0QtvqhAvRZX8dSJhMydfLNbtzIfXuu8LSCgw2eFwpL5pMEVbZdhOLczN
+AE/ILKmkZmWSvsFMfDd3peEoDMrWmW3iiQCUAwUQM8knALDMztimfbldAQHgzgP3
+UG5Z/5tZDt/hSZJBQTY2olBVVeawuaINVv1LsRN3AfLrQ1G52ZD2/0tShemuF0MV
+TjinJg4WZnt0wgjwdIQnd6+IQRBvTo1CQGbmJwzOiTBF4sILqeMfeo2lQlmLBLsQ
+jEO4nn4C6vo1Vm1KgFYD51silHnQ0t0whiBL0xcqBLQcZmlkb2JlbGdAbWFpbC56
+Mi5maWRvbmV0Lm9yZ4kAlQMFEDPJRnawzM7Ypn25XQEBg0gD/jtnIpaapuVf50kH
+tf+AW+5lwXYWGu/ilyRfJLc0xtrJ5sEuHGw+vfoxGcst41xr3cNka9HYn/+7Kohd
+CE5GFcoOafIgU110bv4it64uKJuFZVwDW80jcsartydmqqQYY57NN4qHTubtWhcX
+gYSrk3bKxKa4N1/4ePyBUqmU1rw9tB5CZWxnaWFuIEZpZG9uZXQgZ3JvdXBzIFBH
+UCBrZXmJAJUDBRAzySlIsMzO2KZ9uV0BAUhGA/4tLb797bR/CJUsFi5+GE+OzrLf
++wMSLeZlLPqLBbxbeMQbvLJo7mZHeJmIOFb4rdP9KS5CthegeWFUJAh89c9qDqaa
+jMs2pdF8c7ACvQbqJY5UOHuFv0wFU6d79sSFuUGvJWNmOQnzrs+DZ2RQpJdDvw9/
+oC+nSA+cXGoIOjc7rw==
+=bKdx
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="fido.ger"><HR></A>
+<H3>FIDO.GER</H3>
+
+Control message sender: fido.ger@news.fu-berlin.de<BR>
+Key User ID: fido.ger@news.fu-berlin.de<BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.fu-berlin.de/doc/news/fido.ger/PGP-Key">ftp://ftp.fu-berlin.de/doc/news/fido.ger/PGP-Key</A>
+</UL>
+
+<PRE>
+Typ  Bits/ID       Datum      Benutzer
+öff  2048/A09C385D 1999/09/23 fido.ger <fido.ger@news.fu-berlin.de>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3in
+
+mQENAzfqX7YAAAEIAM8YlxbkLtxn6qYrw+LtczGJcefVFznAig4cWpxfaDd1JLTM
+G9Ds8pbpmZ0C8tFcbtrxUnf74+vvyAtlSJG2QqB8HL6a+FMMK4o0i8FViDvf6ULN
+ESSurJBkRy6eHsYKNraOtTeE8uAGu3LHxAhuNSvDRg/4qwmPmvxvjvyjeWR99gNp
+U8uOnHyXYGgKKPnrvWQB3p9zNDzfUe6QCxOk7pHk16CRzckzjS7ma0Fzvp8Wa7FV
+5R+0O8L1x9k9AmjMH25GU8pXLCmlsVJon6AVQIwk6Dso31SPC28CHwyY0ZAZgYKI
+Qx5VpFU+RA7fYEsWRSflRNUsv3tPbtw1CaCcOF0ABRG0JWZpZG8uZ2VyIDxmaWRv
+LmdlckBuZXdzLmZ1LWJlcmxpbi5kZT6JAJUDBRM36mKL8qLy9gDw1ekBARk5A/9g
+G3bD9h02zG+jZvtGpL6KPosoYzEQN71Z9xg8pZ0OQwi6kWb0upThjVRY8JSKJGCU
+xb5uo/zo/KfloIyjCIzfzZG5z5S75GHySg730BPGvldjcxuxRBu3fvUAuSi06TKJ
+jPciEY/soiV68IEelYEzWHq830QDz04c9CTk+bjfQokBFQMFEDfqYB5u3DUJoJw4
+XQEBG5QH/3c0/TT45qwbCd0VCTLj9Ccgxnz/ow5dJaUYia1J/YRSaFVZFfpvBTnp
+omsnGCMmUnBmA5Ku0YPJEOgZVsTp1RWDCy9BXe4OYiTcFMmCwGHhKTBrDlj0xb8/
+BWV35QyFdlrm8lT6BY0HXeDKoV43zaio8zq+QWZQ3jwzeK47FAqxboBGtr7thzb1
+VkMAxrj6ean0Epl2W4t96wor+cJ4NkEL/elKG1Hz+EHYQTPddWO5+OIHSSjiOP4J
+6+huXiU6BbKDaomvrZNw9YDtRnI4vrfr8fSyQ0/AVXu1M3JGSjJCp/mCwd3eNSaQ
+t4w+uQLu/la7mBSAyYDZpTIhu8Z9J9Q=
+=48O0
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="fido7"><HR></A>
+<H3>FIDO7</H3>
+
+Control message sender: newgroups-request@fido7.org<BR>
+Key User ID: fido7.announce.newgroups<BR>
+Administrative group: <A HREF="news:fido7.postmasters">fido7.postmasters</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.fido7.org/pgpcontrol.html">http://www.fido7.org/pgpcontrol.html</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2i
+
+mQCNAzHp+EYAAAEEAMPTJYTs7vtBxL3seNLTIqfKfAEtBBw9DXgf5/Oqgq9Tr1pR
+1iIRDNzLUxbtgYxbis7sS/9DjpjfMzxmhOAQgXPGcNPws56zj4pThKcb3+e+e2Ap
+/7BJwmvdStuDNZBev2gCehkAC+BDhIYmkr+glH0RlvMo6Iztnt8dj6gC0E7xAAUT
+tBhmaWRvNy5hbm5vdW5jZS5uZXdncm91cHOJAJUDBRAy25lJ1T70qQVgy2EBAYQA
+A/9A/+oiR/AjhkOi/O1cKyT6qirb+amb1S3z00BA7eBo2oZVoClxOBe2XYJYUKtm
+dVe6DnqmZjZfDDw8rozLuBURFVLnB37K71tzWCioRZZ9APVT/DtSEa2N7KpPInod
+disB9+qXPXbGWdlMjDHk8RGMlmN6CfB+yhpZGiztKo6m9Q==
+=Qpjh
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="fj"><HR></A>
+<H3>FJ</H3>
+
+Control message sender: committee@fj-news.org<BR>
+Key User ID: fj.news.announce<BR>
+Administrative group: <A HREF="news:fj.news.announce">fj.news.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.is.tsukuba.ac.jp/~yas/fj/fj.asc">http://www.is.tsukuba.ac.jp/~yas/fj/fj.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/607F5DA9 1998/08/30 fj.news.announce
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzXpV8UAAAEEALhiIKN7JxF+ShGlemWqXAPNmOYqsq8KgJdekqgqoGLl8h3r
+CvxJzt8ZajyUvqmHDgYN36tncGOo1hbNHeXTVs/vY5BNUKsJXe/xP9HdUc7bZfXZ
+SRezERxujZ2JneJmoFkx5g4TD86lj87RGVzS9pGblxNfpv4mvRf4TH9gf12pAAUR
+tBBmai5uZXdzLmFubm91bmNliQCVAwUQNelXxhf4TH9gf12pAQFwKAQAlXkPQezd
+xtlIVbG76NAxC6CpTyg9gc3GrjyUqCnV2pbWF/vBSlZZsYpOR/Er7JImWXRS+DL3
+LB3d4ZXf5izHqkusP5u2ZQjUQIzfG/sqKj9XCBsPG4ZRZ2ADJ/5Itxsk106K9/03
+cximrB7fT6PjZtzp/8wSxVvJ4pJ1OfBmROs=
+=1lpr
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="flora"><HR></A>
+<H3>FLORA</H3>
+
+Control message sender: news@flora.ottawa.on.ca<BR>
+Key User ID: flora-news<BR>
+Administrative group: <A HREF="news:flora.general">flora.general</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzNuAqEAAAEEAMUvbutdGm2Z1abbdaYD72/qrbXXZmeyo32Wr3DCjl2gg6v0
++vd0Dq7odKQXLaTBeEKKGXl6EhOtyxDOoZwJMKS2CZPo5Zgrkercvkl9PTOMyFhX
+K6yMnAkCn6XZopivH5Hp6+Nx0gAqGEccJfdfs1TlXHD0UYkhlOvJiX8PXTE5AAUR
+tApmbG9yYS1uZXdziQCVAwUQNL0mv1nBbqL7SY1BAQGrbwP+NBvKq+hCK5WVpLJj
+6lEP4wCsWfM8bttJH+yIEXU6JYxw0N8VaeG75Lwyld/MQERFXFwb2ljN7QiglGeu
+2xnmR5P1Dq5ZiO0aQm8jVhZ6RxCLPJQJczwg1zVW5LLtSk9JzL9Wa8+vNlTwmTFQ
+ffFsrluX94aLxP+IZJGWfYoCXNaJAJUDBRA0vSIL68mJfw9dMTkBAcFUA/9Q+5d3
+rPB0KdMbd2WQOqCKhWTw5vp+V+wpfGVG9Oqt+U2+9XCkr7ISoGVWaW2vG41vw1M+
+oDt+RXlc2ztL2ow8ZDWxSHibuUDxDybDWFButskq8OreeIPGzAhXaNDhPh4Vdmr/
+leL7YvnCGs/zyjdc2T1VjDrftS1JU90dBJhf67QbZmxvcmEtbmV3cyA8bmV3c0Bm
+bG9yYS5vcmc+iQCVAwUQM24CoevJiX8PXTE5AQFwUgP+KJwJbGPYb2/nWShJPRNn
+/yEB7aNOpLYSU9Eg2Xk+Uxp+1Qgkz2eKovJIF1dyAdyGO0rTxf1zXDjEfOI+MJxM
+D7uUysrCZxgARb0sMXDW9q5Vrn44dZWciUzDN1EM5AuDX4G/XHS4h1l9seXFVUwL
+pDpQVttHCnhrximf26fYb3A=
+=Q/99
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="fr"><HR></A>
+<H3>FR</H3>
+
+Control message sender: control@usenet-fr.news.eu.org<BR>
+Key User ID: control@usenet-fr.news.eu.org<BR>
+Administrative group: <A HREF="news:fr.usenet.forums.annonces">fr.usenet.forums.annonces</A><BR>
+Check also:
+<UL>
+<LI><A HREF="https://www.usenet-fr.net/pgp-fr-2020.txt">https://www.usenet-fr.net/pgp-fr-2020.txt</A>
+</UL>
+
+<PRE>
+pub   rsa4096 2020-11-20 [SC]
+      D5F3 69B2 9757 3622 0153  54E7 FA42 3E89 970E B10B
+uid   control@usenet-fr.news.eu.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v2.1.18
+Comment: fr.* hierarchy
+
+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
+=vYcy
+-----END PGP PUBLIC KEY BLOCK----- 
+</PRE>
+
+<A NAME="france"><HR></A>
+<H3>FRANCE</H3>
+
+Control message sender: control@usenet-france.news.eu.org<BR>
+Key User ID: control@usenet-france.news.eu.org<BR>
+Administrative group: <A HREF="news:france.admin.evolutions">france.admin.evolutions</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP Key Server 0.9.6
+
+mQENAz7fVD0AAAEIALpKujfuGRnNyGS6gKUv3ZbN+hirx6nqAwIIGx1wY5fSDB/0
+B7dr7Lizvt6g9iF2ZNukxLlFRhSjA5bg7gujlJpTcYdPlXomtjFe3K+S1yXxaWTE
+gfPlkbcdXXY3PYymkWReL08OgKuOkd14dc+I1G1TZ0wprMIjLjnGrUDNNM2AM372
+yowJXnmrMteRdQg0aMwn9oVizXcwfr87e2eVC919Es6hi01q/YQcSxSAv00iT4LX
+APGBcDObvslWVsckEq0Qx4YxrK4/s425wu/aoJiE5WuAVPRBFnsLhHLInRTj1+3A
+i1jz+8D3Im5CXSITXRFj6r3VJ7TluynFGDk+xFUABRG0IWNvbnRyb2xAdXNlbmV0
+LWZyYW5jZS5uZXdzLmV1Lm9yZ4kBFQMFED7fVGW7KcUYOT7EVQEBVDIH/0RvG3Vy
+aevTcIwrb+CmxhYqYcJ6i/PPInx+j5PlYZrAwO3vPp0apKLxDIzH0TqK/hWWokpT
+7f7aoHVDWv8H2ysc3gGJJaQEB8PQwkjF+aS8wOzqnrECCaAz6h9nmhGlG7sKjz7B
+fU3AtcaFyOgY0vEuoGLZrPguqLDxzsMlJmOu1zJkSVmtTUtWIPxtUd9CUIiXat7B
+0kQMjShQs2dtUAKiuaOVYCfn6s4/wk0eZPY512Gfd+uBft2k2ltQoqDzpWRJ8ud3
+zQJG3PFNnOPj56T5cMsrsAp8b752Y0dPjhZBAAYMt4CCfYOkn3HOEvgP/XvU+4WC
+krgj/8ST3TlCIGA=
+=uxFD
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="gnu"><HR></A>
+<H3>GNU</H3>
+
+Control message sender: usenet@gnu.org<BR>
+Key User ID: usenet@gnu.org<BR>
+Administrative group: <A HREF="news:gnu.gnusenet.config">gnu.gnusenet.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.gnu.org/usenet/usenet-pgp-key.txt">http://www.gnu.org/usenet/usenet-pgp-key.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.0.7
+
+mQCNAz1w/KoAAAEEAM7MkKeu0tgU3XC3w2ChNyN2nDJCg28sXPhiHOO6ajGhugms
+f7+J1ScU5wHeUl1NjSuA+c3fkZixA9BEhfbkI2FgTkc2+o1HzhOoVaAt57t1UNVN
+txi2aZbrhHQOmrBV2wFefWmcgh6cpTX8Ob1th6WbvZ7KtIu9ZPIyWVItWelFAAUT
+tA51c2VuZXRAZ251Lm9yZ4kAlQMFED1w/KryMllSLVnpRQEB+JAD/0FJ/vi9fM8c
+EK5e/EZP/BpxmGLJ9RQlakvzUU3NGYnCa0jFUW1/YoAHSegn+ogPMdL0K8bzICHH
+VqPc48hABBPUfib96oUfNdgAlp43DiwiKFV7vdqYuDXQUKHhcxiu6HGSHuvthU8V
+/wDAXKz8sH4Q+u0ifZT5qLywNPOOD3rS
+=lRPs
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="gnuu"><HR></A>
+<H3>GNUU</H3>
+
+Control message sender: news@gnuu.de<BR>
+Key User ID: news@gnuu.de<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.gnuu.de/config/PGPKEY.GNUU">http://www.gnuu.de/config/PGPKEY.GNUU</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/7F4EEDD5 2006/05/09 news@gnuu.de
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNA0RhHVAAAAEEALAVEJDMQyQUupfKcUmTaT4TvS3Mlu+P/YldPUVy5Ov4L7KE
+h9tRPTrN9KUATCD9qIjFaBRW7Lko1sH/AMHDjNVG60O60Gyz225fbRKE8qm1XCSx
+G4ftOYJAeAHsmy5KjYhvXt0Xvka+YOMXPjkwS6SADyfrv+TfzH4D5Kh/Tu3VAAUR
+tAxuZXdzQGdudXUuZGWJAJUDBRBEYR1QfgPkqH9O7dUBAUiWBACiA6xHIm6JuiCS
+O9D/AG0Tr0n4WQUJsnMNhNxzaIa9npKa0hJDQzq4WSjnpA2L44su68JMNeeHbCv0
+ORJsdeiwcMd5qVoDgYc4SDGHUF2ibAx1Z6RoOW/PEso/63c1vJfGiRXHXAKhJd8t
+aiyAbfO28p6YHht82lKQi9BFpoWDEQ==
+=Jx+7
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="grisbi"><HR></A>
+<H3>GRISBI</H3>
+
+Control message sender: grisbi-control@grisbi.org<BR>
+Key User ID: grisbi-control@grisbi.org<BR>
+Administrative group: <A HREF="news:grisbi.admin">grisbi.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.grisbi.org/public-key.asc">http://news.grisbi.org/public-key.asc</A>
+</UL>
+
+<PRE>
+pub   2048R/C86CC6E1 2008-11-16
+uid                  Control Grisbi <grisbi-control@grisbi.org>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1
+
+mQENBEkgfHEBCACpZEi5+GIQDUyvbZ6Q/NcHEjDNnzJwWlxjH8MEJfDiozpMAeq8
+5uNxrUeR4UqiFO1CPHZvvAZECQPIp6hrlVrhjYT0x9fmBYdfSKx51PRj8Mh1BAG0
+O7LDh95MwgHNGFPbuXs9HJRQNooU5sA4spfl2+JGXJV5lpFw1u1xFFGooYdBt2WF
+Hn7W0jfFWjMMzdqps26U3rYMd36/xG1s53VKr/RoCWrMoeYyBsp5/Y8Yw7KHPunV
+wSkbU/2S4LTRl9w4MukYejwkkr/rBjZ8plWB+yWePmTCtEh9Mm7aHQhSp36wcVYd
+RJQHVqmSVtfdhNaOc4lp1Ug2VczSEcz34sEjABEBAAG0KkNvbnRyb2wgR3Jpc2Jp
+IDxncmlzYmktY29udHJvbEBncmlzYmkub3JnPokBNgQTAQIAIAUCSSB+GQIbAwYL
+CQgHAwIEFQIIAwQWAgMBAh4BAheAAAoJEPLGKj3IbMbhQT4H/i31VFK6ec53ha0K
+cAeL+4zMVzfOeoeuRB8Lc447cU+lD9fZ280jnS/PJVEyi5vuAWH4vJmPQxKvLUrN
+kLrPklFk4v8u/Hx/30scqsWMAO0QWhrFt9QOMiqFOt7eo3ntbu0HFeNlxj0+46Fz
+3B52Uxj1MqetsVx0A5fejy4M2x5mzoVO7NLIsWVvnMJ9yzxkI6BsejHYT3Pt/Azq
+etw166Miwb42iE1yEUSLjumHv9hq5GvZane+7yKrE3iIMqZZGdRAt/NEzloxJhn1
+Q5KIUbo8EpbyyAUb0ovNRgllqx6KhW8kw085aYnYM9ym3X6IK1/TiAEiJXbXf7hY
+1le2jIY=
+=eqpL
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hacktic"><HR></A>
+<H3>HACKTIC</H3>
+
+Control message sender: news@zhaum.xs4all.nl<BR>
+Key User ID: news@zhaum.xs4all.nl<BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+mQENBEjAjcMBCADVOmDnUlz3Hvy45XkfccA++UTu9JN7Gq+ifK/UPd/whCCENGWg
+wCc3OTxk1xl+LLCDovGl1/zLNjF6wvJRGKCeUj4tWqMpID+O/PUOP2LbiA710YXT
+AySOwbaz9ySoNnZlKZI1uCDtQZOHKiGz/Z5Vj5mkoaNsAk4WaOHVRo+qxhxo3XZc
+9twopbycKz6TyPsJbcBeb/FUMAPPIaRN54xg4kMeRzsDZ/Gw5jxlL1cmi2j2Tb+I
+1/0m+1seC7VcOl42zBvcD3aL7ltKzXUCvwPGbaZtlJlmtB4ecdMxuDEVqCWkvDZQ
+143YfFKvKJB+68l9a3QO3xrMTs3nrSq1jSrvABEBAAG0FG5ld3NAemhhdW0ueHM0
+YWxsLm5siQE2BBMBAgAgBQJIzgdyAhsDBgsJCAcDAgQVAggDBBYCAwECHgECF4AA
+CgkQOnjrTPFCDo5Pggf8ChyBY/arSe8zEw4tOn8jjXB7k4k9agClgu6BrWfbnmlQ
+21kUYUVE28Ts1iUUSkFO8V1eRaa8JVyNwSF1/e8cSMIf/Aqj0K/0nf9t+VZXWXGZ
+9k9sdESWL3y8e6PPIHiVQUEVtZJrKqWXZW2A0/kGXgLhcz6mes8iNN3Z9IYFQA+f
+yedpXheYM8lBtPr3grzXqJpMH9nYCr2afnxMfbQat251RaKagMEiib0B+ZyPSVMk
+M2VDUSCgGL9Iphs9izf03vmpyxU11OfmA2fpDs/EP6TJjZy0ebLWPUq8HOpD+P7g
++aSX6ne4uc+Y+PhUvuwtMM+PHsQEx5cV/KyOIb+hpw==
+=Tr0F
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hamburg"><HR></A>
+<H3>HAMBURG</H3>
+
+Control message sender: hamburg@steering-group.net<BR>
+Key User ID: hamburg.koordination<BR>
+Administrative group: <A HREF="news:hamburg.koordination">hamburg.koordination</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.steering-group.net/hamburg/hamburg.koordination.txt">http://www.steering-group.net/hamburg/hamburg.koordination.txt</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1535/BD98BCFB 2005/03/16 hamburg.koordination
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3in
+
+mQDNA0I4jBcAAAEF/1d0ip5m1EuX9RnUYeZ6xOGvQEHFCCBk4aCOsgRmqDMw+2UC
+b9kXFzgxxyGRuAY2gUm+Qex4yEjLuZquagaBCO5cqP/6eOfwcFlIgjbI4mGu/5XH
+z5EhGNYwaDAyoI17Sx03l33Gf8zouGx6z7sZXa51xBunjaNHshwbG9O2JtDYkBKl
+33VabqoTmgVR6wUrbvCFXia54G7QY6IPw/0WMVAI9Dcch49PE9ti4/jMwQxuNC/A
+21qIlRYYVL5+vZi8+wAFEbQUaGFtYnVyZy5rb29yZGluYXRpb26JANUDBRBCOIxK
+GFS+fr2YvPsBAcXZBfkBJKI8qkcl4dUqaTWlqVwTrtdTYmmBROOHlWkeZ+GGfcK8
+bqO9tOS+SJphFOeI6z60SAjo2uT388by86XRdSGkOBUMOQwTDIyIqPaaiYxEqH4p
+9Gw4mGwcU+ilbArRCb9GiPY85Mh7TUgxmMRYrTQsDJ+ptsfIibyv7jQ4i0bbAZCH
+30kY0Uj5HO6uyVuQUziIl2+E6+ZnnS9BLuHH0kxTcPmREO9piwMmVeLEj3qFwbzt
+PMiSW7oVNQL7zrNu4RI=
+=bcG0
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hamster"><HR></A>
+<H3>HAMSTER</H3>
+
+Control message sender: hamster-control@snafu.de<BR>
+Key User ID: hamster-control@snafu.de<BR>
+Administrative group: <A HREF="news:hamster.de.config">hamster.de.config</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  2048/62EEFEB3 2000/06/19 hamster-control@snafu.de
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3in
+
+mQENAzlOpD4AAAEIAKRDVownmpv5PXE19mpRfSEYeMcbF7TVEcZwIHayPf9k89VA
+vIYVq3J4zxZQhkXsEQPF1ygXlrBOdviVB/n8pAp1/asR5viboo8crIrWf4DfceKn
+UBS6uz3256deG6eyCSt7D0OYn5wY6BlMfDT6Ko0mhGwtUV/CNc8mxS/G1xmosUkJ
+2dC3mVJ2PPqzWwiHBMVJ3gRpIl3e3rXyh2Q2e9IB45DC3Yrx2otQM4oWUc1xzAl9
+gFnu05PXU3KjaNpSV7LZovpTDsCP4jgZh9OBIqEzcckSRcbVNwqbzWWOLqBx+WMv
+9gKi8aJCdFRWqlOTQ9EzKhJx7D+k09P/fWLu/rMABRG0GGhhbXN0ZXItY29udHJv
+bEBzbmFmdS5kZYkBFQMFEDlOrKjT0/99Yu7+swEBbLkH/2toN16MklXQreKsQaFg
+erzNxdCf+Z8d7TiVtLdoH0tHJ4sAvVdbOSrI19VqulamUXFlIU/ZEzRpbXRBI6DY
+KMMu7Hc9kuHYizCTm4U/92Kc2dX4/jK7a5yMC4eVsX6X4SG0+6MDTrd97C6BpIw0
+E6qpgWMTTY9iyYAhSy3A6cfhCIBTX2RDJaRJGrO2YWNxxp+WlvowxYlnIC/ffllX
+L19zF3PjrT8VKVENS6kcqwTre4pdOUW3M+btunYuNp9LfM8tAH1FQni0lHWPOGiO
+P0t8A5gxOlntv1rZImCIsF7KWUtaS7O1S7nk4CkFvnBazA2lkoxlcJV1Ny5zueK+
+J2U=
+=xRt+
+-----END PGP PUBLIC KEY BLOCK-----</PRE>
+
+<A NAME="han"><HR></A>
+<H3>HAN</H3>
+
+Control message sender: newgroups-request@usenet.or.kr<BR>
+Key User ID: han.news.admin<BR>
+Administrative group: <A HREF="news:han.news.admin">han.news.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.usenet.or.kr/pub/korea/usenet/pgp/PGPKEY.han">ftp://ftp.usenet.or.kr/pub/korea/usenet/pgp/PGPKEY.han</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzRzhC8AAAEEAJvTcIT/+WBdosB3lQIunGuRugV4Wwlw0vD7wlGeLWRxrUbc
+3BY/vAFJLrEYLF+h6AKRjipMESxDsbR79SOGjkA1e6TeeXdKtu7nZAhzo6JqudXH
+mErIKV2mgBz9UvJ8xHpXZ0SUG8stTiVl+TzVfRR0GVXSXsn5khzmBMrAhdHdAAUR
+tA5oYW4ubmV3cy5hZG1pbokAlQMFEDRzhC8c5gTKwIXR3QEBO/0D/0vEZ0BJW5Rb
+wG2gzqQaCHSiNXfth2fC+nDNjwhUZyZEUAaIPYY7w+1Ksw6JV3NZ8TMCxqMxemj3
+e+6zMPPwsFe2Lr/Wmu2zwWPKxqVZtDfA+YRVVoyNkh46N1wicn3XInngBwGUP3Kn
+gHr9tW4UbKOJzVYq+g/2kKOe850iIemd
+=I7tQ
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hiv"><HR></A>
+<H3>HIV</H3>
+
+Control message sender: news@hivnet.org<BR>
+Key User ID: news@hivnet.org<BR>
+Administrative group: <A HREF="news:hiv.config">hiv.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzhzJG0AAAEEAKULESHiReZ2NKPH4VvxzyCcy9iESHP57vdSKQJvIfAlM656
+fI+JrXePWckvO33GgXyeyvGpEVNBUMmVvv+tVObj1CflvVQvh3/OMi7S8UuBYBBP
+Jam7jJC3IG7VFP65cTZG7G7e/3AIbtMIwj9mPNevBZstZ1am9LmTyQznADIpAAUR
+tA9uZXdzQGhpdm5ldC5vcmeJAJUDBRA4czJjuZPJDOcAMikBASyyBACFKQq+F3gJ
+TZAQGUvgvwZCDYNOGk+WSkhp/XYp4QpqNwiH5fKhUcKkPBMWfyG6bGovBShqo98O
+DcUe9dxV71fjXyXOrSh6pSPnXIp6JengGqrUp8Ocw5aYEawGYYkQzURWNgcpIxKx
+MLN+6nl5sFKMShq1XgV0n7gm9xGKgEiz9A==
+=cbyX
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="houston"><HR></A>
+<H3>HOUSTON</H3>
+
+Control message sender: news@academ.com<BR>
+Key User ID: houston.usenet.config<BR>
+Administrative group: <A HREF="news:houston.usenet.config">houston.usenet.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2
+
+mQCNAzNk99kAAAEEAOtnP/aA83TNNag5ZsZwBYbTMk2zpQN1cJFEgMOgFLUTQdLe
+T/IKeBUewDz0TP8EdutnJoH/he60AAlx+qgi2HWVkF7F+5n1wsnKs//xgmdYjVAT
+gLzHNH4bYym/LnznlcdnxxokonAbndO4iY53l2AY+d2CJroJwFDtUyJYrHZpAAUR
+tBVob3VzdG9uLnVzZW5ldC5jb25maWeJAJUDBRAzZPg8UO1TIlisdmkBARMBA/9L
+GuYMTT5gOpxn0ZwaKULBaQxDB+LsXg1+LxXb3DneDSHDTSMYSmfU2LnjuUm/e+Z2
+nVBjRqcjX2U+zk6UQ6mvdevFfSakRYGLJ5XSb32lDGoQUw09AH8H/GlaPuXaauEG
+18SR4tLjTawRB1sKe2J6gY5WH72XuOwDKEN5hAgZSw==
+=x1Ic
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hr"><HR></A>
+<H3>HR</H3>
+
+Control message sender: newsmaster@carnet.hr<BR>
+Key User ID: newsmaster@carnet.hr<BR>
+Administrative group: <A HREF="news:hr.news.admin">hr.news.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://newsfeed.carnet.hr/control/key.txt">http://newsfeed.carnet.hr/control/key.txt</A>
+</UL>
+
+<PRE>
+pub  1024D/ED63AD9A 2007-07-24 newsmaster@carnet.hr
+	 Fingerprint=0EE5 74FB 1C40 7ADB 0AAC  A52F 7192 1BA3 ED63 AD9A 
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+mQGiBEamBzERBACKPyS+Fy1qEb2kRLgu2Of48lVwmaGMLRPD3UnzfA9V1id6sTAR
+A0uMsysjxQl6u92aY2rfUs6EiXWCljJghmdfkWo9P9SE450FqwSXoNiZOZkM9pmw
+kAOTF+Vgy/7j/2P6jJ72COl+OxKdCLsCOUPGR09lbJH9KNxkt2I5J4h9vwCghfUD
+cFPoGelEDbFHW3OEK46UDYsD/3ldMNAB4j+k5QWPaYgSWt3w4Hy0Yg69JxHZNNaE
+CKlrtQVHCFpThRhPuNgf9yZlICrMFUdSI3VGRa7PVQ186W58e7vcYAmn2r8R35k0
+BJmthsZX6oxdyzjOtH9+fMaeV/NvZSE9Zc5IBora4ao1K3zG/eSJV9QyTeeIIhSw
+A1RAA/0fgf1PIvNEZrVCfythCYzP1M8pPXkvmHVgQlSK5o4xPN6mIFWbpW0rEV4G
+EWQSEEK/cN57XRYA5my3mzaHL7o/HAGIRwnhA2nwIE9XM9HMHZB8aLJ3ERMKnPUY
+9cPE/sxR6+SJOUbBm8mKBeDqWzE47fqIrWOCAcGVETgANs+lu7QUbmV3c21hc3Rl
+ckBjYXJuZXQuaHKIYAQTEQIAIAUCRqYHMQIbAwYLCQgHAwIEFQIIAwQWAgMBAh4B
+AheAAAoJEHGSG6PtY62aYsQAnA1umOiu3LPTQ01I4NMLz6JLdT/eAJwOsq522QwX
+uRzlVJt5114glzcfyrkCDQRGpgczEAgAiROZbL7Y5mxk95mGyAW5Vk7vbaLH8Nj/
+FVEK/vhX6i7ubnHTw12aqyYGeEFX+opQI9e0ajSanvoUr8r6bvtGrrPlD+/BiPXK
+kbS6djMA5OW5TNvSGz7tb1hnVh4cFlHnZHUIr5KVbZSGFa8GQXa7AdlZemI+jZ3/
+KGeQ6ZNdXkwa2kiRSgOrDtVscsxMWyPkgClswS1O7zz9wvnY7qF9Tggmqxugl2lw
+Iy0e3xOMxrVfpmsVtE1KE2T0Hu1XcXLJ4C4UBbIz7bKiPk1NPgvRipeMfE39jCEo
+iUJSVZ0dO8XyHHa/UY3W+8a2+0zvyPjVIFuYwIzZ87yP8Lgiz6Wl4wADBQf6A3OJ
+DOOAyrPvopWO4VcfgmBmgF8xuZEU1joowgtrwwJ9mBWxXy4F6Puq7G+LUIekc9iD
+h0GIgEiQhdIFChdHW2xWMS+PWOnU2Vt6l610PZy0AjQF+tfotJO4dNx0HvZ6/GTF
+kmJvtfRmgXWgXbiU1lQYBf9ghL/a7mOKAe2dZkGv0uRIyqxZXg6ANS2BhQKlNA7g
+d03GvVFTuDgfibaHKJWw/2ckLCuZYC2VjGr12RzoFdVcBBqkXVeC9L2TUCAtmSJl
+Vcxfwn3smbqtefVCQSJs8CIS4hhP9c9AVPHKXFvU5PNA16jGIloVuCT6brEWRFb7
+psyqzNqq8ifcq69o34hJBBgRAgAJBQJGpgczAhsMAAoJEHGSG6PtY62a9m0An1Fp
+7j1lUS1ZUaiCx8p3j7UvwpSuAJ9a9+n1ag83O6PZ2nN93LEENnl6og==
+=+9qq
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="hun"><HR></A>
+<H3>HUN</H3>
+
+Control message sender: hun-mnt@news.sztaki.hu<BR>
+Key User ID: hun.admin.news<BR>
+Administrative group: <A HREF="news:hun.admin.news">hun.admin.news</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://gatling.ikk.sztaki.hu/~kissg/news/hun.admin.news.asc">http://gatling.ikk.sztaki.hu/~kissg/news/hun.admin.news.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub   512/5D144299 1999/04/12 hun.admin.news
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQBNAzcSE9QAAAECALjFP6VEfJeH1sig+bM0cBmT6YhqtvWpIqLuwYeTgbSXdvVl
+33slOyG0z8SSyuNuDwNmBJqeMf0bDAFWxF0UQpkABRG0Dmh1bi5hZG1pbi5uZXdz
+iQBVAwUQNxIT1AwBVsRdFEKZAQFnkQH7B817uxxX1aDXsw87ZjcTEnM4n7ErcO1t
+/gfL+tpk9n8w2lc9QUIj1SyPY2gzcHxtcR+v03HUxKYgrNUMSWsuDg==
+=hr0o
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ie"><HR></A>
+<H3>IE</H3>
+
+Control message sender: control@usenet.ie<BR>
+Key User ID: control@usenet.ie<BR>
+Administrative group: <A HREF="news:ie.news.group">ie.news.group</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGPfreeware 5.0i for non-commercial use
+
+mQGiBDrv/D0RBADuWCEF49cWGbe71QpDATJE6ylNDQdXEmyHB7Ld4pUEKyQexjiy
+DE6RkQwM/eHm0510wDdr0WDFMbhd5RsG7aI+4fwv5/OnOB99anZCRgLuBlRMsSkJ
+em0S7ASarrd2DWdAh0Ap2XKZ49GrNOf64mXVzCD+CzwwvUMTUeoaQOiL3QCg/zIV
+E5P8x8CJTx+Ako7+tJ+Fh9kEAJsWS5cW5TwrzxSaq3D2o9/fxrwrpJiPkjLl/qdJ
+mg2yYcZtPHMnb/l9a3BnVSCK4q7XxVs9YzoFM9kBNxB7wVy4m0nB88f9FfvVId0m
+B5u9/rejckjnCrKox30+5w4RYroyqWmG3c1bJE4+6mn9bCw0sE6Rs17NH2K8Y1Be
+BSFyA/9UmxYimm79fp2G3S1M0cA56oc7x+/htpMWbHXkshs4DmrPEjMazofzzYph
+PsXr+UDoZx86ain6uRX7tJ+psQqMiUCMz4fBLO8kToG3i0yp7D+kmZZZ0xKq9ye1
+CTUp8y/vpN+3bMRDgXb1tCpIp8T5nWmQeOmtFxOD6NcqKYngNrQRY29udHJvbEB1
+c2VuZXQuaWWJAEsEEBECAAsFAjrv/D0ECwMBAgAKCRBidsigYk+txIAxAJ9HDbYU
+GGF5xrN1lpheJNr9nbaCcACgnjKQfLF8kNAm4r3tgfGa7yqhdGW5AQ0EOu/8VhAE
+AP3a2QTgDDklmQ98qvZ+BywiP73eJqQQqUmjrM/hDzwXj3O6c+K6pguJaXFm/E+1
+5W0j2Bu7M/Bz7+dfIsrkPbUwgVxwbd6DdOWWfVwNRgdunLh3kwB5ly17VvZY74ge
+z7GI+3SVeiCjQwoozqb2w3BmyWwL332a+BIxoq4qeYqRAAICBADN24yABCH7lCeM
+1ZFAtq3Yk3A/MmYgRGFaaRb4vtngl37Z3QVzbrq53StHKPGt+u81t69SODoxwjrr
+bSP+lY4WzoosCjMZqMVMkWeStMKPu5DdBX5SDxCcYqeBv7YAwnSVWY7xxK00XxAX
+ab+mZ01RPjdlK8Awh/uCHmV9qmCLFIkAPwMFGDrv/FZidsigYk+txBECpMwAoKrc
+aGAnyhR4PB5G7VK9yyZjUHSXAJ9LP9yMUrYjyJ3TeOKRdzhDfNGfUw==
+=LJMB
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="is"><HR></A>
+<H3>IS</H3>
+
+Control message sender: group-admin@usenet.is<BR>
+Key User ID: group-admin@usenet.is<BR>
+Administrative group: <A HREF="news:is.isnet">is.isnet</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.is/group-admin.asc">http://www.usenet.is/group-admin.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/F9907F41 2002/11/07 IS Group Admins <group-admin@usenet.is>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAz3KbVYAAAEEAJwNjCKtIqpoFAUVVTzqjhz+v0kNMjtMn4pznTCfacrnLze0
+hKr81oBQe/eVl0T3Y42nIStVVYSQCKhEQ/ufJ/lDnutHpgdHDRcTFooqrRdYAYeC
+YQJFy0JUD+JAC/ARIS/iKXRASZVODVS9vsPCLZ623jk6CwRXqZuzXef5kH9BAAUR
+tCdJUyBHcm91cCBBZG1pbnMgPGdyb3VwLWFkbWluQHVzZW5ldC5pcz6JAJUDBRA9
+ym3kPM8gb1TDj6UBAYZCA/wIKlQhrQV3/fse2/CzclM7EInw7jyviyD1YV/NWtbt
+Qmsq8GDgl7dDpHSN7gF/gCqvXEk7O3OzMQuDHZRfkEzF+7VxPVMWqp7kI6uVOyCA
+dQOkmugrrBdEx4urMuAzKbb3A7O50ncj+/S/KSexp7epNU/xidr7oc3MmBqhpVSI
+NokAlQMFED3KbVebs13n+ZB/QQEBDUgD/0FuYtGUmiaAQRO9G2sxc/gmC2+3dL4V
+2mgcr6SnhIwZ0dX+i+dJEmJbm+uhpBgfexZVAPZilTLZFXIZDp/ksMgpbRfKJ+f5
+OCF9e6GNmzi9OenvP1kKYcn1LtcM5heBck93TmI8SmLaGXeoAgtHbYUxkXZPKzm9
+/ik0/4pVqYoe
+=64gK
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="isu"><HR></A>
+<H3>ISU</H3>
+
+Control message sender: news@news.isu.edu.tw<BR>
+Key User ID: news@news.isu.edu.tw<BR>
+Administrative group: <A HREF="news:isu.newgroups">isu.newgroups</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.isu.edu.tw/isu.asc">http://news.isu.edu.tw/isu.asc</A>
+</UL>
+
+<PRE>
+Type bits      keyID      Date       User ID
+RSA  1024      0xE9B1927D 2004/12/07 news@news.isu.edu.tw
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP 6.5.8
+
+mQCNA0G1nrgAAAEEAMgoBW7pVDdHeZF6y39nZYMoLgnpcNc1hLx4saaadEzAe4SR
+SNbFGksOtz3AFzU/OgSSsy6NJ9XAvFJ9IVoR5k8Y9euCXjussx83eWCOzZt4rfoK
+icv7cnT7ENpGMNWehZMyAqIeYqhx8BVR4xWKdj37F6UAkdJPuOqrsN/psZJ9AAUR
+tBRuZXdzQG5ld3MuaXN1LmVkdS50d4kAlQMFEEG1nrjqq7Df6bGSfQEBjCED/iw0
+neuh+AvFR7vATXw7jf4xt89msP3aIvPm04XCbSnCe52AmBcepqpXMvH+U7eA4w/z
+tXeH6zPOmgB3AnuWN6uOVZTX8PWrNmcMX1KiB6dL27LS3gF9WmOWP8mEMhq1aS+X
+fWJSsTumGVsCl5D0C5DCjAfbeSn25BB/yDYm1Wzk
+=3QgQ
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="it"><HR></A>
+<H3>IT</H3>
+
+Control message sender: gcn@news.nic.it<BR>
+Key User ID: gcn@news.nic.it<BR>
+Administrative group: <A HREF="news:it.news.annunci">it.news.annunci</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.news.nic.it/pgp.txt">http://www.news.nic.it/pgp.txt</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  2048/B28B9B51 2001/08/02 gcn@news.nic.it
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: GnuPG v1.0.6 - For info see http://gnupg.linux.it
+
+mQENAztpd98AAAEIAK8cTulRhuMQYFOKXz94E/ZuhzfVdvX8rDcQ074ttQ+6Mmth
+jdXc4v1TEKqPPpLGLWsR6ZIwfTo1K8Rl4W0rV/ZCdyqE++Fj6oR5Wy2shjJ+/1a0
+1CVi+OFJQYJoEzE8AUWuiOlqARHgXcFDbWLQjNCjjZhkEHwWmGA4xGMTFdBs6OD3
+39slzUc57BJbbdacvf6NOUpF95i4AHmLjgN3SKU1Yf1ffxbtikF4IA1ssSUTuGGP
+OSl2Xh7+uEvbPZbMIqccWUxlnaNST7QRIFBy1eYVk2h56ZHMsu73lg2xURkWZbSH
+kG7LWkIcyG0zrvzcq3UH20q9c3gBxIpwOLKLm1EABRG0D2djbkBuZXdzLm5pYy5p
+dIkBFQMFEDtpd9/EinA4soubUQEBZAEH/2dlv6TKUcJ3Ga8occ0eFxts1pOCNWI3
+9Dcns8rahLItIeZGX1Xpd7Td2EGxlTftlEAQdyc3r587QDooIjkTQUanY0yJRSfe
+8Jyk0VUIpcX1HidC+U/Z5er6j1cGey1NXRC7B84h4ZdxT7jNsINgeFbZoD2hQL0t
+GozH2cudGVLnvCcbUSqGA9oQMdMQ7DSpQx1FQhi6+P0jWEcVkd59iwY04aKHxtxP
+/yadRs+QADgwkRNtk6sptbaM9XZNtlwMIHOV7al2ZYlEmNmyRzkXIIDCs3JNXmbp
++qD1xquUO9gZFV7vyzT5iUnkKpDF5RHJ4iSr/vlPbHoqr8OzLyRzWDE=
+=InDL
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="italia"><HR></A>
+<H3>ITALIA</H3>
+
+Control message sender: news@news.cineca.it<BR>
+Key User ID: italia.announce.newgroups<BR>
+Administrative group: <A HREF="news:italia.announce.newgroups">italia.announce.newgroups</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.cineca.it/italia/italia-pgp.txt">http://news.cineca.it/italia/italia-pgp.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzf03aQAAAEEAOiXa8Ry7C+pa9fXt2lAxWFxonLppeQMkHJzDj/PodW/EpE4
+dnxFQTMIOzFNw2Qw+V01yys0SvTEh70ls6Nq7G1YqRR6SGye3UfgdzFyxSNHm9Yv
+ZMApGkL5dLEiGCDFAqona19ftS5L903uuEo9cYaUIe5DE9uu58b9qAl55RHhAAUR
+tBlpdGFsaWEuYW5ub3VuY2UubmV3Z3JvdXBziQCVAwUQN/Tdpcb9qAl55RHhAQF3
+TAQAi9gPCoUNrEE06Jl77aMJFKN8jbOCEUFDc+2Pw4ZC90KG8tEEGGmEe7ejUA8i
+Zy4uHBJ4RbT3Njc13/JsFhbCZpgRT5kCQqupbnyCEYxnd8nD+Bslnmojqs2DyjgM
+QGk3+xdCpEn4W5EzFcfj3RMTjUQ8pm3ahxYergUgVBcTrlA=
+=M0l0
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="japan"><HR></A>
+<H3>JAPAN</H3>
+
+Control message sender: japan.admin.announce@news.efnet.com<BR>
+Key User ID: japan.admin.announce@news.efnet.com<BR>
+Administrative group: <A HREF="news:japan.admin.announce">japan.admin.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://grex.cyberspace.org/~tt/japan.admin.announce.asc">http://grex.cyberspace.org/~tt/japan.admin.announce.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/C56B3BB9 1998/02/15 japan.admin.announce@news.efnet.com
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzTmcd4AAAEEAMboB1DniZaaBFLbAkwp/xiXYykIvZBxSAI23OdYjp5xZu5K
+e6ikwoFuAupOlF/7Ny1SekzYaip48zKd60np7ME34OAQ0YJAqBRALNgGzlpGct1k
+tuQ+fqaE7f2TYQLT7BcjTkE9NhLW22bRMm9K5ggmUi0PCMrjeo4wi0XFazu5AAUR
+tCNqYXBhbi5hZG1pbi5hbm5vdW5jZUBuZXdzLmVmbmV0LmNvbYkAlQMFEDTmcd6O
+MItFxWs7uQEBL/8D/1jtDDCzj1Yb2DheiJ2EjCe91P/htBopg5Sh7MJvphnqHoap
+SjN4eesBz2QqVikyRlHLa3CDaWW9iqLOynRiRaBEUUpUBatITOFcSLMl6ZvEBmrw
+5zQdIlt7rfnGVQ/PJ/46J4ArEeRqEf4LG9Ck1hBVLsaDHJpFHf6xgbfO+Dxw
+=aNG9
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="jlug"><HR></A>
+<H3>JLUG</H3>
+
+Control message sender: news@linux.or.jp<BR>
+Key User ID: news@linux.or.jp<BR>
+Administrative group: <A HREF="news:jlug.config">jlug.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.linux.or.jp/pgpkey/news">http://www.linux.or.jp/pgpkey/news</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzUm4AgAAAEEAMZEaMhBlSDvD0ltgul0XSigN+SRg31Ppo688mfrs/zV9fJa
+YKg9d/RIkrxiNdDfsgTnRgAMH1jpMETxxENYnW4dKICbIi/0d6YjEAlfTddboVub
+p+CxM47DbY5sWfT1+VZWQawYSIbWjJYYdEEvdBRQkHDwP6tecUphBRwYluJlAAUR
+tBBuZXdzQGxpbnV4Lm9yLmpwiQCVAwUQNVAoA52lbKAOOBBVAQEyAgP9HOi7it4l
+HJss2G2sjPZTkvFZnyNCRN1vi2Q5IW23Z5Ly7kDgHJRt56P6cVrpdpqEKHBoJooz
+q3OFu+HG2F+CBe1Dk+nXs20+ENhmWFerCA/spii0u4YV+xI7vTs+oz7nxyaZJne7
+xZGk2AjNUglLeBlhaL+2lsGKvu5tf4qfzamJAJUDBRA1JuAISmEFHBiW4mUBAcsT
+BACDCFbxb48MmlD4FWiHThLJDbiYtkuFACi/G9JBqYMCBopvaYZfTYE4ouNS11h/
+C8mbGMyvLfikfZpYFLKz9kVrl5wyJn/0ThK5CInlPc/IlxsNyH0diu3pNYzGCxsi
+YvDprPe2yF/OMoWKa5e6CYpV6hhUUH3y+qIaoxwC20wIAg==
+=1rBA
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ka"><HR></A>
+<H3>KA</H3>
+
+Control message sender: usenet@karlsruhe.org<BR>
+Key User ID: usenet@karlsruhe.org<BR>
+Administrative group: <A HREF="news:ka.admin">ka.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.karlsruhe.org/pubkey-news.karlsruhe.org.asc">http://www.karlsruhe.org/pubkey-news.karlsruhe.org.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  2048/280ED2DD 1998/03/07 ka.newsgroups
+                              usenet@karlsruhe.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQENAzUBmz8AAAEIAKVN75ZHDnfOtRglcmnsw2n3yp+Hf6RQwtc+GpuwNXJKehoJ
+V0b9iUXMoN+8fl4Voq3yIOMRJZeqzrYxrElAKMo2Zl015PtCZxFUR7+yCwyh18f5
+vXLD3J4hwiWirpPvDbUnFkWHXJ8OHyAx2UUB8fe2chaf60wZRrf0J5BSduD9rsdd
+xXtpta7X1wGO+1BULxJcInWYfil4sp59sT2z96FgP+nrxrLEWoJL3emztXmPnUiW
+z9xxfw/Bo7TKM7yw6dxYzLOoQkObrYQ0G2gzTE+C/MlAMxbeA9XRrQjTHuxly4Ye
+meKmI3TCfj/PugGGXveV10ON0h9okM0wICgO0t0ABRG0DWthLm5ld3Nncm91cHOJ
+ARUDBRA4qufGkM0wICgO0t0BAXwqB/9I0CQlFGSiZ+l0VxrWaogTnptCmTInMqRS
+FSCc5nFLw8zibmzx9hkf+MAowLUNSfyZiED171hw1skMljGdTi8EWmv2K5hB/a0z
+E9sVmQBhOGNkv3+WSME5qY5FCCZL/ncAi9CoRLCt1tw/PbZ/v0J9+XuHDbHSjlmq
+DXS+vECfzpk4DCPxbE8ct2F4L+BpQXFSoEUkKak0c7ZwT4Km8a04WlLKgqtffaqy
+jNFitoqHKcZjLTEEOqPfBH0WY7NJ164zV9KddB2KWt2FdIn4cnqC9yfCpM8a/4Z6
+84wBsM8nB+lQniNyK62CX1LCI2mZwCheD/A9abkunRty1ZU6n2KGtBR1c2VuZXRA
+a2FybHNydWhlLm9yZ4kBFQMFEDiq6FmQzTAgKA7S3QEBQ7EH/35D7IhCcRxNsuhS
+coCACKuemFz/ciOuVy7CjF2Z2gooIofXr6qntrcxNGBdCU9yIRIu16T0gv7wz7ja
+aJ8DXhQbOTYF7EmL/K/s7c/jRRh3NlsmBx2iNkJaWpItwHtq2DM1dqHnBP426ECy
+92GolxiY3cWUPAGloYfRF4sOWMLhwQZBZx8uGqrzlmJdkXlfQ351VoC7SrWVieim
+S/d+Q1iPXg6a+CacjRyry2ZzZ/sEEj4dCeCjqmklS9XaPthh6tiZ0SMhtvgaaao+
+7hGpUGcqodHp/tYBdpd1UNBRwOG8hr1qxF5qRmYovozkED+jStMjAUZWqxFldqNq
+MO7LSQQ=
+=Bnex
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="kanto"><HR></A>
+<H3>KANTO</H3>
+
+Control message sender: ty@kamoi.imasy.or.jp<BR>
+Key User ID: kanto.news.network<BR>
+Administrative group: <A HREF="news:kanto.news.general">kanto.news.general</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzMG1n8AAAEEANHuYCPlLcazem3Rc90IQwy3oS3oPlrfRu4Jaq7KK8XC5Zby
+yiuMm4Y6uQEE0ET63arHDtCSx0+25naYc2g57O37bbqK9nbhsFSP68Fgxl/Eseg+
+7hyqv4kDNz2BaAq27N/9nr5Z1sU/zREqcthjrv1QksL94VqMVUbR7Jed5tDhAAUR
+tBJrYW50by5uZXdzLm5ldHdvcmuJAJUDBRAzBtembnPou6pBG10BAfmSA/4y/X/k
+XDCSDNdiKknWkONBbmq+Eco9hc+LTawFPDz7HHpiG+eL9ZebKBpajnqmBzrbNZ1P
+tLjqQKSpldenmMPdB2l55IT4YdyXvzUg3muRsY087y2a2RrSQ4Xjq4kZoRY6esTQ
+NjW0NNNU6eMds52VSdH2RjjF6/Pe5XtCnHJvIYkAlQMFEDMG1n9G0eyXnebQ4QEB
+HnwEAMyRdg9bJ0pxYeC0q48girYaX0hYbxO/QoyH7x0f11X95Kwiuf1s6ixJppwE
+14bMWnhzLxwuRR8HWowsUPilaigBULgLB03dzscZdFKeKuL9S0mmjA3oLnKFOASx
+Py1ePSNIIbverEdSOv3of3HRFznAw+42AchSPZPZEmr8ZleM
+=3qm+
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="kassel"><HR></A>
+<H3>KASSEL</H3>
+
+Control message sender: dirk.meyer@dinoex.sub.org<BR>
+Key User ID: kassel-admin<BR>
+Administrative group: <A HREF="news:kassel.admin">kassel.admin</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/C4D30EE5 1998/01/31 kassel-admin
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzTTimEAAAEEALyjAwtrmi68jDg/C+pqG39CuhP5WHk54jIwsKSfVwOsbX4V
+wFYV8mLVbwTdLvHEonM7YrjX2jj3eBaZdX0bJAYHRr2pkc3Z95SgpT61w7/XwyRq
+MSLAv1oU6bheODbQc72mFXTD/By/7Wwrz0bw2f/dsbbJ/umy8eSv3VvE0w7lAAUR
+tAxrYXNzZWwtYWRtaW6JAJUDBRA004p35RUoJTMc2l0BAS34BACrK0upz3Dx1EnS
+/+9WRyBP4ck3uYrFg/yu1O/7w+xNOeUZ8QM0RND6AinEcKZTmZ4RlWNI97vWoh1o
+p8SEYzowjAGMtIBVNaoBzmQH5NBQQxet/dOz++XLiPimlSt6/OTKdigrcsx/faNR
+iisnVWEmTZADQvNIzxvK/YUiJt3wm4kAlQMFEDTTimHkr91bxNMO5QEBN6kD/ArE
+ycUUvXt6MOuV9XfcZVwDSvgh/A1/zA5jqVxpvvvQDa/2Q5/qHmXsydxfLfgaM5LW
+XeYgkcuj1ua3VTkkBoo8NeVKXimKym3oz5XrWWZMRCWhTCMI8vgnvDLhV0duENwQ
+KDd3Ss5X1xAEKiTvlcNN8/oN8vdMtOT9zcWw98f0
+=500g
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="linux"><HR></A>
+<H3>LINUX</H3>
+
+Control message sender: linux-admin@bofh.it<BR>
+Key User ID: linux-admin@bofh.it<BR>
+Administrative group: <A HREF="news:linux.admin.news">linux.admin.news</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: GnuPG v1.0.0
+
+mQCNAznkyGYAAAEEAMaVTjuoCEUDGr+oYbhaQE0KZ8r3q9ozitEMidPATc723yY8
+ZXevQ7mTirBxD8W5g8zAq16ZXAJ7NELwt0rA2QvOoQ3NQAVSLXTmfWgk/WaUYGdt
+uSl+CW7Lm7uwZtxU40krvuHJNmH7+zC3N2JtLEHTuAnC3LNKSaY+DxZ9lg69AAUR
+tBNsaW51eC1hZG1pbkBib2ZoLml0iQCVAwUTOeT9R6Y+DxZ9lg69AQH8iQP9HoLQ
+VrlshmMYOPMH5zC7Cl546frYP5lWLkd4ZV3Hb9QQ7GrzjSH7LBPA7r8JmyXaEUfO
+Ur3QCXJWxhwvp5vo9xpUmttrX5FXjWJh/06lYhEPtNuIERmS9hlVjJjhJPckunJy
+AMGo/13kFkuGd5uxVfI6M/cL1Ctw1df0LrALYn0=
+=bXOA
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="malta"><HR></A>
+<H3>MALTA</H3>
+
+Control message sender: cmeli@cis.um.edu.mt<BR>
+Key User ID: malta.config<BR>
+Administrative group: <A HREF="news:malta.config">malta.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.cis.um.edu.mt/news-malta/PGP.PUBLICKEY">http://www.cis.um.edu.mt/news-malta/PGP.PUBLICKEY</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2i
+
+mQENAjmmghoAAAEIAL1I4uVHIlXVZ9f3iCZrQTKuYUfCJSRUwrzoQhfo5ZpEU6Ac
+c/PuCD/L2akGoYhDky2dQqnmmV+dLyn7sxaznmEwHJrgQeeoIh4i/RizWNXJiB6P
+GUvuUSQLQhJaQH3Lb/fSvUeLD6uZTSKE2qmOgwqgV4FS+tGeejLXd34ld6CsD9kP
+GXzYtSYqwx9Z4xOqarvtviDr3a+vCc0Epj26IFXbfYD8ElSHVWrnbFVPMbJ71uKC
+V8pkHz5acV3V6uw+FV7setgTj4vZcPrngjBXlAgxw1aJLWabXQqn8P9B8BoYVGV/
+LQeCRKQtAsF8ZMlEXfsaDV1IwVTAegTENVAgq3kABRG0DG1hbHRhLmNvbmZpZ4kB
+FQIFEDmmkmZ6BMQ1UCCreQEBjx0IAKJBa6j14XyNlPUwAsCYzzTEP1FztOTA1/0m
+kPXheTcIieZpW82FWKkKik6AiNGjaK2LSMji+C5X4pBLEOiRLPkOJb3n5bHC9lDK
+t4Iii6ZXxSadU/XnDg357208Y7z8CZixXeXNB+QbZu09bBm9kXiesppMJT1Ufx+U
+LDGOJ8R8KQNxMraI/qb2qa1hmaLquCWFYBlb9QL/3LL3zh9yjWohUoYvvoQgbyWt
+UEnGMEZmULQwSu0AU1HGdT/zmyWtPAozINMiTSb73bu/6mycXWHptiHgx2/XTTLL
+FDjHRA4yVxN+xlU/GG+HeYf30B9qzgXjvnRLTUb9SjEn2+FFeHo=
+=lVXx
+-----END PGP PUBLIC KEY BLOCK-----
+
+</PRE>
+
+<A NAME="maus"><HR></A>
+<H3>MAUS</H3>
+
+Control message sender: guenter@gst0hb.hb.provi.de<BR>
+Control message sender: guenter@gst0hb.north.de<BR>
+Key User ID: maus-info<BR>
+Administrative group: <A HREF="news:maus.info">maus.info</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQENAzNbv/YAAAEIAKdDX2KIjpxW6o7SsGFImWbGYio6yOr7YSdGImkOtjmCdSBO
+HL1gf0XlFtCs3Ieod4ApgRYxT0I+79v7Uon8X6wnAexasx8ZO53DGiaa16Eydapz
+AoSvT300pF5Fg77cDmMBDR59B6R+yWc/bY4cL0U/GnAqIvVACKvCIYalilymBnzt
+g2CJUf0dcmJZjK+bPUdRvrjLVM5oAG6Z59wTxK6S2mEqzkwlQSsL7IyqrQdzqtac
+pyLoT99DzhT/PdMveNgmpUwjYJ25sIDdYBznEQZy+qG1sjLN8/o7bvtsEHzyehxi
+F8TICHvL3Fbl50FT5Dmq64/QvPlAfTCxujOZVmUABRG0CW1hdXMtaW5mb4kBFQMF
+EDNbwhRmKbXRMOZHkQEBc20H/3wRpKmWyaiYAxOrNxcxdI0rmjbTS4VhMpNIxNCP
+ABcmGodY4BivqOxCMrTtPCfYbb+tOJ7DbTT02/DLcrKQR6sroN02OlH2mCwScG4o
+dVp5fqs8uAWf7N/jqkNg1u5AuCBw2UqKEgeR2zfqEpoQrP+cjPjTuTiydP4A2buH
+IrxlaD/rZeQdGVNTmcPfdPrUlk3XpcH3K8WhZKRm3qJdnNmWNlgv+k7kCisggoJS
+N2Br55Q4p66lhzXZdyovvQyWNRKc74K29KdYDVvKepUPTBaC2fE4o/Dg/ZBXB6aC
+oMjt9/XJs2g6OqdZgJV8MApWl/7PgsTP6rLwMSNnUbZ3DvaJAFUDBRAzW8H96B+E
+1tFYtckBAZ4IAf9GfY7OfRZqeX7Z+g8ecGeOB73mamX+XSJR6UpxoSYAvSic0MKB
+Mokj6GxmtqkIH9ir07+HRAIqPu0Ie3TWjJGPiQEVAwUQM1u/9n0wsbozmVZlAQEM
+Fwf/UVjaHNOXw+UVqayhlRNFSTYr78XUYTfQ7bpdK6M2y49BmiGXYX1zS28x+ViI
+P4vgevwaN0rsg4T0vY5LtZ6cskVmAYSwEFBMmXt8aFD03CLhZ+wJdzANFw3sR0Gf
+QhCtJrpHViDq/8ymWry44sPE8cElOBLASlemfD2oGWojdc7mWCwEzmM0iaHg6i6f
+d7CGvLpxR2wVi5/r2L1IjtryTBiFSK5rYot3xIxXNzB2Dp/QAO+1TNH6uhK86xiU
+Vjsoulzlf/R7kEMuI/RoEKkbkQXMCX58SmbmozKhz/3QBGO1FBGY6YUTAkW4OQ8P
+eBRlXg0r3A8/FtQPsgc8B7LoaA==
+=dtBe
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="mensa"><HR></A>
+<H3>MENSA</H3>
+
+Control message sender: usenet@newsgate.mensa.org<BR>
+Key User ID: mensa.config<BR>
+Administrative group: <A HREF="news:mensa.config">mensa.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.1 (FreeBSD)
+
+mIsEPeN3GwEEANareCoUiDNGt2Md/lsCXbK4RVTKYed3ltpHOmjtt9zSi8u+XAb4
+XQJWiuEmkP4cXKxiy0Yy4peonscnmfJ1PFgUS6ATZ/2B5P+joMfhmsTqhlJWuV4U
+LYGRn3bRD6wqr1/+Nc8DlCHnTMH010L5H83BV8sASbZVKMIxgcN9Bma3AAYptAxt
+ZW5zYS5jb25maWeIsgQTAQIAHAUCPeN3GwIbAwQLBwMCAxUCAwMWAgECHgECF4AA
+CgkQlzxQBdx9t6e/KgP8DW1DsJULyuKSwrbKn/EBnlrjVRdxus6zhkOWnvhKFPQk
+LC9H3ubuyVIzrIylgeVgiU2SwRSnM7iVLaZ2zriySx4acoBC/gVoXBMPclphPE35
+CACfGWgNWBsW8NFKowvCbm3HBlahCDGRO0KyY7Qzsy3e2Ts0ZBRZ7JFF15uTAhWI
+fAQTAQIABgUCPeQ6oAAKCRAADvWCVm9jxedFAvwIx/GK+nFRv9RSnc2CBnXzpqTU
+GFUFVfO+s3P0Iw1bonXS+derv6TDqNON0RRrC42sqjroH9xix1avlQeRLlpIN+xt
+uxxIgLpn1g6Qui8r0Ef4PCwZkuPvWurExRF53j8=
+=y2CM
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="microsoft"><HR></A>
+<H3>MICROSOFT</H3>
+
+Control message sender: control-microsoft@trigofacile.com<BR>
+Key User ID: control-microsoft@trigofacile.com<BR>
+Administrative group: <A HREF="news:microsoft.public.news.server">microsoft.public.news.server</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.trigofacile.com/divers/usenet/clefs/pgpkey-microsoft.asc">http://www.trigofacile.com/divers/usenet/clefs/pgpkey-microsoft.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID     Date       User ID
+pub  2048R/E60E2FAA 2007-03-30 control-microsoft@trigofacile.com
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.7 (MingW32)
+
+mQENBEYM5lkBCACzpBm74ObU7a3+YYzr4+u/tmHZSEflAsZxN0qUU5/ZdB+Qncau
+HG2Sjy8CThTb48K1uf5P0sSGGdyPEGt+REv641fWiPZntqcfc0xWAzfmSHgRGH1b
+I8vpHfLu86yHpa8d+xJFTSGZRejaDUZXP4ZexlVuJ1dItUZTKHfgui4RoSWvmcGb
+OgE/Qc4QePXeZXWPfdZ3j/HSeM+wCCaCVrFZ25FMH3oySLV70CiqzP3EDAzxmm4F
+y2/jwCa9tu5pfKt1SR2U/nmfO4alBcSUnh40xuF2cBbTLeG/PFyKaER/DQKkirVg
+tFACzWI62XA73BX0L2V92TQAAD+imsjkxZDZABEBAAG0IWNvbnRyb2wtbWljcm9z
+b2Z0QHRyaWdvZmFjaWxlLmNvbYkBNgQTAQIAIAUCRgzmWQIbDwYLCQgHAwIEFQII
+AwQWAgMBAh4BAheAAAoJEGOpjRPmDi+qgWMH/3YTRBTs2nVFDFAM8Uw3iFV3XYdh
+urs/mLlPmI/LbHxoHuGL4TqmOW3RTriEKwsgphQqY1qFuIv2cnekqH7eGrf5fQzL
+E+TO9SGk76mo0qKC75HhBIZtyATBDrBiH97FiMXNgaOi6oiYikeZ11eURatVWzZl
+ul6f6dr1+DpP6qDZGA+OON2baYuIYYG1LkWtu/Zg46vmGXiL6P3vQnJToLhtTtmF
+xe2DftW/vVVu3i0FLBoNtTtP2fkTvux26j/2zohPWj43X9jXjW9lppLkBi0fCILX
+0KLPC3zBDaI74nGooxgCE1QeMw03/BwHx3Wf7VDg4Dwbfp6iK6SM2qd1Mj8=
+=IfrI
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="milw"><HR></A>
+<H3>MILW</H3>
+
+Control message sender: milw@usenet.mil.wi.us<BR>
+Key User ID: milw.config<BR>
+Administrative group: <A HREF="news:milw.config">milw.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://usenet.mil.wi.us/pgpkey">http://usenet.mil.wi.us/pgpkey</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2
+
+mQCNAzY/vwYAAAEEAOA1w52EYpoxwjAl9u3AlJBwh93xlwdLBfP3tqz+6goYbELU
+fCCwnC7GaiqCpivo/7OqLltBSt3Mza4DO+XJ6sRdqZVTzeaFfJ35sqfhL2cX1A2D
+3/mhiAagMaNhJqwvJZkWHS2g9hAIN4AgPwGovp9XKVXCbWAUrsxJ8ozkLDBxAAUR
+tAttaWx3LmNvbmZpZw==
+=GV3/
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="muc"><HR></A>
+<H3>MUC</H3>
+
+Control message sender: muc-cmsg@muenchen.pro-bahn.org<BR>
+Key User ID: muc.admin<BR>
+Administrative group: <A HREF="news:muc.admin">muc.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://home.arcor.de/andreas-barth/muc-admin.html">http://home.arcor.de/andreas-barth/muc-admin.html</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAjPdFSUAAAEEANgr0q6olWHFlo7LA35bGqMt8vFjVpz00CdHmeHDaGFX4W0D
+dL8dEPIGbk7Y5KQ+e2F9DBgK0rhIdMWeya1/XRGMTfJAgTic+o7TNl3TC2bemJsC
+P075T4WTc8m5vUCqn1YfK392Cp5GC3qA7PByygJxY/TZ12aFcvFYi875Z+npAAUR
+tAltdWMuYWRtaW6JAJUCBRAz63X58ViLzvln6ekBAaAmA/4lN3dIZqtJT2ADJEZm
+4HZCLxo3oYBiWQlJmWG9lUIIikN9hg1mr+GhiAls0/bljBIo5gRiUuwAc4tMmKID
+rHZBGiDHNmcEBySEGsdcwzCbbfAoH/pgRqabTy4aYQeFjv1qjH3Fjp7NSWrQmhtu
+LHu79OvnXqmWyENrXgcktYhnOA==
+=j10k
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="netscape"><HR></A>
+<H3>NETSCAPE</H3>
+
+Control message sender: news@netscape.com<BR>
+Key User ID: netscape.public.admin<BR>
+Administrative group: <A HREF="news:netscape.public.admin">netscape.public.admin</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/72A7797D 1998/04/08 netscape.public.admin
+                              netscape.public.newsgroups <news@netscape.com>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzUr0q0AAAEEALm8W9QYzLx6rYGB5C4tDWBH3/lNBSuDUVWyeL106QMfSaFL
+ZTLjwN2e9oQgssv9MLQrTt3tJ+X9L+SVAV/ZQohIslLl5aQR5rFcgqze/gHtN31W
+QOPWW1NyrppzRvmdzYIEEfiX5i1Q3B7UGY/Iz+Gc5l4wyupsuiGTgw5yp3l9AAUR
+tBVuZXRzY2FwZS5wdWJsaWMuYWRtaW6JAJQDBRA1Pnc+IZODDnKneX0BAdzCA/d/
+Mx0fvxTowDoxEJoRDqrq1UWDUOTJBPgyZZY+fS64dgwSQskIOH0EqZAjPN56/oZB
+f6McQIIrd1hqrUf+VN6FNpBh55MuY/uKAAAREPXSSkugBdbThyJWsFDmsBPJlkLG
+ornEbFt2TdPqmm2HbgoZ/jynYPLuE2h5LzHl4+a7tC5uZXRzY2FwZS5wdWJsaWMu
+bmV3c2dyb3VwcyA8bmV3c0BuZXRzY2FwZS5jb20+iQCVAwUQNSvSrSGTgw5yp3l9
+AQH6XwQAiJAWUpyA4WBKaBU3SfeMKG4Qk3gmuunCw4JPPSEqInCFQpxp8fykXS72
+qe9MsLEAvTdMRpmHe1Zs24yRCNLaUG5laHLicARESBnI9D7NdR36CBL/yp5W023T
+o9BLIu4RxfurDsFkGayl64s4aubgJSUgAORgvqdwxsaGpid7FJk=
+=4lmK
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nippon"><HR></A>
+<H3>NIPPON</H3>
+
+Control message sender: news@gcd.org<BR>
+Key User ID: nippon.news.group<BR>
+Administrative group: <A HREF="news:nippon.news.group">nippon.news.group</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.gcd.org/news/nippon/">http://www.gcd.org/news/nippon/</A>
+</UL>
+
+<PRE>
+Key for user ID: nippon.news.group
+1024-bit key, key ID 86F67401, created 1998/09/03
+Key fingerprint =  BC CF 15 CD B1 3C DF B3  C3 DE 35 6F 2F F7 46 DB
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzXuNc8AAAEEAMEPrh9LxWYvNwma7ORh91vhjiTgnggJIAqgcbuarrOiWmKV
+Ics/OXPWUqnbhFA9hITwYOFckYdv+em1KJvdwIGAZ3fNSNSzSduOBdqvMvEImoPO
+XeylZTvixDEgJwXGevmuGYb8X+rSQA57PUxUy5akq8exBZjW7ls/qJWG9nQBAAUR
+tBFuaXBwb24ubmV3cy5ncm91cIkAlQMFEDXuNdBbP6iVhvZ0AQEB4YwD/1w3BKNk
+ozEJWhhwRw2gnce0FYD1qg8Dx8S2x0wk/d/ezI7k684GsAkuNP8xkk4VJPMQPRZW
+SVWUFTR1Uub8DfEuLpYQ6CjShnCF6MkSREk0GptBwr5cGU5KFmz5dEXmOm3qWPkl
+oA0gNbkkQSDa/8jxRI0wfGc1e2zl4qgAHpZm
+=NRy2
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nl"><HR></A>
+<H3>NL</H3>
+
+Control message sender: nl-admin@nic.surfnet.nl<BR>
+Key User ID: nl.newsgroups<BR>
+Administrative group: <A HREF="news:nl.newsgroups">nl.newsgroups</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzLS7GkAAAEEAM+9XI6apW0uhXWIoWDPcRxwRYU/94rxETu0OHrPqXTSQt8D
+Eq/UyrZ3eW7AsDG9zsC0zAVjgO2MP+N4+5fcwFtr/sjbaHGbX0j3P51w2LXqWoxM
+Mm2EcvxC8HqIVE8Z/1Wc1K2wvhrLEzH90injzWD0nTT4WFVXYAjaI3Yj6bOpAAUR
+tA1ubC5uZXdzZ3JvdXBziQCVAwUQMtLsagjaI3Yj6bOpAQEL9wP8CfsFzW6QdW9w
+Ofq5EbWPa9JQ70dTtbFpaPKh3MEcv1vpAKlCrmwpEQ0cXTTgYn02VFSWueBI/69v
+iYOh92BD3+k6Uyku4SkmnoS99H3AfMCwpWsZzgqVStcJF/Q76KCDBHjJ4KHOrR01
+sN5wP5ohSRj/0ju05BoJ3WW18xUI/bY=
+=mqDR
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nlo"><HR></A>
+<H3>NLO</H3>
+
+Control message sender: news@nl.linux.org<BR>
+Key User ID: nlo.newsgroups<BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/59B99EFD 2002/02/20 nlo.newsgroups
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzxzxVIAAAEEAMhXkGFH38gW3YXpLEzjEfmktyRri6SxADcae/yjTE7GJpza
+0C8RAZsGKNy0KVkl6hlaKOWhf5r+ND/Za3d3EyIRXFqCI+M0UOXD7WDZmTF0FzxC
+IM9v5P3fyj4fdl4yHlJlemryUjTNVIR86cXDSBQ1Qk57B9jcvqYgLaBZuZ79AAUR
+tA5ubG8ubmV3c2dyb3Vwc4kAlQMFEDxzxVKmIC2gWbme/QEBPFAD/0OMnSpQooIQ
+Lf+aT+dSgygf/yKRFW76CBW1NSKVCpleB0viuu+0K7weV9WIHCHA6xh4l76A5Jl2
+jvL9wcu+jYyOKTWSJoOE8Xai/5rw/17o/eT1w1WVkPXb4XOSVMdVqoHorvmdsiS9
+9p+OYLtO5olTeV99swPfRQUzDc5M5uX5
+=h+51
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nntpworld"><HR></A>
+<H3>NNTPWORLD</H3>
+
+Control message sender: usenet@nntpworld.net<BR>
+Key User ID: usenet@nntpworld.net<BR>
+Administrative group: <A HREF="news:nntpworld.config">nntpworld.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.nntpworld.net/nntpworld.asc">http://www.nntpworld.net/nntpworld.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/912F2B2D 2010/12/12 usenet@nntpworld.net
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNA00E/HUAAAEEAM1/yzqOYhdtJJkfIoOG1xYiucKGnMyS8LGSr7D38UUCIT5o
+W9RAH5nIz9VNHKM+OtOI+WWaZrOvWgnM5RLV2tPUzUk7cbevpXBk/w+oQJOvsrro
+3q/KmWGH+4IdQTS1Qh/UR5ayuySctfgdqGgUBmp/N06eJXXuwet7FmCRLystAAUR
+tBR1c2VuZXRAbm50cHdvcmxkLm5ldIkAlQMFEE0E/HXrexZgkS8rLQEBqUUD+wdB
+5q5rAi2DKd8M+51Xlz173UsjSnYdkAbJ9oSskcPlMv4Nq/4DNSWR5mrZWmhX8hwm
+BPmfpIOwzSH71/2VB5myiNrz4ZHpRRX2b3jmbr7X/ibls0XkCBdaGSE6HB+OHxKi
+IuEIkYWrP4CzAt/QuCFvdrD/4M3DBM+USpUllaj/
+=dp4h
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="no"><HR></A>
+<H3>NO</H3>
+
+Control message sender: control@usenet.no<BR>
+Key User ID: no-hir-control<BR>
+Administrative group: <A HREF="news:no.usenet.admin">no.usenet.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.no/pgp-key.txt">http://www.usenet.no/pgp-key.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzOtT6IAAAEEANcYtxheOaDSDpvo0OHBEh1DbCCrp9ReA3ycwyrEzWluhBcz
+P3rNz+GCloCvzFXeuaHD8i3VbhPeYDZwsCNOCo55WgKfQaWTD/XG2b29HO+FAzb8
+Dccyp/NINfSquvNmGEcbt487Hb1lh7YbCvCJT3ho+2ste+fedTdnUOEHWSZJAAUR
+tA5uby1oaXItY29udHJvbIkAlQMFEDOtT6M3Z1DhB1kmSQEBAloEAKJuiI2Aqz71
+P/07190P+/xmItxAbT2Ha7BfwRXnk2cXy1FKzj/412Ty4NCY4NOwOtqur43SnhqZ
+2wXYaLwCfMO0JVcZ/SpN7VrwldwYiezb6MdpSlUhJ7MeXi3iJlFd3cbM3RV4gxD8
+rvYXtGzitKrFBLMhWFx9KTpbSfQQvJBo
+=cM7r
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="no.alt"><HR></A>
+<H3>NO.ALT</H3>
+
+Control message sender: control@usenet.no<BR>
+Key User ID: no-hir-control<BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzOtT6IAAAEEANcYtxheOaDSDpvo0OHBEh1DbCCrp9ReA3ycwyrEzWluhBcz
+P3rNz+GCloCvzFXeuaHD8i3VbhPeYDZwsCNOCo55WgKfQaWTD/XG2b29HO+FAzb8
+Dccyp/NINfSquvNmGEcbt487Hb1lh7YbCvCJT3ho+2ste+fedTdnUOEHWSZJAAUR
+tA5uby1oaXItY29udHJvbIkAlQMFEDOtT6M3Z1DhB1kmSQEBAloEAKJuiI2Aqz71
+P/07190P+/xmItxAbT2Ha7BfwRXnk2cXy1FKzj/412Ty4NCY4NOwOtqur43SnhqZ
+2wXYaLwCfMO0JVcZ/SpN7VrwldwYiezb6MdpSlUhJ7MeXi3iJlFd3cbM3RV4gxD8
+rvYXtGzitKrFBLMhWFx9KTpbSfQQvJBo
+=cM7r
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nrw"><HR></A>
+<H3>NRW</H3>
+
+Control message sender: moderator@nrw.usenetverwaltung.de<BR>
+Key User ID: moderator@nrw.usenetverwaltung.de<BR>
+Administrative group: <A HREF="news:nrw.admin.announce">nrw.admin.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://nrw.usenetverwaltung.de/pgp/nrw.asc">http://nrw.usenetverwaltung.de/pgp/nrw.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/A195C439 2002-02-17 Moderation von nrw.admin.announce <moderator@nrw.usenetverwaltung.de>
+uid                           <moderator@nrw.usenetverwaltung.de>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.0.7 (Darwin)
+Comment: <http://nrw.usenetverwaltung.de/pgp/nrw.asc>
+
+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
+hMy31Q==
+=YT7i
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="nz"><HR></A>
+<H3>NZ</H3>
+
+Control message sender: root@usenet.net.nz<BR>
+Key User ID: nz-hir-control<BR>
+Administrative group: <A HREF="news:nz.net.announce">nz.net.announce</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzNYhVkAAAEEAMtQi97id2CiV5TFAqB0xWP2S+4+dEx7lqvh/yXdAmMKHgUH
+UFckf6+Nm62JGjzAvInoKdRN59zL1dYoAB/ZHzthWOlOaleGWM729txFlk6JBuoW
+A/esv+P0BmG/RslIhp7Cyi9oySdFdQvUzd6RFBybJEC+Q0DCvvsII0K45VLFAAUR
+tA5uei1oaXItY29udHJvbIkAlQMFEDNYhVn7CCNCuOVSxQEBi/ED/3eZE6LDVYgA
+IlGgKn3jXK/vECvE3URq9XKdsBQovxEJz1AQEvhJuHzjap5JfbUTqqITZMfmqL6Z
+IOZeCdGGrKw/SqFRM5Knq1Km6uK2D84m2n2zepsvqHb4IDY6j03pZJAd0r2EAMV+
+QOVP7HJ8qn7hgFSiZUuu4Afr7v3K2qfb
+=aND1
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="opennews"><HR></A>
+<H3>OPENNEWS</H3>
+
+Control message sender: news@news2.open-news-network.org<BR>
+Key User ID: news@news2.open-news-network.org<BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP Key Server 0.9.6
+
+mQBNA0Nj5kUAAAECALXkr4HcPC3USU9BnIoh++tXTsWbed2vhoudIs/erV9EyIHZ
+04Cm3ISwpBpoHbF2ylapwQxtRpPnHncWQ+Yq9qkABRG0IG5ld3NAbmV3czIub3Bl
+bi1uZXdzLW5ldHdvcmsub3JniQBVAwUQQ2PmRR53FkPmKvapAQFGRwIAhkl9hmmU
+iECh+h2qXBJ5fulB/GF6ue920cWwW/IlbjHBHf1zt1XbYIzhbRB0ngTBvwCJi5EH
+m1tdE0GvY7ORE4hGBBARAgAGBQJDY/gpAAoJEM3xsLVPIMFayhwAn36YnL6CkOQA
+cnz9RxxHagAdHnKEAJ4hudaSKujeUOxA6EVjoxFKSnMzIYhGBBARAgAGBQJDY/ju
+AAoJEFU8vTtiyTwc+p8AnivP5WYA42xOojfmn7Yp3oGLBFM/AJ4nhoNwOUoOkHf+
+09JemSyMO2I3CA==
+=yAOT
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="openwatcom"><HR></A>
+<H3>OPENWATCOM</H3>
+
+Control message sender: admin@openwatcom.news-admin.org<BR>
+Key User ID: admin@openwatcom.news-admin.org<BR>
+Administrative group: <A HREF="news:openwatcom.contributors">openwatcom.contributors</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://cmeerw.org/files/openwatcom/pgp-openwatcom.asc">http://cmeerw.org/files/openwatcom/pgp-openwatcom.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.3 (GNU/Linux)
+
+mQCNA0Vsm64AAAEEAJwMWF1iFYDbLvw/xI2htyviJZf31zMwtRHYNAgKYG6NPOmf
+gwEoKL0PH38DG+kCCUmECZ0RRRyPB9cTnNUgWELfOCvOTfBPCuJdrmO/fhosDVz6
+MAaLXFwarpwjZveecwE8u3t5tKa++XVGdmmfkiS4rHiqaMCIMfXdyjJTph69AAUR
+tB9hZG1pbkBvcGVud2F0Y29tLm5ld3MtYWRtaW4ub3JniQCVAwUQRWybrvXdyjJT
+ph69AQEUHAP+IxJvZz9qHQDEGIz8SevnP9DxijxH/v3YJURaAsd2FtRAOl0MCY6K
+HEYIbqFAs+6R9jaqYbjUud+U533eXZ/587b0PGa6HKU4Pb88C78TcC7+1PsJrVDZ
+wkIv2FO6lnMpyGPoF5tvHUoMlvnRf2luAkvxorEgbMMDAwi7mmhE8EM=
+=RxG6
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="opera"><HR></A>
+<H3>OPERA</H3>
+
+Control message sender: *@opera.com<BR>
+Key User ID: opera-group-admin<BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP Key Server 0.9.6
+
+mI0DO01g6wAAAQQAviqcEXzned0oYYpHgJ4vUqA/UPafBMcynjXtGGcZizoj18k2
+EE2YocXmcO3Zsi6KxcuXp3XzQm1ltlOdDANU6gVMfFbpHikxwbvkGqlcSdcPdSNK
+0fHyIiA4maedsTR9y7lqVzP/2qxkrRoFFzKXHMAbpNF1vEdyfDQ0x7U/t1UABRG0
+EW9wZXJhLWdyb3VwLWFkbWluiQCVAwUQO01g63w0NMe1P7dVAQGQoQQAh3B77A1C
+WFr6h8YQUIb49TZ7F/lv2xSH57dZzipWtBe40/sI8W+QV/a9J3kgyKOokm4UnheA
++ZZDs6VsR5VeQ4/56k2WUAaxxnlEzTUwUyVVtjXqBVUlxSEyKXSU1x+IX0S8atK9
+HenBB9JcaeTOCshvmcvlUNhcIfxo833RebqIRgQQEQIABgUCPPT6xAAKCRBOqa0W
+nW1brh9sAJ4wFBEn3QnmTkDNwiU6pMTLV8HdYACgq2wfrrrOfMl7xZqGawW5mPnN
+RcWJAEYEMBECAAYFAjz0+uMACgkQTqmtFp1tW65jhACeMqv/BZgqzcfMrAqEl2YE
+Em5F5s4AoJ+3HMctmt12NFXfxwMb7fZ0Ru40
+=VUzr
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="pbinfo"><HR></A>
+<H3>PBINFO</H3>
+
+Control message sender: postmaster@upb.de<BR>
+Key User ID: news@uni-paderborn.de<BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.1 (GNU/Linux)
+
+mQGiBEIwmRgRBACSMWoHH7mUqYKsnO6PqSwvFGKEcD1pNc2acZrzor37thRLWKvd
+odSf/EV8r+evtBJoF+82ONliA/Vslm4D4FuI4nYCfnW2yOtX2eprKL8RSCnuLINa
+Y9W0L4h6/WdFdT+cnjDeHXem9oV6OH84uLa3Gpq1MdRHcey9h9Mr1f5+qwCg5JVQ
+RMhd1t1z2J0VZMGo+I9SikED/RKko5Ej0MZiuuVzN4TC1cYCJZHxv6uJOGwYQyxN
+wF3fs1yAi1WZv7/2bsyiWQZnyl6UyOmtgiq8yoGSCp+r1zY10VZU+hJdrY0bpO33
+QO7aqbnL6gb6Xtn+yJ7eFr6E5VR5jVmnT+E7Uf8YrJ65CjPEb9lY/Jcgt1itLJPd
+xEZ0BACQseUxIgKg9qINWhp+xdNylaTTagKgrf0wVSZIh9ToG4a/iV4v4Nr/Hlf5
+XFED7NA+P87y05KmbFglE6O1RToMnqveOtaf+YQI+YCu6CQt5fdgZVFcIdADEweT
+jb95bt4nTajgpBylp88AwpuBlaIvMFnIEOmZa6Z9lodZt8c/2bQpcGJpbmZvLW5l
+d3MtYWRtaW4gPG5ld3NAdW5pLXBhZGVyYm9ybi5kZT6IXAQTEQIAHAUCQjC4lgIb
+AwQLBwMCAxUCAwMWAgECHgECF4AACgkQcoMtOpV0wmwCrgCcDlx3zy5O+SS26Sft
+GYhEpjYBkKQAoK4AO3q8BFn0z00wqdhidOx3nH5puQENBEIwmRoQBADT7VQdhLs8
+beOfVzUuPbHk+pcfvGmBrav2AZW3AWujdweKnp5Z6aPAQBwH8wqWsc7BL3A2wvXa
+dxfZgFtSUZX/8meriq0X063hV+3cmYMpeqjRlKrSE366NjXyeGItNr/Ut2XVezUF
+JqRw/KzCCy7wMNd/8MN+KMdIGZRPW0WXBwAFEwP7Bqe4qet0v1TpvW7mzdY+yt17
+etuX4Y+Ea2uX5vxkT0g6OgkCgixqCnQaUGbF9zpbogmihLWvOOPw8CpoJrq+eBb2
+qpfmFT1bSCNLLD6PgPPFDUa0QklYsuskFwnn/doheoUgWYf4CAEYwT525t5yXjH+
+Dcf7u/0poDdNDsUn/PyIRgQYEQIABgUCQjCZGgAKCRBygy06lXTCbBqIAJ4u0Tka
+K3sbtaVfwbK6JwJwnr+fWQCgiR3PpVeCJRQUyqf8DfDy/OmP3Fc=
+=4xl1
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="perl"><HR></A>
+<H3>PERL</H3>
+
+Control message sender: newsadmin@perl.org<BR>
+Key User ID: newsadmin@perl.org<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.nntp.perl.org/about/newsadmin@perl.org.pgp">http://www.nntp.perl.org/about/newsadmin@perl.org.pgp</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQENBEY5JJsBCACYBIeYk1jlPgEPq8lQwrKhq9BI4W1McoMEJurzgEK01xQi7EGk
+xBjzzPd8Cg5kRFJxVPRVV/2kuOYCA5eK17sRrchTu8K96Yh6Hhmu9QXqCGlz9cPU
+Xjcuh1VgtK3fc5er0gMz/fbF1o9xfZcRJHwfPEoABpeHBvDV1WbxBW4Ki1LXQq7Z
+d9Nfej1TaXwbNFsU8CemPymKChbPRvCgk0WR8b2ssYHPCkfekk6rksenub2yKCcK
+VLzZItZpDZruciHAD5fQn8OfLPOEDHX4Hv64rx1ESaljfJ3gBXD0GfUNEKfgSo5F
+srNiDC9+A5e/pKro4R8n90J425VRmdDwDkDfABEBAAG0Em5ld3NhZG1pbkBwZXJs
+Lm9yZ4kBNgQTAQIAIAUCRkF0pgIbAwYLCQgHAwIEFQIIAwQWAgMBAh4BAheAAAoJ
+EDKYin2LKs+74fcH/0awACyaLpM1AcQFwtynL1GqzvgpjRmjSvUHa5kBXIDAKwiN
+wKdPBd8is3zzCqOcZEm8CJ2c8wvM5LC8qBAsqzm0bOcP+11ZgKfNkuz0gxsyHwGR
+9F1eRmh4SyEpWMTuYIb/nZuaVOsh7FpmwB25Ew8JlJkott61FdWyOX75LO6D3sBQ
+KcjEyejKL/lA8W9LdT0q840q0ViX+6A/7oZE0SBgWhEyCfsDImOhdyyzE/1X3HaT
+QyN+ispWvoHuEadosoxRIWSEmn9XcWDjgAo8NPPhmuF0so42xg0ciz0X3W3NVt3i
+3kAWfvtm7P85IkbijReN7wbV9JY4+uuZyvsOXlU=
+=EeNn
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="pgh"><HR></A>
+<H3>PGH</H3>
+
+Control message sender: pgh-config@psc.edu<BR>
+Key User ID: pgh.config<BR>
+Administrative group: <A HREF="news:pgh.config">pgh.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2
+
+mQCNAzKkdTUAAAEEAMJVCGgsorYtryCzGKYe6tTv5tgE6l4j3eKkYkdn37icoFAx
+VANFdTHy/1e5GQJxMcnDV3610NQNSXE2sTc8br2IBYqbt7XkyQ48xzW6/qdARQHu
+b9cp0epIKKOu/4Zguxw+hkLyN4leziO1ts1ThnV2Tkaixu9+BpgGy01AM7MxAAUR
+tApwZ2guY29uZmlniQCVAwUQMqR1aJgGy01AM7MxAQEYbwP+MZRjtrY/wiayMehw
+KSDwXZqHh1stPOu/Rh8msk7ebeq4KdnLIgLinwcWZM1v4+ktww4TO2OKXouIVKtL
+YTNVLYAF3AAmHee00XFDaaZMIOsPfEwr+P4YUjLvxPfj1IEaEQXpODQTLUCqRYZ2
+AupSOzmnD4HwwDt5Q5/1BosAg/c=
+=mXnj
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="pgsql"><HR></A>
+<H3>PGSQL</H3>
+
+Control message sender: news@postgresql.org<BR>
+Key User ID: news@postgresql.org<BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.hub.org/gpg_public_keys.html">http://news.hub.org/gpg_public_keys.html</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.6 (FreeBSD)
+
+mIsEQaZGUQEEAMRCrb5GB3wqAoU+dji7vNYCI8JblUHlF2X00JyHywxZVF1rZsU6
+wGZ4Kb6nVCCylXKPbTzIyBs1DLHJ/+hLeDIjlcpAfiXQfj6wXksq46XeRiToCje5
+veigcDcWPeqPN/9rQ5lwK9oIiSbiKX4ULN3oMgUSV8/uasf8iXk5Dn85AAYptBNu
+ZXdzQHBvc3RncmVzcWwub3JniLQEEwECAB4FAkGmW+UCGwMGCwkIBwMCAxUCAwMW
+AgECHgECF4AACgkQTNDpchYb0bcevgQAivteytrQC96SZw3U5OJflm2A6llGhWUe
+GrfBSGacxEsSdW+9EMVpiLCtgFRKkacp6TItWvQFIxealxbKvsOEyJ/GORMXlRC6
+s12LKwkq/mElrwSJPVKOHxcMmEbTQ+GGlls4ICJe4CG2wl9TKQYj9CP0luOutaVR
+Fd5C/GfxO3o=
+=kGyo
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="pl"><HR></A>
+<H3>PL</H3>
+
+Control message sender: michalj@*fuw.edu.pl<BR>
+Control message sender: newgroup@usenet.pl<BR>
+Key User ID: pl.announce.newgroups<BR>
+Administrative group: <A HREF="news:pl.news.admin">pl.news.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.pl/doc/news-pl-new-site-faq.html#pgp">http://www.usenet.pl/doc/news-pl-new-site-faq.html#pgp</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.2i
+
+mQCNAzGvEY4AAAEEAL8clpC5yydhkMN1ppivfj3E6EIyZtntScjuCyI+RwpvLf9o
+So+FLbiMmjjCV7BNjds7c1yaDMPDFetZlqEYKof5Q0QK2bDaaou3wtnDesAXqrde
+K24GURn0N2BYWR9sEFJ4bwn8fudHelFcAXPt24lI29bu6dX+LddKTteDivjtAAUR
+tBVwbC5hbm5vdW5jZS5uZXdncm91cHOJAJUDBRAyc5r/10pO14OK+O0BAWq9A/0e
+So5/56x6hkT0to92FUiIbcoHF6J20sa4edDXbzTHZTvNJh3K4iSBwkspMcx8AWyS
+36ckftXsZP2xRTj2Dk4xgLLCcFBjPHt7q5ysa8dChkgEu8770OE5atbQZorzz757
+xpOgKmjRXLVbzt680Z807jH/zOo+BRby3ZMJFtGPyrQXPGNvbnRyb2xAYWRtLnVz
+ZW5ldC5wbD4=
+=n+Qy
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="pt"><HR></A>
+<H3>PT</H3>
+
+Control message sender: pmelo@*.inescc.pt<BR>
+Key User ID: control@usenet-pt.org<BR>
+Administrative group: <A HREF="news:pt.internet.usenet">pt.internet.usenet</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet-pt.org/control@usenet-pt.org.asc">http://www.usenet-pt.org/control@usenet-pt.org.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/AC2AE025 1999/02/24 control@usenet-pt.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+Comment: Requires PGP version 2.6 or later.
+
+mQCNAzbUOhcAAAEEAL2eYnW0UlnRUQ+hqwvArjzPydNLz//6gUPDGm4iNp01rBGN
+lyaRu9EwW0+bfn35b3c0Ghf/BWBYCs57bdB03wbt/OrvMZiFV3hO5ocB9UsIIBDS
+i0sgGvX6+nm/H0eKTT9ROO1dwDwwQisVhg8ILIKtbm8etzSlA1iTeAWsKuAlAAUR
+tBVjb250cm9sQHVzZW5ldC1wdC5vcmeJAJUDBRA21D1/WJN4Bawq4CUBAQ40BACx
+yelM6H1JcmM2vR4lK263QoKi+G9Oc1cAlTwNuqNgamSUBNLnkBCnQTx0dvoq8hiV
+15TZhAiYctuFcHmjCPfAhNZJlChFJKQbDHKbgp3uRrEWqs2SjVRBaiZ5OsTMO9od
+UwXsXE/Srvl8QPuhC53jXcy3qIPiPygJu0L3EJ2e3w==
+=qNRP
+-----END PGP PUBLIC KEY BLOCK-----
+
+
+</PRE>
+
+<A NAME="relcom"><HR></A>
+<H3>RELCOM</H3>
+
+Control message sender: coord@*.relcom.ru<BR>
+Key User ID: relcom.newsgroups<BR>
+Administrative group: <A HREF="news:relcom.netnews">relcom.netnews</A><BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.relcom.ru/pub/relcom/netinfo/coordpubkey.txt">ftp://ftp.relcom.ru/pub/relcom/netinfo/coordpubkey.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQBtAzXun1sAAAEDALof/xCxlk+clO3w6+s5FYc0gTK4AT0RhBqUULylQ8lB25Nm
+tkfre3ErB9hen3+/RzbsZpzteDY03PWo9dG3FFrrYw2Ro7XfOoM1tR1fmsdzwzfz
+ovUF4fP3l2K315dhpQAFEbQRcmVsY29tLm5ld3Nncm91cHOJAHUDBRA17p9b95di
+t9eXYaUBAZ1WAv9I98BzsnJjbY/fslbarT7oncMQIOzIpaGj5oqf56UgkIfBoA/u
+bG4FGbimSqgTIVD73ZvAgv0s5P99UXZER97gIcF+lF+BOcmekVF0BvPVI9i40/oz
+EoVeLqrXELM0Gvs=
+=U3wV
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="rocksolid"><HR></A>
+<H3>ROCKSOLID</H3>
+
+Control message sender: usenet@novabbs.com<BR>
+Key User ID: usenet@novabbs.com<BR>
+Administrative group: <A HREF="news:rocksolid.shared.rocksolid">rocksolid.shared.rocksolid</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.novabbs.com/hierarchy/rocksolid.txt">http://news.novabbs.com/hierarchy/rocksolid.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1
+
+mQENBFxMMg4BCADKvUtOY+F4JzK3GHLUw7rkCy8+CZz6vmjo7Mvrs4KmUc4nAxQ6
+GukkeTyD/htBsp6Fhxel5WL9LgO2Z5JfFkZthzoRsGQKOM+uHX29/vk2kh6/++iA
+bqcXZZhdozED7/t5oGr0w3PN3AU30q/N1ar/MkA6t7Qb8p2mEC+chZIUYYIx4nUp
+nYvWjGNdJu/pU6E4DRQPQ7cpk3jxkYDdYovt9zjWoB4ZXMuT+R4ziLl5+/zd/pnN
+40+pCFDskDub0b/jIq7+6EtU8X9iRU5LpW3rtWr8Ik7rRLNVtmcSUb94VCOpJgxA
+Z1+Ax+Ej1oYk0W+a6OarDqN1KJxabhvZdIjbABEBAAG0JUNvbnRyb2wgKFVzZW5l
+dCkgPHVzZW5ldEBub3ZhYmJzLmNvbT6JATgEEwECACIFAlxMMg4CGwMGCwkIBwMC
+BhUIAgkKCwQWAgMBAh4BAheAAAoJECocZVv20QsTob8H/AhoIR5cv784pbZiSwFM
+HAfgFGHgg23cxD/hPMywJo5AHkNIqhvJpcYR+ljK5kGW48JY3A6iJnM5DVwGaCZZ
+dothUUw56J4jBcmg9tPJWG4M4zXGqRfYrjsQQyv89lwQllAy2hQpW4F1gjCEBguw
+5WQUyUPtwZcu8rnn2+voQSZEI8fDkCwaDLnCzRsHmIA+3lDuMiAqgrTy69oIYQdW
+TAe1d7Pd8g3PN8R4+xb0NCUTKqM64TF5X6ywKWUscrP1+wam19YH7TjQIw3y6rCh
+zTG7PpNX2+FcXEAYUYBig99rJFI+D9Zy3Zy+zcvjZEOQLd/8dNPjA21SiDW0KrbR
+c8+5AQ0EXEwyDgEIAJOjakZytjut+FyxAgVfDjHj8KeJMHcaClTZF7APSpoF37IT
+KaOIjmFtIwr9Aow8c4ycazKZLoqh4DOgmqH5N8m9ByJGd+6mGN4SOEpaznyEuEc7
+hmVQmOj5EqT2UJjCQ52ndlL0F82HWLo1NwSOsxAi9X35uBb4SvH7E6mvlZ41n8zl
+ycalpaUy+pnhFcfG7RZFF64AF6AjU3q1sm6mYmBSpKUgiXVHAMLgXG2iuEljN54X
+fJQS/imN7EXb/O+NA9j+9UlbxtHog7uU9XseW8DhLZo+aynxr4bs06kg7+j+ZDfJ
+lr7LW8dALYhx6H13KA9nZVaZ5gt4el7CzFkbF3UAEQEAAYkBHwQYAQIACQUCXEwy
+DgIbDAAKCRAqHGVb9tELExyNCACLjqyb+zTjST7X43gvXNApv0N3F67W8k2npZCe
+8cIkdZJie10BAfYIg1pfgz3/swffE+0D7DsjFPx6HE4/+ML73lkRUgJeUxC/jK6w
+VhmP585HrWb88f905QpT48vxJhfBKEheJ1Xrma39Irs+N4HjgbZsfwyQVDhCjhd2
+y80nUZh9rgvDoxvR1vYWSpHCLtV75547b81K4MjqlGDPWG4AEnvjSEOjJjYCQgzF
+wp/r2W6czYGRQuZn3hUoRpwl83+EdP2GuhdrW6PR5bx/wucjSMPrn5qlPOCeP/Tc
+ciwPqPfRylRSkXFB4p5l4Rj0EPv4X1ymApOLoQ2WofT9lmgE
+=j4Vm
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="saar"><HR></A>
+<H3>SAAR</H3>
+
+Control message sender: control@saar-admin-news.de<BR>
+Key User ID: saar-control<BR>
+Administrative group: <A HREF="news:saar.admin.news">saar.admin.news</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.saar-admin-news.de/saar-control.asc">http://www.saar-admin-news.de/saar-control.asc</A>
+</UL>
+
+<PRE>
+Type bits/keyID    Date       User ID
+pub  2048/2C017393 2000/10/29 saar-control
+                              control@saar-admin-news.de
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGPfreeware 6.5.1 Int. for non-commercial use
+
+mQENAzn7czcAAAEIALihpRXfA5jSwb3FN1DGch91B2QaBsAttd00Ean0Bkhjp0I2
+4JI1Vlx+iRzZUxvNaKwvCqE9yPWI6hI5mEXdsh0XhC1J8nOLTx/fE9YmUgw/tcqs
+Wc+C15ls30mZSpfHFXLriWcG2TzTBquNiXo7XMGrS1w7ArYbQ1JngDjdhodwHKAB
+hcjZnpmn9LlWvMzR//CA+sLgq/LdP7hEOowQigHB4f5kB90o13pjTwp9+lTV1G8s
+KHaLI4v4b3Hy+r4NqI/8ElgsQ4Q8an/SiQQFjWF669WW5mzIaTKyxp/bLDE2YKPo
+sK9cwnBChonZyw/NrOX6lb1P78LeSmtLDiwBc5MABRG0DHNhYXItY29udHJvbIkB
+FQMFEDn7czdKa0sOLAFzkwEBEbAH/R1atdJdeJQSgJV8M6CcWNEoChiiS1MvEU43
+zbsSlBhnepICut8a2rW6zzk6eB/UzLVgsKmD2iIQiaeOfW964+gXMSz9YZSoKVlQ
+c1cvLgK52TIExBUvl55zveleS5zd6DtGqpCd3N2Mj9np7z1q1NYvUjCpWgWyjN8K
+Vpn7CT1d1PnMjSk6tCbsExen3sLeVBbavYCq9Pd3x0kjO6dYkwXjsJyzPXqypsYl
+iuIpEIo7vRxE2HQLNKSUeuVViNMcdM1Q9YGX6DeXxe33PQroO7salZFSkLjV04Bi
+PzNlVz2AqPb+LqE+QiZ1W5rA44DCHQbTvcRPErHvyU7E0PN5JhW0GmNvbnRyb2xA
+c2Fhci1hZG1pbi1uZXdzLmRliQEVAwUQOxdDKUprSw4sAXOTAQGIdAgAnM7xFbtC
+Auee00ba5ZKwsekjfQBNv8tov5ppPkWb66ZjzDqsQl5bVb6PwnoIamztnHagjGNI
+IjLbIsnrWnOPt1cfgerIY/kYot2Mru/0rrFRm4NRdAXbqKdY2tJJjS3E0Q00HNAs
+uEWP9DH81jxp+5JCek1lJluxrC+9wYylcg4DzaaYv2jCX5hDcztsk9Ns6c5uAuXk
+8j48vOm7poVTSFh48HKKHo+/mPvRQWOykZnfuwrJxe21ADKKrdneNLh9AcHP8qhY
+7M+zHBwwm6rXxm1dIsqS7zWZw4C/aRirG0S45xXVmBLB+B/rVdqBa4DAIXS7qUuK
+Wmd4azaZgd87aQ==
+=vqxc
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="sat"><HR></A>
+<H3>SAT</H3>
+
+Control message sender: satgroup@endicor.com<BR>
+Key User ID: satgroup@endicor.com<BR>
+Administrative group: <A HREF="news:sat.usenet.config">sat.usenet.config</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/98690EE9 1996/07/18 satgroup@endicor.com
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3a
+
+mQCNAzHtkkUAAAEEAN9sqrBBgcjuaG+mWamDYbOz0GARQhY7dli6m6c6zBaAhvZV
+i2CBy4deMWF5wAWY0SPFTSeowZrkI1fCIFwBt2XRdEj8YY06BpsXYaajvD10yppg
+Lx70y662p+R7pK7GAlbsaf8o/y31pzbFssJAWA8GGkFbnpRN2gv3azuYaQ7pAAUT
+tBRzYXRncm91cEBlbmRpY29yLmNvbYkAlQMFEDUtq30L92s7mGkO6QEBh1YD/i56
++SdS9ab1zdwPMCOLkuAZDqCnO72uCPlX5jg787wgVZ9FgsXnQUhKJWEdsi9lLn1y
+K0NYe00/N54H5R0LEYuo0uN0aGfpPnVw6wq0Zyd1Bu9mICcll0GYB2p3NkeoAWg5
+D4A1uRxI4iBKLTMB4uJUfpitMCRcRgi18CcTlwEg
+=ziZy
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="schule"><HR></A>
+<H3>SCHULE</H3>
+
+Control message sender: newsctrl@schule.de<BR>
+Key User ID: schule.konfig<BR>
+Administrative group: <A HREF="news:schule.admin">schule.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.afaik.de/usenet/admin/schule/control/schule.asc">http://www.afaik.de/usenet/admin/schule/control/schule.asc</A>
+</UL>
+
+<PRE>
+Typ  Bits/KeyID    Datum      NutzerID
+öff  2048/21DBB2A5 1997/02/09 schule.konfig
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3in
+
+mQENAzL9vYEAAAEIAOuQU8rD71soRIS6pcl4w/LbGBbfKMwDMdJxSNZTAjrLfZqB
+9i7hUK+YsrYeJbjEE08OydBbSpFTAdxCPF1pXtY2mNtl2EqSdrrCr6Hfkyy3u6uU
+djIC2DKOTSVVzmI4pK9knmUzUV/AayykRpZ2z7vwbM/CVZoQmHHrum/y1+qGySe6
+rm28dW06eXP9uDa9AMSNhso21wkfA7/Q4zx+ovBGqxP1HKQOtUZlkXQPrWB3wkOf
+JkxBmyC/PnwhHwdUfYeQtc7LGG5DIUEAI7u2sODmrNwo0k2l36/3DbfWV2qWovaZ
+/JADHsyAw64Wg9J5aE8GxIKDxdHN2GBYViHbsqUABRG0DXNjaHVsZS5rb25maWeJ
+AJUDBRM1XI95JaS4h9dc56kBAcKHA/9w6IR3n309W6EhAREsQVpediQQvWYIqX/j
+Tw/Ie/vNFHLXOd7xNKLQHkXtYvJA6E0MXvum6XnGmg2bp0uqyNtgQ6ZBbMMCeuNm
+78OI29cG77ldyYwKzmz0wRQtlvirWY/4JPZH2dMBgC4sAnPiImW+R6UfsisGcPve
+CScx5kKNjIkBFQMFEDL9vlMJ3HA5OfN/XQEBC8IH/jtxwf/gPU16x3Rqzb/mAiLF
+9HJdBSL+plLr0SIsdr38qF68+5Q41viDODGiPIgaA5k2cAOCCD+7jkQaLTWFauIL
+du4+1MroEPsjHAfGZDdvGJbT8yqsvgU2FeIdiB86REGsQ+WXRhEfgGm4lQ6pPk0y
+krDr4OD+fWDMefZlHIqfChBN68ltJLsG/6cLzpyuUTVGcg11Pfvz7gkTQ09iZFIa
+1LfbiWTv4X7wrw3aynMg4aF4Yp8kBr43WXKNHq1B136ycDg5SmB0hqdRERsN/A6H
+xA6qJwLi3mQR6Wo1+yrM3whyutKrrLISKsn4le1Gu7m5Y8iLENdiVXfCf5KooZ6J
+ARUDBRAy/b2D2GBYViHbsqUBAY6dCACj7nCSHv6aIHErEy93UFUsTqq2vEWLLYPd
+VBNDaVTf6VCbmCaaXHvMHIBctvLsmQsUzPf8CedkbsW4Zfp2yvfZdvRsx0emLHRP
+nIsbwuthetOUD2nmdIWFS6IN7QBGRpHoDjDTwpJb4wqM+kvZvJSwACUeD+bLbhGg
+DyxsDxinervegdCrksdihQGc/IbngLh8sEN+Fx/JpdlJa0Gp29BblqgTbP1J5yK6
+XbgEIUedU4kxXXU5yIqfIfnuLLpajX++3ieZ1++v8o1cRJVo70SmhjMXemRgseCm
+QoYUm9jMBpTIHc7b60fJgSlqynBoXBnpsnzVwL8nGnqtCsN00jGL
+=Z0nI
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="scot"><HR></A>
+<H3>SCOT</H3>
+
+Control message sender: control@scot.news-admin.org<BR>
+Key User ID: control@scot.news-admin.org<BR>
+Administrative group: <A HREF="news:scot.newsgroups.discuss">scot.newsgroups.discuss</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://scot.news-admin.org/signature.html">http://scot.news-admin.org/signature.html</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/739DB91D 1999/06/03 control@scot.news-admin.org
+                              control@www.scot.news-admin.org
+                              scot.newsgroups.announce
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzdWoSIAAAEEANOOqr6L0FerlN8lpzp7O3DIidm9nHOs7aozOFccPMAQrx7q
+mJ09BiAAC0P5otmqd7a1MiQDgeRSBrwA0SzBPSUsIrrU4rzjs7Gr1kM4VMN5xycj
+do5Lkpio24VhizWMd1ks55zCoV8CTWg7Ln54LjxTb3wTxizyXeUBhP9znbkdAAUT
+tBtjb250cm9sQHNjb3QubmV3cy1hZG1pbi5vcmeJAJUDBRA3ku415QGE/3OduR0B
+ATG/BACiZRl0sOjiweDoHiCx8lKe6GrcvQx1cUcQ7oDDsKjwcUrg305DLQVYX4UF
+iky7btduP3Zk0cc0x21q8ymCatGO50uAo6r2pC2pmntVsgNBWynHvFxetFmklFpx
+YvV6pfzGZsBINAHPTuheoiiUidINuqAQZkbDx0AZBbqnFvy8ZrQfY29udHJvbEB3
+d3cuc2NvdC5uZXdzLWFkbWluLm9yZ4kAlQMFEDdWoSLlAYT/c525HQEBec4D/0nS
+p+GI1ML/x+SxpLDI4Vb0OvRLGmlbTQSS8gK+L2mlX5U2DxR/JQlF4Bfeu7iFTavh
+kS39i5QKA2bu1hAJ1MkLkzsEm+Y/82ABdUuvPZeDQn99SCRf2G+SyOxHbx8YhXgW
+9U0sLHdRyF2Vj8AlE3syAb/Ih4XSxVY8HQC8PR7utBhzY290Lm5ld3Nncm91cHMu
+YW5ub3VuY2WJAJUDBRA3ku1g5QGE/3OduR0BAdadA/kBmpeMTX93g+c3XRdZCzjm
+uxNDj4lPCGUugrDF6dIqxQpOKo7lBb0pUrfADFyTZsVXhJU+HTozBMPrnrgYp2fr
+7iYwumsI6o42aT/3WkMxc2twi1LWtcMDlq3qgU7jgpBxJSv6iRND6NjrKFzRvGXH
+kxN51hLSe72P/78hLpei2w==
+=0k1+
+-----END PGP PUBLIC KEY BLOCK-----       
+</PRE>
+
+<A NAME="scout"><HR></A>
+<H3>SCOUT</H3>
+
+Control message sender: control@news.scoutnet.org<BR>
+Key User ID: control@news.scoutnet.org<BR>
+Administrative group: <A HREF="news:scout.admin">scout.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.scoutnet.org/scout-pgpkey.asc">http://news.scoutnet.org/scout-pgpkey.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP 6.5.8
+
+mQCNA0A/ploAAAEEAMQWZvEn0rQ59XnOuz94gpwzsuagcxywgYcL8hhI+cQsak6e
+iMTrUhh+GLo06vVcNXYAc87YGscGn8iRg4koX5swmM6U9WNZD5eVtfXv4phT1mvh
+5Siyjy4CKjed6UDzsv11+iOQeBUawkmoTbth6taYMsf6dr2O2TYl07+8BrmDAAUR
+tBljb250cm9sQG5ld3Muc2NvdXRuZXQub3JniQCVAwUQQD+0qjYl07+8BrmDAQEb
+YQP/bhymy4CsSgQaYH/+W/Eon9zjkO9pje/XbckugVgkYNIy+IKp0PC6lZ1rjDJ8
+xqIYwP8Gn4GJGY8ExWQqgBGxwuBeU0W9ot8MvwDetMvwYtmvdkGqJPNzCj7iiXTt
+1ZW+ylrtKiVZeanF2fIbUtM8FVQEKTF8OdTTp0nZLanVaOi0Gzxjb250cm9sQG5l
+d3Muc2NvdXRuZXQub3JnPokAlQMFEEA/plo2JdO/vAa5gwEBoEkD/1S58U+IVfAC
+mcVNwZJIrz1pjGwNYmAyQ91QDypgsMVvLgSIj+Noy/Hyfp+tONgu+K5w3NwooRZ5
+ZZVQbECTXu2cNGhK24twVo0KVJv4wo/UVm/EydL0LhuFb4z5EOHdnjEzeHrjeNRe
+Mc81stz++h7dtBKN2h+AfqLg7Wmdcw5D
+=zpED
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="se"><HR></A>
+<H3>SE</H3>
+
+Control message sender: usenet@usenet-se.net<BR>
+Key User ID: usenet-se<BR>
+Administrative group: <A HREF="news:se.internet.news.meddelanden">se.internet.news.meddelanden</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzUmnrMAAAEEAN6MDnKOZVC4RJgu68kZReudVhGe2NWphdIazagz5jBjs68M
+EQMhoHF4ZJzt7ubVEU9qz7w7MvIvNFIvQFYlGgNe/1+TxtKNeZ1Lwt4u9g33K7im
+XRUPWjp4Ft43UREFm/asuBZmKHq1dsPLyDADP/lXi+Tzxc55s+whZDvtu6MBAAUR
+tAl1c2VuZXQtc2WJAJUDBRA1Jp637CFkO+27owEBAfaCA/9tH+xo6cIdp8CyEyFd
+2NETQ43X68r3NeoFJhNG4LsFHqnQPb3OfqyNTBCbCNNGYn+KJ9ngnlVn0uPIi9Kv
+81fDeJG+sHeXENXsjDfD7gpniuPwpDSZgph32WHXYCwIWbuM5ABDW59SYIPi62Vc
+AYlctrTeh/hts+u5tGCqNMX91Q==
+=ejWf
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="sfnet"><HR></A>
+<H3>SFNET</H3>
+
+Control message sender: sfnet@*cs.tut.fi<BR>
+Key User ID: sfnet@cs.tut.fi<BR>
+Administrative group: <A HREF="news:sfnet.ryhmat+listat">sfnet.ryhmat+listat</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.2 (GNU/Linux)
+
+mQGiBEP1otgRBADazQsS4dV/SCfB3ifsOD/Ps2bJbI0G+L6bBmKp9XyOEoThgsp3
+VcQwUzvTEjf78wUM36AdRjacML005SiZTc7WieEohetySE5/ce2pG2wHXCXHMFvk
+f4kRbKEYBo5QalJKYaTdN8rXXdfmTUXj+xLBzzsEra+CR4aIjby2WKPs4wCgphgV
+dQUkbkvRehlyD7inIUvjzskD/RgzUR3Qyzzd+3EA3ygDLOlMWdvnB8tbYTi5YkLI
+jM8psvFpvbgnMpS+mz47o0Fz5Bmj6P9iiIBV/Qp28Kyam2xXG2kpYd7DjItWTCSv
+F9H6JRqKj/tGgxxh134ndBQCslGLkd8juH3UnihdWPUnbuPb5W0W51KPjRlgcSyi
+4Q7qA/4prbKGXUKfhpuPrUPL4drsDy0zvih/R3B7DbfCS+pPOLWxpu0lR9nCzxUj
+HUxJgwCZiihspgjMX7xceHz3gHzccY2qlGqJnafSQ1VDY+PMWobssCgVzhT1FD9G
+vCZOAZ5cMEygTUNxlZXatFg+H86YnY0CeE5c9t2f5AcTEBPiELQPc2ZuZXRAY3Mu
+dHV0LmZpiGAEExECACAFAkP1otgCGwMGCwkIBwMCBBUCCAMEFgIDAQIeAQIXgAAK
+CRC24w5TaTOmNomUAJ97ZJip0b5PZm7prVfhhLkC/xOQ6wCfRtgdgWuakN4mqQt6
+wNUkWWi6G5eIRgQQEQIABgUCQ/WregAKCRCS5gqLX22AFa5EAKCrkDY1Bq9tD/53
+Q2ni+R3VrjknqwCfXZWsQP79eQR9sS6W75RDbgc9meW5Ag0EQ/WmMhAIAIgzVm2t
+M+GjgMLEp4kvyzyeCCcM7GDPwCj9QaXUnrX8dlIU3ejp7xGhdOhrecqW+iCyKRaU
+Qlms+WqrTUwvT2Hi/sI1wy79ijcnjVNlKVhZpQeaW9J6RndSCtuh91q48yz22es0
+SNbCY4Tp4D8BFDs6naGfpnNxC6aNTYm98GTE1UWxz9KX4tKKPYtMcxAHyibjek5h
+lpu6QRFbq+UevROuX46SLA0WPp7FtMK/8Ctj6pwZEtphxaMqAqkBg7dhXbFcnrHC
+XFUvyf6TRmQHC8+zJKfzrburUC5VwdNITx0ovj2hfpGKeSAmyP0Hep6JNLOwll2j
+QJXFB+n5jBiiGHcABRMH/3ePSlifQXORFv/6AzIijcf5hZ25G2dFIXkToj2LsYEC
+l+GcVfUwPN90Vq00/5m1imooRhG/hw8oKGTK2OCK5y6fUfH4rLbSTO4rIUR2bgPC
+hNbMqIVzDkHZ0NPqVuRr0vEKG6/nQSqGFx72YuKeQlTbBeCnbKOH9AqxS5ddMD93
+iu03qo0e5vO507zqtIjk69N6RPTpc67Z1rR2lxIiVPoKcElBdGKvFmnwBcsvzwU4
+AAVAzhrtxt51vv1rggkyAbmMuSa01/ZXWTfc476jAOY67nwaqbkMWHN0VWYsxTP6
+S4o4xKxijHBI4/LXPyJD+PshY9NYWrB+DccnaReVGKSISQQYEQIACQUCQ/WmMgIb
+DAAKCRC24w5TaTOmNsjUAKCA69S9H5IfJQMydoYC78T7SZVUZgCePRUl2R7tgn5L
+06oS5eYWGwL5BNw=
+=gE4u
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="si"><HR></A>
+<H3>SI</H3>
+
+Control message sender: news-admin@arnes.si<BR>
+Key User ID: si.news.announce.newsgroups<BR>
+Administrative group: <A HREF="news:si.news.announce.newsgroups">si.news.announce.newsgroups</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.arnes.si/news/config/">http://www.arnes.si/news/config/</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/434E1955 1997/04/03 si.news.announce.newsgroups
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzNDes4AAAEEAKCcPqRR5rQH0bbUd8tgSMHwdL8anJMb/6+MoYSfgJmmjEZS
+hOh8mp2aUK5mtAygDtT+uEhz1Aqz5gRKEqfcCyweXAs4Aty9RjJIUJrl3OHqny5c
+BkXXAIibaYli3tx0tzp0vDDFXZeNcipkRcSaoPhltjijKfuVIu8d3lZDThlVAAUR
+tBtzaS5uZXdzLmFubm91bmNlLm5ld3Nncm91cHOJAJUDBRAzRDJ7DHODXHe4jmkB
+AS5/BADN072wLLRs6MZ1imSSfxh6ueCJXxU078OeJmQtYfSlxwJ/dQs862eTY4Tu
+bhKZUIRgagtrN+rtXxFf4lFVazOzDvpEase50tL8r+PnpZZbwOBXDliU98HP+oN+
+TcewX2pTA+163gP9WzBiJtAN67zT4Wu035ECcUYal8J5+XhinYkAdQMFEDNDgbN4
+4MaigooJfQEB9F4C/0PP4L9GRW8Pq8HXT8H0FPFDmI9ZLAzym3ZPFh2Grtgnbc9H
+KOD6Rr0FWNL/mtacUajBsHVwUibANK0AUo8udCm80QIR7t4axjNZlttVvKPCFvdp
+9VshQIWKpxV6qWBhFYkAlQMFEDNDes7vHd5WQ04ZVQEBAPID/3VY0GooUrJQu1Rn
+zSxGNg1qZwuIEmsD/GAinE2bNKbXtqF2pm2DNSn2KNT+WG0uqss4yQO3VmXs8l/s
+XEHWeEyF/qA+xTSrQIpJW3fLtsroMTuc3d8sZ8oz0ReBenBGfHPPp1m1q8U4rLvD
+Xf0Gybil7SY5lHnP5GPI9U9vHcd/
+=EWB7
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="staroffice"><HR></A>
+<H3>STAROFFICE</H3>
+
+Control message sender: news@stardivision.de<BR>
+Key User ID: staroffice.admin<BR>
+Administrative group: <A HREF="news:staroffice.admin">staroffice.admin</A><BR>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/039A3B4D 2000/03/01 staroffice.admin
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzi9bA0AAAEEANTQ0SyyL7yurIQ+MlLIvs+NrN9ktERffZlcm3F9U3hSkRah
+vfihRxzIzqDW/n7LxZh9A8ySStZswqDRcgM0kCNkc0rCI7yIo9BH0HAYWxv38uiY
+jzhZvtk+IQSyRriZLH91ZFR8Cjg2qFi6ToCjFmPG7me6/BhJNh514PADmjtNAAUT
+tBBzdGFyb2ZmaWNlLmFkbWluiQCVAwUQOL1sDR514PADmjtNAQF+vAQAwiAdJEJA
+/qr22zKlJioh35eTTbvELI/9VsH1a4b2ZK6zHPwIZ6h4hdWlWHIXBXiU93tYF1VS
+YWX3DtqgzrdDl+3gOU+zTkn7WDIh9UJ0CutfahW0uzQ0xT3rfCRmkw+W8RqFTKkQ
+/oF5qx7AYj9aE5RF7BnSv3VDww1eYtN11GY=
+=C7ub
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="stgt"><HR></A>
+<H3>STGT</H3>
+
+Control message sender: stgt-control@news.uni-stuttgart.de<BR>
+Key User ID: stgt-control<BR>
+Administrative group: <A HREF="news:stgt.net">stgt.net</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.uni-stuttgart.de/hierarchie/stgt/stgt-control.txt">http://news.uni-stuttgart.de/hierarchie/stgt/stgt-control.txt</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/CFBA947D 2000/10/25 stgt-control
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzn3U8MAAAEEAPYq2djl2gdZioUIuTE3uhj+iNZLcgmaPICKiqzokpJVk7dX
+1cXZbeQVk+PXi73XCzSvRZnxV0aF+005UhaNzdxMla7v91yGDh3rgFv5EPTyPz8B
+mCYHm1GiYSsMc8kQvcBU7dF6tCkAtmanuYIQhPGAYZ+smKjtS2XadhDPupR9AAUT
+tAxzdGd0LWNvbnRyb2yJAJUDBRA591PDZdp2EM+6lH0BAZgLBADGoU6IXrWuubp+
+cGZLBeWb2aJJSHY03QAE6VuV1RdrMJqTC8ZwNtxevICvG0N1A5JA+qO+Mdq11kOx
++6ocPZQFbDC0yOHWhDXT+EnHtOpwG8Uj869tN0dSh8/dR7sc2mP0Cal/gc1LBXnx
+F4POsFk7EDlUnhcv8S82KcOoY3hgxA==
+=LvCn
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="szaf"><HR></A>
+<H3>SZAF</H3>
+
+Control message sender: hirtenrat@szaf.org<BR>
+Key User ID: Hirtenrat<BR>
+Administrative group: <A HREF="news:szaf.admin">szaf.admin</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://news.szaf.org/szaf/szaf-key.txt">http://news.szaf.org/szaf/szaf-key.txt</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.2.2 (FreeBSD)
+
+mQGiBEdigHsRBACeoN7JnXc2i3uJpTwF3gD9Fv7LgBq2za+GIoOnfHS0ifgTbvCR
+7PBx684a3cc5rtFrV8h2j/0tw7tWaj9YzzJvxKf67QKO/Mvrc5M3aDBZnrKHq2gN
+rB72M4BZXefc5GUJrLXezxvAI3XxiJiVf/L3H4nPD4jrsHVaUgwZ+Z9mzwCgyHs7
++y0Y4EwkEtMJ2lgk+Dbc8+cEAJKwH2VDv+ZOo0IDF3v1szKwQ87aKg4P4c1MH68H
+j8h/dNxwyRK6ENN3SafwLEmim/cBF16g+1viibDzTEULfO6uTaK6WGydLpqMhh7s
+K2Hx1oWFruxGrawd0zKjLb7c2MxZjl6EH+cmt6V+dsAbH0K64CLsHxGWoMnNReHa
+UoSqA/0Yi/joL3JySNUHv+xk8a4Dag1X/Vx5CZZGGlWo0tsiRGZJtLqAiXv0v5Da
+u0O38Q7mFnQlyLlzgSSZpIauvbWEYbbbi+sEaWTtSx1OOS2i1N17IS1VJDphuYEZ
+babhpl3XfPeeFuhaWATnDnXRiMzEK70nGYU8qHG1aocrc9gOtbQySGlydGVucmF0
+IChNYWludGFpbmVyIHN6YWYuKikgPGhpcnRlbnJhdEBzemFmLm9yZz6IYAQTEQIA
+IAUCR2KAewIbAwYLCQgHAwIEFQIIAwQWAgMBAh4BAheAAAoJEAidIQSFhUI07pAA
+n1KMTPiRxQPG6ImFdu/X5TB00jlHAJ9SlIcj7R4CD+H8EZ7+RaiYzlLgN4hGBBAR
+AgAGBQJHYoDbAAoJEJNxIndLznA49TAAniBv23KA6ACXmq219Z5+t8rjQVafAJ9C
+0Ki7Em5QZn2m9eNhO8++hwk2x7kCDQRHYoCIEAgA1mqCQ1QwdLrd3Z+7FGvpNb0T
+vFVUhP9Lp8YYYexg3PNuvoRtqmprRQ0HUwezm09DGVhuSoaXYGOwh0eLoqW4AgQM
+lzRgjlShs43EpdocN5rnTfObXvXc8UBzoSWRogOqX8/Qg6EG0zuuE45y65Y1Ayfb
+waxEhhM7lET3A+/3Rp45YyG3okAsAFrZPSoPJVg6+yGj23BQM545kX/poTCSXlIa
+eKr3ItkB2LMqe5Q2NismhWP4Ib7kA0gB4GWwLPshQzdw6YJuLPWSj1ac3akFnssU
+V6zFbYeLhzQ3mKDKyrvtLC+cKYze1q0sgY8xwLP2hX4wbdwRhkTXtzw2igzafwAF
+Ewf/QOZjP+MgiZmonBUnCXDqjOAypl3e6gQucCrB2K1j8QPT4APSef/W6knqm44b
+4NL08zKxg5rvhZ11Obma88CBT3m1kVsf+8MGIxRvQgcNSmprGluOZDTKJYwZcQyf
+9vixGWiDlmzh9Xmbzc5xPiiMJI5oFbJCHu7mOrNwH3dwhP61dhBx6k7QZcDG155L
+E2W/OJ0Lyg5niqbvsFXEQ0pe29GmqDzKInyKbz6QnmAf/YOv5hXz89WTD1JXzK2y
+Rch9FbeGelo7aSrRYDRDjIvDa8RRON2np+oSiH0hV2CcDeRSg6VoOTMhT4K60ceU
+kH8hEq8cs/91q6PO45lEZbcRvYhJBBgRAgAJBQJHYoCIAhsMAAoJEAidIQSFhUI0
+Q7gAmwRTZqdepKdPlGvr1pJ7/qgfhNO+AJ4vttCGCQ6jdm53YOCInMlK5JQy3w==
+=79O+
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ucb"><HR></A>
+<H3>UCB</H3>
+
+Control message sender: usenet@agate.berkeley.edu<BR>
+Key User ID: ucb.news<BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.net.berkeley.edu/usenet/usenet.asc">http://www.net.berkeley.edu/usenet/usenet.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+mQCNAzRH0/sAAAEEAOKnxwOdLN/tgpvLsN9JEP10MMhHYJ09TTtklZGmIhYkcsgI
+5kQY4G9ppZxo/CydmgpgVEFF27O6so6q5b4uq8qCCi6nWvjUS7ihy5h4KuS+4Gr6
+4lDyPpMWC51DSNZNfsI2yHQx3WRzTaDBFvhij+2vqzoLLW/zdUwPpNKPLC+5AAUR
+tAh1Y2IubmV3cw==
+=TNXa
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="ufra"><HR></A>
+<H3>UFRA</H3>
+
+Key User ID: news.mayn.de<BR>
+Administrative group: <A HREF="news:ufra.admin">ufra.admin</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGP Key Server 0.9.6
+
+mQENAzTsKfIAAAEIALiQniRHIsKL95gPi0rpxTLz9X7UNDp3k4uUvTC+SryeR8MA
+NMNprudlAGkRHfoD4EQlWC4hq3kEWm3AolSIfH2pApgcKrkEkpr/t6GR0CFZBJFo
+f1tWbIevRZwdtrh9AgpnkGv84g+MycNmirQHc8VbP3wtmQWsPvvp5UUPf3mC3ikk
+1/CV7gtRsOMtYbGiz8st9j6wG5Y7wKACZm+87+bVG1MzuM6b5mKI5PbTYrPry1p1
++jq7BE3viS4ntT2Ptbyw3ApPkDxqu7yhAm7hfwNr6lJhjmyyRQeLrnUyNvtLwh3w
+5JnHUtKAxH0wAKE8Q/Ctqn6FECmD2QAIAHdUnM0ABRG0DG5ld3MubWF5bi5kZYkB
+FQMFEDT5SAXZAAgAd1SczQEBM1kH/RP6G1TlKcF3ld56VrJVdunDZV9mbmZ8LuFV
+u/3zTu9OxZphR1WHxL1djB5IVHFs7TNv8FMFOB5sX4iYpRMUr2AeMgbtnIENKBnx
+DJvAaQgvWTMi/AVR+aaWXFtV/mdv9wEyvJrq17p6EaBP7RpWz+JFEL9dZUgOCXpX
+AWi8ZisLqhq6YbkA1/ZYnnJ/8Ds/rBcdazDqKzTtsBx7IxmaqJDmmibQH2eS+Tug
+Xds4+SpPjcrwmb19u7AYWFZyc3rv0l/YSqf3DvpP1QnLWe6qc/z/UmXL6cioWbLH
+ghSFukUJpf4KAZxiaI9pcn7JwG22iKNwDYazdSeamiqwGVGHCVGJARUDBRA5a4B6
+PknhBEHs9QcBAVEKB/wOWX0hzzHpCGmIOxmwwVDsOHtU4uYN9u3eveEOcxH6twCg
+OdYT3Vfw0VAHCSKkr7HiGKTR4D2G75Xt6vuLSDaIp/VgrTAkvtMTKAFMErpn6DAI
+JYLVtmT+LqVtNfytyp0kbyCVohPd90IeNBbULaMSNDqzjjD2sePUjQJgsXf3FHKa
+uBcnGj5h7G45JI9kiskrOunmj2rj9AYVQKwJRAtNTajAemAY/Qi7irhpdTRWq7aL
+zceEc923uaGZc6FjRVmcl66puc75Yz3RVH41xUEc+OKHirc44VmqZaNSZ+73GPxS
+KNnIPXoZZi2OximrkiAZ78c4n3JVOZPDzHy61y1E
+=6bqa
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="uk"><HR></A>
+<H3>UK</H3>
+
+Control message sender: control@usenet.org.uk<BR>
+Key User ID: uk.net.news.announce<BR>
+Administrative group: <A HREF="news:uk.net.news.announce">uk.net.news.announce</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.usenet.org.uk/newsadmins.html">http://www.usenet.org.uk/newsadmins.html</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: PGPfreeware 5.0i for non-commercial use
+
+mQCNAjGL0cgAAAEEAJ6p7fQHn139U9zQawLixrExOUrkFhi1yLb8m8fLxmKTprKn
+ZNM1nnxMSbRyO8vXohXKKs4G1U2jTpaCkSRrbCiJ5VxWB/B31E/p/vrBXqqQ2amq
+3gb4Df9DZub0ZtOhHTF/pPjQmXvAv08umjZWpYlXRmUHBlBhMmOfGXkh8vHZAAUR
+tBR1ay5uZXQubmV3cy5hbm5vdW5jZYkAlQMFEDhCcUxjnxl5IfLx2QEB6e8EAJDt
+gIkNXdLiyL07lgDBr+Wq/Zckgm70JhNaHWxLPqckMLOJZGPFKlOlKA6W62UrwDWI
+yktEosLHd8whbPCaMOSbIOX7mmTrIySOKf+rBxhFLlRY+fAQ4h2oEyEWYhJ80wiN
+GgKgMJC+UqQD/ylMB1VcCsTYuZWEQ18ldKgtTsOZtBc8Y29udHJvbEB1c2VuZXQu
+b3JnLnVrPokAlQIFEDGL1R1jnxl5IfLx2QEBF/gD/ikHjpmJuG10X3PXA/yciZ0r
+qqVo01/4q5yy8vHBGGfopfxpqrjGnNtUV4kWluNo0/1uYZm1o7TeqHI6Siv/yWQp
++QldN4nED3RPauqCtj5cubmMgryXg2pcCBiY+brHWEr0tBV7cSSOHFipwM55FA22
+ctQzQ5nIPZQ+KPC3WjdZiQB8AwUQMvCcUq1e6k0sFfGpAQE6nwMzBdaFclXiv48C
+aMXBUG8S3bLUtx3u2OBajzpe8G2nJlCKYkCY482p2MjtfCDi7+eYDfqgKMDoGrUM
+zSfMraDRyoXjNC/nIKf1+R2EFMyaLoC9FWggCKTov/I/2BE2+grvQ7ewQSWEUokA
+lQIFEDGL1FGemw5PLx059QEBje0EAKx99yOZ0zQ9FjibuEBStP8t0BCsRNqkrVjx
+O513RBXecgcdXdv9hWn+8LNRZx6JLHv/ZpWsdGXqP3oiqj+LRt7WpHnZ55He/njx
+5DAoPAM/TjgTk7arazSjsJuFhcTP7gHitLDoHxVkUfdLX8h4HH9LWhEnrWEx82EY
+/29z/xQ6iQCVAgUQMYvTeKSiIc7jUXyJAQHLNwP/Qz+g2RRsuSZrJ9L0HAVPLcml
+oAEGOMFfYJDM/mvxegAYzL8i0HGFbwTH/+E94WSmsWAx1KZ/Z2DYKdI7BUaS8c09
+a2OtqOEbCd7QBI37seyxG0rTWNpuE0ZXBo0eiQBg37oIW+Faf/tqJQZnALVsV5LD
+Kcf+6+MhgS47HWJ6ZjQ=
+=iInx
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="un"><HR></A>
+<H3>UN</H3>
+
+Control message sender: news@news.itu.int<BR>
+Key User ID: ungroups@news.itu.int<BR>
+Administrative group: <A HREF="news:un.public.usenet.admin">un.public.usenet.admin</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQCNAzM2VakAAAEEAMj6+3NSJItwhqTJHMsNlGIBz6FxzTohNweqqoIuHhx4Q0sL
+YP33VAhABmoSCOsbmQUaWruRoO2Xqt+2a+x4klZB9PCIk/reCqS4qNA/Va/6qi65
+HIUniiSu3JrineZUjZ7uv65Eolfm7aUi/BpQgw3ymW8Jglgq45lzddlE9iqBAAUT
+tBV1bmdyb3Vwc0BuZXdzLml0dS5pbnSJAJUDBRAzNlWqmXN12UT2KoEBAb9pBAC8
+ppqj/r373Mb5ATZ9+gXpoBk8BIAztSmK1sB+5R/K3JeDFSjKHNnSBjgMLn3KzXHW
+bJ9I6BK14AbVQ9Cdbk5rzuoVkUTuuCzi1jbgt9yZKwSeI/bStXOsvUU4Gf2dHqwL
+W4E41GioIMvKYSdymBPAYcVBc/C4PJghfb7B3E0QrA==
+=MdCR
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="us"><HR></A>
+<H3>US</H3>
+
+Control message sender: us-control@lists.killfile.org<BR>
+Key User ID: us-control@lists.killfile.org<BR>
+Administrative group: <A HREF="news:us.config">us.config</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.4.6 (GNU/Linux)
+
+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
+YI5LPL0aaKj6
+=um00
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="uw"><HR></A>
+<H3>UW</H3>
+
+Control message sender: newsgroups@news.uwaterloo.ca<BR>
+Key User ID: uw.newsgroups<BR>
+Administrative group: <A HREF="news:uw.newsgroups">uw.newsgroups</A><BR>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1.2.6 (GNU/Linux)
+
+mQCNAz2l3GEAAAEEANa1NkC2AgFuhHxdfXSLJkxqhriOxZ4q3u80EnH9X6gxe9Tj
+R3YbERe5e3HRqR1Vx0lUyEZpM1Z+pYO5ZV3MakxlItMwnRMDnURpLGrMOkKGBmb5
+Z/8acpJgm18/n0dvxfUEefxXljM4Lm0bTRHPdoU+mihpUtqbjr+n6q4DG8yJAAUR
+tA11dy5uZXdzZ3JvdXBziQCVAwUQPaXcYb+n6q4DG8yJAQEz9gQAoOwynnQqEIPa
+LkrskX3uASqgn7AcxmRXeOTHrBbUukIblsgaMDg6+HZ1HA5QcDAH3g6cyQPnyZL2
+Hts10SaQ3XJVKTOc9ePNt34xlPpjr1uaiuItobYveaMPUNkUmEgMNxAty/1jwc5j
+JOV8pWQ4qrL0YQ0IgkUb/YxDKN7zUEc=
+=fKcD
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="wales"><HR></A>
+<H3>WALES</H3>
+
+Control message sender: control@wales-usenet.org<BR>
+Key User ID: wales-usenet<BR>
+Administrative group: <A HREF="news:wales.usenet.config">wales.usenet.config</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.wales-usenet.org/english/newsadmin.txt">http://www.wales-usenet.org/english/newsadmin.txt</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  1024/86F7AA61 1999/01/06 wales-usenet
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQCNAzaTFFwAAAEEAL/I099TKV7a7Ow6vDdvUa4/dHXFfzotYqSsP7CN5mL/AW16
+vXZUQJejnTvoothg9vyTaJYIDHq87ZZS7EFZWR2HszjgmypveAP6QGK1OV91KVyx
+MXMII50S1dQo3stwPpL+HiBVqPyQ51RGhxdlYGLcmdtZnpBvxwfZCkeG96phAAUT
+tAx3YWxlcy11c2VuZXSJAJUDBRA2kxWUQR9KqCtLo+EBAYxwA/0b1XKS9KyYuDXG
+IRIhUbj22F3UCKfpm6yJpV/mOvQB+qyC0AluK2l2LtMRypW/ksZoa7nP7LhugFs0
+sZMrPWySfjoEZMUrES20iwV3o8dDkBx3UaxXPX/6WSB7yWyQifKfECUL4g30RGjc
+Lg5MZ138Cn2jHqt8FBZUrYf35bLHJYkAlQMFEDaTFF0H2QpHhveqYQEBdgAD/2ry
+lk5JKtSYkd4efYg+Z0ap0yme1P94oilrRBx1wFuU324qzh1FPMEKTHOcI1K0WObq
+7BGcY2WXqAfQvxNRw7LImWdR6TJVV/6/R0FR/Eh3gymPUGMqska47MSjN1Np+clb
+PBXxge/pd21j6MJJHwNd860zf/UZIUmsLKjyBfMn
+=p13X
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="x-privat"><HR></A>
+<H3>X-PRIVAT</H3>
+
+Control message sender: dmitry@x-privat.org<BR>
+Key User ID: dmitry@x-privat.org<BR>
+Administrative group: <A HREF="news:x-privat.info">x-privat.info</A><BR>
+Check also:
+<UL>
+<LI><A HREF="http://www.x-privat.org/dmitry.asc">http://www.x-privat.org/dmitry.asc</A>
+</UL>
+
+<PRE>
+Type Bits/KeyID    Date       User ID
+pub  2048/01E40B31 2003/09/28 dmitry@x-privat.org
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3ia
+
+mQENAz93JnYAAAEIAMdra0Ain2LdRonbt8AbcEwPoD1UFioGbnfntZKKcwt+v+HJ
+UNhzRiYdazc5775wku1cJhh2B6fwSTo++5zPHgYUpMTSMvnAEBtPE2HwFtoOdbXH
+5DchyDhTVvnVAOJ61Ah3lifsjRYccV6NRjVA/+xeS9ZwrvxBOgM/gDB4BOf9fmqz
+4XjQ+C98mfvPNyWzFpgqb3cmcZBhxJchI+/p+bfrenOtZkr14ADBHBZXHjuvPhbf
+XbyDsGL6+qXWtIHTW10sdvEboERD0xt/NFCfCU8a8h93giF6sQJxH6iQeO8iF5qf
+y2O/M96o0Kx+mrVXih6iudHEBuNatL0YrQHkCzEABRG0E2RtaXRyeUB4LXByaXZh
+dC5vcmeJARUDBRA/dyZ2tL0YrQHkCzEBAeqjB/46al2c3s7GpUlrL8D+/iqwkl9O
+g/6sg2R2XaPr2ZpmXQfcQH9RndonZzCSsxD+9Ejpn6Q+PfesBJgHIgasw7r0WZP9
+QZGRK/YztlLN7AasQA6i+MrMFduVbNb2Len/e8NZedEKI7FPaqdUpELiuEZsL4h/
+byFv7gGRoHcQhWSlt+6WjENcwN+BVV/rmZ5DT4Bsf+Ykq7oGmjNjrmti2kj8XYES
+C4nOB5NnzhyRSZmfzuTrvi8a1ifvA0NnxRNvSKmzMc9hpXqWdvrYi5TBpbkTiUB4
+Ro8jv+qHUQd9IapErwHvn4dKh8Fxc309EYqNqJR7EBJlI+Of7WsK/IKvoV/O
+=zOUJ
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+
+<A NAME="z-netz"><HR></A>
+<H3>Z-NETZ</H3>
+
+Control message sender: teko@dinoex.sub.org<BR>
+Key User ID: z-netz.koordination.user+sysops<BR>
+Administrative group: <A HREF="news:z-netz.koordination.user+sysops">z-netz.koordination.user+sysops</A><BR>
+Check also:
+<UL>
+<LI><A HREF="ftp://ftp.dinoex.de/pub/keys/z-netz.koordination.user+sysops.asc">ftp://ftp.dinoex.de/pub/keys/z-netz.koordination.user+sysops.asc</A>
+</UL>
+
+<PRE>
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: 2.6.3i
+
+mQENAzKYLZkAAAEIAMnGhSvvCTsAyAuHGnczJma1wWyeFBe/RkpAMSfFA6DDsk+q
+VnTblHXVsAVl7gRjv2DOifB1dw52lvCXLCn+IlKvQkD2/JVYSeTxI9IDIT5Ecws0
+Rf4TFHrPgS8TjZ6WKlvIEAAmb3P64ZaVZbe7+H11m2HFHV4lZiZA6ktKf1kYc56u
+b09ZevKjbFLlgSHt/PY2Xaz8fjP1sSzSfh9m+CNYEoTPp4smrXK6yzeen8gtoLYU
+5JPrMQ3zZqY6bzy8J9ahi58447n+AdATMQEm8G98LZ4V4MD8iJc4JXPscVtC6Zct
+MHa6dQSH/T5oDJmN7ekcraPYvdpaTMWF8NWfcX0ABRG0H3otbmV0ei5rb29yZGlu
+YXRpb24udXNlcitzeXNvcHOJARUDBRAymC4QCdxwOTnzf10BAZu/B/9JldQbFed7
+tndj6vX285FgQKswoDJJdAJft3kLohg8ZkXOVEreLJ/Zhh50OH++mLqHcqTgDi4M
+u2K+KEqxEVaLIDlANUzgy/vtO5atHnQs8n4lCvFLLSx4Wnn2LCZmb+0o69Ap/rF/
+l2JWeg+oOERC9IyjrjnD8IkOJii6k42TbVfpTlcc7S/2YLFTg5tGjoRgjROpkC9A
+BoDy89PcTEHBwfpsPuqFnJ90fcmaIZkZf0uUPCJRpCK9TTbCYp0z8vZZetHbhjiE
+AXoVh6cIWdVwnDiaAE9Z8LvvL3mzyDA3lzDGQuBLtDjw/N0IavbDK47kV+2HYbfy
+NI3ISjZXkE0ZiQEVAwUQMpgtm0zFhfDVn3F9AQH+Ngf/TKExNsoL/iH+9xaM2Z1i
+LbpU17tTntmb/G5tZiPA1XbSCmFnVI8mbe09n8u9JGFco8MGTcshzB/G2DWwE8ff
+PNFBJFjRbiAn9COg1hSHmosK/3BOXIsSXEkBMIbsitrKQeu6S9tNKOMVekYE6TM7
+dN/73r5pGAUv2JBjmQlp3gmsbj8YzczHFcUgXu63wcYMlBBIRHndW7XS9uMTKBOp
+HpefbrB3qU99GOdXNjmN4ufEWsSWkZceIgwcJ02SHlFf/pHv+CCBGXFtB0hDJvk+
+hRPliao6FDCk8unlPClgNotTTtQ6Z3rwKrApJsI7zNHfQpq2UNDeQswOcgjmJ6eQ
+HA==
+=vT5W
+-----END PGP PUBLIC KEY BLOCK-----
+</PRE>
+<HR><HR>
+
+<H2><A NAME="Signing">Signing Control Messages</A></H2>
+
+<P>If you are responsible for sending control messages about authorized
+changes to a newsgroup hierarchy, then 
+<A HREF="ftp://ftp.isc.org/pub/pgpcontrol/signcontrol">
+ftp://ftp.isc.org/pub/pgpcontrol/signcontrol</A> will
+sign your control messages so that <I>pgpverify</I> can authenticate
+them.  It is a Perl script that requires Perl version 5 or higher to
+work.  It has several configuration parameters that should be reviewed
+before use.</P>
+
+<P>When establishing a PGP key and control message sender, please use
+tokens that are not tied to a particular individual.  This makes it
+easier to transfer the administrative responsibility when it finally
+comes time.  (The all-too-common "tale@uunet.uu.net" sender is still
+appearing in Big 8 control messages because of its legacy in the
+installed server base; eventually it will be completely phased out and
+only group-admin@isc.org will be used.)  Please also do not sign other
+keys with the key that is used for control messages.</P>
+
+<P>Note that the key you use should not include whitespace or angle
+brackets, because some of the various pieces of software that deal
+with the user id mishandle it.  For the best results netwide, I
+strongly recommend that you use only alphanumeric characters, the at
+sign, dot, dash, plus and underscore.</P>
+
+<P>If you will be signing control messages, please
+<A HREF="mailto:usenet-config@isc.org">let me know</A> the hierarchy that
+you are responsible for maintaining and the information that you would
+like to appear in the <A HREF="#Keys">List of PGP Public Keys for
+Newsgroup Administration</A>.</P>
+
+<HR><HR>
+
+<H2><A NAME="Getting PGP">How to Get PGP</A></H2>
+
+<P>Information about obtaining PGP can be found in the
+<A HREF="http://www.cis.ohio-state.edu/hypertext/faq/usenet/pgp-faq/where-is-PGP/faq.html">
+Where to get the latest PGP FAQ</A>
+article, posted regularly in the
+<A HREF="news:alt.security.pgp">alt.security.pgp</A>
+newsgroup.</P>
+
+<H2><A NAME="Getting Perl">How to Get Perl</A></H2>
+
+<P>Information about obtaining Perl can be found in the
+<A HREF="http://www.cis.ohio-state.edu/hypertext/faq/usenet/perl-faq/part1/faq.html">
+comp.lang.perl.* FAQ 1/5 - Availability</A>
+article, posted regularly in the
+<A HREF="news:comp.lang.perl.misc">comp.lang.perl.misc</A>
+newsgroup.</P>
+
+<HR>
+Last modified: 2016-10-27
+<ADDRESS>
+Russ Allbery<BR>
+<A HREF="mailto:eagle@eyrie.org">eagle@eyrie.org</A>
+</ADDRESS>
+</BODY>
+</HTML>

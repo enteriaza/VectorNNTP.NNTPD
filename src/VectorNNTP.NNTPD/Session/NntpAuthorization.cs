@@ -7,13 +7,14 @@ namespace VectorNNTP.NNTPD.Session;
 /// </summary>
 /// <remarks>
 /// Authentication and authorization are distinct: a session may be authenticated without
-/// reader, transit, posting, or streaming privileges. Production default for new sessions is
-/// unauthenticated with <see cref="StreamingPermitted"/> false. A Transit AllowFrom match
-/// retains <see cref="TransitPeerName"/> (the Transit identifier) and <see cref="TransitPeerPolicy"/>.
+/// reader, transit, posting, streaming, or control-cancel privileges. Production default for
+/// new sessions is unauthenticated with <see cref="StreamingPermitted"/> false. A Transit
+/// AllowFrom match retains <see cref="TransitPeerName"/> (the Transit identifier) and
+/// <see cref="TransitPeerPolicy"/>.
 /// </remarks>
 public sealed class NntpAuthorization
 {
-    /// <summary>Default privileges before authentication (no reader/transit/posting/streaming).</summary>
+    /// <summary>Default privileges before authentication (no reader/transit/posting/streaming/control-cancel).</summary>
     public static NntpAuthorization Unauthenticated { get; } = new(
         isAuthenticated: false,
         authorizedReader: false,
@@ -41,7 +42,8 @@ public sealed class NntpAuthorization
         bool postingPermitted,
         bool streamingPermitted,
         string? transitPeerName = null,
-        TransitPeerPolicy? transitPeerPolicy = null)
+        TransitPeerPolicy? transitPeerPolicy = null,
+        bool controlCancelPermitted = false)
     {
         IsAuthenticated = isAuthenticated;
         AuthorizedReader = authorizedReader;
@@ -50,6 +52,7 @@ public sealed class NntpAuthorization
         StreamingPermitted = streamingPermitted;
         TransitPeerName = transitPeerName;
         TransitPeerPolicy = transitPeerPolicy;
+        ControlCancelPermitted = controlCancelPermitted;
     }
 
     /// <summary>Creates transit/streaming privileges bound to a named peer policy.</summary>
@@ -82,6 +85,17 @@ public sealed class NntpAuthorization
     public bool StreamingPermitted { get; }
 
     /// <summary>
+    /// Gets a value indicating whether this session may POST a well-formed
+    /// <c>Control: cancel &lt;message-id&gt;</c> article.
+    /// </summary>
+    /// <remarks>
+    /// Ordinary posting remains forbidden from supplying <c>Control</c>. This flag is granted
+    /// only by an authentication provider (the configured newsmaster account). It is not a
+    /// generic control-header bypass.
+    /// </remarks>
+    public bool ControlCancelPermitted { get; }
+
+    /// <summary>
     /// Gets the Transit identifier when this session was identified as a named peer.
     /// </summary>
     /// <remarks>This is the dictionary-key identifier, not <see cref="TransitPeerPolicy.PeerName"/>.</remarks>
@@ -96,7 +110,8 @@ public sealed class NntpAuthorization
         bool? authorizedReader = null,
         bool? authorizedTransit = null,
         bool? postingPermitted = null,
-        bool? streamingPermitted = null) =>
+        bool? streamingPermitted = null,
+        bool? controlCancelPermitted = null) =>
         new(
             isAuthenticated ?? IsAuthenticated,
             authorizedReader ?? AuthorizedReader,
@@ -104,5 +119,6 @@ public sealed class NntpAuthorization
             postingPermitted ?? PostingPermitted,
             streamingPermitted ?? StreamingPermitted,
             TransitPeerName,
-            TransitPeerPolicy);
+            TransitPeerPolicy,
+            controlCancelPermitted ?? ControlCancelPermitted);
 }

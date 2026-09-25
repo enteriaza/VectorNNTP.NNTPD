@@ -41,6 +41,18 @@ internal sealed class StreamingPostReadOptions
 
     /// <summary>Gets the <c>X-Trace</c> protector, or <see langword="null"/> when unset.</summary>
     public IPostingTraceProtector? TraceProtector { get; init; }
+
+    /// <summary>
+    /// Gets whether this receive may accept a well-formed <c>Control: cancel</c> header.
+    /// Ordinary posters remain <see langword="false"/>.
+    /// </summary>
+    public bool ControlCancelPermitted { get; init; }
+
+    /// <summary>
+    /// Gets the AUTHINFO username captured at POST admission, or <see langword="null"/>
+    /// when the session is unauthenticated. Never taken from article headers.
+    /// </summary>
+    public string? AuthenticatedUsername { get; init; }
 }
 
 /// <summary>Result of <see cref="StreamingPostArticleReader.ReadAsync"/>.</summary>

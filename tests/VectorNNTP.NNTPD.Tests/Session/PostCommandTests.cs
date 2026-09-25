@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Tests.Fixtures;
@@ -31,6 +32,14 @@ public sealed class PostCommandTests
         authorizedTransit: false,
         postingPermitted: false,
         streamingPermitted: false);
+
+    private static readonly NntpAuthorization Newsmaster = new(
+        isAuthenticated: true,
+        authorizedReader: true,
+        authorizedTransit: false,
+        postingPermitted: true,
+        streamingPermitted: false,
+        controlCancelPermitted: true);
 
     private static readonly TimeSpan Safety = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan Idle = TimeSpan.FromSeconds(5);
@@ -63,6 +72,169 @@ public sealed class PostCommandTests
         Assert.Equal("440 Posting not permitted", await duplex.ReadClientLineAsync());
         await duplex.WriteClientLineAsync("DATE");
         Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task OrdinaryPoster_ControlHeader_Returns441_AndDoesNotEnqueue()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Poster);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(extraHeaders: "Control: cancel <victim@example.com>\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task Newsmaster_WellFormedCancel_Returns240_AndKeepsDistinctMessageId()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Newsmaster);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(
+                messageId: "<cancel-article@example.com>",
+                extraHeaders: "Control: cancel <original@example.com>\r\n") + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+
+        using var cts = new CancellationTokenSource(Safety);
+        var inbound = await queue.DequeueAsync(cts.Token);
+        Assert.NotNull(inbound);
+        Assert.Equal("<cancel-article@example.com>", inbound!.MessageId);
+        var text = Encoding.ASCII.GetString(inbound.Payload.Span);
+        Assert.Contains("Control: cancel <original@example.com>", text, StringComparison.Ordinal);
+        Assert.Contains("Message-ID: <cancel-article@example.com>", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Message-ID: <original@example.com>", text, StringComparison.Ordinal);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task Newsmaster_OtherControlVerb_Returns441()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Newsmaster);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(ValidArticle(extraHeaders: "Control: newgroup misc.test\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task AuthenticatedOrdinaryUser_CannotSubmitControl()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, authenticationProvider: new DualAuthProvider());
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await AuthenticateAsync(duplex, "poster", "poster-secret");
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(extraHeaders: "Control: cancel <victim@example.com>\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(ValidArticle(extraHeaders: "Control: newgroup misc.test\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task AuthenticatedOrdinaryUser_XTraceContainsSessionUsername()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, authenticationProvider: new DualAuthProvider());
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await AuthenticateAsync(duplex, "poster+tag/name", "poster-secret");
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(extraHeaders: "X-Authenticated-User: spoofed\r\n") + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+
+        var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
+        var text = Encoding.ASCII.GetString(inbound!.Payload.Span);
+        var xtrace = RequireHeader(text, "X-Trace");
+        Assert.DoesNotContain("poster+tag/name", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("spoofed", xtrace, StringComparison.Ordinal);
+        Assert.True(session.PostingTraceProtector!.TryUnprotect(xtrace, out var recovered));
+        Assert.Equal("poster+tag/name", recovered.AuthenticatedUsername);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task AuthenticatedNewsmaster_CancelXTraceContainsUsername_OtherControlRejected()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, authenticationProvider: new DualAuthProvider());
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await AuthenticateAsync(duplex, "newsmaster", "unit-test-newsmaster-password");
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(
+                messageId: "<cancel-article@example.com>",
+                extraHeaders: "Control: cancel <original@example.com>\r\n") + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+
+        var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
+        var text = Encoding.ASCII.GetString(inbound!.Payload.Span);
+        var xtrace = RequireHeader(text, "X-Trace");
+        Assert.DoesNotContain("newsmaster", text.Replace("X-Trace: " + xtrace, string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.True(session.PostingTraceProtector!.TryUnprotect(xtrace, out var recovered));
+        Assert.Equal("newsmaster", recovered.AuthenticatedUsername);
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(ValidArticle(extraHeaders: "Control: newgroup misc.test\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(ValidArticle(extraHeaders: "Control: cancel not-an-id\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            ValidArticle(extraHeaders: "Control: cancel <a@example.com> extra\r\n") + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
 
         await QuitAsync(duplex, run);
     }
@@ -316,6 +488,7 @@ public sealed class PostCommandTests
         Assert.Equal(IPAddress.Loopback, recovered.Address);
         Assert.Equal(119, recovered.Port);
         Assert.Equal(clock.GetUtcNow(), recovered.InjectedAtUtc);
+        Assert.Null(recovered.AuthenticatedUsername);
         Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
         Assert.DoesNotContain("forged", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Xref:", text, StringComparison.Ordinal);
@@ -690,6 +863,37 @@ public sealed class PostCommandTests
         await run;
     }
 
+    private static async Task AuthenticateAsync(PostDuplex duplex, string username, string password)
+    {
+        await duplex.WriteClientLineAsync("AUTHINFO USER " + username);
+        Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        await duplex.WriteClientLineAsync("AUTHINFO PASS " + password);
+        Assert.StartsWith("281 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+    }
+
+    private sealed class DualAuthProvider : INntpAuthenticationProvider
+    {
+        public ValueTask<NntpAuthenticationResult> AuthenticateAsync(
+            string username,
+            string password,
+            CancellationToken cancellationToken = default)
+        {
+            _ = cancellationToken;
+            if (password == "poster-secret"
+                && (username == "poster" || username == "poster+tag/name"))
+            {
+                return ValueTask.FromResult(NntpAuthenticationResult.Success(username, Poster));
+            }
+
+            if (username == "newsmaster" && password == "unit-test-newsmaster-password")
+            {
+                return ValueTask.FromResult(NntpAuthenticationResult.Success(username, Newsmaster));
+            }
+
+            return ValueTask.FromResult(NntpAuthenticationResult.Failed);
+        }
+    }
+
     private static string ValidArticle(
         string? date = null,
         string? messageId = "<ok@example.com>",
@@ -828,7 +1032,8 @@ public sealed class PostCommandTests
             TimeSpan? idle = null,
             string? mailComplaintsTo = null,
             bool includeTraceProtector = true,
-            IPostingTraceProtector? postingTraceProtector = null)
+            IPostingTraceProtector? postingTraceProtector = null,
+            INntpAuthenticationProvider? authenticationProvider = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -841,6 +1046,7 @@ public sealed class PostCommandTests
             var session = new NntpSession(
                 connection,
                 NullLogger<NntpSession>.Instance,
+                authenticationProvider: authenticationProvider,
                 articleIngestion: queue,
                 historyDb: historyDb,
                 commandIdleTimeout: idle,

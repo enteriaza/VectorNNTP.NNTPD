@@ -21,7 +21,8 @@ internal static class PostHeaderNormalizer
         string injectionIdentity,
         ConnectionClientIdentity clientIdentity,
         string mailComplaintsTo,
-        IPostingTraceProtector traceProtector)
+        IPostingTraceProtector traceProtector,
+        string? authenticatedUsername = null)
     {
         ArgumentNullException.ThrowIfNull(article);
         ArgumentException.ThrowIfNullOrWhiteSpace(article.MessageId);
@@ -49,7 +50,8 @@ internal static class PostHeaderNormalizer
             injectionIdentity,
             clientIdentity,
             mailComplaintsTo,
-            traceProtector);
+            traceProtector,
+            authenticatedUsername);
         if (!article.Body.IsEmpty)
         {
             writer.Write(article.Body.Span);
@@ -86,7 +88,8 @@ internal static class PostHeaderNormalizer
         string injectionIdentity,
         ConnectionClientIdentity clientIdentity,
         string mailComplaintsTo,
-        IPostingTraceProtector traceProtector)
+        IPostingTraceProtector traceProtector,
+        string? authenticatedUsername = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
@@ -111,7 +114,8 @@ internal static class PostHeaderNormalizer
                     clientIdentity.ClientAddress,
                     clientIdentity.ClientPort,
                     injectionUtc,
-                    Guid.NewGuid())));
+                    Guid.NewGuid(),
+                    authenticatedUsername)));
         writer.Write("\r\n"u8);
     }
 

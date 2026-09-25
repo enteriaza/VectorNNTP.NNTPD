@@ -1,6 +1,7 @@
 using System.Buffers.Text;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -10,11 +11,13 @@ namespace VectorNNTP.NNTPD.Session.Commands.Posting;
 /// AES-256-GCM protector for POST <c>X-Trace</c> (envelope version <c>v1</c>).
 /// </summary>
 /// <remarks>
-/// Token format: <c>v1.</c> followed by Base64url of nonce, ciphertext, and tag.
-/// Base64url encodes the ciphertext; it is not a substitute for encryption.
-/// <see cref="Protect"/> always uses the current key. <see cref="TryUnprotect"/>
-/// tries the current key, then the optional previous key for one-generation rotation.
-/// This type does not log keys or decrypted payloads.
+/// Token envelope: <c>v1.</c> followed by Base64url of nonce, ciphertext, and tag.
+/// Envelope version is independent of the inner payload version and of key rotation.
+/// Inner payload version 1 is the pre-username layout (still decryptable).
+/// Inner payload version 2 appends a big-endian u16 length and UTF-8 username.
+/// <see cref="Protect"/> always writes payload version 2 with the current key.
+/// <see cref="TryUnprotect"/> tries the current key, then the optional previous key.
+/// This type does not log keys, tokens, or decrypted payloads.
 /// </remarks>
 public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
 {
@@ -23,8 +26,11 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
 
     private const int NonceLength = 12;
     private const int TagLength = 16;
-    private const byte PayloadVersion = 1;
+    private const byte LegacyPayloadVersion = 1;
+    private const byte CurrentPayloadVersion = 2;
+    internal const int MaxAuthenticatedUsernameBytes = 256;
     private static readonly byte[] AssociatedData = "VectorNNTP.XTrace.v1"u8.ToArray();
+    private static readonly UTF8Encoding Utf8Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly byte[] _currentKey;
     private readonly byte[]? _previousKey;
@@ -74,24 +80,7 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
     }
 
     /// <inheritdoc />
-    public string Protect(PostingTracePayload payload)
-    {
-        var plaintext = EncodePayload(payload);
-        Span<byte> nonce = stackalloc byte[NonceLength];
-        RandomNumberGenerator.Fill(nonce);
-        Span<byte> ciphertext = stackalloc byte[plaintext.Length];
-        Span<byte> tag = stackalloc byte[TagLength];
-        using (var aes = new AesGcm(_currentKey, TagLength))
-        {
-            aes.Encrypt(nonce, plaintext, ciphertext, tag, AssociatedData);
-        }
-
-        Span<byte> packed = stackalloc byte[NonceLength + plaintext.Length + TagLength];
-        nonce.CopyTo(packed);
-        ciphertext.CopyTo(packed[NonceLength..]);
-        tag.CopyTo(packed[(NonceLength + plaintext.Length)..]);
-        return TokenPrefix + Base64Url.EncodeToString(packed);
-    }
+    public string Protect(PostingTracePayload payload) => EncryptPacked(EncodePayload(payload));
 
     /// <inheritdoc />
     public bool TryUnprotect(ReadOnlySpan<char> token, out PostingTracePayload payload)
@@ -110,8 +99,16 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
         }
 
         Span<byte> packed = max <= 256 ? stackalloc byte[max] : new byte[max];
-        if (!Base64Url.TryDecodeFromChars(encoded, packed, out var written)
-            || written < NonceLength + TagLength + 1)
+        int written;
+        try
+        {
+            if (!Base64Url.TryDecodeFromChars(encoded, packed, out written)
+                || written < NonceLength + TagLength + 1)
+            {
+                return false;
+            }
+        }
+        catch (FormatException)
         {
             return false;
         }
@@ -146,24 +143,107 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
         return TryDecodePayload(plaintext, out payload);
     }
 
+    /// <summary>
+    /// Protects a pre-username payload (inner version 1) for backward-compatibility tests.
+    /// Production <see cref="Protect"/> always writes inner version 2.
+    /// </summary>
+    internal string ProtectLegacyV1(PostingTracePayload payload) =>
+        EncryptPacked(EncodeLegacyV1(payload));
+
+    /// <summary>Encrypts caller-supplied plaintext for malformed-payload tests.</summary>
+    internal string ProtectRawForTests(ReadOnlySpan<byte> plaintext) => EncryptPacked(plaintext);
+
+    private string EncryptPacked(ReadOnlySpan<byte> plaintext)
+    {
+        Span<byte> nonce = stackalloc byte[NonceLength];
+        RandomNumberGenerator.Fill(nonce);
+        Span<byte> ciphertext = stackalloc byte[plaintext.Length];
+        Span<byte> tag = stackalloc byte[TagLength];
+        using (var aes = new AesGcm(_currentKey, TagLength))
+        {
+            aes.Encrypt(nonce, plaintext, ciphertext, tag, AssociatedData);
+        }
+
+        Span<byte> packed = stackalloc byte[NonceLength + plaintext.Length + TagLength];
+        nonce.CopyTo(packed);
+        ciphertext.CopyTo(packed[NonceLength..]);
+        tag.CopyTo(packed[(NonceLength + plaintext.Length)..]);
+        return TokenPrefix + Base64Url.EncodeToString(packed);
+    }
+
     private static byte[] EncodePayload(PostingTracePayload payload)
     {
+        var usernameBytes = EncodeUsername(payload.AuthenticatedUsername);
         var address = payload.Address.GetAddressBytes();
-        var length = 1 + 1 + address.Length + 2 + 8 + 16;
+        var length = FixedFieldLength(address.Length) + 2 + usernameBytes.Length;
         var buffer = new byte[length];
+        var offset = WriteFixedFields(buffer, CurrentPayloadVersion, payload, address);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(
+            buffer.AsSpan(offset, 2),
+            (ushort)usernameBytes.Length);
+        offset += 2;
+        usernameBytes.CopyTo(buffer.AsSpan(offset));
+        return buffer;
+    }
+
+    private static byte[] EncodeLegacyV1(PostingTracePayload payload)
+    {
+        var address = payload.Address.GetAddressBytes();
+        var buffer = new byte[FixedFieldLength(address.Length)];
+        WriteFixedFields(buffer, LegacyPayloadVersion, payload, address);
+        return buffer;
+    }
+
+    private static int FixedFieldLength(int addressLength) => 1 + 1 + addressLength + 2 + 8 + 16;
+
+    private static int WriteFixedFields(
+        Span<byte> buffer,
+        byte version,
+        PostingTracePayload payload,
+        ReadOnlySpan<byte> address)
+    {
         var offset = 0;
-        buffer[offset++] = PayloadVersion;
+        buffer[offset++] = version;
         buffer[offset++] = (byte)address.Length;
-        address.CopyTo(buffer, offset);
+        address.CopyTo(buffer[offset..]);
         offset += address.Length;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(offset, 2), (ushort)payload.Port);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(buffer[offset..(offset + 2)], (ushort)payload.Port);
         offset += 2;
         System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(
-            buffer.AsSpan(offset, 8),
+            buffer[offset..(offset + 8)],
             payload.InjectedAtUtc.ToUnixTimeSeconds());
         offset += 8;
-        payload.TraceId.TryWriteBytes(buffer.AsSpan(offset, 16));
-        return buffer;
+        payload.TraceId.TryWriteBytes(buffer[offset..(offset + 16)]);
+        return offset + 16;
+    }
+
+    private static byte[] EncodeUsername(string? username)
+    {
+        if (string.IsNullOrEmpty(username))
+        {
+            return [];
+        }
+
+        var bytes = Utf8Strict.GetBytes(username);
+        if (bytes.Length > MaxAuthenticatedUsernameBytes || ContainsNul(bytes))
+        {
+            throw new ArgumentException("Authenticated username is not encodable in X-Trace.", nameof(username));
+        }
+
+        return bytes;
+    }
+
+    private static bool ContainsNul(ReadOnlySpan<byte> value)
+    {
+        foreach (var b in value)
+        {
+            if (b == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryDecodePayload(ReadOnlySpan<byte> plaintext, out PostingTracePayload payload)
@@ -174,18 +254,15 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
             return false;
         }
 
-        if (plaintext[0] != PayloadVersion)
-        {
-            return false;
-        }
-
+        var version = plaintext[0];
         var addressLength = plaintext[1];
         if (addressLength is not (4 or 16))
         {
             return false;
         }
 
-        if (plaintext.Length != 1 + 1 + addressLength + 2 + 8 + 16)
+        var fixedLength = FixedFieldLength(addressLength);
+        if (plaintext.Length < fixedLength)
         {
             return false;
         }
@@ -207,6 +284,7 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
         var unix = System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(plaintext.Slice(offset, 8));
         offset += 8;
         var traceId = new Guid(plaintext.Slice(offset, 16));
+        offset += 16;
         DateTimeOffset injected;
         try
         {
@@ -217,7 +295,56 @@ public sealed class AesGcmPostingTraceProtector : IPostingTraceProtector
             return false;
         }
 
-        payload = new PostingTracePayload(address, port, injected, traceId);
+        string? username = null;
+        if (version == LegacyPayloadVersion)
+        {
+            if (plaintext.Length != fixedLength)
+            {
+                return false;
+            }
+        }
+        else if (version == CurrentPayloadVersion)
+        {
+            if (plaintext.Length < fixedLength + 2)
+            {
+                return false;
+            }
+
+            var userLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(plaintext.Slice(offset, 2));
+            offset += 2;
+            if (userLength > MaxAuthenticatedUsernameBytes || plaintext.Length != fixedLength + 2 + userLength)
+            {
+                return false;
+            }
+
+            if (userLength > 0)
+            {
+                var userBytes = plaintext.Slice(offset, userLength);
+                if (ContainsNul(userBytes))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    username = Utf8Strict.GetString(userBytes);
+                }
+                catch (DecoderFallbackException)
+                {
+                    return false;
+                }
+                catch (ArgumentException)
+                {
+                    return false;
+                }
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        payload = new PostingTracePayload(address, port, injected, traceId, username);
         return true;
     }
 }

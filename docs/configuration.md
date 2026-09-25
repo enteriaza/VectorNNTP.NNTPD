@@ -36,6 +36,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `MailComplaintsTo` | string | `abuse@usenet.ninja` | no | Mailbox emitted as `mail-complaints-to` on server-generated POST `Injection-Info`. Must be a plausible mailbox. Client `Injection-Info` is discarded. |
 | `XTraceKey` | string | _(none)_ | **yes** (secret) | 32-byte AES-256 key that protects POST `X-Trace` (64 hex characters or Base64). Supply via `nntpd__XTraceKey` or secrets. Never commit. |
 | `XTracePreviousKey` | string | _(none)_ | no (secret) | Optional previous AES-256 key retained for one-generation decrypt after rotation. Supply via `nntpd__XTracePreviousKey`. |
+| `NewsmasterUser` | string | _(none)_ | no | AUTHINFO username that may POST a well-formed `Control: cancel <message-id>` article. When set, `NewsmasterPassword` is required. |
+| `NewsmasterPassword` | string | _(none)_ | no (secret) | AUTHINFO password for `NewsmasterUser`. Supply via `nntpd__NewsmasterPassword` or secrets. Never commit. |
 | `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
@@ -97,7 +99,19 @@ VectorNNTP treats the following headers as server-owned for locally POSTed artic
 | `NNTP-Posting-Date` | discarded (not generated) |
 | `NNTP-Posting-Host` | discarded (not generated) |
 
-The client transport IP address is never written in plaintext article headers. `Injection-Info` does not include `posting-host`. Transport identity (peer address, port, injection timestamp, and a unique trace id) is retained only inside the authenticated-encrypted `X-Trace` payload for trusted server-side diagnostics. Base64 encoding of the IP is not used as protection; AES-GCM provides confidentiality and tamper detection.
+The client transport IP address is never written in plaintext article headers. `Injection-Info` does not include `posting-host`. The authenticated-encrypted `X-Trace` payload contains:
+
+| Field | Meaning |
+|-------|---------|
+| Peer IP | Effective transport client address |
+| Peer Port | Effective transport client port |
+| Injection Unix timestamp | Injection-boundary UTC time |
+| Trace GUID | Unique id for this POST attempt |
+| Authenticated username | AUTHINFO identity captured at POST admission, or empty when the session is unauthenticated |
+
+The username is taken only from trusted session authentication state. It is never read from `From:`, a client `X-Trace`, or other article headers. It is not written as plaintext article metadata.
+
+The token envelope remains `v1.` + Base64url(nonce \|\| ciphertext \|\| tag) with AAD `VectorNNTP.XTrace.v1`. Inner payload version 2 adds a length-prefixed UTF-8 username. Existing inner version 1 tokens (no username) remain decryptable. Key rotation (`XTraceKey` / `XTracePreviousKey`) is independent of payload version. Base64 encoding of the IP is not used as protection; AES-GCM provides confidentiality and tamper detection.
 
 `Fqdn` is the generated `nntpd{ServerId:00}.{DnsSuffix}` identity (for example `nntpd01.usenet.ninja`). The client `Date:` is preserved. A missing `Message-ID:` is synthesized as `<MD5(UUID())@usenet.ninja>` for that posting attempt.
 
@@ -112,7 +126,82 @@ Rotation:
 3. New articles use the current key. Trusted decrypt tries the current key, then the previous key.
 4. After the previous key is removed, tokens produced only with that retired key cannot be decrypted.
 
-Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs.
+Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs. The newsmaster utility `VectorNNTP.NNTPAdmin` decrypts `X-Trace` with the same keys and prints the payload to the terminal only.
+
+## Newsmaster AUTHINFO (`NewsmasterUser`)
+
+When both `Nntpd:NewsmasterUser` and `Nntpd:NewsmasterPassword` are set, AUTHINFO USER/PASS for that account grants posting plus `ControlCancelPermitted`. That flag allows only a well-formed `Control: cancel <message-id>` header on POST (RFC 5536 Control syntax; RFC 5537 §5.3 CANCEL). It does not permit `newgroup`, `rmgroup`, `checkgroups`, or any other Control verb. Ordinary authenticated users still receive `441` for every `Control` header. RFC 1036 is historical only.
+
+When either value is omitted, both must be omitted and AUTHINFO remains deny-all unless another `INntpAuthenticationProvider` is registered.
+
+Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
+
+```text
+nntpd__NewsmasterUser=newsmaster
+nntpd__NewsmasterPassword=<secret>
+```
+
+## Newsmaster utility (`VectorNNTP.NNTPAdmin`)
+
+`src/VectorNNTP.NNTPAdmin` is a separate executable. It is not part of the NNTP server runtime.
+
+```text
+VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+  --username newsmaster --password 'secret' <message-id>
+VectorNNTP.NNTPAdmin --host nntpd01.usenet.ninja --port 563 --tls \
+  --username newsmaster --password 'secret' --cancel <message-id>
+```
+
+Command-line `--host`, `--port`, `--username`, `--password`, `--tls` / `--plaintext`, and `--cancel` / `-cancel` override `appsettings.json`. Without `--cancel` the utility never POSTs. Credentials are mandatory for `--cancel`. If credentials are supplied for inspect, AUTHINFO runs before HEAD. Failed AUTHINFO stops the utility.
+
+`--password` can appear in OS process listings and shell history. Prefer `NntpAdmin:Password` / `Nntpd:NewsmasterPassword` via environment or secrets. The password is never printed, logged, or included in exception messages.
+
+Cancel is refused when authentication fails, HEAD fails, the article is missing (`430`), `X-Trace` cannot be decrypted, the original `Newsgroups` header is absent/invalid, or PGPVERIFY signing cannot be configured or used. There is no `--no-sign` / `--unsigned` / `--skip-signature` option. Inspection (`HEAD` + decrypt) does not require PGP.
+
+The cancel article itself is RFC 5536 / RFC 5537: it copies that exact `Newsgroups` list, uses `Control: cancel <target-message-id>` (RFC 5537; Control is authoritative; no RFC 1036 `cmsg`), generates an independent Message-ID, and omits server-owned headers so POST can write Path / Injection-Date / Injection-Info / a new `X-Trace` identifying the authenticated newsmaster.
+
+PGPVERIFY is a de-facto Netnews control-message authentication convention. It is **not** standardized by RFC 5537. RFC 5537 §5.1 identifies PGPVERIFY as an existing unstandardized mechanism. VectorNNTP implements it for interoperability with INN `pgpverify` and similar peers. Do not describe the signature as RFC-compliant. The signature is **not** PGP/MIME, S/MIME, or an `X-PGP-Signature` extension.
+
+The admin utility signs the FORMAT header set `Subject,Control,Message-ID,Date,From,Sender` plus the body (Unix LF). FORMAT constructs each signed header as `Name: ` (colon + space), including empty Sender as `Sender: ` + EOL. Deployed INN `pgpverify` 1.23–1.31 then strips trailing SP/HT immediately before LF (`$message =~ s/[ \t]+\n/\n/g`), so the hashed empty Sender is `Sender:\n`. VectorNNTP applies that same INN detached-verification rule so CANCEL controls interoperate with deployed INN. This does not rewrite or supersede FORMAT. `Newsgroups` is present on the wire but unsigned, because FORMAT adds it after signing. Path, Injection-Date, Injection-Info, and X-Trace are not signed; the server still generates them. `X-PGP-Sig` is a client header and is passed through POST.
+
+VectorNNTP.NNTPD `HEAD` is still a placeholder (no article catalogue). The utility targets a peer/upstream server that implements RFC 3977 HEAD.
+
+Client settings bind from `NntpAdmin` (`Host`, `Port`, `UseTls`, `From`, `Username`, `Password`, `Pgp`) plus `Nntpd:BindPort` / `BindPortTls` when `Port` is `0`, and the same `XTraceKey` / `XTracePreviousKey` / newsmaster secrets as the server. TLS never falls back to plaintext.
+
+### `NntpAdmin:Pgp`
+
+```json
+"NntpAdmin": {
+  "Pgp": {
+    "Enabled": true,
+    "PrivateKeyPath": "",
+    "PrivateKeyPassphrase": "",
+    "KeyId": ""
+  }
+}
+```
+
+| Setting | Env | Notes |
+|---------|-----|--------|
+| `Enabled` | `NntpAdmin__Pgp__Enabled` | Must be `true` for `--cancel`. Inspection still works when this is `true` but `PrivateKeyPath` is empty. |
+| `PrivateKeyPath` | `NntpAdmin__Pgp__PrivateKeyPath` | ASCII-armored OpenPGP secret key or keyring **outside Git**. On Unix the file must not be group- or world-accessible. On Windows restrict the NTFS ACL to the newsmaster account. |
+| `PrivateKeyPassphrase` | `NntpAdmin__Pgp__PrivateKeyPassphrase` | Unlocks the secret key. Never commit this. Prefer environment or secrets. Never logged. |
+| `KeyId` | `NntpAdmin__Pgp__KeyId` | Full fingerprint (preferred) or 16-hex Key ID. Required when the file contains more than one signing-capable secret key. The utility never chooses a key from the command line. |
+
+Do not put a real private key or passphrase in `appsettings.json`. `Enabled: true` with empty path/passphrase is the safe committed sample.
+
+Key generation (operator machine, not in this repository):
+
+```text
+gpg --quick-generate-key 'newsmaster@usenet.ninja' rsa3072 sign 2y
+gpg --export-secret-keys --armor <fingerprint> > /secure/path/newsmaster-secret.asc
+gpg --export --armor <fingerprint> > newsmaster-public.asc
+chmod 600 /secure/path/newsmaster-secret.asc
+```
+
+RSA 3072 is recommended for production. Tests use RSA 2048 only. Signatures are OpenPGP detached **binary-document** signatures with SHA-256, ASCII-armored, then placed into `X-PGP-Sig` as FORMAT specifies (version token, comma-separated header names, tab-folded radix64). Peers export/import the public key into their `pgpverify` keyring.
+
+If multiple signing-capable secret keys are present and `KeyId` is omitted, CANCEL aborts. The selected identity (full fingerprint and User ID) is printed to the terminal; the private key is never displayed.
 
 Example environment:
 

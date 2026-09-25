@@ -62,6 +62,10 @@ internal static class Post
                         ClientIdentity = context.Session.ClientIdentity,
                         MailComplaintsTo = context.Session.MailComplaintsTo,
                         TraceProtector = context.Session.PostingTraceProtector,
+                        ControlCancelPermitted = context.Session.Authorization.ControlCancelPermitted,
+                        AuthenticatedUsername = context.Session.Authentication.IsAuthenticated
+                            ? context.Session.Authentication.Username
+                            : null,
                     },
                     cancellationToken)
                 .ConfigureAwait(false);
