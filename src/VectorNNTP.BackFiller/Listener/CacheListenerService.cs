@@ -92,8 +92,9 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
         {
             if (!_certificates.TryGetCurrent(out var material))
             {
+                var expected = Path.Combine(_runtime.CertificateDirectory, ListenerProtocol.ListenerPfxFileName);
                 throw new InvalidOperationException(
-                    "Cache Listener cannot start because no TLS certificate is available. ACME provisioning is deferred; place backfiller-listener.pfx in CertificateDirectory.");
+                    $"Cache Listener cannot start because no TLS certificate is available at '{expected}'. ACME provisioning is deferred; place {ListenerProtocol.ListenerPfxFileName} in CertificateDirectory.");
             }
 
             _certificate = material;

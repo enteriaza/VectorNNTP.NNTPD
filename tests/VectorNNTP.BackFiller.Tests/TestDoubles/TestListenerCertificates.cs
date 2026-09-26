@@ -41,6 +41,20 @@ internal static class TestListenerCertificates
             "test",
             CacheListenerCertificateMaterial.TlsServerKeyStorageFlags);
     }
+
+    internal static void WritePkcs12(string path, string password)
+    {
+        using var certificate = CreateSelfSigned();
+        File.WriteAllBytes(path, certificate.Export(X509ContentType.Pfx, password));
+    }
+
+    internal static void WritePublicOnlyPkcs12(string path, string password)
+    {
+        using var certificate = CreateSelfSigned();
+        var publicBytes = certificate.Export(X509ContentType.Cert);
+        using var publicOnly = X509CertificateLoader.LoadCertificate(publicBytes);
+        File.WriteAllBytes(path, publicOnly.Export(X509ContentType.Pfx, password));
+    }
 }
 
 internal sealed class StaticCacheListenerCertificateSource : ICacheListenerCertificateSource

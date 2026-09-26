@@ -97,6 +97,85 @@ public sealed class BackFillerConfigurationBindingTests
             });
     }
 
+    [Fact]
+    public void Prefixed_environment_variables_reach_runtime_options()
+    {
+        using var environment = new IsolatedEnvironment(
+            (BackFillerOptions.NameEnvironmentVariable, "env-name"),
+            (BackFillerOptions.ServerIdEnvironmentVariable, "8"),
+            (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "env-user"),
+            (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
+            (BackFillerOptions.CloudFlareApiTokenEnvironmentVariable, BackFillerTestOptions.SecretToken),
+            ("backfiller__BackFiller__LetsEncrypt__CloudFlareZoneId", "0123456789abcdef0123456789abcdef"),
+            (BackFillerOptions.PfxExportPasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
+            (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
+
+        var configuration = environment.BuildPrefixedConfiguration();
+        var options = new BackFillerOptions();
+        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        var connectionStrings = new BackFillerConnectionStringsOptions();
+        configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
+
+        Assert.Equal("env-name", options.Name);
+        Assert.Equal(8, options.ServerId);
+        Assert.Equal("env-user", options.RabbitMQ.Username);
+        Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
+        Assert.Equal(BackFillerTestOptions.SecretToken, options.LetsEncrypt.CloudFlareApiToken);
+        Assert.Equal(BackFillerTestOptions.SecretPfx, options.LetsEncrypt.PfxExportPassword);
+        Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", connectionStrings.GrabberDB);
+    }
+
+    [Fact]
+    public void Whitespace_name_from_the_prefixed_environment_fails_validation()
+    {
+        using var environment = new IsolatedEnvironment(
+            (BackFillerOptions.NameEnvironmentVariable, "   "));
+
+        var configuration = environment.BuildPrefixedConfiguration();
+        var options = BackFillerTestOptions.CreateValid();
+        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+
+        Assert.True(string.IsNullOrWhiteSpace(options.Name));
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("Name", StringComparison.Ordinal));
+        Assert.All(
+            result.Failures!,
+            failure =>
+            {
+                Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, failure, StringComparison.Ordinal);
+                Assert.DoesNotContain(BackFillerTestOptions.SecretPfx, failure, StringComparison.Ordinal);
+            });
+    }
+
+    [Fact]
+    public void Malformed_server_id_from_the_prefixed_environment_fails_at_bind()
+    {
+        using var environment = new IsolatedEnvironment(
+            (BackFillerOptions.ServerIdEnvironmentVariable, "not-an-integer"));
+
+        var configuration = environment.BuildPrefixedConfiguration();
+        var options = BackFillerTestOptions.CreateValid();
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => configuration.GetSection(BackFillerOptions.SectionName).Bind(options));
+        Assert.Contains("ServerId", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Short_form_environment_names_do_not_bind_through_the_real_prefix_provider()
+    {
+        using var environment = new IsolatedEnvironment(
+            ("backfiller__RabbitMQ__Username", "short-form-user"),
+            ("backfiller__RabbitMQ__Password", BackFillerTestOptions.SecretPassword));
+
+        var configuration = environment.BuildPrefixedConfiguration();
+        var options = new BackFillerOptions();
+        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
+        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
+    }
+
     private static IConfiguration ConfigurationFromEnvironmentVariables(params (string Name, string Value)[] variables)
     {
         var pairs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
@@ -118,5 +197,34 @@ public sealed class BackFillerConfigurationBindingTests
             StringComparison.OrdinalIgnoreCase);
         return environmentVariable[BackFillerOptions.EnvironmentVariablePrefix.Length..]
             .Replace("__", ":", StringComparison.Ordinal);
+    }
+
+    private sealed class IsolatedEnvironment : IDisposable
+    {
+        private readonly (string Name, string? Previous)[] _previous;
+
+        public IsolatedEnvironment(params (string Name, string Value)[] variables)
+        {
+            _previous = variables
+                .Select(static pair => (pair.Name, Environment.GetEnvironmentVariable(pair.Name)))
+                .ToArray();
+            foreach (var (name, value) in variables)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+
+        public IConfiguration BuildPrefixedConfiguration() =>
+            new ConfigurationBuilder()
+                .AddEnvironmentVariables(prefix: BackFillerOptions.EnvironmentVariablePrefix)
+                .Build();
+
+        public void Dispose()
+        {
+            foreach (var (name, previous) in _previous)
+            {
+                Environment.SetEnvironmentVariable(name, previous);
+            }
+        }
     }
 }

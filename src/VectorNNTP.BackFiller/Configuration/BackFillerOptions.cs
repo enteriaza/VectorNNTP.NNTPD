@@ -108,13 +108,21 @@ public sealed class BackFillerOptions
     /// <summary>
     /// Gets or sets the directory used for application log files.
     /// </summary>
-    /// <remarks>Old key: <c>DirLogs</c>. Relative paths resolve against the current directory.</remarks>
+    /// <remarks>
+    /// Old key: <c>DirLogs</c>. Relative paths resolve against the host content root
+    /// (<see cref="AppContext.BaseDirectory"/> by default), not the process working directory.
+    /// The current Serilog configuration writes to stdout only; this directory is reserved
+    /// for operators and future file sinks.
+    /// </remarks>
     public string LogDirectory { get; set; } = DefaultLogDirectory;
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.
     /// </summary>
-    /// <remarks>Old key: <c>DirCerts</c>.</remarks>
+    /// <remarks>
+    /// Old key: <c>DirCerts</c>. Relative paths resolve against the host content root.
+    /// The Listener loads <c>backfiller-listener.pfx</c> from this directory.
+    /// </remarks>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;
 
     /// <summary>

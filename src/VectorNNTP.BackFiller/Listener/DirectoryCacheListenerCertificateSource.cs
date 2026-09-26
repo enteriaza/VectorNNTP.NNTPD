@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using VectorNNTP.BackFiller.Configuration;
 
@@ -39,16 +40,30 @@ public sealed class DirectoryCacheListenerCertificateSource : ICacheListenerCert
             if (!certificate.HasPrivateKey)
             {
                 certificate.Dispose();
-                return false;
+                throw new InvalidOperationException(
+                    $"Cache Listener certificate '{_pfxPath}' does not contain a private key.");
             }
 
             material = new CacheListenerCertificateMaterial(certificate);
             return true;
         }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            certificate?.Dispose();
+            throw new InvalidOperationException(
+                $"Cache Listener certificate '{_pfxPath}' could not be loaded. The file may be invalid, inaccessible, or the PKCS#12 password may be incorrect.",
+                ex);
+        }
         catch (Exception)
         {
             certificate?.Dispose();
-            return false;
+            throw new InvalidOperationException(
+                $"Cache Listener certificate '{_pfxPath}' could not be loaded. The file may be invalid, inaccessible, or the PKCS#12 password may be incorrect.");
         }
     }
 }

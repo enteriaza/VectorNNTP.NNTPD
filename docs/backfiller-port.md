@@ -1177,4 +1177,228 @@ Phase 11 did not add a feature. It audited the Phase 0–10 implementation for l
 - Grace-expired RabbitMQ settlement can lose the ACK/NACK race to channel close (at-least-once redelivery).
 - ACME, Cloudflare, Transit `TAKETHIS`, and live broker/MySQL/NNTP tests remain out of scope.
 
+## Phase 12 — deployment and live-runtime validation
+
+Phase 12 is an audit of whether the current process can be deployed and operated. It did not add Windows Service installers, systemd units, ACME, Cloudflare, Docker, or Testcontainers. Existing packaging in this repository is NNTPD-oriented (`deploy/systemd/vectornntpd.service`, `docs/systemd.md`). BackFiller has no unit file, publish profile, or installer; none were invented.
+
+Validation classes used below:
+
+| Class | What was done |
+|---|---|
+| Automated | 363 BackFiller tests, including real loopback TLS, PFX files, prefixed environment variables, and process startup |
+| Local runtime | Framework-dependent `dotnet publish` to `.artifacts/phase12-publish` (gitignored) and starting `VectorNNTP.BackFiller.exe` from a foreign working directory |
+| Live / manual | Not executed. This machine has no `backfiller__*` secrets, no `VECTORNNTP_NNTPDB_INTEGRATION`, and no dedicated BackFiller RabbitMQ/MySQL/NNTP fixtures |
+
+### Supported deployment model (as implemented)
+
+| Item | Current contract |
+|---|---|
+| Target framework | `net10.0` (`global.json` SDK `10.0.401`, `rollForward: latestFeature`) |
+| Output | Worker SDK exe `VectorNNTP.BackFiller.exe` + `VectorNNTP.BackFiller.dll` |
+| RID | None configured. `dotnet publish` without `-r` produces a framework-dependent portable build |
+| Self-contained | Not configured. Published `runtimeconfig.json` requires `Microsoft.NETCore.App` 10.0 |
+| Single-file | Not configured |
+| ReadyToRun | Not configured |
+| Native / RID assets | Published `runtimes/win/lib/net10.0/` contains `System.Diagnostics.EventLog` and `System.ServiceProcess.ServiceController` |
+| NuGet data-plane deps | `RabbitMQ.Client` 7.2.2, `MySqlConnector` 2.6.2 (managed assemblies; no extra native MySQL client) |
+| Required files next to the exe | `appsettings.json` (non-secret defaults). Listener PFX is **not** published; operators place `certs/backfiller-listener.pfx` |
+| Required external services | RabbitMQ (startup invariant), MySQL GrabberDB (startup snapshot), upstream NNTP accounts from MySQL (runtime). ACME/Cloudflare are **not** called |
+| Logs | Serilog Console → stdout only. `LogDirectory` is validated and resolved but is not a file sink |
+| Working directory | Must not be required. Content root is `AppContext.BaseDirectory` |
+
+`dotnet publish src/VectorNNTP.BackFiller/VectorNNTP.BackFiller.csproj -c Release -o .artifacts/phase12-publish` produced the exe, deps, `appsettings.json`, and the assemblies listed above. That output is not tracked by Git.
+
+### Windows Service
+
+`ConfigureBackFillerPlatformHosting` calls `AddWindowsService(options => options.ServiceName = "VectorNNTP.BackFiller")` and `HostOptions.BackgroundServiceExceptionBehavior = StopHost`.
+
+`Microsoft.Extensions.Hosting.WindowsServices` 10.0.12 registers the Windows lifetime **only** when `WindowsServiceHelpers.IsWindowsService()` is true (SCM). Console / testhost runs keep the default Console lifetime. The ServiceName callback is therefore applied only under a real service process. This testhost is not a Windows Service; no SCM install was performed.
+
+Service stop uses Generic Host `StopAsync`. `HostOptions.ShutdownTimeout` is `BackFiller:Shutdown:GracePeriod` (default 30s, range 5–600). Operators must set the Windows service wait hint / `TimeoutStopSec` equivalent **above** that budget. The process does not install itself, change service identity, or create log/cert directories.
+
+Relative `logs` / `certs` and `appsettings.json` now resolve against the application base, so a service whose process CWD is `C:\Windows\System32` no longer looks for config or the Listener PFX under System32.
+
+### Linux / systemd
+
+`AddSystemd()` is registered. Official helpers activate `SystemdLifetime` / notify only on Linux when systemd (or `NOTIFY_SOCKET`) is detected. Microsoft console formatter options that `AddSystemd()` may add are stripped; Serilog owns console formatting (`UseAutoFlushConsoleOutput` before the first Console sink).
+
+There is no BackFiller unit in `deploy/systemd/`. Repository systemd documentation is NNTPD-specific. A unit is **not** required by BackFiller code. If operators add one later, match Generic Host semantics: `Type=notify` only if they rely on systemd lifetime, `KillSignal=SIGTERM`, `TimeoutStopSec` greater than `Shutdown.GracePeriodSeconds`, `WorkingDirectory` optional after the content-root fix, and `EnvironmentFile` for `backfiller__*` secrets. `Restart=` is entirely an operator/systemd choice; the process returns `0` on clean `RunAsync` completion and `1` on any startup/runtime exception in `Program.cs`.
+
+SIGTERM of a **fully running** worker was not exercised here (startup cannot complete without live RabbitMQ). In-process host stop and Phase 10/11 drain tests remain the automated shutdown evidence.
+
+### Filesystem and certificates
+
+| Path | Behavior |
+|---|---|
+| `LogDirectory` (default `logs`) | Required non-empty. Resolved to a full path against the content root. **Not created and not written.** Inaccessible log paths have no runtime effect today |
+| `CertificateDirectory` (default `certs`) | Required non-empty. Same resolution. Not created. Listener loads `backfiller-listener.pfx` from here |
+| Absolute directories | Remain absolute |
+| PFX password | `BackFiller:LetsEncrypt:PfxExportPassword` / `backfiller__BackFiller__LetsEncrypt__PfxExportPassword`. Used only to load the PFX. Never logged |
+
+`DirectoryCacheListenerCertificateSource` uses `X509CertificateLoader.LoadPkcs12FromFile` with `CacheListenerCertificateMaterial.TlsServerKeyStorageFlags` (Windows: `UserKeySet \| Exportable`; elsewhere ephemeral). Material is disposed with the Listener. Private keys are not copied into logs.
+
+| PFX case | Behavior (automated) |
+|---|---|
+| Valid | Loads; `HasPrivateKey` required |
+| Missing | `TryGetCurrent` is false; Listener start names the resolved path |
+| Invalid bytes | `InvalidOperationException` naming the path, not the password |
+| Wrong password | Same load-failure exception; password is not in the message |
+| Public-only PFX | Rejected (`does not contain a private key`) |
+| Exclusive-lock / inaccessible | Load failure exception when the OS denies the read |
+
+ACME and Cloudflare are not contacted. `LetsEncrypt:*` other than the PFX password is validated at startup and unused at runtime.
+
+### Real TCP / TLS (automated, loopback)
+
+`CacheListenerService` binds real sockets. Covered:
+
+- IPv4 loopback GET + exact Found payload + ReceiptAck
+- Wildcard `*` binds IPv4 any (IPv6 any is attempted and skipped if the family is unavailable)
+- Explicit `::1` when `Socket.OSSupportsIPv6` and the bind succeeds; otherwise the test returns with an explicit skip reason
+- TLS 1.2 handshake + fetch
+- TLS 1.3 handshake + fetch when `SslStream` supports it (this Windows run completed TLS 1.3)
+- Invalid handshake (non-TLS bytes) does not fault the Listener
+- Unsupported-version binary frame after TLS closes the connection
+- Shutdown during an incomplete handshake
+- Handshake / I/O timeouts release the connection slot
+
+The suite does not require a machine-wide IPv6 configuration.
+
+### MySQL — automated vs manual
+
+Automated: `MySqlProviderAccountSource` query/mapping/timeout/error wrapping tests use fakes. There is no GrabberDB Testcontainers convention and `VECTORNNTP_NNTPDB_INTEGRATION` is an NNTPD fixture, not a BackFiller one. No live MySQL was available.
+
+Production behavior to use in a manual check (do not commit the connection string):
+
+```text
+backfiller__ConnectionStrings__GrabberDB=Server=...;Port=3306;Database=...;User ID=...;Password=...;
+```
+
+1. Confirm startup fails with `Provider account query failed against GrabberDB.` when the host is unreachable (first refresh is required). The raw connection string is not copied into that message.
+2. Confirm `serverid = @ServerId` (`UByte`) filters `nntpbackfilleraccounts`.
+3. Confirm a later poll exception keeps last-known-good and does not recreate pools after registry stop (Phase 8/11).
+4. Confirm command timeout is `BackFiller:Accounts:CommandTimeoutSeconds` (default 15).
+5. Confirm cancellation during `OpenAsync` / `ExecuteReaderAsync` is `OperationCanceledException`, not the GrabberDB wrapper.
+
+TLS for MySQL is whatever the connection string requests (`SslMode=...`). The worker does not add a second TLS policy.
+
+### RabbitMQ — automated vs manual
+
+Automated: fake `IBackFillerRabbitMqConnectionFactory` covers connect, generation, consumer/publisher channels, confirms, ACK/NACK, replacement fencing, and shutdown. RabbitMQ.Client 7.x automatic recovery is disabled; `BackFillerRabbitMqService` owns reconnect.
+
+No live broker was available. Manual procedure (do not commit credentials):
+
+```text
+backfiller__BackFiller__RabbitMQ__Username=...
+backfiller__BackFiller__RabbitMQ__Password=...
+```
+
+`appsettings.json` defaults `Hosts: ["127.0.0.1"]`, `Port: 5672`, `EnableSsl: false`. Override hosts/TLS for the real broker.
+
+1. Startup: process must not reach Running if the initial connect fails (`StartupFailed`, exit 1).
+2. After start: one consumer channel per provider backbone queue (`backfiller.<backbone>`) plus one publisher channel.
+3. Publish a v1 Article Work request with `CorrelationId`, `ReplyTo`, and header `RequestId`.
+4. Confirm a successful retrieve publishes a v1 JSON response and ACKs the original delivery.
+5. Drop the broker: watch-loop reconnect must install a new generation; stale handles must not ACK on the new channel.
+6. SIGTERM / service stop during recovery, confirm, or consume: grace is `Shutdown.GracePeriodSeconds`; rebuild uses `_runCts` (Phase 11).
+
+Do not change the NNTPD-owned `backfiller.*` topology.
+
+### Upstream NNTP — automated vs manual
+
+Automated: `ScriptedNntpServer` / fake transport cover ARTICLE by Message-ID, multiline, dot-stuffing, timeout, reuse, and retirement. No commercial provider was used.
+
+Manual procedure (credentials live only in MySQL `nntpbackfilleraccounts`, never in Git):
+
+1. Insert one row for this `ServerId` (plain TCP and/or TLS).
+2. Drive one Article Work request for that backbone.
+3. Confirm AUTHINFO USER/PASS when username/password are both set.
+4. Confirm ARTICLE `<message-id>`, dot-unstuffing, and session reuse.
+5. Confirm a bad password / timeout retires that session per Phase 4 health rules and does not ACK a successful response.
+
+### Published artifact (local runtime)
+
+Framework-dependent publish to `.artifacts/phase12-publish`:
+
+- Executable: `VectorNNTP.BackFiller.exe`
+- Requires .NET 10 runtime on the host
+- `appsettings.json` is copied; `certs/` and `logs/` are not
+- Starting from a **different** working directory now still binds `appsettings.json` from the exe directory (content-root fix). Before the fix, that start reported `Name`, `BindPort`, and `RabbitMQ:Hosts` as missing even though they are in the published JSON
+
+Minimal valid **process** start still requires env secrets (`ServerId`, PFX password, Cloudflare token/zone, GrabberDB, RabbitMQ username/password). With only the published JSON, exit code is `1` and the fatal log lists those missing keys. That is useful. A fully running process was not obtained without live RabbitMQ.
+
+### Environment-variable contract
+
+Unchanged from Phase 1. Prefix `backfiller__` is stripped, then `__` → `:`.
+
+| Setting | Environment variable | Required | Default | Secret |
+|---|---|---|---|---|
+| Name | `backfiller__BackFiller__Name` | yes | `backfiller` in appsettings | no |
+| ServerId | `backfiller__BackFiller__ServerId` | yes | none | no |
+| DnsSuffix | `backfiller__BackFiller__DnsSuffix` | yes | `usenet.ninja` | no |
+| BindAddress | `backfiller__BackFiller__BindAddress__0` … | no | empty = all interfaces | no |
+| BindPort | `backfiller__BackFiller__BindPort` | yes | `1190` in appsettings | no |
+| LogDirectory | `backfiller__BackFiller__LogDirectory` | yes (non-empty) | `logs` | no |
+| CertificateDirectory | `backfiller__BackFiller__CertificateDirectory` | yes (non-empty) | `certs` | no |
+| GrabberDB | `backfiller__ConnectionStrings__GrabberDB` | yes | none | yes |
+| RabbitMQ username | `backfiller__BackFiller__RabbitMQ__Username` | with password | none | no |
+| RabbitMQ password | `backfiller__BackFiller__RabbitMQ__Password` | with username | none | yes |
+| PFX password | `backfiller__BackFiller__LetsEncrypt__PfxExportPassword` | yes | none | yes |
+| Cloudflare token | `backfiller__BackFiller__LetsEncrypt__CloudFlareApiToken` | yes (validated only) | none | yes |
+| Cloudflare zone | `backfiller__BackFiller__LetsEncrypt__CloudFlareZoneId` | yes (validated only) | none | no |
+| Accounts poll | `backfiller__BackFiller__Accounts__RefreshIntervalSeconds` | no | 60 | no |
+| Accounts timeout | `backfiller__BackFiller__Accounts__CommandTimeoutSeconds` | no | 15 | no |
+| Grace period | `backfiller__BackFiller__Shutdown__GracePeriodSeconds` | no | 30 | no |
+| Drain queued | `backfiller__BackFiller__Shutdown__DrainQueuedWork` | no | true | no |
+| Finish active | `backfiller__BackFiller__Shutdown__FinishActiveArticles` | no | true | no |
+
+Short-form `backfiller__RabbitMQ__*` and `backfiller__LetsEncrypt__*` do **not** bind. Legacy `BackFiller:Id` does not map to `ServerId`. Unprefixed `BackFiller__*` may still be seen by the default host environment source; that is not a supported contract.
+
+Whitespace `Name` fails `IValidateOptions`. Non-integer `ServerId` fails at configuration bind (`Failed to convert configuration value ... ServerId`) before the validator. Secrets are not copied into those messages.
+
+Provider host/user/password/TLS come from MySQL only.
+
+Let's Encrypt / Cloudflare: **required by the validator, unused by runtime, not implemented.** Do not treat existing keys as a reason to build ACME.
+
+TransitServer keys remain bindable and validated; Transit `TAKETHIS` remains out of scope.
+
+### Process-level shutdown
+
+Automated: host `ShutdownTimeout` equals snapshotted grace; Phase 10 drain flags; Phase 11 shared registry grace, publisher rebuild cancellation, disposed-registry guard.
+
+Local process: invalid config exits `1` in well under the grace period.
+
+Not done: SIGTERM of a process that had already connected to RabbitMQ, MySQL, a provider, and the Listener. Manual: start with live deps, then `Stop-Service` / `systemctl stop` / Ctrl+C and confirm wall-clock stop ≤ `GracePeriodSeconds` plus supervisor overhead.
+
+### Operational failure matrix
+
+| Failure | Startup | Runtime | Recovery | Shutdown |
+|---|---|---|---|---|
+| RabbitMQ unavailable | Initial connect fails; hosted start fails; process exits 1 | n/a | n/a | n/a |
+| RabbitMQ connection loss | n/a | Not terminal; watch loop reconnects; generation increments | New generation; stale handles cannot settle | `_runCts` cancels rebuild; no post-stop resurrection |
+| MySQL unavailable | First refresh is required; start throws (wrapper message, no connection string) | Later poll exceptions keep last-known-good | Next successful poll republishes | Poll loop cancelled; registry already stopping later in reverse order |
+| MySQL recovery | n/a | Last-known-good remains | Snapshot apply; disposed registry ignores late apply | n/a |
+| Provider unavailable / auth / timeout | Host can still start if MySQL snapshot loaded | Article Work maps to provider failure / cancel; session retired per Phase 4 | Pool replacement from control plane; in-flight leases finish or time out | Shared grace drain (Phase 11); no per-pool full grace |
+| Certificate missing | Listener start fails; host start fails | n/a | n/a | n/a |
+| Certificate invalid / bad password | Listener start throws path-only load error; host start fails | n/a | n/a | n/a |
+| Listener bind failure | Start fails if no endpoint bound; implicit wildcard IPv6 family may be skipped | n/a | n/a | n/a |
+| Listener client abuse | n/a | Over-capacity refused; bad handshake / bad frame isolated | Connection slot released | Accept loops and sessions observe `_runCts` |
+| Disk / log directory | Empty `LogDirectory` fails validation. Missing log dir is ignored (no file sink) | Console logging only | n/a | n/a |
+| Shutdown during active work | n/a | n/a | n/a | `DrainQueuedWork` / `FinishActiveArticles` independently; grace is the host budget |
+
+### Concrete defects fixed
+
+1. **Content root / relative paths followed the process CWD.** `Path.GetFullPath("certs")` and default `Host.CreateApplicationBuilder(args)` used the working directory. A published exe started from `%TEMP%` did not load the `appsettings.json` sitting next to the exe, and Windows Service CWD (`System32`) would have resolved `certs` / `logs` there. `Program.cs` now sets `ContentRootPath = AppContext.BaseDirectory`. Runtime options resolve relative directories against `IHostEnvironment.ContentRootPath`.
+2. **PFX load failures were indistinguishable from a missing file.** Invalid PFX, wrong password, and missing private key now throw a path-only `InvalidOperationException`. Missing file still returns false and the Listener names the resolved path. Passwords are not logged.
+
+### Remaining risks and deferred items
+
+- No live RabbitMQ, MySQL, or commercial NNTP in this environment.
+- No Windows Service SCM install and no Linux systemd unit for BackFiller.
+- `LogDirectory` is unused (stdout only).
+- Cloudflare / ACME values are mandatory at validation and inert at runtime.
+- Transit `TAKETHIS` remains out of scope.
+- Self-contained / single-file / ReadyToRun / RID-specific publish were not added.
+- Process-level SIGTERM of a fully connected worker remains a manual step.
+
 

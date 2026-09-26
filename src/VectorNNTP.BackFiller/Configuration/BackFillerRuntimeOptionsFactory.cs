@@ -12,11 +12,18 @@ public static class BackFillerRuntimeOptionsFactory
     /// </summary>
     /// <param name="options">Validated bindable options.</param>
     /// <param name="connectionStrings">Validated connection-string options.</param>
+    /// <param name="contentRootPath">
+    /// Host content root used to resolve relative <see cref="BackFillerOptions.LogDirectory"/>
+    /// and <see cref="BackFillerOptions.CertificateDirectory"/> values. When omitted, relative
+    /// paths resolve against <see cref="AppContext.BaseDirectory"/> rather than the process
+    /// working directory.
+    /// </param>
     /// <returns>Immutable snapshot.</returns>
     /// <exception cref="InvalidOperationException">Thrown when a required value is missing after validation.</exception>
     public static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
-        BackFillerConnectionStringsOptions connectionStrings)
+        BackFillerConnectionStringsOptions connectionStrings,
+        string? contentRootPath = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(connectionStrings);
@@ -79,8 +86,8 @@ public static class BackFillerRuntimeOptionsFactory
             BindAddressTokens: tokens,
             CanonicalBindAddresses: addresses,
             BindPort: bindPort,
-            LogDirectory: Path.GetFullPath(options.LogDirectory.Trim()),
-            CertificateDirectory: Path.GetFullPath(options.CertificateDirectory.Trim()),
+            LogDirectory: ResolveConfiguredDirectory(options.LogDirectory, contentRootPath),
+            CertificateDirectory: ResolveConfiguredDirectory(options.CertificateDirectory, contentRootPath),
             Shutdown: new BackFillerShutdownRuntimeOptions(
                 TimeSpan.FromSeconds(shutdown.GracePeriodSeconds),
                 shutdown.DrainQueuedWork,
@@ -165,4 +172,21 @@ public static class BackFillerRuntimeOptionsFactory
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Resolves a configured directory against the host content root.
+    /// Absolute paths stay absolute. Relative paths do not follow
+    /// <see cref="Environment.CurrentDirectory"/>.
+    /// </summary>
+    /// <param name="path">Configured directory.</param>
+    /// <param name="contentRootPath">Host content root, or <see langword="null"/> for the application base directory.</param>
+    /// <returns>A fully qualified directory path.</returns>
+    internal static string ResolveConfiguredDirectory(string path, string? contentRootPath)
+    {
+        var trimmed = path.Trim();
+        var root = string.IsNullOrWhiteSpace(contentRootPath)
+            ? AppContext.BaseDirectory
+            : contentRootPath;
+        return Path.GetFullPath(trimmed, Path.GetFullPath(root));
+    }
 }

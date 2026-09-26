@@ -56,7 +56,8 @@ public static class BackFillerServiceCollectionExtensions
         {
             var options = provider.GetRequiredService<IOptions<BackFillerOptions>>().Value;
             var connectionStrings = provider.GetRequiredService<IOptions<BackFillerConnectionStringsOptions>>().Value;
-            return BackFillerRuntimeOptionsFactory.Create(options, connectionStrings);
+            var contentRoot = provider.GetRequiredService<IHostEnvironment>().ContentRootPath;
+            return BackFillerRuntimeOptionsFactory.Create(options, connectionStrings, contentRoot);
         });
 
         builder.Services.AddOptions<HostOptions>()

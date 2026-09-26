@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
+using Xunit.Abstractions;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Retention;
@@ -13,7 +14,7 @@ using VectorNNTP.BackFiller.Tests.TestDoubles;
 
 namespace VectorNNTP.BackFiller.Tests.Listener;
 
-public sealed class CacheListenerServiceTests
+public sealed class CacheListenerServiceTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task Starts_binds_ipv4_and_repeated_dispose_is_safe()
@@ -175,8 +176,47 @@ public sealed class CacheListenerServiceTests
     }
 
     [Fact]
+    public async Task Tls12_client_can_complete_handshake_and_fetch()
+    {
+        await AssertHandshakeProtocolAsync(SslProtocols.Tls12);
+    }
+
+    [Fact]
+    public async Task Tls13_client_can_complete_handshake_when_the_platform_supports_it()
+    {
+        try
+        {
+            await AssertHandshakeProtocolAsync(SslProtocols.Tls13);
+        }
+        catch (Exception ex) when (ex is AuthenticationException or PlatformNotSupportedException)
+        {
+            output.WriteLine($"SKIP: TLS 1.3 is not available for SslStream on this platform/runtime ({ex.GetType().Name}).");
+            return;
+        }
+    }
+
+    [Fact]
+    public async Task Malformed_binary_frame_closes_the_authenticated_connection()
+    {
+        await using var context = await ListenerContext.StartAsync();
+        await using var client = await ConnectAsync(context);
+        var frame = ListenerProtocolEncoder.EncodeGetReceiptAck(4);
+        frame[0] = 0x02;
+        await client.Stream.WriteAsync(frame);
+        await ArticleWorkTestDeliveries.WaitUntilAsync(
+            () => context.Service.State == CacheListenerState.Running && context.Service.ActiveConnections == 0,
+            TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task Explicit_ipv6_loopback_binds_when_the_platform_supports_it()
     {
+        if (!Socket.OSSupportsIPv6)
+        {
+            output.WriteLine("SKIP: Socket.OSSupportsIPv6 is false on this platform.");
+            return;
+        }
+
         var port = GetFreePort();
         var runtime = CreateRuntime(port) with
         {
@@ -197,9 +237,13 @@ public sealed class CacheListenerServiceTests
                 service.LocalEndPoints,
                 static endpoint => endpoint is IPEndPoint ip && ip.Address.Equals(IPAddress.IPv6Loopback));
         }
-        catch (SocketException)
+        catch (SocketException ex) when (
+            ex.SocketErrorCode is SocketError.AddressFamilyNotSupported
+                or SocketError.ProtocolNotSupported
+                or SocketError.AddressNotAvailable)
         {
-            // IPv6 loopback is not available in this environment.
+            output.WriteLine($"SKIP: IPv6 loopback bind is not available ({ex.SocketErrorCode}).");
+            return;
         }
         finally
         {
@@ -224,7 +268,23 @@ public sealed class CacheListenerServiceTests
         }
     }
 
-    private static async Task<TlsClient> ConnectAsync(ListenerContext context)
+    private static async Task AssertHandshakeProtocolAsync(SslProtocols protocol)
+    {
+        var payload = "tls-protocol"u8.ToArray();
+        await using var context = await ListenerContext.StartAsync(payload);
+        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
+        await using var client = await ConnectAsync(context, protocol);
+        Assert.Equal(protocol, client.Stream.SslProtocol);
+        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetRequest(21, md5));
+        var found = await ReadFrameAsync(client.Stream);
+        Assert.Equal(ListenerOpcode.GetResponseFound, found.Header.Opcode);
+        Assert.Equal(payload, found.Payload);
+        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(21));
+    }
+
+    private static async Task<TlsClient> ConnectAsync(
+        ListenerContext context,
+        SslProtocols protocols = SslProtocols.Tls12 | SslProtocols.Tls13)
     {
         var tcp = new TcpClient();
         await tcp.ConnectAsync(IPAddress.Loopback, context.Port);
@@ -232,7 +292,7 @@ public sealed class CacheListenerServiceTests
         await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
         {
             TargetHost = "localhost",
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            EnabledSslProtocols = protocols,
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
         });
         return new TlsClient(tcp, ssl);

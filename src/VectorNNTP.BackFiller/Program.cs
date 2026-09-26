@@ -9,7 +9,11 @@ try
 {
     Log.Information("VectorNNTP.BackFiller host starting");
 
-    var builder = Host.CreateApplicationBuilder(args);
+    var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory,
+    });
 
     builder.ConfigureBackFillerLogging();
     builder.ConfigureBackFillerPlatformHosting();

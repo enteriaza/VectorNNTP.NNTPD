@@ -72,4 +72,74 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.False(runtime.Shutdown.FinishActiveArticles);
         Assert.Equal(TimeSpan.FromSeconds(45), runtime.Shutdown.GracePeriod);
     }
+
+    [Fact]
+    public void Relative_directories_resolve_against_the_content_root_not_the_working_directory()
+    {
+        var previous = Environment.CurrentDirectory;
+        var contentRoot = Directory.CreateTempSubdirectory("bf-content-").FullName;
+        var otherCwd = Directory.CreateTempSubdirectory("bf-cwd-").FullName;
+        try
+        {
+            Environment.CurrentDirectory = otherCwd;
+            var options = BackFillerTestOptions.CreateValid();
+            options.LogDirectory = "logs";
+            options.CertificateDirectory = "certs";
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidConnectionStrings(),
+                contentRoot);
+
+            Assert.Equal(Path.GetFullPath(Path.Combine(contentRoot, "logs")), runtime.LogDirectory);
+            Assert.Equal(Path.GetFullPath(Path.Combine(contentRoot, "certs")), runtime.CertificateDirectory);
+            Assert.NotEqual(Path.GetFullPath(Path.Combine(otherCwd, "certs")), runtime.CertificateDirectory);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TryDelete(contentRoot);
+            TryDelete(otherCwd);
+        }
+    }
+
+    [Fact]
+    public void Absolute_directories_remain_absolute()
+    {
+        var contentRoot = Directory.CreateTempSubdirectory("bf-content-abs-").FullName;
+        var absoluteLogs = Directory.CreateTempSubdirectory("bf-abs-logs-").FullName;
+        var absoluteCerts = Directory.CreateTempSubdirectory("bf-abs-certs-").FullName;
+        try
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.LogDirectory = absoluteLogs;
+            options.CertificateDirectory = absoluteCerts;
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidConnectionStrings(),
+                contentRoot);
+
+            Assert.Equal(Path.GetFullPath(absoluteLogs), runtime.LogDirectory);
+            Assert.Equal(Path.GetFullPath(absoluteCerts), runtime.CertificateDirectory);
+        }
+        finally
+        {
+            TryDelete(contentRoot);
+            TryDelete(absoluteLogs);
+            TryDelete(absoluteCerts);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 }
