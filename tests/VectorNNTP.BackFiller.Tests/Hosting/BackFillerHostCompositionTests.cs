@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
@@ -28,16 +29,21 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(6, hosted.Length);
+        Assert.Equal(7, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
-        Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[1]);
-        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[2]);
-        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[3]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[4]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[5]);
+        Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[1]);
+        Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[2]);
+        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[4]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[5]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[6]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
+        Assert.Same(
+            host.Services.GetRequiredService<ProviderConfigurationCatalog>(),
+            host.Services.GetRequiredService<IBackFillerProviderCatalog>());
+        Assert.IsType<FakeProviderAccountSource>(host.Services.GetRequiredService<IProviderAccountSource>());
         Assert.IsType<ProviderArticleWorkHandler>(host.Services.GetRequiredService<IArticleWorkHandler>());
         Assert.Same(
             host.Services.GetRequiredService<ArticleWorkResponsePublisher>(),
@@ -54,6 +60,8 @@ public sealed class BackFillerHostCompositionTests
         Assert.Same(first, second);
         Assert.Equal("backfiller01.usenet.ninja", first.Fqdn);
         Assert.Equal("127.0.0.1", first.GrabberDb.Server);
+        Assert.Equal(TimeSpan.FromSeconds(60), first.Accounts.RefreshInterval);
+        Assert.Equal(TimeSpan.FromSeconds(15), first.Accounts.CommandTimeout);
         Assert.Equal(TimeSpan.FromSeconds(45), first.Shutdown.GracePeriod);
         Assert.Equal(
             first.Shutdown.GracePeriod,
@@ -96,6 +104,15 @@ public sealed class BackFillerHostCompositionTests
     }
 
     [Fact]
+    public void AddBackFillerHosting_defaults_to_the_mysql_account_source()
+    {
+        using var host = CreateHost(injectAccountSource: false);
+
+        Assert.IsType<MySqlProviderAccountSource>(host.Services.GetRequiredService<IProviderAccountSource>());
+        Assert.IsType<ProviderConfigurationCatalog>(host.Services.GetRequiredService<IBackFillerProviderCatalog>());
+    }
+
+    [Fact]
     public void BackFiller_assembly_does_not_reference_NNTPD()
     {
         var referenced = typeof(BackFillerServiceCollectionExtensions).Assembly
@@ -105,7 +122,9 @@ public sealed class BackFillerHostCompositionTests
         Assert.DoesNotContain("VectorNNTP.NNTPD", referenced);
     }
 
-    private static IHost CreateHost(FakeBackFillerRabbitMqConnectionFactory? factory = null)
+    private static IHost CreateHost(
+        FakeBackFillerRabbitMqConnectionFactory? factory = null,
+        bool injectAccountSource = true)
     {
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
@@ -116,6 +135,11 @@ public sealed class BackFillerHostCompositionTests
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
             factory ?? new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<ICacheListenerCertificateSource>(new StaticCacheListenerCertificateSource());
+        if (injectAccountSource)
+        {
+            builder.Services.AddSingleton<IProviderAccountSource>(new FakeProviderAccountSource());
+        }
+
         builder.ConfigureBackFillerLogging();
         builder.ConfigureBackFillerPlatformHosting();
         builder.AddBackFillerHosting();

@@ -15,7 +15,7 @@ public interface IBackFillerProviderCatalog
     bool TryGetProvider(string backbone, out BackFillerProviderDefinition provider);
 }
 
-/// <summary>In-memory catalog. Empty by default until MySQL account polling exists.</summary>
+/// <summary>Fixed in-memory catalog used by tests. Production uses the MySQL-backed live catalog.</summary>
 public sealed class StaticBackFillerProviderCatalog : IBackFillerProviderCatalog
 {
     private readonly IReadOnlyList<BackFillerProviderDefinition> _providers;

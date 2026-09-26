@@ -123,6 +123,34 @@ public sealed class BackFillerOptionsValidatorTests
         Assert.True(result.Succeeded);
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(3601)]
+    public void Validate_fails_when_accounts_refresh_interval_is_out_of_range(int seconds)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Accounts.RefreshIntervalSeconds = seconds;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Accounts:RefreshIntervalSeconds", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(121)]
+    public void Validate_fails_when_accounts_command_timeout_is_out_of_range(int seconds)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Accounts.CommandTimeoutSeconds = seconds;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Accounts:CommandTimeoutSeconds", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_fails_when_grabber_db_is_missing()
     {

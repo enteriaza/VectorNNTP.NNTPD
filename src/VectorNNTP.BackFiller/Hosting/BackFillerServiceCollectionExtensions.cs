@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Listener;
@@ -24,11 +25,12 @@ public static class BackFillerServiceCollectionExtensions
     /// <remarks>
     /// Registers <see cref="BackFillerRabbitMqService"/> as the sole RabbitMQ connection
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
-    /// connection cannot be established. Registers <see cref="NntpProviderRegistry"/> after
-    /// the connection owner, then <see cref="ArticleRetentionSweepService"/>, then
+    /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
+    /// after the connection owner, then <see cref="NntpProviderRegistry"/>,
+    /// then <see cref="ArticleRetentionSweepService"/>, then
     /// <see cref="CacheListenerService"/>, then <see cref="ArticleWorkResponsePublisher"/>,
-    /// then <see cref="ArticleWorkConsumerService"/>. Transit, ACME, accounts, and
-    /// control-plane capacity are not registered in Phase 7.
+    /// then <see cref="ArticleWorkConsumerService"/>. Transit, ACME, and
+    /// control-plane capacity remain deferred.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -73,13 +75,24 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<BackFillerRabbitMqService>());
 
-        builder.Services.TryAddSingleton<IBackFillerProviderCatalog, StaticBackFillerProviderCatalog>();
+        builder.Services.TryAddSingleton<IProviderAccountSource, MySqlProviderAccountSource>();
+        builder.Services.AddSingleton<ProviderConfigurationCatalog>();
+        builder.Services.TryAddSingleton<IBackFillerProviderCatalog>(static provider =>
+            provider.GetRequiredService<ProviderConfigurationCatalog>());
+        builder.Services.AddSingleton(static provider => new ProviderAccountConfigurationService(
+            provider.GetRequiredService<IProviderAccountSource>(),
+            provider.GetRequiredService<ProviderConfigurationCatalog>(),
+            provider.GetRequiredService<NntpProviderRegistry>(),
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>()));
         builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();
         builder.Services.AddSingleton(static provider => new NntpProviderRegistry(
             provider.GetRequiredService<IBackFillerProviderCatalog>(),
             provider.GetRequiredService<INntpTransportFactory>(),
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
             provider.GetRequiredService<ILogger<NntpProviderRegistry>>()));
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<ProviderAccountConfigurationService>());
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<NntpProviderRegistry>());
         builder.Services.TryAddSingleton<INntpArticleRetriever, NntpArticleRetriever>();

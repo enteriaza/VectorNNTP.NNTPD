@@ -1,11 +1,12 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
+using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.Configuration;
 
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>
-/// Owns one <see cref="NntpSessionPool"/> per configured provider. Does not poll MySQL.
+/// Owns one <see cref="NntpSessionPool"/> per configured provider. Pool replacement is driven by the account control plane.
 /// </summary>
 public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
 {
@@ -53,13 +54,19 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
         lock (_gate)
         {
-            if (_pools.TryGetValue(backbone, out pool!))
-            {
-                return true;
-            }
-
             if (!_catalog.TryGetProvider(backbone, out var provider))
             {
+                pool = null!;
+                return false;
+            }
+
+            if (_pools.TryGetValue(backbone, out pool!))
+            {
+                if (pool.Provider == provider)
+                {
+                    return true;
+                }
+
                 pool = null!;
                 return false;
             }
@@ -67,6 +74,88 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
             pool = new NntpSessionPool(provider, _options, _transport, _logger, _shutdownGrace);
             _pools[provider.Backbone] = pool;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Publishes <paramref name="providers"/> and reconciles pools. Unchanged providers keep their pool.
+    /// Retired pools drain outstanding leases before dispose.
+    /// </summary>
+    public async Task ApplySnapshotAsync(
+        IReadOnlyList<BackFillerProviderDefinition> providers,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(providers);
+        var retiring = new List<NntpSessionPool>();
+        var warming = new List<NntpSessionPool>();
+        lock (_gate)
+        {
+            if (_catalog is ProviderConfigurationCatalog live)
+            {
+                live.Publish(providers);
+            }
+
+            var desired = new Dictionary<string, BackFillerProviderDefinition>(StringComparer.OrdinalIgnoreCase);
+            foreach (var provider in providers)
+            {
+                desired[provider.Backbone] = provider;
+            }
+
+            foreach (var pair in _pools.ToArray())
+            {
+                if (!desired.TryGetValue(pair.Key, out var next))
+                {
+                    if (_pools.TryRemove(pair.Key, out var removed))
+                    {
+                        retiring.Add(removed);
+                    }
+
+                    continue;
+                }
+
+                if (pair.Value.Provider == next)
+                {
+                    continue;
+                }
+
+                if (_pools.TryRemove(pair.Key, out var replaced))
+                {
+                    retiring.Add(replaced);
+                }
+
+                var created = new NntpSessionPool(next, _options, _transport, _logger, _shutdownGrace);
+                _pools[next.Backbone] = created;
+                warming.Add(created);
+            }
+
+            foreach (var provider in desired.Values)
+            {
+                if (_pools.ContainsKey(provider.Backbone))
+                {
+                    continue;
+                }
+
+                var created = new NntpSessionPool(provider, _options, _transport, _logger, _shutdownGrace);
+                _pools[provider.Backbone] = created;
+                warming.Add(created);
+            }
+        }
+
+        foreach (var pool in retiring)
+        {
+            await pool.DrainAndDisposeAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        foreach (var pool in warming)
+        {
+            if (pool.Provider.MinSessions <= 0)
+            {
+                continue;
+            }
+
+            await pool.WarmupAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 

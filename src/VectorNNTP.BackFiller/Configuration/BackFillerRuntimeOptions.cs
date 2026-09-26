@@ -26,7 +26,8 @@ public sealed record BackFillerRuntimeOptions(
     BackFillerTransitServerRuntimeOptions TransitServer,
     BackFillerRabbitMqRuntimeOptions RabbitMq,
     BackFillerLetsEncryptRuntimeOptions LetsEncrypt,
-    GrabberDbRuntimeOptions GrabberDb);
+    GrabberDbRuntimeOptions GrabberDb,
+    BackFillerAccountsRuntimeOptions Accounts);
 
 /// <summary>Validated shutdown policy.</summary>
 /// <param name="GracePeriod">Complete shutdown budget.</param>
@@ -122,3 +123,8 @@ public sealed record BackFillerRabbitMqRuntimeOptions(
     int RequestedChannelMax,
     ushort? ConsumerPrefetchCount,
     string? DiagnosticPayloadCorrelationId);
+
+/// <summary>Validated MySQL provider-account control-plane policy.</summary>
+public sealed record BackFillerAccountsRuntimeOptions(
+    TimeSpan RefreshInterval,
+    TimeSpan CommandTimeout);

@@ -148,6 +148,11 @@ public sealed class BackFillerOptions
     public BackFillerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets MySQL provider-account control-plane settings.
+    /// </summary>
+    public BackFillerAccountsOptions Accounts { get; set; } = new();
+
+    /// <summary>
     /// Returns whether a bind-address token is a wildcard.
     /// </summary>
     /// <param name="entry">Configured token.</param>
@@ -217,6 +222,22 @@ public sealed class BackFillerListenerOptions
 
     /// <summary>Maximum concurrently active accepted connections.</summary>
     public int MaxActiveConnections { get; set; } = 1024;
+}
+
+/// <summary>MySQL provider-account control-plane bounds.</summary>
+public sealed class BackFillerAccountsOptions
+{
+    /// <summary>Old ControlPlaneService refresh cadence.</summary>
+    public const int DefaultRefreshIntervalSeconds = 60;
+
+    /// <summary>Per-command MySQL timeout.</summary>
+    public const int DefaultCommandTimeoutSeconds = 15;
+
+    /// <summary>Seconds between successful-or-failed refresh attempts after the initial load.</summary>
+    public int RefreshIntervalSeconds { get; set; } = DefaultRefreshIntervalSeconds;
+
+    /// <summary>MySQL command timeout in seconds for the accounts query.</summary>
+    public int CommandTimeoutSeconds { get; set; } = DefaultCommandTimeoutSeconds;
 }
 
 /// <summary>In-memory article retention policy.</summary>

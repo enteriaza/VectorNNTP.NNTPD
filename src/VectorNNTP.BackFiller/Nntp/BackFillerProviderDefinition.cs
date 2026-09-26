@@ -2,7 +2,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>
 /// Explicit provider identity and session-capacity for one backbone.
-/// Phase 4 is populated by tests or a static catalog; MySQL account polling is deferred.
+/// Phase 8 publishes these from MySQL <c>nntpbackfilleraccounts</c>. Tests may construct them directly.
 /// </summary>
 /// <param name="Backbone">Provider backbone label (queue context).</param>
 /// <param name="Host">Upstream NNTP hostname or address.</param>

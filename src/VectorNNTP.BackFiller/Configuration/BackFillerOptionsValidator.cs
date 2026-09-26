@@ -39,6 +39,7 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateDirectories(options, failures);
         ValidateShutdown(options, failures);
         ValidateListener(options, failures);
+        ValidateAccounts(options, failures);
         ValidateArticleRetention(options, failures);
         ValidateTransitServer(options, failures);
         ValidateLetsEncrypt(options, failures);
@@ -223,6 +224,20 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         if (listener.MaxActiveConnections < 1)
         {
             failures.Add("BackFiller:Listener:MaxActiveConnections must be between 1 and 2147483647.");
+        }
+    }
+
+    private static void ValidateAccounts(BackFillerOptions options, List<string> failures)
+    {
+        var accounts = options.Accounts ?? new BackFillerAccountsOptions();
+        if (accounts.RefreshIntervalSeconds is < 5 or > 3600)
+        {
+            failures.Add("BackFiller:Accounts:RefreshIntervalSeconds must be between 5 and 3600.");
+        }
+
+        if (accounts.CommandTimeoutSeconds is < 1 or > 120)
+        {
+            failures.Add("BackFiller:Accounts:CommandTimeoutSeconds must be between 1 and 120.");
         }
     }
 

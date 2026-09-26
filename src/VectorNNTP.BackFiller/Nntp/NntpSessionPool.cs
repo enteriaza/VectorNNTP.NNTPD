@@ -55,6 +55,9 @@ public sealed class NntpSessionPool : IAsyncDisposable
     /// <summary>Gets the provider backbone.</summary>
     public string Backbone => _provider.Backbone;
 
+    /// <summary>Gets the provider definition this pool was created for.</summary>
+    internal BackFillerProviderDefinition Provider => _provider;
+
     /// <summary>Gets the number of live session objects.</summary>
     public int LiveSessionCount => _live.Count;
 
@@ -135,8 +138,18 @@ public sealed class NntpSessionPool : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Stops new leases, waits for outstanding leases to return, then retires remaining sessions.
+    /// Used when the control plane replaces this pool. Does not force-close a leased session unless
+    /// <paramref name="cancellationToken"/> is cancelled.
+    /// </summary>
+    internal Task DrainAndDisposeAsync(CancellationToken cancellationToken) =>
+        DisposeCoreAsync(forceAfterGrace: false, cancellationToken);
+
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => new(DisposeCoreAsync(forceAfterGrace: true, CancellationToken.None));
+
+    private async Task DisposeCoreAsync(bool forceAfterGrace, CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
         {
@@ -146,9 +159,19 @@ public sealed class NntpSessionPool : IAsyncDisposable
         await _shutdown.CancelAsync().ConfigureAwait(false);
         try
         {
-            await _drained.Task.WaitAsync(_shutdownGrace).ConfigureAwait(false);
+            if (forceAfterGrace)
+            {
+                await _drained.Task.WaitAsync(_shutdownGrace).ConfigureAwait(false);
+            }
+            else
+            {
+                await _drained.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (TimeoutException)
+        {
+        }
+        catch (OperationCanceledException)
         {
         }
 

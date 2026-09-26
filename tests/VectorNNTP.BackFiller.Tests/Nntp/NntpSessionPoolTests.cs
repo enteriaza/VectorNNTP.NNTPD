@@ -155,7 +155,10 @@ public sealed class NntpSessionPoolTests
         for (var i = 0; i < count; i++)
         {
             var server = new ScriptedNntpServer();
-            server.Respond(static _ => "430 missing\r\n");
+            server.Respond(static command =>
+                command.StartsWith("AUTHINFO", StringComparison.OrdinalIgnoreCase)
+                    ? "281 authentication accepted\r\n"
+                    : "430 missing\r\n");
             factory.Enqueue(server);
         }
     }

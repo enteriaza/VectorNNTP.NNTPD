@@ -819,7 +819,7 @@ Exactly one ACK or NACK per settlement lease. The publisher cannot settle. A cra
 
 ### Explicit deferral
 
-Phase 7 implements Listener/TLS serving. Still not implemented: Transit `TAKETHIS`, ACME, Cloudflare, MySQL account polling, control-plane capacity.
+Phase 7 implements Listener/TLS serving. Still not implemented: Transit `TAKETHIS`, ACME, Cloudflare, MySQL account polling (Phase 8), control-plane capacity.
 
 ### Phase 6 discrepancies
 
@@ -899,7 +899,7 @@ Stop accept, cancel in-flight handshake/session tokens, drain admitted connectio
 
 ### Explicit deferral
 
-Not implemented: Transit `TAKETHIS`, ACME issuance/renewal, Cloudflare DNS, MySQL accounts, control-plane capacity, Listener-completion eviction of retained articles.
+Not implemented: Transit `TAKETHIS`, ACME issuance/renewal, Cloudflare DNS, MySQL accounts (Phase 8), control-plane capacity, Listener-completion eviction of retained articles.
 
 ### Phase 7 discrepancies
 
@@ -907,5 +907,95 @@ Not implemented: Transit `TAKETHIS`, ACME issuance/renewal, Cloudflare DNS, MySQ
 2. **No `MarkListenerCompleted` eviction.** Old handler marked listener completion after Found write + ReceiptAck so retention could drop the article when Transit had also completed. Phase 5 has no completion channels. Phase 7 releases the read lease only.
 3. **Certificate source.** Old worker used ACME-backed `BackFillerCertificateState`. Phase 7 loads an already-provisioned PFX or a test-injected certificate. No accept-all TLS on the server; clients in tests disable validation.
 4. **BackgroundService.** Old listener was a `BackgroundService`. Phase 7 is an `IHostedService` with the same local state machine used by RabbitMQ / consumers / publisher. Not NNTPD `ApplicationLifecycle`.
+
+## Phase 8 — MySQL provider/account control plane
+
+Implemented in `src/VectorNNTP.BackFiller/Accounts` plus registry snapshot apply in `Nntp/NntpProviderRegistry`. MySQL is control-plane state only. Article Work still resolves providers through `NntpProviderRegistry` / `IBackFillerProviderCatalog` and never queries GrabberDB.
+
+Hosted-service order is now: RabbitMQ → **provider-account control plane** → NNTP registry → sweep → cache Listener → response publisher → Article Work consumers.
+
+### Schema and query
+
+The old worker table contract is used unchanged. Phase 8 does not create or migrate the table.
+
+```sql
+SELECT
+  entryid,
+  backbone,
+  hostname,
+  keepalive,
+  maxconnections,
+  password,
+  port,
+  serverid,
+  username,
+  usessl
+FROM nntpbackfilleraccounts
+WHERE serverid = @ServerId;
+```
+
+`serverid` is the validated `BackFiller:ServerId` (0–99), sent as an unsigned byte. Connections open only for the duration of a query. Command timeout is `BackFiller:Accounts:CommandTimeoutSeconds` (default 15, range 1–120). `MySqlException` is wrapped as `InvalidOperationException("Provider account query failed against GrabberDB.")` so the connection string is not copied into the exception message.
+
+`keepalive` is parsed and stored on the row and is otherwise unused (DATE remains deferred).
+
+### Mapping onto Phase 4 providers
+
+Each accepted row becomes one `BackFillerProviderDefinition`:
+
+| Column / rule | Provider field |
+|---|---|
+| `backbone` matched ignore-case to the Phase 2/3 canonical list | `Backbone` (canonical spelling) |
+| `hostname` (required, trimmed) | `Host` |
+| `port` 1–65535 | `Port` |
+| `usessl` exactly `y` / `n` | `UseTls` |
+| `username` (required, trimmed) | `Username` |
+| `password` (required, may be empty) | `Password` |
+| no min-session column | `MinSessions = 0` (lazy) |
+| `maxconnections` ≥ 1 | `MaxSessions` |
+
+Unknown backbones, duplicates (first valid row wins), and invalid rows are rejected and logged. They do not fail the snapshot and do not create runtime providers. An empty accepted set is a valid snapshot.
+
+### Snapshot and polling
+
+`ProviderConfigurationCatalog` publishes a complete list atomically (`volatile` replace). Readers see the previous complete set or the new complete set.
+
+`ProviderAccountConfigurationService` owns one polling loop:
+
+1. `StartAsync` performs a **required** initial refresh. Query failure fails startup. Empty providers succeed.
+2. After startup, the loop `Delay`s `BackFiller:Accounts:RefreshIntervalSeconds` (default **60**, the old `ControlPlaneService` cadence; range 5–3600), then refreshes. The delay happens first, so the initial load is not immediately repeated.
+3. `Interlocked` prevents overlapping refreshes. A refresh that overruns the interval is not started again until it finishes.
+4. Change detection uses record equality on the published `BackFillerProviderDefinition` set (host, port, TLS, credentials, min/max, presence). Unchanged polls keep the existing snapshot and pools.
+5. A later query/refresh failure logs a warning and **retains the last known-good snapshot**. Database unavailable is not treated as “all providers removed”. The next successful refresh publishes atomically and logs recovery.
+
+### Ownership
+
+| Resource | Owner |
+|---|---|
+| MySQL poll, current snapshot, change publication | `ProviderAccountConfigurationService` |
+| Row query | `IProviderAccountSource` / `MySqlProviderAccountSource` |
+| Published provider set | `ProviderConfigurationCatalog` (`IBackFillerProviderCatalog`) |
+| Session pools, lease, reuse, retirement, warmup | existing `NntpSessionPool` / `NntpProviderRegistry` |
+
+The control plane does not own RabbitMQ, Article Work settlement, retention, the Cache Listener, or NNTP protocol state. It does not implement a second session pool.
+
+`NntpProviderRegistry.ApplySnapshotAsync` publishes the catalog and reconciles pools under the same lock: unchanged providers keep their pool; added/changed providers get a new pool; removed/replaced pools are drained via `DrainAndDisposeAsync`. New leases use the new pool. An already-leased session stays with the retired pool until the lease returns. Drain waits for outstanding leases unless the refresh token is cancelled, in which case remaining live sessions are retired and the refresh throws.
+
+Removed providers disappear from the catalog, so `TryGetPool` rejects new leases. Reappearance creates a new pool without a process restart.
+
+### Observability
+
+Structured events 5600–5609: snapshot loaded, provider added/removed/changed, refresh failed/recovered, rejected row, unchanged snapshot, start/stop. Logs include backbone, host, port, TLS, and session bounds. They never include passwords, connection strings, tokens, article payloads, or full account rows.
+
+### Explicit deferral
+
+Not implemented: table/database provisioning, DATE keepalive from `keepalive`, Transit `TAKETHIS`, ACME, Cloudflare, control-plane capacity.
+
+### Phase 8 discrepancies
+
+1. **No `BackgroundService`.** Same local `IHostedService` pattern as RabbitMQ / registry / Listener. Not NNTPD `ApplicationLifecycle`. Not a copy of the old `ControlPlaneService` / `NntpAccountSnapshotStartupInitializer` types.
+2. **MinSessions.** The table has no min-session column. Phase 8 always publishes `MinSessions = 0`. A later definition that differs only in `MinSessions` (tests / future source) still replaces the pool.
+3. **Rejected rows do not fail the snapshot.** The old worker also skipped unusable account rows rather than refusing the whole process after a successful query. Startup still fails when the **query itself** fails.
+4. **Last-known-good after startup.** A temporary GrabberDB outage keeps the last successful providers. That is the Phase 8 policy; it is not “fail-open to an invented catalog”.
+5. **No live MySQL in the test suite.** Tests use `IProviderAccountSource` fakes. There is no Testcontainers convention in this repository for GrabberDB.
 
 

@@ -33,6 +33,8 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.Equal("backfiller", runtime.Name);
         Assert.Equal(["127.0.0.1"], runtime.RabbitMq.Hosts);
         Assert.Equal(4L * 1024 * 1024 * 1024, runtime.ArticleRetention.MaximumRetainedPayloadBytes);
+        Assert.Equal(TimeSpan.FromSeconds(60), runtime.Accounts.RefreshInterval);
+        Assert.Equal(TimeSpan.FromSeconds(15), runtime.Accounts.CommandTimeout);
     }
 
     [Fact]

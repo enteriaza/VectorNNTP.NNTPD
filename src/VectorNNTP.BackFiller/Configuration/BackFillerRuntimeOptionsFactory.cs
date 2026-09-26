@@ -69,6 +69,7 @@ public static class BackFillerRuntimeOptionsFactory
         var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
         var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
         var transit = options.TransitServer ?? throw new InvalidOperationException("BackFiller:TransitServer is required.");
+        var accounts = options.Accounts ?? throw new InvalidOperationException("BackFiller:Accounts is required.");
 
         return new BackFillerRuntimeOptions(
             Name: name,
@@ -156,7 +157,10 @@ public static class BackFillerRuntimeOptionsFactory
                 grabberDbValue!.Trim(),
                 server!,
                 database!,
-                userId!));
+                userId!),
+            Accounts: new BackFillerAccountsRuntimeOptions(
+                TimeSpan.FromSeconds(accounts.RefreshIntervalSeconds),
+                TimeSpan.FromSeconds(accounts.CommandTimeoutSeconds)));
     }
 
     private static string? NullIfWhiteSpace(string? value) =>
