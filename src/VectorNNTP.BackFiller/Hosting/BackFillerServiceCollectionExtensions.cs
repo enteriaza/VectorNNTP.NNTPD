@@ -25,8 +25,8 @@ public static class BackFillerServiceCollectionExtensions
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
     /// connection cannot be established. Registers <see cref="NntpProviderRegistry"/> after
     /// the connection owner, then <see cref="ArticleRetentionSweepService"/>, then
-    /// <see cref="ArticleWorkConsumerService"/>. Response publication, transit, listener,
-    /// accounts, and certificates are not registered in Phase 5.
+    /// <see cref="ArticleWorkResponsePublisher"/>, then <see cref="ArticleWorkConsumerService"/>.
+    /// Transit, listener, accounts, and certificates are not registered in Phase 6.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -93,7 +93,14 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleRetentionSweepService>());
         builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
-        builder.Services.TryAddSingleton<IArticleWorkResponsePublisher, RecordingArticleWorkResponsePublisher>();
+        builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
+            provider.GetRequiredService<IBackFillerRabbitMqService>(),
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<ILogger<ArticleWorkResponsePublisher>>()));
+        builder.Services.AddSingleton<IArticleWorkResponsePublisher>(static provider =>
+            provider.GetRequiredService<ArticleWorkResponsePublisher>());
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<ArticleWorkResponsePublisher>());
         builder.Services.AddSingleton(static provider => new ArticleWorkConsumerService(
             provider.GetRequiredService<IBackFillerRabbitMqService>(),
             provider.GetRequiredService<BackFillerRuntimeOptions>(),

@@ -14,7 +14,7 @@ public readonly record struct ArticleWorkHandlerResult(
     string? CacheUri = null);
 
 /// <summary>
-/// Processes admitted Article Work. Phase 5 retrieves and retains; it does not publish or ACK Success.
+/// Processes admitted Article Work. Retrieval and retention happen here; publication and ACK do not.
 /// </summary>
 public interface IArticleWorkHandler
 {

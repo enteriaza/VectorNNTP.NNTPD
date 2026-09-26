@@ -68,6 +68,29 @@ public readonly struct BackFillerRabbitMqConnectionHandle
         return _connection.CreateChannelAsync(Generation, cancellationToken);
     }
 
+    /// <summary>
+    /// Opens a caller-owned confirm-enabled publish channel on the captured generation.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel channel creation.</param>
+    /// <returns>A publish channel stamped with <see cref="Generation"/>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the handle is empty or the generation is no longer current.
+    /// </exception>
+    public Task<IBackFillerRabbitMqPublishChannel> CreatePublishChannelAsync(CancellationToken cancellationToken)
+    {
+        if (_owner is null || _connection is null)
+        {
+            throw new InvalidOperationException("RabbitMQ connection handle is empty.");
+        }
+
+        if (!IsCurrent)
+        {
+            throw new InvalidOperationException("RabbitMQ connection generation is no longer current.");
+        }
+
+        return _connection.CreatePublishChannelAsync(Generation, cancellationToken);
+    }
+
     internal IBackFillerRabbitMqConnection Connection =>
         _connection ?? throw new InvalidOperationException("RabbitMQ connection handle is empty.");
 

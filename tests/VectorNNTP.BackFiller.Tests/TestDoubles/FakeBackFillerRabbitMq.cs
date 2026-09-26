@@ -103,7 +103,18 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
 
     public List<FakeBackFillerRabbitMqChannel> Channels { get; } = [];
 
+    public List<FakeBackFillerRabbitMqPublishChannel> PublishChannels { get; } = [];
+
     public Exception? CreateChannelException { get; set; }
+
+    public Exception? CreatePublishChannelException { get; set; }
+
+    public TaskCompletionSource? CreatePublishChannelStarted { get; set; }
+
+    public TaskCompletionSource? BlockCreatePublishChannel { get; set; }
+
+    public FakePublishConfirmBehavior DefaultPublishConfirmBehavior { get; set; } =
+        FakePublishConfirmBehavior.Wait;
 
     public Task<IBackFillerRabbitMqChannel> CreateChannelAsync(long generation, CancellationToken cancellationToken)
     {
@@ -121,6 +132,35 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
         var channel = new FakeBackFillerRabbitMqChannel(generation);
         Channels.Add(channel);
         return Task.FromResult<IBackFillerRabbitMqChannel>(channel);
+    }
+
+    public async Task<IBackFillerRabbitMqPublishChannel> CreatePublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        CreatePublishChannelStarted?.TrySetResult();
+        if (BlockCreatePublishChannel is not null)
+        {
+            await BlockCreatePublishChannel.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (CreatePublishChannelException is not null)
+        {
+            throw CreatePublishChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for publish channel creation.");
+        }
+
+        var channel = new FakeBackFillerRabbitMqPublishChannel(generation)
+        {
+            ConfirmBehavior = DefaultPublishConfirmBehavior,
+        };
+        PublishChannels.Add(channel);
+        return channel;
     }
 
     public void SimulateLost(
@@ -257,6 +297,84 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
         }
 
         return _onDelivery(delivery);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        IsOpen = false;
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal enum FakePublishConfirmBehavior
+{
+    Wait = 0,
+    Confirm = 1,
+    Nack = 2,
+    ThrowOnPublish = 3,
+    Timeout = 4,
+    CloseChannel = 5,
+}
+
+internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IBackFillerRabbitMqPublishChannel
+{
+    public long Generation { get; } = generation;
+
+    public bool IsOpen { get; set; } = true;
+
+    public int DisposeCount { get; private set; }
+
+    public FakePublishConfirmBehavior ConfirmBehavior { get; set; } = FakePublishConfirmBehavior.Wait;
+
+    public TaskCompletionSource? Enqueued { get; set; }
+
+    public TaskCompletionSource? ConfirmGate { get; set; }
+
+    public Action? AfterEnqueue { get; set; }
+
+    public List<BackFillerRabbitMqPublication> Publications { get; } = [];
+
+    public async Task PublishConfirmedAsync(BackFillerRabbitMqPublication publication, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(publication);
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(DisposeCount > 0, this);
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ publish channel is not open.");
+        }
+
+        if (ConfirmBehavior == FakePublishConfirmBehavior.ThrowOnPublish)
+        {
+            throw new InvalidOperationException("publish failed");
+        }
+
+        Publications.Add(publication);
+        Enqueued?.TrySetResult();
+        AfterEnqueue?.Invoke();
+
+        switch (ConfirmBehavior)
+        {
+            case FakePublishConfirmBehavior.Confirm:
+                return;
+            case FakePublishConfirmBehavior.Nack:
+                throw new InvalidOperationException("publisher nack");
+            case FakePublishConfirmBehavior.Timeout:
+                throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
+            case FakePublishConfirmBehavior.CloseChannel:
+                IsOpen = false;
+                throw new InvalidOperationException("RabbitMQ publish channel closed during confirmation.");
+            default:
+                if (ConfirmGate is not null)
+                {
+                    await ConfirmGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                throw new OperationCanceledException(cancellationToken);
+        }
     }
 
     public ValueTask DisposeAsync()

@@ -41,4 +41,12 @@ internal interface IBackFillerRabbitMqConnection : IAsyncDisposable
     /// <param name="cancellationToken">Token used to cancel channel creation.</param>
     /// <returns>A channel owned by the caller. The caller must not dispose the connection.</returns>
     Task<IBackFillerRabbitMqChannel> CreateChannelAsync(long generation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a caller-owned confirm-enabled publish channel on this connection.
+    /// </summary>
+    /// <param name="generation">Connection generation the channel belongs to.</param>
+    /// <param name="cancellationToken">Token used to cancel channel creation.</param>
+    /// <returns>A publish channel owned by the caller. The caller must not dispose the connection.</returns>
+    Task<IBackFillerRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken);
 }

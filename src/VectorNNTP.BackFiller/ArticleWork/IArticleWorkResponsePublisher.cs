@@ -4,8 +4,9 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// Intent to publish a terminal Article Work RPC response.
 /// </summary>
 /// <remarks>
-/// Phase 3 records this intent only. Broker publish and publisher confirms are deferred.
 /// Identities are never invented: missing parse fields stay null.
+/// <see cref="Uri"/> is the Phase 5 retention <c>cache://</c> value for Success only.
+/// The publisher must not reconstruct that URI.
 /// </remarks>
 /// <param name="Outcome">Terminal protocol outcome.</param>
 /// <param name="RequestId">Logical request identity when recovered.</param>
@@ -14,6 +15,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="CorrelationId">AMQP correlation to echo on the response.</param>
 /// <param name="ReplyTo">AMQP reply destination.</param>
 /// <param name="Error">Failure reason for terminal non-success outcomes.</param>
+/// <param name="Uri">Retention cache URI for Success. Must be absent otherwise.</param>
 public sealed record ArticleWorkResponseIntent(
     ArticleWorkOutcome Outcome,
     Guid? RequestId,
@@ -21,30 +23,33 @@ public sealed record ArticleWorkResponseIntent(
     string? Backbone,
     string? CorrelationId,
     string? ReplyTo,
-    string? Error);
+    string? Error,
+    string? Uri = null);
 
 /// <summary>
-/// Phase 3 response-publish seam. Does not own the consumer channel or connection.
+/// Response-publish seam. Does not own the consumer channel or connection.
 /// </summary>
 public interface IArticleWorkResponsePublisher
 {
     /// <summary>
     /// Gets whether a Success publish is a real RPC publication that may be followed by ACK.
-    /// Phase 4 recording seam returns <see langword="false"/> so successful ARTICLE does not ACK.
+    /// The recording seam returns <see langword="false"/> so tests can leave Success pending.
+    /// The hosted publisher returns <see langword="true"/>.
     /// </summary>
     bool CompletesSuccessPublication { get; }
 
     /// <summary>
-    /// Attempts to publish a terminal response. Phase 3 implementations must not talk to the broker.
+    /// Publishes a terminal response and waits until the broker confirms, or throws.
+    /// Returning is not permission to ACK; the pipeline must re-check the original settlement context.
     /// </summary>
     /// <param name="intent">Response identities and outcome.</param>
     /// <param name="cancellationToken">Token used to cancel the attempt.</param>
-    /// <returns>A task that completes when the seam has recorded or rejected the intent.</returns>
+    /// <returns>A task that completes when publication is confirmed or the seam has recorded the intent.</returns>
     Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// In-process recorder used until real response publishing is implemented.
+/// In-process recorder used by tests that do not exercise broker publication.
 /// </summary>
 public sealed class RecordingArticleWorkResponsePublisher : IArticleWorkResponsePublisher
 {

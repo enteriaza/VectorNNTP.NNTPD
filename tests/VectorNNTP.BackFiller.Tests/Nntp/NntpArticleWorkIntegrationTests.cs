@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
+using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
 namespace VectorNNTP.BackFiller.Tests.Nntp;
@@ -38,6 +40,49 @@ public sealed class NntpArticleWorkIntegrationTests
         var settlement = Assert.Single(channel.Settlements);
         Assert.False(settlement.Acknowledge);
         Assert.True(settlement.Requeue);
+    }
+
+    [Fact]
+    public async Task Retrieved_article_publishes_confirmed_success_and_acks()
+    {
+        var factory = new ScriptedNntpTransportFactory();
+        var server = new ScriptedNntpServer();
+        server.Respond(static _ => "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n");
+        factory.Enqueue(server);
+        var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory();
+        var connections = BackFillerRabbitMqServiceTests.CreateService(rabbitFactory);
+        await connections.StartAsync(CancellationToken.None);
+        rabbitFactory.LastConnection!.DefaultPublishConfirmBehavior = FakePublishConfirmBehavior.Confirm;
+        var publisher = new ArticleWorkResponsePublisher(
+            connections,
+            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            NullLogger<ArticleWorkResponsePublisher>.Instance);
+        await publisher.StartAsync(CancellationToken.None);
+        var (handler, _, _) = CreatePipeline(factory);
+        var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+
+        var outcome = await pipeline.ProcessAsync(
+            ArticleWorkTestDeliveries.Canonical(),
+            "Giganews",
+            channel,
+            static () => true,
+            CancellationToken.None);
+
+        Assert.Equal(ArticleWorkOutcome.Success, outcome);
+        Assert.Equal(
+            "cache://backfiller.test:1190/30edc94157aa16fe644a45a1f1ffe160",
+            handler.LastCacheUri);
+        var publication = Assert.Single(
+            Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(publisher.Channel).Publications);
+        using var document = JsonDocument.Parse(publication.Body);
+        Assert.Equal("Success", document.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(handler.LastCacheUri, document.RootElement.GetProperty("uri").GetString());
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalRequestId, document.RootElement.GetProperty("requestId").GetString());
+        Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+        Assert.NotNull(handler.LastPayload);
+        await publisher.DisposeAsync();
+        await connections.DisposeAsync();
     }
 
     [Fact]

@@ -50,4 +50,62 @@ internal static partial class ArticleWorkLogMessages
         Level = LogLevel.Error,
         Message = "Article Work consumers failed to rebuild after connection replacement: {Reason}")]
     public static partial void ConsumerReplaceFailed(ILogger logger, string Reason);
+
+    [LoggerMessage(
+        EventId = 5310,
+        Level = LogLevel.Information,
+        Message = "Article Work response publisher starting generation={Generation}")]
+    public static partial void PublisherStarting(ILogger logger, long Generation);
+
+    [LoggerMessage(
+        EventId = 5311,
+        Level = LogLevel.Information,
+        Message = "Article Work response publisher running generation={Generation}")]
+    public static partial void PublisherRunning(ILogger logger, long Generation);
+
+    [LoggerMessage(
+        EventId = 5312,
+        Level = LogLevel.Information,
+        Message = "Article Work response publisher retiring generation={Generation}")]
+    public static partial void PublisherRetiring(ILogger logger, long Generation);
+
+    [LoggerMessage(
+        EventId = 5313,
+        Level = LogLevel.Information,
+        Message = "Article Work response publisher stopped generation={Generation}")]
+    public static partial void PublisherStopped(ILogger logger, long Generation);
+
+    [LoggerMessage(
+        EventId = 5314,
+        Level = LogLevel.Error,
+        Message = "Article Work response publisher failed to start: {Reason}")]
+    public static partial void PublisherStartFailed(ILogger logger, string Reason);
+
+    [LoggerMessage(
+        EventId = 5315,
+        Level = LogLevel.Error,
+        Message = "Article Work response publisher failed to rebuild after connection replacement: {Reason}")]
+    public static partial void PublisherReplaceFailed(ILogger logger, string Reason);
+
+    [LoggerMessage(
+        EventId = 5316,
+        Level = LogLevel.Warning,
+        Message = "Article Work response publication failed generation={Generation} requestId={RequestId} outcome={Outcome}: {Reason}")]
+    public static partial void PublicationFailed(
+        ILogger logger,
+        long Generation,
+        string RequestId,
+        string Outcome,
+        string Reason);
+
+    [LoggerMessage(
+        EventId = 5317,
+        Level = LogLevel.Debug,
+        Message = "Article Work response published and confirmed generation={Generation} requestId={RequestId} correlationId={CorrelationId} outcome={Outcome}")]
+    public static partial void PublicationConfirmed(
+        ILogger logger,
+        long Generation,
+        string RequestId,
+        string CorrelationId,
+        string Outcome);
 }

@@ -3,7 +3,7 @@ using VectorNNTP.BackFiller.RabbitMq;
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
-/// Parses, classifies, optionally records a response intent, and settles one delivery.
+/// Parses, classifies, publishes a confirmed terminal response when required, and settles one delivery.
 /// </summary>
 public sealed class ArticleWorkDeliveryPipeline
 {
@@ -70,7 +70,7 @@ public sealed class ArticleWorkDeliveryPipeline
                 return ArticleWorkOutcome.InvalidRequest;
             }
 
-            await PublishIfRequiredAsync(
+            if (!await PublishIfRequiredAsync(
                     invalid,
                     ArticleWorkOutcome.InvalidRequest,
                     failure.Identities.RequestId,
@@ -79,8 +79,14 @@ public sealed class ArticleWorkDeliveryPipeline
                     delivery.CorrelationId,
                     delivery.ReplyTo,
                     failure.Reason,
+                    cacheUri: null,
                     cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false))
+            {
+                await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
+                return ArticleWorkOutcome.UnexpectedFailure;
+            }
+
             await lease.TrySettleAsync(
                     invalid,
                     channelStillCurrent() && lease.IsOriginalChannel(channel),
@@ -98,6 +104,7 @@ public sealed class ArticleWorkDeliveryPipeline
 
         ArticleWorkOutcome outcome;
         string? error;
+        string? cacheUri = null;
         try
         {
             if (cancellationToken.IsCancellationRequested)
@@ -112,6 +119,7 @@ public sealed class ArticleWorkDeliveryPipeline
                     ? ArticleWorkOutcome.UnexpectedFailure
                     : result.Outcome;
                 error = result.Error;
+                cacheUri = result.CacheUri;
                 result.Article?.Dispose();
             }
         }
@@ -157,15 +165,11 @@ public sealed class ArticleWorkDeliveryPipeline
                     item.CorrelationId,
                     item.ReplyTo,
                     error,
+                    cacheUri,
                     cancellationToken)
                 .ConfigureAwait(false))
         {
-            var retry = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
-            await lease.TrySettleAsync(
-                    retry,
-                    channelStillCurrent() && lease.IsOriginalChannel(channel),
-                    CancellationToken.None)
-                .ConfigureAwait(false);
+            await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
             return ArticleWorkOutcome.UnexpectedFailure;
         }
 
@@ -177,6 +181,19 @@ public sealed class ArticleWorkDeliveryPipeline
         return outcome;
     }
 
+    private async Task SettleRetryableAsync(
+        ArticleWorkSettlementLease lease,
+        IBackFillerRabbitMqChannel channel,
+        Func<bool> channelStillCurrent)
+    {
+        var retry = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
+        await lease.TrySettleAsync(
+                retry,
+                channelStillCurrent() && lease.IsOriginalChannel(channel),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
     private async Task<bool> PublishIfRequiredAsync(
         ArticleWorkDisposition disposition,
         ArticleWorkOutcome outcome,
@@ -186,6 +203,7 @@ public sealed class ArticleWorkDeliveryPipeline
         string? correlationId,
         string? replyTo,
         string? error,
+        string? cacheUri,
         CancellationToken cancellationToken)
     {
         if (!disposition.PublishResponse)
@@ -203,7 +221,8 @@ public sealed class ArticleWorkDeliveryPipeline
                         backbone,
                         correlationId,
                         replyTo,
-                        error),
+                        error,
+                        outcome == ArticleWorkOutcome.Success ? cacheUri : null),
                     cancellationToken)
                 .ConfigureAwait(false);
             return true;

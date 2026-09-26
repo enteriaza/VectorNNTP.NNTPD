@@ -25,16 +25,18 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(4, hosted.Length);
+        Assert.Equal(5, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[1]);
         Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[2]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[4]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
         Assert.IsType<ProviderArticleWorkHandler>(host.Services.GetRequiredService<IArticleWorkHandler>());
-        Assert.IsType<RecordingArticleWorkResponsePublisher>(
+        Assert.Same(
+            host.Services.GetRequiredService<ArticleWorkResponsePublisher>(),
             host.Services.GetRequiredService<IArticleWorkResponsePublisher>());
     }
 
@@ -70,6 +72,7 @@ public sealed class BackFillerHostCompositionTests
             var consumer = host.Services.GetRequiredService<ArticleWorkConsumerService>();
             Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, consumer.Sessions.Count);
             Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, factory.LastConnection!.Channels.Count);
+            Assert.Single(factory.LastConnection.PublishChannels);
             Assert.Equal(1, factory.ConnectCount);
             Assert.Contains(
                 host.Services.GetServices<IHostedService>(),
@@ -85,6 +88,7 @@ public sealed class BackFillerHostCompositionTests
 
         Assert.False(host.Services.GetRequiredService<IBackFillerRabbitMqService>().IsReady);
         Assert.All(factory.LastConnection!.Channels, static channel => Assert.Equal(1, channel.DisposeCount));
+        Assert.All(factory.LastConnection.PublishChannels, static channel => Assert.Equal(1, channel.DisposeCount));
     }
 
     [Fact]

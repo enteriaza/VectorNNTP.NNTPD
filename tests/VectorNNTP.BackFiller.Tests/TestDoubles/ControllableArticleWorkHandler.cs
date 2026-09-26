@@ -8,6 +8,8 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
 
     public string? Error { get; set; }
 
+    public string? CacheUri { get; set; }
+
     public Exception? Throw { get; set; }
 
     public TaskCompletionSource? Gate { get; set; }
@@ -37,6 +39,6 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
             throw Throw;
         }
 
-        return new ArticleWorkHandlerResult(Outcome, Error);
+        return new ArticleWorkHandlerResult(Outcome, Error, CacheUri: CacheUri);
     }
 }

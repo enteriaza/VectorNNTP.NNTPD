@@ -19,6 +19,12 @@ internal static class ArticleWorkTestDeliveries
     internal const string CanonicalCorrelationId = "61d4b5f6-8b24-4c14-8d40-741a378abfc8";
     internal const string CanonicalReplyTo = "nnrpd.rpc.responses";
     internal const string CanonicalMessageId = "<12345@example.invalid>";
+    internal const string CanonicalCacheUri =
+        "cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160";
+    internal const string CanonicalSuccessResponseJson =
+        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160"}""";
+    internal const string CanonicalNotFoundResponseJson =
+        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}""";
 
     internal static BackFillerRabbitMqConsumedDelivery Create(
         string json,

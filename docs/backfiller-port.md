@@ -703,16 +703,129 @@ The lease exposes `ReadOnlyMemory<byte>` and the cache URI. One caller disposing
 | `Retained` / `AlreadyPresent` | Success + `CacheUri` | NACK `requeue=true`, **no** publish, **no** ACK (`CompletesSuccessPublication` remains false) |
 | Capacity / collision / invalid / shutdown | `RetentionRejected` | NACK `requeue=true`, no publish. Not `ArticleNotFound`, not `ProviderFailure` |
 
-`RetentionRejected` is a new distinguishable outcome. Temporary Phase 5 settlement matches the old sink (retention failure requeues). Phase 6 decides the final ACK/publish policy.
+`RetentionRejected` is a new distinguishable outcome. Temporary Phase 5 settlement matches the old sink (retention failure requeues). Phase 6 implements Success publish/confirm/ACK; `RetentionRejected` remains retryable with no terminal response.
 
 ### Explicit deferral
 
-Not implemented: real RPC publish + confirms, Success ACK, Transit completion channels, Listener protocol, ACME, Cloudflare, MySQL accounts, control-plane capacity.
+Phase 6 implements real RPC publish, publisher confirms, and Success ACK. Still not implemented: Transit completion channels, Listener protocol, ACME, Cloudflare, MySQL accounts, control-plane capacity.
 
 ### Phase 5 discrepancies
 
 1. **Lookup TTL.** Old read-lease acquisition did not check TTL; expired-but-unswept entries remained readable. Phase 5 lookup rejects expired entries. Documented tightening.
 2. **Transit/Listener completion.** Old removal also happened when both consumers completed. Phase 5 does not implement those channels. TTL, FIFO pressure eviction, and dispose are the removal paths.
 3. **FQDN property name.** Old URI used `CanonicalBackFillerFqdn`. Phase 1 runtime uses `Fqdn` (same validated identity).
-4. **Success ACK.** Old ACK required retain + confirmed publish. Phase 5 retains and produces a URI but still does not publish or ACK.
+4. **Success ACK.** Old ACK required retain + confirmed publish. Phase 5 retains and produces a URI but still does not publish or ACK. Phase 6 closes that path.
 5. **Expire-before-evict.** Old `RecoverCapacity` only pressure-evicted insertion order. Phase 5 expires eligible entries first, then evicts. With uniform TTL this matches oldest-first.
+
+## Phase 6 — Article Work response publication and confirmed settlement
+
+Implemented in `src/VectorNNTP.BackFiller/ArticleWork` and `src/VectorNNTP.BackFiller/RabbitMq`. This phase closes the RabbitMQ Article Work success path and the terminal-failure response path.
+
+### Ownership
+
+| Resource | Owner |
+|---|---|
+| TCP connection | `BackFillerRabbitMqService` (Phase 2; sole recovery owner) |
+| Consume / ACK / NACK channel | `ArticleWorkConsumerSession` |
+| Confirm-enabled publish channel | `ArticleWorkResponsePublisher` |
+| Retained article bytes | `ArticleRetentionAuthority` (unchanged) |
+| Settlement lease | `ArticleWorkDeliveryPipeline` |
+
+Shared connection → consumer-owned channel → publisher-owned channel. The publisher never ACK/NACKs a delivery. The consumer channel never publishes a response.
+
+Hosted-service order: RabbitMQ → NNTP registry → retention sweep → **response publisher** → Article Work consumers. Stop is reverse: consumers drain, then the publisher stops admitting and closes its channel.
+
+Publisher states: `Created → Starting → Running → Retiring → Stopped`. Startup fails if a publish channel cannot be opened on the current generation.
+
+### Publisher confirms
+
+The production publish channel is created with RabbitMQ.Client 7.2 `CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true)`. With tracking enabled, `BasicPublishAsync` waits for a broker confirmation and throws `PublishException` on nack or `basic.return`.
+
+**Publish completion ≠ publisher confirmation.** Completing a `BasicPublishAsync` that was not opened with confirmation tracking is not a confirmation.
+
+**Publisher confirmation ≠ permission to ACK.** ACK requires a confirmed response **and** a still-current original delivery settlement context (same consumer channel, same generation, channel open).
+
+Confirm timeout is `BackFiller:RabbitMQ:PublishConfirmTimeoutSeconds` (linked with caller and publisher shutdown cancellation). A timeout, nack, return, channel close, or lost generation is an unconfirmed publication.
+
+### Response construction
+
+`ArticleWorkResponseWireProtocol.SerializeV1` writes compact UTF-8 JSON with exact property names: `version`, `requestId`, `messageId`, `backbone`, `outcome`, plus `uri` (Success only) or `error` (terminal failure only). Article bytes are never included.
+
+Success `uri` is the Phase 5 retention result. The publisher does not reconstruct FQDN/port. Serialization rejects a Success URI that is not `cache://…/{md5}` bound to the exact Message-ID.
+
+### RequestId / CorrelationId / ReplyTo
+
+| Identity | Source | Use |
+|---|---|---|
+| JSON `requestId` | Validated `ArticleWorkItem.Request.RequestId` | Logical work identity. Never synthesized. Never a new UUID. |
+| AMQP `RequestId` header | Same logical GUID when present | Required by locked NNTPD `ArticleWorkRpcResponseRouter`. Omitted when InvalidRequest could not parse a request id. |
+| AMQP `CorrelationId` | Request `CorrelationId` | Echoed on the response. Not `RequestId`. Not the delivery tag. |
+| AMQP `MessageId` | Fresh UUID per publication attempt | Transport publication identity only. |
+| `ReplyTo` | Validated request `ReplyTo` | Default-exchange routing key. Never hard-coded. |
+| Connection generation | Phase 2 handle | Fencing. Not a protocol field. |
+
+NNTPD publishes requests with `ContentType=application/json` and `Expiration=1000`. Responses use the same content type and expiration so the locked NNTPD consume path can accept them.
+
+### Success settlement ordering
+
+1. Article retrieved
+2. Article retained (`cache://` URI from the authority)
+3. Response JSON constructed
+4. Response published to `ReplyTo` on the publisher channel
+5. Publisher confirmation succeeds
+6. Re-check original consumer generation/channel currentness
+7. ACK the original delivery on the **consumer** channel
+
+Never reverse 5 and 6. Never ACK before confirmation. If currentness fails after confirmation, do not ACK on a replacement channel; leave the original delivery for broker recovery.
+
+The retained article stays in the authority after confirm. Listener/Transit removal is deferred.
+
+### Terminal failure settlement ordering
+
+| Outcome | Response | After confirmed publish | If publish/confirm fails |
+|---|---|---|---|
+| `ArticleNotFound` | Yes (`error`, no `uri`) | NACK `requeue=false` | NACK `requeue=true` |
+| `InvalidArticle` | Yes | NACK `requeue=false` | NACK `requeue=true` |
+| `InvalidRequest` | Yes when `CorrelationId` and `ReplyTo` are present | NACK `requeue=false` | NACK `requeue=true` |
+| `ProviderFailure` / `Cancelled` / `UnexpectedFailure` / `RetentionRejected` | No | NACK `requeue=true` | n/a |
+
+InvalidRequest identity rules are unchanged from Phase 3: no synthesized identity. If reply coordinates are missing, no response is published and the delivery is still NACK `requeue=false`.
+
+### Generation fencing
+
+- Capture generation when opening the publisher channel.
+- A stale publisher generation cannot replace or dispose a newer publisher channel.
+- If the generation is not current before publish, publication fails.
+- If the generation becomes invalid during publish/confirm, publication is not treated as confirmed.
+- The original delivery is ACKed only when confirmation succeeded **and** the original consumer channel/generation is still the settlement context.
+
+Never: old generation publishes → connection replaced → old publish reports success → ACK through the current generation.
+
+### Publication failure and redelivery
+
+There is no unbounded publish-retry loop inside one delivery. One `ProcessAsync` attempts one publish/confirm. Failure → retryable NACK `requeue=true`. A later redelivery may publish another response (at-least-once). This phase does not implement distributed deduplication.
+
+### Shutdown
+
+1. Consumers stop admitting new Article Work (existing Phase 3 drain).
+2. Publisher stops admitting new publications (`Retiring`) and cancels in-flight confirm waits.
+3. Unconfirmed publications are not ACKed.
+4. Publisher channel is closed.
+5. Existing host `ShutdownTimeout` / `GracePeriod` bounds the wait. Confirms are not awaited indefinitely. Shutdown never forces an ACK.
+
+### Duplicate / redelivery
+
+Exactly one ACK or NACK per settlement lease. The publisher cannot settle. A crash after confirm and before ACK may redeliver and publish a second response.
+
+### Explicit deferral
+
+Not implemented: Transit `TAKETHIS`, Listener/TLS serving, ACME, Cloudflare, MySQL account polling, control-plane capacity.
+
+### Phase 6 discrepancies
+
+1. **AMQP `RequestId` header.** Locked NNTPD `ArticleWorkRpcResponseRouter` ignores responses whose AMQP `RequestId` is missing or does not match the pending logical request. Old BackFiller publisher omitted that header. Protocol MD is silent. Phase 6 includes the header when JSON `requestId` exists (NNTPD wire contract).
+2. **AMQP `Expiration=1000`.** Locked NNTPD architecture / `ArticleWorkRpcAmqp` uses this on requests and accepted responses. Old publisher and protocol MD omit Expiration. Phase 6 sets `1000` for NNTPD interop.
+3. **InvalidRequest without `requestId`.** Protocol still publishes when replyable. NNTPD will ignore a response that has no matching `RequestId` header. Settlement remains NACK `requeue=false` after confirm. Identities are not synthesized to make NNTPD accept the response.
+4. **`RetentionRejected`.** Still no terminal response (retryable). Not in the protocol outcome enum.
+5. **Confirm API.** Old publisher also used `BasicPublishAsync` on a confirm-tracking channel. Phase 6 keeps that RabbitMQ.Client 7.2 behavior behind `IBackFillerRabbitMqPublishChannel.PublishConfirmedAsync` so tests can fail confirm independently of enqueue.
+

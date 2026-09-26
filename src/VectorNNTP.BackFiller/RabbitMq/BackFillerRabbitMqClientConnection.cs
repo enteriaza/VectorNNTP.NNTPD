@@ -80,6 +80,26 @@ internal sealed class BackFillerRabbitMqClientConnection : IBackFillerRabbitMqCo
     }
 
     /// <inheritdoc />
+    public async Task<IBackFillerRabbitMqPublishChannel> CreatePublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (!_connection.IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for publish channel creation.");
+        }
+
+        var options = new CreateChannelOptions(
+            publisherConfirmationsEnabled: true,
+            publisherConfirmationTrackingEnabled: true);
+        var channel = await _connection
+            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return new BackFillerRabbitMqClientPublishChannel(channel, generation);
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)

@@ -184,6 +184,33 @@ public sealed class ArticleWorkSettlementTests
     }
 
     [Fact]
+    public async Task InvalidRequest_publish_failure_is_retryable()
+    {
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+        var publisher = new RecordingArticleWorkResponsePublisher
+        {
+            PublishException = new InvalidOperationException("confirm failed"),
+        };
+        var pipeline = new ArticleWorkDeliveryPipeline(
+            new DeferredArticleWorkHandler(),
+            publisher,
+            1024);
+
+        var outcome = await pipeline.ProcessAsync(
+            ArticleWorkTestDeliveries.Create("{"),
+            "Giganews",
+            channel,
+            static () => true,
+            CancellationToken.None);
+
+        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+        Assert.Empty(publisher.Published);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Requeue);
+    }
+
+    [Fact]
     public async Task Publish_failure_is_retryable_and_does_not_ack()
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
