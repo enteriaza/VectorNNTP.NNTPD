@@ -116,7 +116,7 @@ public sealed class ArticleWorkSettlementTests
         bool requeue)
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
-        var publisher = new RecordingArticleWorkResponsePublisher();
+        var publisher = new RecordingArticleWorkResponsePublisher { CompletesSuccessPublication = true };
         var handler = new ControllableArticleWorkHandler { Outcome = handlerOutcome, Error = "test" };
         var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
         var delivery = ArticleWorkTestDeliveries.Canonical();
@@ -188,6 +188,7 @@ public sealed class ArticleWorkSettlementTests
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher
         {
+            CompletesSuccessPublication = true,
             PublishException = new InvalidOperationException("confirm failed"),
         };
         var handler = new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Success };

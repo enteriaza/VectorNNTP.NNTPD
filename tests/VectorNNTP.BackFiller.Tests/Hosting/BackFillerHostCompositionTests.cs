@@ -6,6 +6,7 @@ using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Logging;
+using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
@@ -23,10 +24,11 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(2, hosted.Length);
+        Assert.Equal(3, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[1]);
-        Assert.IsType<DeferredArticleWorkHandler>(host.Services.GetRequiredService<IArticleWorkHandler>());
+        Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[1]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[2]);
+        Assert.IsType<ProviderArticleWorkHandler>(host.Services.GetRequiredService<IArticleWorkHandler>());
         Assert.IsType<RecordingArticleWorkResponsePublisher>(
             host.Services.GetRequiredService<IArticleWorkResponsePublisher>());
     }

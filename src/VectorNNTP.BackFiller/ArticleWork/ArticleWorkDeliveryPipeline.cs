@@ -112,6 +112,7 @@ public sealed class ArticleWorkDeliveryPipeline
                     ? ArticleWorkOutcome.UnexpectedFailure
                     : result.Outcome;
                 error = result.Error;
+                result.Article?.Dispose();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -132,6 +133,17 @@ public sealed class ArticleWorkDeliveryPipeline
 
         if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
         {
+            return outcome;
+        }
+
+        if (outcome == ArticleWorkOutcome.Success && !_publisher.CompletesSuccessPublication)
+        {
+            var pending = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
+            await lease.TrySettleAsync(
+                    pending,
+                    channelStillCurrent() && lease.IsOriginalChannel(channel),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
             return outcome;
         }
 

@@ -500,7 +500,7 @@ Message-ID validation is NNTPD `IsWellFormed` (`<local@domain>`, length ≥ 5) c
 | Cancelled | None | NACK `requeue=true` |
 | UnexpectedFailure | None | NACK `requeue=true` |
 
-Phase 3 default handler is `DeferredArticleWorkHandler`: admitted valid work is `ProviderFailure` ("Upstream provider retrieval is not implemented."). Success / ArticleNotFound / InvalidArticle are representable so later provider work can use the same planner; they are not invented by the default handler.
+Phase 3 default handler was `DeferredArticleWorkHandler`. Phase 4 replaces it with `ProviderArticleWorkHandler`.
 
 `IArticleWorkResponsePublisher` is a test seam (`RecordingArticleWorkResponsePublisher` in DI). It does not talk to the broker. Publisher confirms are not decided. Publish-seam failure is treated as retryable (NACK requeue, no ACK).
 
@@ -514,7 +514,7 @@ A delivery captures the consume-channel generation. If that generation is no lon
 
 ### Explicit deferral
 
-Not implemented: upstream NNTP / provider sessions / `ARTICLE`, article parse, yEnc, retention, `cache://` serving, Transit `TAKETHIS`, full response publish + confirms, ACME, Cloudflare, MySQL accounts, control-plane capacity.
+Phase 3 deferred upstream NNTP. Phase 4 implements provider ARTICLE retrieval. Still deferred: full article-header grammar / yEnc, retention, `cache://` serving, Transit `TAKETHIS`, full response publish + confirms, ACME, Cloudflare, MySQL accounts, control-plane capacity.
 
 ### Protocol discrepancies recorded (not silently chosen)
 
@@ -522,3 +522,91 @@ Not implemented: upstream NNTP / provider sessions / `ARTICLE`, article parse, y
 2. **Unbracketed Message-ID example.** Protocol MD "Canonical Incoming Request Example" uses `"messageId":"12345@example.invalid"` (no brackets). The same document's canonical payload and valid example use brackets. Old parser and NNTPD `IsWellFormed` require brackets. Phase 3 requires brackets; the unbracketed example is treated as a documentation defect, not a second wire contract.
 3. **Message-ID length / grammar.** NNTPD `IsWellFormed` is 5–998, brackets + `@`. Old BackFiller is INN/dot-atom 3–250. Port inventory previously said 3–250. Phase 3: 5–250, NNTPD envelope, no INN grammar. Tokens longer than 250 are `InvalidRequest` here even if NNTPD would accept them as well-formed.
 4. **Consumer lifecycle names.** Protocol MD lists Running / Retiring / Stopped. Phase 3 adds Created / Starting as requested local states. This is not NNTPD `ApplicationLifecycle`.
+
+## Phase 4 — upstream provider retrieval
+
+Implemented in `src/VectorNNTP.BackFiller/Nntp`. The Phase 3 consume/validate/settle boundary is unchanged. This phase retrieves `ARTICLE <exact-message-id>` and classifies the result. It does **not** retain articles, publish RPC responses, or ACK Success.
+
+### Provider / session ownership
+
+| Resource | Owner |
+|---|---|
+| Provider identity | `IBackFillerProviderCatalog` / `BackFillerProviderDefinition`. Empty static catalog in production until MySQL accounts exist. |
+| TCP/TLS stream | `INntpTransportFactory` (`TcpNntpTransportFactory` in production). |
+| NNTP session | `NntpProviderSession`. One ARTICLE at a time. |
+| Session pool | `NntpSessionPool` per backbone. |
+| Pool set | `NntpProviderRegistry` (`IHostedService`, registered after RabbitMQ and before Article Work consumers). |
+| Retrieval | `NntpArticleRetriever` acquires a lease, calls ARTICLE, releases or retires. Article Work never holds raw pool ownership. |
+
+RabbitMQ `MinConnections` / `MaxConnections` remain **RabbitMQ connection-pool policy** from Phase 2. They are not NNTP session limits. NNTP capacity is `BackFillerProviderDefinition.MinSessions` / `MaxSessions`. Old worker used MySQL `maxconnections` as the exact eager slot count; Phase 4 uses `MaxSessions` as the hard bound and `MinSessions` as optional warmup (0 = fully lazy). That difference is intentional until account polling exists.
+
+### Pool semantics
+
+- Acquire waits for a lease slot (`SemaphoreSlim` = `MaxSessions`).
+- Idle reusable sessions are reused. A session is never leased to two callers.
+- Connect happens on first need (or warmup). One TCP session is not opened per ARTICLE when idle capacity exists.
+- Return vs retire is exclusive and exactly-once (`NntpSessionLease`).
+- Double-dispose of a lease is a no-op.
+- Shutdown cancels waiters, waits for active leases up to `BackFillerRuntimeOptions.Shutdown.GracePeriod`, then force-retires remaining live sessions. The grace period is the existing BackFiller shutdown budget, not a second global timeout.
+
+### Authentication and TLS
+
+- Implicit TLS from connect when `UseTls` is true (old `usessl`). Not STARTTLS (Transit-only in the old worker).
+- `SslStream.AuthenticateAsClientAsync` with TLS 1.2/1.3 and **platform certificate validation**. No accept-all callback.
+- AUTHINFO USER/PASS only when both username and password are configured (RFC 4643). Half-configured credentials fail locally without sending AUTHINFO.
+- Credentials are never logged. AUTHINFO arguments are written as bytes; debug logs are not emitted for those commands.
+- AUTHINFO 281 accepts; 381 prompts PASS; 480/481/482/5xx are authentication failures.
+
+### ARTICLE retrieval
+
+Command bytes: `ARTICLE ` + exact ASCII Message-ID + CRLF. No case-fold, no bracket changes. Non-ASCII Message-IDs are not sent.
+
+Greeting must be 200 or 201 (RFC 3977 §5.1.1). Other greetings are provider failures; TCP connect alone is not health.
+
+220 starts a multiline block (RFC 3977 §3.1.1 / §6.2.1). The destuffed payload excludes the terminating `.` line. A line-start `..` becomes `.`. Hard maximum destuffed size is 5 MiB (`ArticleResourceLimits.MaxArticleBytes`, old contract, not config).
+
+### Response classification
+
+| Retrieval | Article Work outcome | Session reusable? |
+|---|---|---|
+| 220 + destuffed payload with header/body separator | Success (internal `ArticleRetrieved`) | yes |
+| 430 | ArticleNotFound | yes |
+| 220 but empty / no header-body separator | InvalidArticle | yes |
+| 480/481/482 or AUTHINFO failure | ProviderFailure (`AuthenticationFailure`) | no |
+| Timeout, EOF, malformed status/greeting, 412/420/423/5xx, oversized, truncated | ProviderFailure | no |
+| Caller/shutdown cancel | Cancelled | no |
+
+yEnc and the old full `NntpArticleParser` header grammar are **not** in this phase. InvalidArticle here means framing completed but the destuffed bytes are not a minimal article.
+
+### Session retirement
+
+Reusable after: Success, ArticleNotFound, InvalidArticle (protocol completed).
+
+Retired after: connection/TLS/EOF/timeout/malformed/truncated/oversized/auth failure/cancellation/unexpected protocol state. Cancelled is **not** reusable (old `NntpArticleSessionHealthClassifier`).
+
+A failed session is never enqueued idle.
+
+### Cancellation / shutdown
+
+Timeout → ProviderFailure, session retired. Caller cancel → Cancelled, not ArticleNotFound. Host shutdown: consumers drain first, then the provider registry disposes pools. Shutdown cancel must not be classified as a miss.
+
+### Payload ownership
+
+`RetrievedArticle` owns destuffed bytes. The payload remains readable after the session is released. The handler copies bytes for tests (`LastPayload`) and hands a separate owner to the pipeline, which disposes it. Retention is the next phase.
+
+### Success must not ACK yet
+
+`IArticleWorkResponsePublisher.CompletesSuccessPublication` is false on the Phase 3/4 recording seam. A retrieved article is classified Success at the disposition boundary but is settled as NACK `requeue=true` with **no** Success RPC publish. That matches the old “cannot finish Success without retain + publish confirm” edge (retention admission failure requeues). Phase 5 must publish a URI then ACK.
+
+### Explicit deferral
+
+Not implemented: article retention authority, `cache://` URI, real response publish + confirms, Transit, Listener/TLS serving, ACME, Cloudflare, MySQL `nntpbackfilleraccounts` polling, control-plane capacity, DATE keepalive, STARTTLS for providers, yEnc.
+
+### Phase 4 discrepancies
+
+1. **Pool sizing vs RabbitMQ options.** `BackFiller:RabbitMQ:MinConnections` / `MaxConnections` are not NNTP pool sizes.
+2. **Eager vs lazy.** Old worker eagerly connected `maxconnections` slots at initialize. Phase 4 is lazy unless `MinSessions` > 0.
+3. **Status-line length.** RFC 3977 §3.2: 512 octets including CRLF. Old worker / Phase 4: 16 KiB.
+4. **Article validation depth.** Old grabber parsed headers/dates/newsgroups and ran yEnc before Success. Phase 4 only destuffs and requires a header/body separator. yEnc remains a later stage.
+5. **AuthenticationFailure** is a retrieval kind but maps to Article Work `ProviderFailure` (old processor contract).
+6. **Success ACK.** Old Success ACKs only after retain + confirmed publish. Phase 4 never ACKs Success.

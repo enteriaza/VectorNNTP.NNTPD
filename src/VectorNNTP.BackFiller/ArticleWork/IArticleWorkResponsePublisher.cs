@@ -29,6 +29,12 @@ public sealed record ArticleWorkResponseIntent(
 public interface IArticleWorkResponsePublisher
 {
     /// <summary>
+    /// Gets whether a Success publish is a real RPC publication that may be followed by ACK.
+    /// Phase 4 recording seam returns <see langword="false"/> so successful ARTICLE does not ACK.
+    /// </summary>
+    bool CompletesSuccessPublication { get; }
+
+    /// <summary>
     /// Attempts to publish a terminal response. Phase 3 implementations must not talk to the broker.
     /// </summary>
     /// <param name="intent">Response identities and outcome.</param>
@@ -55,6 +61,9 @@ public sealed class RecordingArticleWorkResponsePublisher : IArticleWorkResponse
             }
         }
     }
+
+    /// <inheritdoc />
+    public bool CompletesSuccessPublication { get; set; }
 
     /// <summary>When set, the next publish throws this exception.</summary>
     public Exception? PublishException { get; set; }

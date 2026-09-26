@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 
 namespace VectorNNTP.BackFiller.Hosting;
@@ -21,9 +22,10 @@ public static class BackFillerServiceCollectionExtensions
     /// <remarks>
     /// Registers <see cref="BackFillerRabbitMqService"/> as the sole RabbitMQ connection
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
-    /// connection cannot be established. Registers <see cref="ArticleWorkConsumerService"/>
-    /// after the connection owner. Provider retrieval, transit, retention, listener,
-    /// accounts, and certificates are not registered in Phase 3.
+    /// connection cannot be established. Registers <see cref="NntpProviderRegistry"/> after
+    /// the connection owner, then <see cref="ArticleWorkConsumerService"/>. Retention,
+    /// response publication, transit, listener, accounts, and certificates are not
+    /// registered in Phase 4.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -68,7 +70,17 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<BackFillerRabbitMqService>());
 
-        builder.Services.TryAddSingleton<IArticleWorkHandler, DeferredArticleWorkHandler>();
+        builder.Services.TryAddSingleton<IBackFillerProviderCatalog, StaticBackFillerProviderCatalog>();
+        builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();
+        builder.Services.AddSingleton(static provider => new NntpProviderRegistry(
+            provider.GetRequiredService<IBackFillerProviderCatalog>(),
+            provider.GetRequiredService<INntpTransportFactory>(),
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<ILogger<NntpProviderRegistry>>()));
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<NntpProviderRegistry>());
+        builder.Services.TryAddSingleton<INntpArticleRetriever, NntpArticleRetriever>();
+        builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
         builder.Services.TryAddSingleton<IArticleWorkResponsePublisher, RecordingArticleWorkResponsePublisher>();
         builder.Services.AddSingleton(static provider => new ArticleWorkConsumerService(
             provider.GetRequiredService<IBackFillerRabbitMqService>(),

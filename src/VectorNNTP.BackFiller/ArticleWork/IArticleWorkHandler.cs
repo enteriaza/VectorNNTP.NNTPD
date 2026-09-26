@@ -5,10 +5,14 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 /// <param name="Outcome">Processing outcome. Must not be <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
 /// <param name="Error">Optional diagnostic reason. Never a secret.</param>
-public readonly record struct ArticleWorkHandlerResult(ArticleWorkOutcome Outcome, string? Error);
+/// <param name="Article">Owned retrieved payload when upstream ARTICLE succeeded. Caller/pipeline must dispose it.</param>
+public readonly record struct ArticleWorkHandlerResult(
+    ArticleWorkOutcome Outcome,
+    string? Error,
+    Nntp.RetrievedArticle? Article = null);
 
 /// <summary>
-/// Processes admitted Article Work. Phase 3 does not retrieve articles.
+/// Processes admitted Article Work. Phase 4 retrieves from a backbone provider.
 /// </summary>
 public interface IArticleWorkHandler
 {
