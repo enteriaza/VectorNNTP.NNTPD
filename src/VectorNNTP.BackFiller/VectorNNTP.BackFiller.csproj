@@ -5,7 +5,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.BackFiller</RootNamespace>
     <AssemblyName>VectorNNTP.BackFiller</AssemblyName>
-    <Description>Usenet article recovery worker. Phase 2 RabbitMQ connection foundation; article-work processing is not implemented yet.</Description>
+    <Description>Usenet article recovery worker. Phase 3 Article Work consume/validate/settle; provider retrieval is not implemented yet.</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

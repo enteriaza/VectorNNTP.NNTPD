@@ -145,13 +145,119 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
     }
 }
 
+internal readonly record struct FakeRabbitMqSettlement(ulong DeliveryTag, bool Acknowledge, bool Requeue);
+
 internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFillerRabbitMqChannel
 {
+    private Func<BackFillerRabbitMqConsumedDelivery, Task>? _onDelivery;
+
     public long Generation { get; } = generation;
 
     public bool IsOpen { get; set; } = true;
 
     public int DisposeCount { get; private set; }
+
+    public int ConsumeCount { get; private set; }
+
+    public int CancelCount { get; private set; }
+
+    public ushort? LastPrefetch { get; private set; }
+
+    public string? LastQueue { get; private set; }
+
+    public string? ConsumerTag { get; private set; }
+
+    public List<string> ConsumedQueues { get; } = [];
+
+    public List<FakeRabbitMqSettlement> Settlements { get; } = [];
+
+    public Exception? ConsumeException { get; set; }
+
+    public Exception? AckException { get; set; }
+
+    public Exception? NackException { get; set; }
+
+    public Task<string> BasicConsumeAsync(
+        string queue,
+        ushort prefetchCount,
+        Func<BackFillerRabbitMqConsumedDelivery, Task> onDelivery,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        ArgumentNullException.ThrowIfNull(onDelivery);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ConsumeException is not null)
+        {
+            throw ConsumeException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ channel is not open for consume.");
+        }
+
+        _onDelivery = onDelivery;
+        LastPrefetch = prefetchCount;
+        LastQueue = queue;
+        ConsumedQueues.Add(queue);
+        ConsumeCount++;
+        ConsumerTag = $"ctag-{Generation}-{ConsumeCount}";
+        return Task.FromResult(ConsumerTag);
+    }
+
+    public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerTag);
+        cancellationToken.ThrowIfCancellationRequested();
+        CancelCount++;
+        return Task.CompletedTask;
+    }
+
+    public Task BasicAckAsync(ulong deliveryTag, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(DisposeCount > 0, this);
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ channel is not open for ACK.");
+        }
+
+        if (AckException is not null)
+        {
+            throw AckException;
+        }
+
+        Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: true, Requeue: false));
+        return Task.CompletedTask;
+    }
+
+    public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(DisposeCount > 0, this);
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ channel is not open for NACK.");
+        }
+
+        if (NackException is not null)
+        {
+            throw NackException;
+        }
+
+        Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: false, requeue));
+        return Task.CompletedTask;
+    }
+
+    public Task DeliverAsync(BackFillerRabbitMqConsumedDelivery delivery)
+    {
+        if (_onDelivery is null)
+        {
+            throw new InvalidOperationException("RabbitMQ channel has no consumer.");
+        }
+
+        return _onDelivery(delivery);
+    }
 
     public ValueTask DisposeAsync()
     {

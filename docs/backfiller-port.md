@@ -299,7 +299,7 @@ Phase 0 implemented host + logging. Phase 1 removed the no-op hosted service; th
 - Backbone case-insensitive ordinal match between JSON and queue context.
 - Channel-scoped settlement; no cross-channel ACK.
 - InvalidRequest vs ProviderFailure classification.
-- Message-ID grammar already enforced by NNTPD/BackFiller validators (3..250, bracketed local@domain).
+- Message-ID grammar already enforced by NNTPD/BackFiller validators (bracketed local@domain). Phase 3 uses the NNTPD `IsWellFormed` envelope capped at 250 (see Phase 3).
 - Twelve backbone names used by NNTPD topology: Abavia, Altopia, BaseIP, Eweka, Elbracht, Giganews, GTT, Highwinds, ItsHosted, Novia, UExpress, UsenetNode1.
 
 ## 19. Items that can be re-engineered internally
@@ -317,9 +317,9 @@ Phase 0 implemented host + logging. Phase 1 removed the no-op hosted service; th
 ## 20. Items requiring explicit design decisions before implementation
 
 1. **Shared Article Work contract ownership.** NNTPD types live in `VectorNNTP.NNTPD.RabbitMq.ArticleWork` and are internal to NNTPD. Extracting a shared project requires a separate approved task. Until then, BackFiller owns consume-side types; do not add a ProjectReference to NNTPD; do not modify NNTPD to expose internals.
-2. **AMQP `RequestId` header.** NNTPD writes it and requires it to match JSON `requestId`. Old worker parsed JSON only. New worker should accept the header without putting it in JSON; mismatch policy (ignore vs InvalidRequest) must be decided when the parser is written.
+2. **AMQP `RequestId` header.** **Decided in Phase 3:** the header is not a JSON field and is not required. When present it must be a non-empty GUID that matches JSON `requestId`; mismatch is `InvalidRequest`. Absence is accepted (protocol MD + old parser). NNTPD always sends the header and matches it on the *response* router (ignore), not as a worker-side required request field. Same presence-only rule for AMQP `ContentType`: if present it must be exactly `application/json`.
 3. **`grabbers.*` vs `backfiller.*`.** Interop decision is already made by locked NNTPD: consume `backfiller.*`. Document leftover `grabbers.*` broker entities as out of scope (NNTPD does not delete them).
-4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. **Phase 2:** Generic Host + one real `IHostedService` (`BackFillerRabbitMqService`) for fail-closed RabbitMQ startup. No placeholder `BackgroundService`. No NNTPD `ApplicationLifecycle`.
+4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. **Phase 2:** Generic Host + `BackFillerRabbitMqService` for fail-closed RabbitMQ startup. **Phase 3:** a second `IHostedService` (`ArticleWorkConsumerService`) with a *local* consumer lifecycle (`Created → Starting → Running → Retiring → Stopped`). No placeholder `BackgroundService`. No NNTPD `ApplicationLifecycle`. No second connection-recovery loop.
 5. **Listener vs NNTPD fetch.** Whether NNTPD will later pull `cache://` URIs, and whether Listener remains a separate protocol, is integration work — not this phase.
 6. **Transit coupling.** Whether recovered articles must still TAKETHIS to TransitServer in every Success path, and the drop-on-transit-reject settlement, needs confirmation before that path is rewritten.
 7. **MySQL account schema.** Keep `nntpbackfilleraccounts` as-is vs any later shared auth store. Default: keep the table contract.
@@ -428,4 +428,97 @@ RabbitMQ.Client automatic recovery and topology recovery are disabled. Applicati
 
 ### Article Work
 
-Deferred. This phase does not deserialize requests, publish responses, ACK/NACK, or consume queues.
+Deferred in Phase 2. Phase 3 adds consume, validation, work-item admission, disposition, and settlement. Provider retrieval remains deferred.
+
+## Phase 3 — Article Work consumption, validation, and settlement
+
+Implemented in `src/VectorNNTP.BackFiller/ArticleWork`. This phase is the inbound protocol boundary only. It does **not** retrieve articles from upstream providers.
+
+### Consumer ownership
+
+| Resource | Owner |
+|---|---|
+| Process RabbitMQ connection | `BackFillerRabbitMqService` (Phase 2). Sole recovery owner. |
+| Consume channel | One `ArticleWorkConsumerSession` per provider backbone. Caller-owned via `CreateChannelAsync`. Disposing the channel must not dispose the connection. |
+| Hosted orchestration | `ArticleWorkConsumerService` (`IHostedService`, registered after the connection owner). Starts 12 backbone sessions. Rebuilds sessions on `ConnectionReplaced` (`IsReplacement=true`) without a second reconnect loop. |
+
+Startup is fail-closed: if the current generation cannot create every required consumer, `StartAsync` fails and the host does not run. After start, a failed rebuild is logged; the host is not crashed. Prefetch is `ConsumerPrefetchCount` when configured, otherwise `1` (single-dispatch per session). Topology is not declared. Queues are `backfiller.<backbone>` from `BackFillerRabbitMqTopology`. `grabbers.*` is not used.
+
+### Request validation boundary
+
+`ArticleWorkRequestParser` is the only request deserializer. Property names are case-sensitive. Unknown JSON fields are ignored. Identities are never synthesized.
+
+Required JSON fields: `version` (integer `1`), `requestId` (non-empty GUID), `messageId` (well-formed Message-ID), `backbone` (non-empty; ordinal-ignore-case match to the consuming session).
+
+Required AMQP properties: `CorrelationId`, `ReplyTo`. Missing either is `InvalidRequest`.
+
+Presence-only AMQP checks (not required by the protocol MD or old parser; NNTPD always sends both):
+
+- `ContentType`, when present, must be exactly `application/json`.
+- AMQP `RequestId` header, when present and non-whitespace, must be a non-empty GUID equal to JSON `requestId`.
+
+`WorkRequestMaxPayloadBytes` rejects oversized bodies before JSON parse.
+
+### Backbone-scoped consumption
+
+Each session consumes one queue and rejects a JSON `backbone` that does not match that session, even if the message arrived on the queue. Comparison is ordinal-ignore-case. The JSON string is preserved as supplied (not case-folded).
+
+### RequestId vs CorrelationId vs delivery tag
+
+| Identity | Layer | Role |
+|---|---|---|
+| JSON `requestId` | Application | Logical lookup. Stable across redelivery. |
+| AMQP `RequestId` header | Transport | Echo of JSON `requestId` when NNTPD published the request. Not a JSON field. |
+| AMQP `CorrelationId` | Transport | Individual RPC publication. Distinct from `requestId`. |
+| Delivery tag | Channel | ACK/NACK identity. Channel-scoped. Not globally unique. |
+| Connection generation | Infrastructure | Fences settlement after replacement. |
+
+These must not be merged or substituted for each other.
+
+### Work-item model
+
+- Wire: `BackFillerRabbitMqConsumedDelivery` (bytes + AMQP metadata; no RabbitMQ.Client types).
+- Parse: `ArticleWorkParseResult` / `ArticleWorkRequest`.
+- Admitted work: `ArticleWorkItem` (validated request + CorrelationId/ReplyTo + settlement lease).
+- Domain code does not carry `JsonDocument` through the worker.
+
+Message-ID validation is NNTPD `IsWellFormed` (`<local@domain>`, length ≥ 5) capped at 250 (NNTP command envelope). The exact accepted string is preserved. Old INN/dot-atom grammar is not imported.
+
+### Settlement ownership
+
+`ArticleWorkSettlementLease` binds one delivery tag to the original channel and generation. Settlement is exactly-once: ACK or NACK, never both, never twice. A replacement channel cannot settle another channel's tag. A lost generation sets `channelStillCurrent=false` and skips settlement; later consumer rebuild establishes a fresh consumer. Failed broker RPCs do not claim success.
+
+### Terminal vs retryable dispositions
+
+| Outcome | Response seam | Settlement |
+|---|---|---|
+| Success | Publish intent | ACK |
+| ArticleNotFound | Publish intent | NACK `requeue=false` |
+| InvalidArticle | Publish intent | NACK `requeue=false` |
+| InvalidRequest | Publish intent if `CorrelationId` and `ReplyTo` are present | NACK `requeue=false` |
+| ProviderFailure | None | NACK `requeue=true` |
+| Cancelled | None | NACK `requeue=true` |
+| UnexpectedFailure | None | NACK `requeue=true` |
+
+Phase 3 default handler is `DeferredArticleWorkHandler`: admitted valid work is `ProviderFailure` ("Upstream provider retrieval is not implemented."). Success / ArticleNotFound / InvalidArticle are representable so later provider work can use the same planner; they are not invented by the default handler.
+
+`IArticleWorkResponsePublisher` is a test seam (`RecordingArticleWorkResponsePublisher` in DI). It does not talk to the broker. Publisher confirms are not decided. Publish-seam failure is treated as retryable (NACK requeue, no ACK).
+
+### Stale-generation behavior
+
+A delivery captures the consume-channel generation. If that generation is no longer current, the session does not ACK/NACK through a replacement channel and does not open a replacement channel behind the in-flight delivery. Channel-close requeue remains the broker safety net.
+
+### Cancellation behavior
+
+`ArticleWorkOutcome.Cancelled` is distinct from host shutdown. Pipeline cancellation (token or `OperationCanceledException` while the token is cancelled) maps to NACK `requeue=true` and no terminal response. Session retirement is Model B: block admission, `BasicCancel`, drain already-admitted work on the original channel, dispose the channel. Drain does not convert admitted work into `Cancelled`.
+
+### Explicit deferral
+
+Not implemented: upstream NNTP / provider sessions / `ARTICLE`, article parse, yEnc, retention, `cache://` serving, Transit `TAKETHIS`, full response publish + confirms, ACME, Cloudflare, MySQL accounts, control-plane capacity.
+
+### Protocol discrepancies recorded (not silently chosen)
+
+1. **AMQP `RequestId` / `ContentType`.** Protocol MD required transport fields are only `CorrelationId` and `ReplyTo`. Old parser follows that. NNTPD always publishes `ContentType=application/json` and header `RequestId`. Phase 3 validates those two only when present (decision 2).
+2. **Unbracketed Message-ID example.** Protocol MD "Canonical Incoming Request Example" uses `"messageId":"12345@example.invalid"` (no brackets). The same document's canonical payload and valid example use brackets. Old parser and NNTPD `IsWellFormed` require brackets. Phase 3 requires brackets; the unbracketed example is treated as a documentation defect, not a second wire contract.
+3. **Message-ID length / grammar.** NNTPD `IsWellFormed` is 5–998, brackets + `@`. Old BackFiller is INN/dot-atom 3–250. Port inventory previously said 3–250. Phase 3: 5–250, NNTPD envelope, no INN grammar. Tokens longer than 250 are `InvalidRequest` here even if NNTPD would accept them as well-formed.
+4. **Consumer lifecycle names.** Protocol MD lists Running / Retiring / Stopped. Phase 3 adds Created / Starting as requested local states. This is not NNTPD `ApplicationLifecycle`.

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.RabbitMq;
 
@@ -20,8 +21,9 @@ public static class BackFillerServiceCollectionExtensions
     /// <remarks>
     /// Registers <see cref="BackFillerRabbitMqService"/> as the sole RabbitMQ connection
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
-    /// connection cannot be established. Article-work consume, NNTP, transit, retention,
-    /// listener, accounts, and certificates are not registered in Phase 2.
+    /// connection cannot be established. Registers <see cref="ArticleWorkConsumerService"/>
+    /// after the connection owner. Provider retrieval, transit, retention, listener,
+    /// accounts, and certificates are not registered in Phase 3.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -65,6 +67,17 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<BackFillerRabbitMqService>());
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<BackFillerRabbitMqService>());
+
+        builder.Services.TryAddSingleton<IArticleWorkHandler, DeferredArticleWorkHandler>();
+        builder.Services.TryAddSingleton<IArticleWorkResponsePublisher, RecordingArticleWorkResponsePublisher>();
+        builder.Services.AddSingleton(static provider => new ArticleWorkConsumerService(
+            provider.GetRequiredService<IBackFillerRabbitMqService>(),
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<IArticleWorkHandler>(),
+            provider.GetRequiredService<IArticleWorkResponsePublisher>(),
+            provider.GetRequiredService<ILogger<ArticleWorkConsumerService>>()));
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<ArticleWorkConsumerService>());
 
         return builder;
     }
