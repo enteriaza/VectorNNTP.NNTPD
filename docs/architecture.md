@@ -552,7 +552,7 @@ Startup order places `RedisService` after Cloudflare DNS reconciliation and befo
 
 `RabbitMqService` is generic infrastructure. It owns the top-level `RabbitMQ` configuration, one process-wide AMQP connection, a monotonic connection generation, and application-level replacement after connectivity loss. It does not declare exchanges, queues, or bindings, and it does not publish or consume messages.
 
-Startup order places `RabbitMqService` after `RedisService` and before `NntpDbService`. RabbitMQ is a critical dependency: invalid configuration or a failed initial connect prevents `Running`. Client automatic recovery is disabled; the service replaces the connection and increments the generation (`N` → `N+1`) so a stale connection cannot be treated as current. Shutdown is cancellation-aware, idempotent, and coordinated by `ApplicationServiceManager` like other application services.
+Startup order places `RabbitMqService` after `RedisService` and before `NntpDbService`. RabbitMQ is a critical dependency: invalid configuration or a failed initial connect prevents `Running`. Client automatic recovery is disabled. The service is the sole connection owner: a successful connect installs a new generation (`N` → `N+1`), and only that generation may publish readiness, request recovery, or be disposed as current. A stale connection cannot replace a newer one. One watch task performs reconnect with the configured backoff; shutdown cancels that task, waits for it, and disposes the current connection once. Shutdown is idempotent and coordinated by `ApplicationServiceManager` like other application services.
 
 `HistoryDB` is a Redis consumer:
 

@@ -1,20 +1,22 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Options;
-using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Dedicated RabbitMQ infrastructure service: owns the process-wide broker connection,
-/// connection generation, application-level replacement, and shutdown.
+/// Process-wide RabbitMQ connection owner: startup connect, generation-tagged replacement, and shutdown.
 /// </summary>
 /// <remarks>
 /// <para>
-/// RabbitMQ is a critical NNTPD dependency. Startup fails if an initial usable connection
-/// cannot be established. Client automatic recovery is disabled; this service replaces the
-/// connection and increments the generation on loss.
+/// RabbitMQ is a critical NNTPD dependency. <see cref="StartAsync"/> fails if an initial usable
+/// connection cannot be established, and it disposes any partial connect before returning.
+/// RabbitMQ.Client automatic recovery is disabled; this service is the only lifecycle owner.
+/// </para>
+/// <para>
+/// One watch task observes the current generation. A lost connection requests recovery; a
+/// stale generation cannot install state, trigger reconnect, or dispose a newer connection.
+/// Shutdown cancels that task, waits for it, and disposes the current connection once.
 /// </para>
 /// <para>
 /// This service does not declare topology, create channels, publish, consume, or process messages.
@@ -22,85 +24,98 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// </remarks>
 public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAsyncDisposable
 {
-    private readonly IRabbitMqBrokerConnector _connector;
+    private readonly IRabbitMqConnectionFactory _connectionFactory;
     private readonly IOptions<RabbitMqOptions> _options;
     private readonly IOptions<NntpdOptions> _nntpdOptions;
     private readonly ILogger<RabbitMqService> _logger;
-    private readonly SemaphoreSlim _stateGate = new(1, 1);
-    private readonly SemaphoreSlim _recoverySignal = new(0, int.MaxValue);
-    private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly TimeProvider _timeProvider;
+    private readonly CancellationTokenSource _runCts = new();
+    private readonly object _gate = new();
 
-    private RabbitMqRuntimeOptions? _runtimeOptions;
+    private TaskCompletionSource _recoveryRequested = NewRecoverySource();
+    private RabbitMqRuntimeOptions? _runtime;
     private string _connectionName = string.Empty;
-    private IRabbitMqBrokerConnection? _connection;
-    private Task? _recoveryTask;
-    private volatile RabbitMqInfrastructureState _state = RabbitMqInfrastructureState.NotInitialized;
-    private volatile bool _disposeRequested;
-    private int _recoveryQueued;
-    private int _recoveryAttempt;
-    private int _consecutiveClientRecoveryErrors;
-    private long _connectionGeneration;
+    private LiveConnection? _current;
+    private Task? _execution;
+    private long _generation;
     private int _started;
     private int _disposed;
+    private bool _stopping;
 
     /// <summary>Initializes a new instance of the <see cref="RabbitMqService"/> class.</summary>
-    internal RabbitMqService(
-        IRabbitMqBrokerConnector connector,
+    public RabbitMqService(
+        IRabbitMqConnectionFactory connectionFactory,
         IOptions<RabbitMqOptions> options,
         IOptions<NntpdOptions> nntpdOptions,
         ILogger<RabbitMqService> logger)
+        : this(connectionFactory, options, nntpdOptions, logger, TimeProvider.System)
     {
-        ArgumentNullException.ThrowIfNull(connector);
+    }
+
+    /// <summary>Initializes a new instance with an explicit clock (tests).</summary>
+    internal RabbitMqService(
+        IRabbitMqConnectionFactory connectionFactory,
+        IOptions<RabbitMqOptions> options,
+        IOptions<NntpdOptions> nntpdOptions,
+        ILogger<RabbitMqService> logger,
+        TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(connectionFactory);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(nntpdOptions);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
-        _connector = connector;
+        _connectionFactory = connectionFactory;
         _options = options;
         _nntpdOptions = nntpdOptions;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc />
     public string Name => "RabbitMQ";
 
     /// <inheritdoc />
-    public Task? Execution => _recoveryTask;
+    public Task? Execution => _execution;
 
     /// <inheritdoc />
-    public bool IsReady => _state is RabbitMqInfrastructureState.Connected;
+    public bool IsReady
+    {
+        get
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return false;
+            }
+
+            var current = Volatile.Read(ref _current);
+            return current is { Connection.IsOpen: true };
+        }
+    }
 
     /// <inheritdoc />
-    public long ConnectionGeneration => Interlocked.Read(ref _connectionGeneration);
+    public long ConnectionGeneration => Volatile.Read(ref _generation);
 
     /// <inheritdoc />
-    public RabbitMqInfrastructureState State => _state;
-
-    /// <summary>
-    /// Raised after a new broker connection generation becomes active.
-    /// </summary>
-    /// <remarks>
-    /// The first successful connect also raises this event with <c>IsReplacement</c> set to <see langword="false"/>.
-    /// Later generations set <c>IsReplacement</c> to <see langword="true"/>.
-    /// </remarks>
     public event EventHandler<RabbitMqConnectionReplacedEventArgs>? ConnectionReplaced;
 
     /// <summary>Gets the number of times a usable connection was installed (tests).</summary>
     internal int ConnectionCount { get; private set; }
 
     /// <summary>
-    /// Returns the current open connection for future topology or channel work.
+    /// Returns the current open connection for later topology or channel work.
     /// </summary>
     /// <returns>The current broker connection.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no open connection is available.</exception>
-    internal IRabbitMqBrokerConnection GetRequiredConnection()
+    internal IRabbitMqConnection GetRequiredConnection()
     {
-        var connection = _connection
+        var current = Volatile.Read(ref _current)
             ?? throw new InvalidOperationException("RabbitMQ connection has not been established.");
 
-        return !connection.IsOpen
+        return !current.Connection.IsOpen
             ? throw new InvalidOperationException("RabbitMQ connection is not open.")
-            : connection;
+            : current.Connection;
     }
 
     /// <inheritdoc />
@@ -113,20 +128,21 @@ public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAs
 
         try
         {
-            _runtimeOptions = _options.Value.ToRuntimeOptions();
+            _runtime = _options.Value.ToRuntimeOptions();
             _connectionName = RabbitMqRuntimeOptions.GetDefaultConnectionName(_nntpdOptions.Value.Fqdn);
-            await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+            await ConnectAndInstallAsync(cancellationToken, startup: true).ConfigureAwait(false);
+            _execution = WatchConnectionAsync(_runCts.Token);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             RabbitMqLogMessages.StartupFailed(_logger, ex);
-            await DisposeConnectionAsync().ConfigureAwait(false);
+            await RetireCurrentAsync().ConfigureAwait(false);
             Interlocked.Exchange(ref _started, 0);
             throw;
         }
         catch (OperationCanceledException)
         {
-            await DisposeConnectionAsync().ConfigureAwait(false);
+            await RetireCurrentAsync().ConfigureAwait(false);
             Interlocked.Exchange(ref _started, 0);
             throw;
         }
@@ -146,233 +162,284 @@ public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAs
             return;
         }
 
-        _disposeRequested = true;
-        _state = RabbitMqInfrastructureState.Stopping;
-        _shutdownCts.Cancel();
-        _ = _recoverySignal.Release();
-
-        try
+        lock (_gate)
         {
-            if (_recoveryTask is not null)
+            _stopping = true;
+        }
+
+        await _runCts.CancelAsync().ConfigureAwait(false);
+
+        var execution = _execution;
+        if (execution is not null)
+        {
+            try
             {
-                await _recoveryTask.ConfigureAwait(false);
+                await execution.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
 
-        await DisposeConnectionAsync().ConfigureAwait(false);
-
-        _state = RabbitMqInfrastructureState.Stopped;
-        RabbitMqLogMessages.ShutdownCompleted(_logger);
-
-        _stateGate.Dispose();
-        _recoverySignal.Dispose();
-        _shutdownCts.Dispose();
+        await RetireCurrentAsync().ConfigureAwait(false);
+        RabbitMqLogMessages.Stopped(_logger);
+        _runCts.Dispose();
     }
 
-    private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
+    private async Task WatchConnectionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await WaitForRecoveryRequestAsync(cancellationToken).ConfigureAwait(false);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                await RecoverAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RecoverAsync(CancellationToken cancellationToken)
+    {
+        var runtime = _runtime
+            ?? throw new InvalidOperationException("RabbitMQ runtime options have not been projected.");
+
+        var consecutiveFailures = 0;
+        var attempt = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            attempt++;
+            var delay = ComputeReconnectBackoff(runtime, attempt);
+            RabbitMqLogMessages.ReconnectStarting(
+                _logger,
+                attempt,
+                delay.TotalMilliseconds,
+                ConnectionGeneration);
+
+            try
+            {
+                await Task.Delay(delay, _timeProvider, cancellationToken).ConfigureAwait(false);
+                await RetireCurrentAsync().ConfigureAwait(false);
+                var generation = await ConnectAndInstallAsync(cancellationToken, startup: false)
+                    .ConfigureAwait(false);
+                RabbitMqLogMessages.ReconnectSucceeded(_logger, attempt, generation);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                consecutiveFailures++;
+                RabbitMqLogMessages.ReconnectFailed(_logger, attempt, consecutiveFailures, ex.Message);
+                if (consecutiveFailures >= runtime.MaxConsecutiveRecoveryFailures)
+                {
+                    RabbitMqLogMessages.ReconnectAbandoned(_logger, consecutiveFailures);
+                    return;
+                }
+            }
+        }
+    }
+
+    private async Task<long> ConnectAndInstallAsync(CancellationToken cancellationToken, bool startup)
     {
         ThrowIfStopping();
 
-        if (State is RabbitMqInfrastructureState.Connected)
-        {
-            return;
-        }
-
-        await _stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            ThrowIfStopping();
-            if (State is RabbitMqInfrastructureState.Connected)
-            {
-                return;
-            }
-
-            await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
-            _recoveryTask ??= Task.Run(RecoveryLoopAsync, CancellationToken.None);
-        }
-        finally
-        {
-            _ = _stateGate.Release();
-        }
-    }
-
-    private async Task ConnectCoreAsync(CancellationToken cancellationToken)
-    {
-        var runtimeOptions = _runtimeOptions
+        var runtime = _runtime
             ?? throw new InvalidOperationException("RabbitMQ runtime options have not been projected.");
-        var stopwatch = Stopwatch.StartNew();
+        var hosts = string.Join(',', runtime.Hosts);
+        var started = _timeProvider.GetTimestamp();
 
-        _state = RabbitMqInfrastructureState.Connecting;
-        var snapshot = RabbitMqConnectionFactoryBuilder.BuildSanitizedSnapshot(runtimeOptions, _connectionName);
-        var hosts = string.Join(',', snapshot.Hosts);
-        RabbitMqLogMessages.ConnectionAttempt(
+        RabbitMqLogMessages.Connecting(
             _logger,
             hosts,
-            snapshot.Port,
-            snapshot.VirtualHost,
-            snapshot.ClientProvidedConnectionName,
-            snapshot.EnableSsl);
+            runtime.Port,
+            runtime.VirtualHost,
+            _connectionName,
+            runtime.EnableSsl);
 
+        IRabbitMqConnection? connection = null;
+        var installed = false;
         try
         {
-            var connection = await _connector
-                .ConnectAsync(runtimeOptions, _connectionName, cancellationToken)
+            connection = await _connectionFactory
+                .ConnectAsync(_options.Value, _connectionName, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!connection.IsOpen)
             {
                 RabbitMqLogMessages.ConnectionNotUsable(_logger);
-                await connection.DisposeAsync().ConfigureAwait(false);
+                await DisposeConnectionQuietlyAsync(connection).ConfigureAwait(false);
+                connection = null;
                 throw new InvalidOperationException("RabbitMQ connection opened but is not usable.");
             }
 
-            AttachConnectionEvents(connection);
-            _connection = connection;
-            _recoveryAttempt = 0;
-            _ = Interlocked.Exchange(ref _consecutiveClientRecoveryErrors, 0);
-            _state = RabbitMqInfrastructureState.Connected;
+            var live = Publish(connection);
+            installed = true;
+            connection = null;
 
-            var generation = Interlocked.Increment(ref _connectionGeneration);
-            var isReplacement = generation > 1;
-            ConnectionCount++;
+            var previous = live.Replaced;
+            if (previous is not null)
+            {
+                previous.Connection.ConnectionLost -= OnConnectionLost;
+                await DisposeConnectionQuietlyAsync(previous.Connection).ConfigureAwait(false);
+            }
 
-            RabbitMqLogMessages.ConnectionSucceeded(
+            var elapsedMs = _timeProvider.GetElapsedTime(started).TotalMilliseconds;
+            RabbitMqLogMessages.Connected(
                 _logger,
-                connection.EndpointHostName,
-                connection.EndpointPort,
-                connection.VirtualHost,
-                connection.ClientProvidedName,
-                generation,
-                stopwatch.Elapsed.TotalMilliseconds);
+                live.Current.Connection.Host,
+                live.Current.Connection.Port,
+                live.Current.Connection.VirtualHost,
+                live.Current.Connection.ClientProvidedName,
+                live.Current.Generation,
+                elapsedMs);
 
-            ConnectionReplaced?.Invoke(this, new RabbitMqConnectionReplacedEventArgs(generation, isReplacement));
+            ConnectionReplaced?.Invoke(
+                this,
+                new RabbitMqConnectionReplacedEventArgs(
+                    live.Current.Generation,
+                    live.Current.Generation > 1));
+
+            return live.Current.Generation;
         }
         catch (Exception ex)
         {
-            _state = RabbitMqInfrastructureState.Failed;
-            RabbitMqLogMessages.ConnectionFailed(
-                _logger,
-                ex,
-                hosts,
-                snapshot.Port,
-                snapshot.VirtualHost,
-                snapshot.ClientProvidedConnectionName,
-                stopwatch.Elapsed.TotalMilliseconds);
+            if (!installed && connection is not null)
+            {
+                await DisposeConnectionQuietlyAsync(connection).ConfigureAwait(false);
+            }
+
+            if (startup && ex is not OperationCanceledException)
+            {
+                RabbitMqLogMessages.ConnectionFailed(
+                    _logger,
+                    ex,
+                    hosts,
+                    runtime.Port,
+                    runtime.VirtualHost,
+                    _connectionName,
+                    _timeProvider.GetElapsedTime(started).TotalMilliseconds);
+            }
+
             throw;
         }
     }
 
-    private async Task RecoveryLoopAsync()
+    private PublishedConnection Publish(IRabbitMqConnection connection)
     {
-        while (!_shutdownCts.IsCancellationRequested)
+        // Subscribe before making the instance current so a close that races the
+        // publish is observed. OnConnectionLost still ignores a sender that is not current.
+        connection.ConnectionLost += OnConnectionLost;
+
+        lock (_gate)
         {
-            try
+            if (_stopping)
             {
-                await _recoverySignal.WaitAsync(_shutdownCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
+                connection.ConnectionLost -= OnConnectionLost;
+                throw new InvalidOperationException("RabbitMQ service is stopping.");
             }
 
-            if (_shutdownCts.IsCancellationRequested || _disposeRequested)
+            var previous = _current;
+            _generation++;
+            var current = new LiveConnection(connection, _generation);
+            _current = current;
+            ConnectionCount++;
+            return new PublishedConnection(current, previous);
+        }
+    }
+
+    private void OnConnectionLost(object? sender, RabbitMqConnectionLostEventArgs eventArgs)
+    {
+        long generation;
+        lock (_gate)
+        {
+            // A retired connection must not request recovery or overwrite a newer generation.
+            if (_stopping
+                || _current is not { } current
+                || !ReferenceEquals(current.Connection, sender))
             {
-                break;
+                return;
             }
 
-            _ = Interlocked.Exchange(ref _recoveryQueued, 0);
+            generation = current.Generation;
+        }
 
-            var acquired = false;
-            try
+        RabbitMqLogMessages.ConnectionLost(
+            _logger,
+            generation,
+            eventArgs.ReplyCode,
+            eventArgs.ReplyText,
+            eventArgs.Initiator);
+        RequestRecovery();
+    }
+
+    private void RequestRecovery()
+    {
+        TaskCompletionSource source;
+        lock (_gate)
+        {
+            if (_stopping)
             {
-                await _stateGate.WaitAsync(_shutdownCts.Token).ConfigureAwait(false);
-                acquired = true;
-
-                if (_shutdownCts.IsCancellationRequested || _disposeRequested)
-                {
-                    break;
-                }
-
-                _state = RabbitMqInfrastructureState.Reconnecting;
-                var failureCount = 0;
-                var runtimeOptions = _runtimeOptions
-                    ?? throw new InvalidOperationException("RabbitMQ runtime options have not been projected.");
-
-                while (!_shutdownCts.IsCancellationRequested && !_disposeRequested)
-                {
-                    _recoveryAttempt++;
-                    var delay = ComputeRecoveryBackoff(runtimeOptions, _recoveryAttempt);
-                    RabbitMqLogMessages.RecoveryStarting(_logger, _recoveryAttempt, delay.TotalMilliseconds);
-
-                    try
-                    {
-                        await Task.Delay(delay, _shutdownCts.Token).ConfigureAwait(false);
-                        await DisposeConnectionAsync().ConfigureAwait(false);
-                        await ConnectCoreAsync(_shutdownCts.Token).ConfigureAwait(false);
-
-                        RabbitMqLogMessages.RecoverySucceeded(_logger, _recoveryAttempt, ConnectionGeneration);
-                        break;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        failureCount++;
-                        RabbitMqLogMessages.RecoveryFailed(_logger, _recoveryAttempt, failureCount, ex.Message);
-
-                        if (failureCount >= runtimeOptions.MaxConsecutiveRecoveryFailures)
-                        {
-                            _state = RabbitMqInfrastructureState.Failed;
-                            RabbitMqLogMessages.RecoveryFailureThresholdReached(_logger, failureCount);
-                            break;
-                        }
-                    }
-                }
+                return;
             }
-            catch (OperationCanceledException)
+
+            source = _recoveryRequested;
+        }
+
+        source.TrySetResult();
+    }
+
+    private async Task WaitForRecoveryRequestAsync(CancellationToken cancellationToken)
+    {
+        Task wait;
+        lock (_gate)
+        {
+            wait = _recoveryRequested.Task;
+        }
+
+        await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // Replace the consumed signal before RecoverAsync runs so a loss of the
+        // newly installed generation is not dropped as an already-observed event.
+        lock (_gate)
+        {
+            if (_recoveryRequested.Task.IsCompleted)
             {
-                break;
-            }
-            finally
-            {
-                if (acquired)
-                {
-                    _ = _stateGate.Release();
-                }
+                _recoveryRequested = NewRecoverySource();
             }
         }
     }
 
-    private void QueueRecovery(string reason)
+    private async Task RetireCurrentAsync()
     {
-        if (_disposeRequested || _shutdownCts.IsCancellationRequested)
+        LiveConnection? current;
+        lock (_gate)
+        {
+            current = _current;
+            _current = null;
+        }
+
+        if (current is null)
         {
             return;
         }
 
-        if (Interlocked.Exchange(ref _recoveryQueued, 1) == 0)
-        {
-            RabbitMqLogMessages.RecoveryQueued(_logger, reason);
-            _ = _recoverySignal.Release();
-        }
+        current.Connection.ConnectionLost -= OnConnectionLost;
+        await DisposeConnectionQuietlyAsync(current.Connection).ConfigureAwait(false);
     }
 
-    private async Task DisposeConnectionAsync()
+    private async Task DisposeConnectionQuietlyAsync(IRabbitMqConnection connection)
     {
-        var connection = Interlocked.Exchange(ref _connection, null);
-        if (connection is null)
-        {
-            return;
-        }
-
-        DetachConnectionEvents(connection);
-
         try
         {
             await connection.DisposeAsync().ConfigureAwait(false);
@@ -383,7 +450,18 @@ public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAs
         }
     }
 
-    private static TimeSpan ComputeRecoveryBackoff(RabbitMqRuntimeOptions options, int attempt)
+    private void ThrowIfStopping()
+    {
+        lock (_gate)
+        {
+            if (_stopping)
+            {
+                throw new InvalidOperationException("RabbitMQ service is stopping.");
+            }
+        }
+    }
+
+    private static TimeSpan ComputeReconnectBackoff(RabbitMqRuntimeOptions options, int attempt)
     {
         var boundedAttempt = Math.Clamp(attempt, 1, 30);
         var exponential = Math.Pow(2, boundedAttempt - 1);
@@ -392,87 +470,15 @@ public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAs
         return TimeSpan.FromMilliseconds(delayMs);
     }
 
-    private void AttachConnectionEvents(IRabbitMqBrokerConnection connection)
+    private static TaskCompletionSource NewRecoverySource() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private sealed class LiveConnection(IRabbitMqConnection connection, long generation)
     {
-        connection.ConnectionShutdown += OnConnectionShutdown;
-        connection.CallbackException += OnCallbackException;
-        connection.ConnectionBlocked += OnConnectionBlocked;
-        connection.ConnectionUnblocked += OnConnectionUnblocked;
-        connection.ConnectionRecoveryError += OnConnectionRecoveryError;
-        connection.RecoverySucceeded += OnRecoverySucceeded;
+        public IRabbitMqConnection Connection { get; } = connection;
+
+        public long Generation { get; } = generation;
     }
 
-    private void DetachConnectionEvents(IRabbitMqBrokerConnection connection)
-    {
-        connection.ConnectionShutdown -= OnConnectionShutdown;
-        connection.CallbackException -= OnCallbackException;
-        connection.ConnectionBlocked -= OnConnectionBlocked;
-        connection.ConnectionUnblocked -= OnConnectionUnblocked;
-        connection.ConnectionRecoveryError -= OnConnectionRecoveryError;
-        connection.RecoverySucceeded -= OnRecoverySucceeded;
-    }
-
-    private void OnConnectionShutdown(object? sender, ShutdownEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.ConnectionShutdown(
-            _logger,
-            eventArgs.ReplyCode,
-            eventArgs.ReplyText,
-            eventArgs.Initiator.ToString());
-
-        if (_disposeRequested || _shutdownCts.IsCancellationRequested)
-        {
-            return;
-        }
-
-        _state = RabbitMqInfrastructureState.Reconnecting;
-        QueueRecovery($"connection-shutdown:{eventArgs.ReplyCode}");
-    }
-
-    private void OnCallbackException(object? sender, CallbackExceptionEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.CallbackException(_logger, eventArgs.Exception.Message);
-    }
-
-    private void OnConnectionBlocked(object? sender, ConnectionBlockedEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.ConnectionBlocked(_logger, eventArgs.Reason);
-    }
-
-    private void OnConnectionUnblocked(object? sender, AsyncEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.ConnectionUnblocked(_logger);
-    }
-
-    private void OnConnectionRecoveryError(object? sender, ConnectionRecoveryErrorEventArgs eventArgs)
-    {
-        var consecutiveErrors = Interlocked.Increment(ref _consecutiveClientRecoveryErrors);
-        RabbitMqLogMessages.ClientAutomaticRecoveryError(_logger, consecutiveErrors, eventArgs.Exception.Message);
-
-        var threshold = _runtimeOptions?.MaxConsecutiveRecoveryFailures ?? 5;
-        if (consecutiveErrors >= threshold)
-        {
-            RabbitMqLogMessages.ClientAutomaticRecoveryThresholdReached(_logger, consecutiveErrors);
-            QueueRecovery("automatic-recovery-error-threshold");
-        }
-    }
-
-    private void OnRecoverySucceeded(object? sender, AsyncEventArgs eventArgs)
-    {
-        _ = Interlocked.Exchange(ref _consecutiveClientRecoveryErrors, 0);
-        if (_state is not RabbitMqInfrastructureState.Stopping and not RabbitMqInfrastructureState.Stopped)
-        {
-            _state = RabbitMqInfrastructureState.Connected;
-        }
-
-        RabbitMqLogMessages.ClientAutomaticRecoverySucceeded(_logger);
-    }
-
-    private void ThrowIfStopping()
-    {
-        if (_disposeRequested || _shutdownCts.IsCancellationRequested)
-        {
-            throw new InvalidOperationException("RabbitMQ connection service is stopping.");
-        }
-    }
+    private readonly record struct PublishedConnection(LiveConnection Current, LiveConnection? Replaced);
 }

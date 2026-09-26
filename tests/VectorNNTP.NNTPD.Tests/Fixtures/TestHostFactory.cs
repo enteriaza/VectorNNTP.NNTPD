@@ -137,7 +137,7 @@ internal static class TestHostFactory
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(localAssignee);
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
-        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeRabbitMqConnectionFactory>();
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         IsolateTransit(builder.Services);
 

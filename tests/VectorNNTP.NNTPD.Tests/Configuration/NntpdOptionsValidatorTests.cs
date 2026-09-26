@@ -1306,7 +1306,7 @@ public sealed class NntpdConfigurationTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
-        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeRabbitMqConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindPortTls = 0;
@@ -1354,7 +1354,7 @@ public sealed class NntpdConfigurationTests
             assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
-        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeRabbitMqConnectionFactory>();
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {

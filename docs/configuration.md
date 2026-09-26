@@ -411,7 +411,7 @@ This phase does **not** declare exchanges, queues, or bindings, and does not pub
 | `NetworkRecoveryIntervalSeconds` | int | `5` | **yes** | Client recovery-interval setting (`1–3600`; unused while automatic recovery is disabled) |
 | `PoolReconnectBaseDelayMs` | int | `250` | **yes** | Application reconnect base delay (`50–60000`) |
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
-| `MaxConsecutiveRecoveryFailures` | int | `5` | **yes** | Consecutive reconnect failures before the service marks `Failed` (`1–100`) |
+| `MaxConsecutiveRecoveryFailures` | int | `5` | **yes** | Consecutive reconnect failures before application-level reconnect stops for that loss (`1–100`) |
 | `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
 | `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Validated; reserved for later message work (`1–4096`) |
 | `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |

@@ -1,26 +1,38 @@
-using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 
-/// <summary>In-memory RabbitMQ connector for offline tests.</summary>
-internal sealed class FakeRabbitMqBrokerConnector : IRabbitMqBrokerConnector
+/// <summary>In-memory RabbitMQ connection factory for offline tests.</summary>
+internal sealed class FakeRabbitMqConnectionFactory : IRabbitMqConnectionFactory
 {
     private int _connectCount;
+    private int _attemptCount;
+    private readonly SemaphoreSlim _attemptPulse = new(0, int.MaxValue);
 
-    /// <summary>Gets the number of connect attempts.</summary>
+    /// <summary>Gets the number of successful connects.</summary>
     public int ConnectCount => Volatile.Read(ref _connectCount);
 
+    /// <summary>Gets the number of connect attempts, including failures.</summary>
+    public int AttemptCount => Volatile.Read(ref _attemptCount);
+
     /// <summary>Gets the most recently created connection.</summary>
-    public FakeRabbitMqBrokerConnection? LastConnection { get; private set; }
+    public FakeRabbitMqConnection? LastConnection { get; private set; }
 
-    /// <summary>Gets every connection created by this connector.</summary>
-    public List<FakeRabbitMqBrokerConnection> Connections { get; } = [];
+    /// <summary>Gets every connection created by this factory.</summary>
+    public List<FakeRabbitMqConnection> Connections { get; } = [];
 
-    /// <summary>Optional exception thrown by the next connect attempt.</summary>
+    /// <summary>When set, every connect attempt throws this exception.</summary>
     public Exception? ConnectException { get; set; }
+
+    /// <summary>
+    /// Remaining connect attempts that throw <see cref="ConnectException"/> or a default broker failure.
+    /// After the budget is exhausted, connects succeed unless <see cref="ConnectException"/> is set.
+    /// </summary>
+    public int RemainingConnectFailures { get; set; }
+
+    /// <summary>Signaled when a connect attempt begins, before <see cref="BlockConnect"/>.</summary>
+    public TaskCompletionSource? ConnectStarted { get; set; }
 
     /// <summary>When set, connect waits on this source before completing.</summary>
     public TaskCompletionSource? BlockConnect { get; set; }
@@ -31,32 +43,51 @@ internal sealed class FakeRabbitMqBrokerConnector : IRabbitMqBrokerConnector
     /// <summary>When <see langword="true"/>, created connections report <c>IsOpen == false</c>.</summary>
     public bool ReturnUnusableConnection { get; set; }
 
+    /// <summary>Waits until at least <paramref name="count"/> connect attempts have started.</summary>
+    public async Task WaitForAttemptsAsync(int count, CancellationToken cancellationToken)
+    {
+        while (AttemptCount < count)
+        {
+            await _attemptPulse.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <inheritdoc />
-    public async Task<IRabbitMqBrokerConnection> ConnectAsync(
-        RabbitMqRuntimeOptions runtimeOptions,
-        string clientProvidedConnectionName,
+    public async Task<IRabbitMqConnection> ConnectAsync(
+        RabbitMqOptions options,
+        string connectionName,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(runtimeOptions);
-        ArgumentException.ThrowIfNullOrWhiteSpace(clientProvidedConnectionName);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionName);
 
+        Interlocked.Increment(ref _attemptCount);
+        _attemptPulse.Release();
+        ConnectStarted?.TrySetResult();
         if (BlockConnect is not null)
         {
             await BlockConnect.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (RemainingConnectFailures > 0)
+        {
+            RemainingConnectFailures--;
+            throw ConnectException ?? new InvalidOperationException("broker down");
+        }
+
         if (ConnectException is not null)
         {
             throw ConnectException;
         }
 
         var count = Interlocked.Increment(ref _connectCount);
-        var connection = new FakeRabbitMqBrokerConnection(
-            runtimeOptions.Hosts.Count > 0 ? runtimeOptions.Hosts[0] : "127.0.0.1",
-            runtimeOptions.Port,
-            runtimeOptions.VirtualHost,
-            clientProvidedConnectionName)
+        var hosts = options.Hosts ?? [];
+        var connection = new FakeRabbitMqConnection(
+            hosts.Length > 0 ? hosts[0] : "127.0.0.1",
+            options.Port ?? 5672,
+            string.IsNullOrWhiteSpace(options.VirtualHost) ? "/" : options.VirtualHost.Trim(),
+            connectionName)
         {
             IsOpen = !ReturnUnusableConnection,
         };
@@ -69,13 +100,13 @@ internal sealed class FakeRabbitMqBrokerConnector : IRabbitMqBrokerConnector
 }
 
 /// <summary>In-memory RabbitMQ connection for lifecycle tests.</summary>
-internal sealed class FakeRabbitMqBrokerConnection : IRabbitMqBrokerConnection
+internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
 {
     /// <summary>Initializes a new fake connection.</summary>
-    public FakeRabbitMqBrokerConnection(string host, int port, string virtualHost, string clientProvidedName)
+    public FakeRabbitMqConnection(string host, int port, string virtualHost, string clientProvidedName)
     {
-        EndpointHostName = host;
-        EndpointPort = port;
+        Host = host;
+        Port = port;
         VirtualHost = virtualHost;
         ClientProvidedName = clientProvidedName;
     }
@@ -84,10 +115,10 @@ internal sealed class FakeRabbitMqBrokerConnection : IRabbitMqBrokerConnection
     public bool IsOpen { get; set; } = true;
 
     /// <inheritdoc />
-    public string EndpointHostName { get; }
+    public string Host { get; }
 
     /// <inheritdoc />
-    public int EndpointPort { get; }
+    public int Port { get; }
 
     /// <inheritdoc />
     public string VirtualHost { get; }
@@ -99,38 +130,13 @@ internal sealed class FakeRabbitMqBrokerConnection : IRabbitMqBrokerConnection
     public int DisposeCount { get; private set; }
 
     /// <inheritdoc />
-    public event EventHandler<ShutdownEventArgs>? ConnectionShutdown;
+    public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
-    /// <inheritdoc />
-    public event EventHandler<CallbackExceptionEventArgs>? CallbackException;
-
-    /// <inheritdoc />
-    public event EventHandler<ConnectionBlockedEventArgs>? ConnectionBlocked;
-
-    /// <inheritdoc />
-    public event EventHandler<AsyncEventArgs>? ConnectionUnblocked;
-
-    /// <inheritdoc />
-    public event EventHandler<ConnectionRecoveryErrorEventArgs>? ConnectionRecoveryError;
-
-    /// <inheritdoc />
-    public event EventHandler<AsyncEventArgs>? RecoverySucceeded;
-
-    /// <summary>Raises <see cref="ConnectionShutdown"/> as a peer-initiated disconnect.</summary>
-    public void SimulateShutdown(ushort replyCode = 320, string replyText = "CONNECTION FORCED")
+    /// <summary>Raises <see cref="ConnectionLost"/> as a peer-initiated disconnect.</summary>
+    public void SimulateLost(ushort replyCode = 320, string replyText = "CONNECTION FORCED")
     {
         IsOpen = false;
-        ConnectionShutdown?.Invoke(this, new ShutdownEventArgs(ShutdownInitiator.Peer, replyCode, replyText));
-    }
-
-    /// <summary>Raises the remaining connection events so the fake implements the full lifecycle seam.</summary>
-    public void SimulateLifecycleSignals()
-    {
-        CallbackException?.Invoke(this, null!);
-        ConnectionBlocked?.Invoke(this, null!);
-        ConnectionUnblocked?.Invoke(this, AsyncEventArgs.Empty);
-        ConnectionRecoveryError?.Invoke(this, null!);
-        RecoverySucceeded?.Invoke(this, AsyncEventArgs.Empty);
+        ConnectionLost?.Invoke(this, new RabbitMqConnectionLostEventArgs(replyCode, replyText, "Peer"));
     }
 
     /// <inheritdoc />

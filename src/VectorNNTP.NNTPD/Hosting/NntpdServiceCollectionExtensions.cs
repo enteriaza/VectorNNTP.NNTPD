@@ -305,13 +305,8 @@ public static class NntpdServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, RedisService>(static sp =>
                 sp.GetRequiredService<RedisService>()));
 
-        services.TryAddSingleton<IRabbitMqBrokerConnector, RabbitMqBrokerConnector>();
-        services.TryAddSingleton(static sp =>
-            new RabbitMqService(
-                sp.GetRequiredService<IRabbitMqBrokerConnector>(),
-                sp.GetRequiredService<IOptions<RabbitMqOptions>>(),
-                sp.GetRequiredService<IOptions<NntpdOptions>>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RabbitMqService>>()));
+        services.TryAddSingleton<IRabbitMqConnectionFactory, RabbitMqClientConnectionFactory>();
+        services.TryAddSingleton<RabbitMqService>();
         services.TryAddSingleton<IRabbitMqService>(static sp => sp.GetRequiredService<RabbitMqService>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
