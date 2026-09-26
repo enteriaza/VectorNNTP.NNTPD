@@ -31,10 +31,12 @@ public sealed class RedisServiceTests
 
         _ = await service.KeyExistsAsync("a"u8.ToArray());
         _ = await service.KeyExistsAsync("b"u8.ToArray());
+        _ = await service.GetAsync("c"u8.ToArray());
         await service.SetAsync("c"u8.ToArray(), "d"u8.ToArray(), TimeSpan.FromMinutes(1));
 
         Assert.Equal(1, factory.ConnectCount);
         Assert.Equal(2, factory.LastConnection!.Database.KeyExistsCount);
+        Assert.Equal(1, factory.LastConnection.Database.GetCount);
         Assert.Equal(1, factory.LastConnection.Database.SetCount);
     }
 

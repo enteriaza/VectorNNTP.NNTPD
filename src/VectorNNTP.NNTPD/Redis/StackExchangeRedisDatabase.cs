@@ -34,6 +34,20 @@ internal sealed class StackExchangeRedisDatabase : IRedisDatabase
     }
 
     /// <inheritdoc />
+    public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var pending = _database.StringGetAsync(ToRedisKey(key));
+            return AwaitGet(pending, cancellationToken);
+        }
+        catch (Exception ex) when (IsInfrastructureFailure(ex))
+        {
+            return ValueTask.FromException<byte[]?>(new RedisUnavailableException("Redis GET failed.", ex));
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask SetAsync(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
@@ -123,6 +137,31 @@ internal sealed class StackExchangeRedisDatabase : IRedisDatabase
             throw new RedisUnavailableException("Redis EXISTS failed.", ex);
         }
     }
+
+    private static ValueTask<byte[]?> AwaitGet(Task<RedisValue> pending, CancellationToken cancellationToken)
+    {
+        if (pending.IsCompletedSuccessfully)
+        {
+            return new ValueTask<byte[]?>(ToBytes(pending.Result));
+        }
+
+        return AwaitGetSlow(pending, cancellationToken);
+    }
+
+    private static async ValueTask<byte[]?> AwaitGetSlow(Task<RedisValue> pending, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var value = await Await(pending, cancellationToken).ConfigureAwait(false);
+            return ToBytes(value);
+        }
+        catch (Exception ex) when (IsInfrastructureFailure(ex))
+        {
+            throw new RedisUnavailableException("Redis GET failed.", ex);
+        }
+    }
+
+    private static byte[]? ToBytes(RedisValue value) => value.IsNull ? null : (byte[]?)value;
 
     private static ValueTask<long> AwaitEval(Task<RedisResult> pending, CancellationToken cancellationToken)
     {

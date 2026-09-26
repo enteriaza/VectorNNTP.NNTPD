@@ -67,9 +67,15 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
 
     public int SetCount { get; set; }
 
+    public int GetCount { get; set; }
+
     public Exception? ExistsException { get; set; }
 
+    public Exception? GetException { get; set; }
+
     public Exception? SetException { get; set; }
+
+    public TimeSpan LastSetExpiry { get; private set; }
 
     public TaskCompletionSource? BlockSet { get; set; }
 
@@ -138,6 +144,32 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         return true;
     }
 
+    public ValueTask<byte[]?> GetAsync(
+        ReadOnlyMemory<byte> key,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetCount++;
+        if (GetException is not null)
+        {
+            return ValueTask.FromException<byte[]?>(GetException);
+        }
+
+        var name = ToKey(key);
+        if (!_keys.TryGetValue(name, out var entry))
+        {
+            return ValueTask.FromResult<byte[]?>(null);
+        }
+
+        if (entry.Expiry <= DateTimeOffset.UtcNow)
+        {
+            _keys.TryRemove(name, out _);
+            return ValueTask.FromResult<byte[]?>(null);
+        }
+
+        return ValueTask.FromResult<byte[]?>(entry.Value);
+    }
+
     public async ValueTask SetAsync(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,
@@ -156,6 +188,7 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
             throw SetException;
         }
 
+        LastSetExpiry = expiry;
         _keys[ToKey(key)] = (value.ToArray(), DateTimeOffset.UtcNow.Add(expiry));
     }
 
@@ -332,9 +365,28 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
     }
 
     public void Seed(ReadOnlyMemory<byte> key, TimeSpan? expiry = null) =>
-        _keys[ToKey(key)] = ([1], DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromHours(2)));
+        Seed(key, new byte[] { 1 }, expiry);
+
+    public void Seed(ReadOnlyMemory<byte> key, ReadOnlyMemory<byte> value, TimeSpan? expiry = null) =>
+        _keys[ToKey(key)] = (value.ToArray(), DateTimeOffset.UtcNow.Add(expiry ?? TimeSpan.FromHours(2)));
 
     public bool Contains(ReadOnlyMemory<byte> key) => _keys.ContainsKey(ToKey(key));
+
+    public bool TryGetStored(ReadOnlyMemory<byte> key, out byte[] value, out DateTimeOffset expiry)
+    {
+        if (_keys.TryGetValue(ToKey(key), out var entry))
+        {
+            value = entry.Value;
+            expiry = entry.Expiry;
+            return true;
+        }
+
+        value = [];
+        expiry = default;
+        return false;
+    }
+
+    public void Expire(ReadOnlyMemory<byte> key) => _keys.TryRemove(ToKey(key), out _);
 
     private static string ToKey(ReadOnlyMemory<byte> key) => Convert.ToHexString(key.Span);
 
@@ -386,6 +438,9 @@ internal sealed class FakeRedisService : IRedisService
 
     public ValueTask<bool> KeyExistsAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
         Database.KeyExistsAsync(key, cancellationToken);
+
+    public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+        Database.GetAsync(key, cancellationToken);
 
     public ValueTask SetAsync(
         ReadOnlyMemory<byte> key,

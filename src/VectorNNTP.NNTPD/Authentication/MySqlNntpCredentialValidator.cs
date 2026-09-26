@@ -10,6 +10,11 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// <summary>
 /// Validates AUTHINFO PASS / SASL password mechanisms and finalizes SCRAM/CRAM against MySQL.
 /// </summary>
+/// <remarks>
+/// Account rows come from <see cref="INntpUserRecordStore"/> (Redis 10s cache, then
+/// MySQL). This type does not keep a process-local full-record cache. Password
+/// and SASL proofs are verified on every attempt.
+/// </remarks>
 public sealed class MySqlNntpCredentialValidator
 {
     /// <summary>Reader + posting privileges granted to every successful MySQL account.</summary>
@@ -21,27 +26,15 @@ public sealed class MySqlNntpCredentialValidator
         streamingPermitted: false);
 
     private readonly INntpUserRecordStore _store;
-    private readonly NntpUserRecordCache _cache;
     private readonly ILogger<MySqlNntpCredentialValidator> _logger;
 
     /// <summary>Initializes a new instance of the <see cref="MySqlNntpCredentialValidator"/> class.</summary>
     public MySqlNntpCredentialValidator(INntpUserRecordStore store, ILogger<MySqlNntpCredentialValidator> logger)
-        : this(store, logger, new NntpUserRecordCache())
-    {
-    }
-
-    /// <summary>Initializes a new instance with an explicit burst cache (tests).</summary>
-    internal MySqlNntpCredentialValidator(
-        INntpUserRecordStore store,
-        ILogger<MySqlNntpCredentialValidator> logger,
-        NntpUserRecordCache cache)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(logger);
-        ArgumentNullException.ThrowIfNull(cache);
         _store = store;
         _logger = logger;
-        _cache = cache;
     }
 
     /// <summary>Validates a cleartext password for AUTHINFO PASS, PLAIN, or LOGIN.</summary>
@@ -63,12 +56,7 @@ public sealed class MySqlNntpCredentialValidator
         var ip = FormatClientIp(clientIp);
         try
         {
-            var fingerprint = NntpUserRecordCache.ComputePasswordFingerprint(password);
-            if (!_cache.TryGet(username, fingerprint, out var record))
-            {
-                record = await _store.TryGetUserAsync(username, cancellationToken).ConfigureAwait(false);
-            }
-
+            var record = await _store.TryGetUserAsync(username, cancellationToken).ConfigureAwait(false);
             if (record is null
                 || !record.IsEnabled
                 || !record.AllowAuthPlain
@@ -78,7 +66,6 @@ public sealed class MySqlNntpCredentialValidator
                 return NntpAuthenticationResult.Failed;
             }
 
-            _cache.Put(username, fingerprint, record);
             return Succeed(mechanism, record, ip);
         }
         catch (OperationCanceledException)
@@ -193,7 +180,6 @@ public sealed class MySqlNntpCredentialValidator
                 return NntpAuthenticationResult.Failed;
             }
 
-            _cache.Put(username, NntpUserRecordCache.UsernameOnlyFingerprint, record);
             return Succeed(mechanism, record, ip);
         }
         catch (OperationCanceledException)

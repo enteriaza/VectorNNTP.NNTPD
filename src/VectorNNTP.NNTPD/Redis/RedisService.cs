@@ -126,6 +126,10 @@ public sealed class RedisService : IRedisService, IApplicationService, IAsyncDis
         Database.KeyExistsAsync(key, cancellationToken);
 
     /// <inheritdoc />
+    public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+        Database.GetAsync(key, cancellationToken);
+
+    /// <inheritdoc />
     public ValueTask SetAsync(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,

@@ -355,6 +355,9 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
         public ValueTask<bool> KeyExistsAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
             _database.KeyExistsAsync(key, cancellationToken);
 
+        public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+            _database.GetAsync(key, cancellationToken);
+
         public ValueTask SetAsync(
             ReadOnlyMemory<byte> key,
             ReadOnlyMemory<byte> value,

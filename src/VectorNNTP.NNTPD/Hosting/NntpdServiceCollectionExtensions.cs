@@ -63,7 +63,12 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
         // Newsmaster (when configured) then MySQL nntpusers. Reader-authority only.
         // Transit AUTHINFO is MODE STREAM / Transit authority and never enters this provider.
-        services.TryAddSingleton<INntpUserRecordStore, MySqlUserRecordStore>();
+        services.TryAddSingleton<MySqlUserRecordStore>();
+        services.TryAddSingleton<INntpUserRecordStore>(static sp =>
+            new CachedNntpUserRecordStore(
+                sp.GetRequiredService<MySqlUserRecordStore>(),
+                sp.GetRequiredService<IRedisService>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNntpUserRecordStore>>()));
         services.TryAddSingleton<MySqlNntpCredentialValidator>();
         services.TryAddSingleton<ISessionStateStore, RedisSessionStateStore>();
         services.TryAddSingleton<DistributedSessionStateTracker>(static sp =>

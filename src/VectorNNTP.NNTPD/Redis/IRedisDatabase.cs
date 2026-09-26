@@ -9,6 +9,9 @@ public interface IRedisDatabase
     /// <summary>Returns whether <paramref name="key"/> exists.</summary>
     ValueTask<bool> KeyExistsAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns the value of <paramref name="key"/>, or <see langword="null"/> when missing.</summary>
+    ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default);
+
     /// <summary>Sets <paramref name="key"/> to <paramref name="value"/> with a Redis-native TTL.</summary>
     ValueTask SetAsync(
         ReadOnlyMemory<byte> key,

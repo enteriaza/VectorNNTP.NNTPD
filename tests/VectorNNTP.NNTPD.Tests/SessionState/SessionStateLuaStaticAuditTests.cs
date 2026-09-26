@@ -366,6 +366,9 @@ public sealed class SessionStateLuaStaticAuditTests
         public ValueTask<bool> KeyExistsAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(false);
 
+        public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<byte[]?>(null);
+
         public ValueTask SetAsync(
             ReadOnlyMemory<byte> key,
             ReadOnlyMemory<byte> value,
@@ -387,6 +390,9 @@ public sealed class SessionStateLuaStaticAuditTests
 
             public ValueTask<bool> KeyExistsAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
                 ValueTask.FromResult(false);
+
+            public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+                ValueTask.FromResult<byte[]?>(null);
 
             public ValueTask SetAsync(
                 ReadOnlyMemory<byte> key,

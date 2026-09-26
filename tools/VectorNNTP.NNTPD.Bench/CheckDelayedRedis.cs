@@ -58,6 +58,9 @@ internal sealed class CheckDelayedRedis : IRedisService
         return _keys.ContainsKey(digest);
     }
 
+    public ValueTask<byte[]?> GetAsync(ReadOnlyMemory<byte> key, CancellationToken cancellationToken = default) =>
+        ValueTask.FromResult<byte[]?>(null);
+
     public ValueTask SetAsync(
         ReadOnlyMemory<byte> key,
         ReadOnlyMemory<byte> value,

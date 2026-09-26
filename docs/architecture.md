@@ -223,7 +223,32 @@ AUTHINFO USER username
 AUTHINFO PASS password
     → authority from MODE, never from source IP (no Transit ↔ MySQL fallback)
     → MODE STREAM / Stream: Transit peer credentials only
-    → MODE READER / unspecified: INntpAuthenticationProvider (newsmaster, then nntpusers)
+    → MODE READER / unspecified: INntpAuthenticationProvider (newsmaster, then nntpusers).
+      Reader `nntpusers` lookup is `INntpUserRecordStore`:
+
+        AUTHINFO
+           |
+           v
+        account-record cache
+           |
+           +-- Redis `nntpd:account:{sha256hex(UTF-8 accountName)}`, `SET EX 10`
+           |
+           +-- MySQL `SELECT` on miss/expiry
+                 ^
+                 |
+           process-local single-flight (cold-miss coalescing only)
+
+      There is no process-local full-record cache in front of Redis. GET does
+      not extend the Redis TTL. The cached object is the complete MySQL
+      account/policy snapshot (password/SCRAM material and policy fields; not
+      `account_type`). It is not an authenticated session. Password and SASL
+      proofs are verified on every AUTHINFO. Redis GET/SET failure falls back
+      to MySQL and does not become `503`. That is distinct from SessionState
+      admission, which remains fail-closed. Missing accounts are not cached.
+      Cached `account_byte_limit` / `account_rate_limit` / session and source
+      limits are policy inputs only; live byte remaining, rate allocation, and
+      session/source counts stay on the existing AccountBytes / rate allocator /
+      SessionState paths.
     → SessionState admission (`account_session_limit` is the cluster-wide
       authenticated-session cap; `account_srcip_limit` is the cluster-wide
       distinct-source-address cap. Both are evaluated in one Redis EVAL. Two HASH keys
