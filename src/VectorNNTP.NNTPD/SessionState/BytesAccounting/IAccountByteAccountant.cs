@@ -1,7 +1,7 @@
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 /// <summary>
-/// Process-local B-account download-quota bookkeeping. Redis and MySQL are used by
+/// Process-local download-quota bookkeeping. Redis and MySQL are used by
 /// AUTHINFO observe and the periodic reconciler, never on the NNTP write path.
 /// </summary>
 public interface IAccountByteAccountant
@@ -100,7 +100,7 @@ public readonly struct AccountByteCommittedBatch
     public long MysqlRemaining { get; }
 }
 
-/// <summary>No-op accountant for tests and identities that are not B-accounts.</summary>
+/// <summary>No-op accountant for tests and unauthenticated identities.</summary>
 public sealed class NullAccountByteAccountant : IAccountByteAccountant
 {
     /// <summary>Shared no-op instance.</summary>

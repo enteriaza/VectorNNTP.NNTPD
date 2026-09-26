@@ -47,7 +47,8 @@ public sealed class NntpReaderAuthenticationTests
         Assert.False(session.Authorization.AuthorizedTransit);
         Assert.False(session.Authorization.ControlCancelPermitted);
         Assert.NotNull(session.AccountPolicy);
-        Assert.Equal(NntpAccountType.RateLimited, session.AccountPolicy!.AccountType);
+        Assert.Equal(0, session.AccountPolicy!.RateLimitBps);
+        Assert.True(session.AccountPolicy.ByteLimit > 0);
 
         await harness.WriteClientLineAsync("QUIT");
         await harness.ReadClientLineAsync();
@@ -605,16 +606,17 @@ public sealed class NntpReaderAuthenticationTests
     }
 
     [Fact]
-    public async Task AccountTypeB_IsByteLimited()
+    public async Task AuthenticatedAccount_ReceivesBothByteAndRatePolicies()
     {
         await using var harness = await AuthHarness.CreateAsync(
-            MemoryNntpUserRecordStore.Create("alice", "secret", accountType: 'B', byteLimit: 1000));
+            MemoryNntpUserRecordStore.Create("alice", "secret", rateLimitBps: 240, byteLimit: 1000));
         var session = harness.CreateSession();
         var run = session.RunAsync();
         await harness.ReadGreetingAsync();
         await harness.AuthenticateAsync("alice", "secret");
-        Assert.Equal(NntpAccountType.ByteLimited, session.AccountPolicy!.AccountType);
-        Assert.Equal(1000, session.AccountPolicy.ByteLimit);
+        Assert.Equal(1000, session.AccountPolicy!.ByteLimit);
+        Assert.Equal(240, session.AccountPolicy.RateLimitBps);
+        Assert.True(session.AccountPolicy.RequiresRateTracking);
         await harness.WriteClientLineAsync("QUIT");
         await harness.ReadClientLineAsync();
         await run;

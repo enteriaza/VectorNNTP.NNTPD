@@ -214,7 +214,8 @@ public sealed class MySqlNntpCredentialValidator
             mechanism,
             record.AccountName,
             clientIp,
-            record.AccountType,
+            record.ByteLimit,
+            record.RateLimitBps,
             record.CustomerId);
         return NntpAuthenticationResult.Success(
             record.AccountName,

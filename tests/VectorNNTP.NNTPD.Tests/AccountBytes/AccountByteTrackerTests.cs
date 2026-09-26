@@ -297,23 +297,23 @@ public sealed class AccountByteTrackerTests
     }
 
     [Fact]
-    public async Task ObserveRemaining_RateAccount_ReturnsNull()
+    public async Task ObserveRemaining_SeededAccount_UsesMysql()
     {
         var (tracker, durable, _) = Create();
-        durable.SeedRateAccount("alice", 999);
-        Assert.Null(await tracker.ObserveRemainingAsync("alice"));
+        durable.SeedByteAccount("alice", 999);
+        Assert.Equal(999, await tracker.ObserveRemainingAsync("alice"));
     }
 
     [Fact]
-    public async Task NonByteAccount_DropsInFlightWithoutDurableChange()
+    public async Task Consume_AppliesToEverySeededAccount()
     {
         var (tracker, durable, cluster) = Create();
-        durable.SeedRateAccount("alice", 500);
+        durable.SeedByteAccount("alice", 500);
         tracker.CreateSink("alice").ObserveCopied(40);
         await tracker.ReconcileAsync();
-        Assert.Equal(500, durable.Remaining("alice"));
+        Assert.Equal(460, durable.Remaining("alice"));
         Assert.Equal(0, tracker.InFlightBytes("alice"));
-        Assert.Equal(0, cluster.ApplyCalls);
+        Assert.Equal(1, cluster.ApplyCalls);
     }
 
     [Fact]

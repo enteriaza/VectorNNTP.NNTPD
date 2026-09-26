@@ -117,7 +117,7 @@ public sealed class NntpResponseWriter : IAsyncDisposable
     internal bool ChannelAllowsSynchronousContinuations { get; }
 
     /// <summary>
-    /// Installs the B-account byte sink. Counting starts after the next successful
+    /// Installs the account byte sink. Counting starts after the next successful
     /// <c>PipeWriter.Advance</c>, never at Channel enqueue.
     /// </summary>
     public void SetByteSink(IAccountByteSink sink)

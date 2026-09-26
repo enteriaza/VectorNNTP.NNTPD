@@ -140,9 +140,9 @@ When both `Nntpd:NewsmasterUser` and `Nntpd:NewsmasterPassword` are set, AUTHINF
 
 When either value is omitted, both must be omitted and the newsmaster path is inactive. Reader AUTHINFO still uses MySQL `nntpusers` through the existing NntpDB pool (`CompositeNntpAuthenticationProvider`). Transit peer AUTHINFO remains a separate peer-credential check and never falls through to MySQL.
 
-### `nntpusers` byte quota (`account_type` B)
+### `nntpusers` remaining-byte quota
 
-`account_type = 'B'` (or `'b'`) is byte-oriented. `account_byte_limit` is **remaining** download quota, not an original configured cap:
+Every authenticated reader account has `account_byte_limit`. It is **remaining** download quota, not an original configured cap, and it applies independently of `account_rate_limit`. `account_type` is not selected for NNTP policy.
 
 | Remaining | Meaning |
 |-----------|---------|
@@ -150,7 +150,7 @@ When either value is omitted, both must be omitted and the newsmaster path is in
 | `0` | Exhausted |
 | `< 0` | Invalid / never allowed |
 
-There is no `0 = unlimited` meaning for B accounts. An effectively unlimited B account is provisioned with a sufficiently large positive remaining value (for example 10 TB). R accounts are rate-oriented and are not subject to this byte-quota accounting. Newsmaster/admin identities (`AccountPolicy` null) and unauthenticated or Transit-only sessions do not participate.
+NULL remaining maps to `0` (exhausted). There is no `0 = unlimited` meaning. An effectively unlimited account is provisioned with a sufficiently large positive remaining value (for example 10 TB). Newsmaster/admin identities (`AccountPolicy` null) and unauthenticated or Transit-only sessions do not participate.
 
 **Quota top-up is not automatic.** `account_byte_limit` is remaining quota. Redis is conservative and will never autonomously increase an existing remaining-byte value. Changing MySQL remaining while `nntpd:bytes:{sha256hex(accountName)}` exists leaves effective remaining at `min(Redis, MySQL)`. An exhausted account (`MySQL=0`, `Redis=0`) that is topped up in MySQL stays exhausted until AccountBytes Redis state is deleted. This repository has no account-management writer for `account_byte_limit` (the only SQL write is consume). After an external MySQL top-up the operator must invalidate cluster state:
 
@@ -161,11 +161,11 @@ The next observe/APPLY then sees a missing Redis key and may initialize from cur
 
 Live remaining is **not** the 10-second AUTHINFO user-record cache. `AccountBytes` observes Redis cluster state when present and otherwise the durable MySQL remaining. Effective remaining is `min(Redis, MySQL)` when Redis exists. Redis (`nntpd:bytes:{sha256(accountName)}`, HASH `remaining` plus per-batch `b:{batchId}` marks, at most 256 marks) never has a key TTL and is never reconstructed from an original provisioned quota when the key is missing. Redis APPLY is idempotent per batch id: remaining is floored to `min(current, mysqlRemainingAfter)` and `consumed` is not subtracted. The same batch id is a no-op. `Redis < MySQL` is a valid conservative state and is **never repaired upward**. After APPLY is idempotent, a duplicate retry cannot create an artificial Redis-low. Redis-low can still occur when a later node's lower `mysqlRemainingAfter` arrived first, or when an operator raises MySQL remaining while the Redis key still exists. A MySQL top-up is visible on Redis only after the key is deleted so the next APPLY can initialize from current durable remaining. APPLY is not a sync-from-MySQL.
 
-Accounting is batched on the `SessionStateService` ~10-second cycle (lease renewal and byte APPLY share that scheduler; there is no second AccountBytes timer). It is not byte-exact at the instant of exhaustion. Expected overshoot is roughly the bytes those B sessions can send in one interval plus one in-flight NNTP response (for example about 1.25 GiB for one 1 Gbit/s session). MySQL stores durable remaining (`CASE`/`GREATEST`-style clamp at zero). Redis stores cluster-wide live remaining and may only initialize from durable remaining, decrease, or reconcile downward. When an account has both SessionState ownership and a committed byte batch, one Redis EVAL performs renewal and APPLY.
+Accounting is batched on the `SessionStateService` ~10-second cycle (lease renewal and byte APPLY share that scheduler; there is no second AccountBytes timer). It is not byte-exact at the instant of exhaustion. Expected overshoot is roughly the bytes those authenticated sessions can send in one interval plus one in-flight NNTP response (for example about 1.25 GiB for one 1 Gbit/s session). MySQL stores durable remaining (`CASE`/`GREATEST`-style clamp at zero). Redis stores cluster-wide live remaining and may only initialize from durable remaining, decrease, or reconcile downward. When an account has both SessionState ownership and a committed byte batch, one Redis EVAL performs renewal and APPLY.
 
-### `nntpusers` rate limit (`account_type` R)
+### `nntpusers` rate limit
 
-`account_type = 'R'` (or `'r'`) is rate-oriented. `account_rate_limit` is the **account-wide aggregate outbound download rate in bits per second (bps)**. It is not megabits and not a per-session cap:
+Every authenticated reader account also has `account_rate_limit`. It is the **account-wide aggregate outbound download rate in bits per second (bps)** and applies independently of remaining-byte quota. It is not megabits and not a per-session cap. Example: `account_byte_limit = 10,000,000,000` and `account_rate_limit = 2,400` means 10 GB remaining **and** 2,400 bps = 300 B/s aggregate. Both apply at once.
 
 | `account_rate_limit` | Meaning |
 |----------------------|---------|
@@ -178,11 +178,11 @@ Accounting is batched on the `SessionStateService` ~10-second cycle (lease renew
 | `< 0` | Treated as unlimited (same sentinel as `0`) |
 | `1`–`7` | Positive but `floor(bps / 8) = 0`; blocked (`cap = -1`), never unlimited |
 
-This is not the B-account remaining-byte rule. `account_rate_limit = 0` does **not** mean exhausted. R accounts do not consume `account_byte_limit`. The divisor is the live cluster-wide authenticated session count, never `account_session_limit`. Example: `10,000,000` bps (10 Mbps) and session limit 10 with only 2 sessions active is 625,000 bytes/sec each, not 125,000. When the third of 10 disconnects, remaining sessions move from 125,000 to `floor(1,250,000 / 7)` = 178,571 bytes/sec without reconnecting.
+This is not the remaining-byte rule. `account_rate_limit = 0` does **not** mean exhausted; it means unlimited rate while byte quota still applies. NULL rate maps to `0` (unlimited). The divisor is the live cluster-wide authenticated session count, never `account_session_limit`. Example: `10,000,000` bps (10 Mbps) and session limit 10 with only 2 sessions active is 625,000 bytes/sec each, not 125,000. When the third of 10 disconnects, remaining sessions move from 125,000 to `floor(1,250,000 / 7)` = 178,571 bytes/sec without reconnecting.
 
 Allocation is cluster-wide: five sessions on two nodes still split `10,000,000` bps five ways after every node has observed the new total. SessionState's existing session HASH is the only counter. Local sessions are updated on admit/release immediately when this node owns every session. A session that joins a node while other nodes still hold the previous share is blocked. Established local sessions may only drop, using the last applied split to bound what remotes may still be sending. Equal shares resume when this node owns every remaining session. Remote disconnect is safe under-use until the next renew. There is no `RateLimitService` and no Redis operation on the write path.
 
-The limiter sits under TLS/DEFLATE, so it throttles octets written toward the socket. Byte accounting (B) remains at uncompressed `PipeWriter.Advance`. The two policies do not mix.
+The limiter sits under TLS/DEFLATE, so it throttles octets written toward the socket. Byte accounting remains at uncompressed `PipeWriter.Advance`. The two policies apply together and do not disable each other.
 
 Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
 

@@ -6,7 +6,7 @@ namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
 internal interface IAccountByteDurableStore
 {
     /// <summary>
-    /// Atomically subtracts <paramref name="bytes"/> from a B-account, clamping at zero.
+    /// Atomically subtracts <paramref name="bytes"/> from remaining quota, clamping at zero.
     /// </summary>
     ValueTask<AccountByteConsumeResult> ConsumeAsync(
         string accountName,

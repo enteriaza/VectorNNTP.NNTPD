@@ -133,12 +133,6 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
                     return new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0);
                 }
 
-                if (!locked.Value.IsByteAccount)
-                {
-                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-                    return new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0);
-                }
-
                 var current = ClampNonNegative(locked.Value.Remaining);
                 var consumed = bytes > current ? current : bytes;
                 await using (var update = _connection.CreateCommand())
@@ -157,7 +151,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
                         cancellationToken)
                     .ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                var remaining = after is { IsByteAccount: true } row
+                var remaining = after is { } row
                     ? ClampNonNegative(row.Remaining)
                     : 0L;
                 return new AccountByteConsumeResult(AccountByteConsumeStatus.Consumed, remaining, consumed);
@@ -193,11 +187,6 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
                 return new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0);
             }
 
-            if (!row.Value.IsByteAccount)
-            {
-                return new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0);
-            }
-
             return new AccountByteConsumeResult(
                 AccountByteConsumeStatus.Consumed,
                 ClampNonNegative(row.Value.Remaining),
@@ -223,7 +212,13 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         return new NntpModeratorRow(id, pattern, address, account);
     }
 
-    /// <summary>Maps one <c>nntpusers</c> row. Flag columns are true only for <c>Y</c>. <c>account_rate_limit</c> is bits/sec.</summary>
+    /// <summary>
+    /// Maps one <c>nntpusers</c> row from <see cref="NntpUserQueries.SelectUserByName"/>.
+    /// Flag columns are true only for <c>Y</c>. NULL rate/byte limits map to <c>0</c>.
+    /// Ordinals: 0 pass, 1 salt, 2 iterations, 3 stored key, 4 server key, 5 plain,
+    /// 6 scram256, 7 rate bps, 8 byte remaining, 9 session limit, 10 srcip limit,
+    /// 11 enabled, 12 customer.
+    /// </summary>
     internal static NntpUserRecord MapUserRecord(MySqlDataReader reader, string accountName)
     {
         ArgumentNullException.ThrowIfNull(reader);
@@ -234,13 +229,12 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         var scramServerKey = ReadBinaryColumn(reader, 4);
         var allowAuthPlain = IsYesFlag(reader, 5);
         var allowAuthScram256 = IsYesFlag(reader, 6);
-        var accountType = ReadAccountType(reader, 7);
-        var rateLimitBps = reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8));
-        var byteLimit = reader.IsDBNull(9) ? 0L : ConvertByteLimit(reader.GetValue(9));
-        var sessionLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
-        var srcIpLimit = reader.IsDBNull(11) ? 0 : Convert.ToInt32(reader.GetValue(11));
-        var isEnabled = IsYesFlag(reader, 12);
-        var customerId = ReadCustomerId(reader, 13);
+        var rateLimitBps = reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7));
+        var byteLimit = reader.IsDBNull(8) ? 0L : ConvertByteLimit(reader.GetValue(8));
+        var sessionLimit = reader.IsDBNull(9) ? 0 : Convert.ToInt32(reader.GetValue(9));
+        var srcIpLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
+        var isEnabled = IsYesFlag(reader, 11);
+        var customerId = ReadCustomerId(reader, 12);
         return new NntpUserRecord(
             accountName,
             password,
@@ -250,7 +244,6 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             scramIterations,
             scramStoredKey,
             scramServerKey,
-            accountType,
             rateLimitBps,
             byteLimit,
             sessionLimit,
@@ -275,9 +268,8 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             return null;
         }
 
-        var accountType = ReadAccountType(reader, 0);
-        var remaining = reader.IsDBNull(1) ? 0L : ConvertByteLimit(reader.GetValue(1));
-        return new ByteQuotaRow(IsByteAccountType(accountType), remaining);
+        var remaining = reader.IsDBNull(0) ? 0L : ConvertByteLimit(reader.GetValue(0));
+        return new ByteQuotaRow(remaining);
     }
 
     /// <summary>
@@ -305,9 +297,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
 
     private static long ClampNonNegative(long value) => value < 0 ? 0 : value;
 
-    private static bool IsByteAccountType(char accountType) => accountType is 'B' or 'b';
-
-    private readonly record struct ByteQuotaRow(bool IsByteAccount, long Remaining);
+    private readonly record struct ByteQuotaRow(long Remaining);
 
     private static bool IsYesFlag(MySqlDataReader reader, int ordinal)
     {
@@ -317,23 +307,6 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         }
 
         return string.Equals(Convert.ToString(reader.GetValue(ordinal)), "Y", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static char ReadAccountType(MySqlDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal))
-        {
-            return 'R';
-        }
-
-        var value = reader.GetValue(ordinal);
-        return value switch
-        {
-            char ch => ch,
-            string text when text.Length > 0 => text[0],
-            byte b => (char)b,
-            _ => 'R',
-        };
     }
 
     private static string ReadCustomerId(MySqlDataReader reader, int ordinal)

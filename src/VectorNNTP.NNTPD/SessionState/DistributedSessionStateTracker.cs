@@ -566,7 +566,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 return true;
             }
 
-            // A finite session limit or R-account rate share consumes a cluster-wide
+            // A finite session limit or positive rate share consumes a cluster-wide
             // slot; the source-IP hot path must not skip Redis.
             if (sessionLimit > 0 || rateLimitBps > 0)
             {

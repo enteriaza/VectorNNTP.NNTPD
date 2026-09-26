@@ -32,10 +32,10 @@ public sealed class AccountRateFormulaTests
         var record = MemoryNntpUserRecordStore.Create(
             "alice",
             "x",
-            accountType: 'R',
             sessionLimit: 1,
             srcIpLimit: 1,
-            rateLimitBps: 240);
+            rateLimitBps: 240,
+            byteLimit: 10_000_000_000);
         var policy = NntpAccountPolicy.FromRecord(record);
         Assert.Equal(240, record.RateLimitBps);
         Assert.True(policy.RequiresRateTracking);

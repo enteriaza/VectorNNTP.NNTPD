@@ -38,14 +38,14 @@ public interface INntpDbConnection : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Atomically subtracts <paramref name="bytes"/> from a B-account
+    /// Atomically subtracts <paramref name="bytes"/> from
     /// <c>account_byte_limit</c>, clamping at zero. Remaining is never negative.
     /// </summary>
     /// <param name="accountName">Plaintext wire username. Bound as <c>@account_name</c>.</param>
     /// <param name="bytes">Non-negative byte count to subtract.</param>
     /// <param name="cancellationToken">Token used to cancel the transaction.</param>
     /// <returns>
-    /// Found/B-account status, bytes actually subtracted, and remaining after the update.
+    /// Found status, bytes actually subtracted, and remaining after the update.
     /// </returns>
     ValueTask<AccountByteConsumeResult> ConsumeAccountBytesAsync(
         string accountName,

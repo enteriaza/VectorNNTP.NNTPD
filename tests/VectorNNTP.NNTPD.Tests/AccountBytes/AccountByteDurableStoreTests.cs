@@ -45,14 +45,15 @@ public sealed class AccountByteDurableStoreTests
     }
 
     [Fact]
-    public async Task InMemory_NonByteAndMissing()
+    public async Task InMemory_MissingAccount_DoesNotConsume()
     {
         var store = new InMemoryAccountByteDurableStore();
-        store.SeedRateAccount("rate", 100);
-        Assert.Equal(AccountByteConsumeStatus.NotByteAccount, (await store.ConsumeAsync("rate", 10)).Status);
-        Assert.Equal(100, store.Remaining("rate"));
+        store.SeedByteAccount("rate", 100);
+        var consumed = await store.ConsumeAsync("rate", 10);
+        Assert.Equal(AccountByteConsumeStatus.Consumed, consumed.Status);
+        Assert.Equal(90, consumed.Remaining);
         Assert.Equal(AccountByteConsumeStatus.AccountNotFound, (await store.ConsumeAsync("ghost", 10)).Status);
-        Assert.Equal(AccountByteConsumeStatus.NotByteAccount, (await store.QueryRemainingAsync("rate")).Status);
+        Assert.Equal(AccountByteConsumeStatus.Consumed, (await store.QueryRemainingAsync("rate")).Status);
         Assert.Equal(AccountByteConsumeStatus.AccountNotFound, (await store.QueryRemainingAsync("ghost")).Status);
     }
 
@@ -69,8 +70,8 @@ public sealed class AccountByteDurableStoreTests
     public async Task FakeNntpDb_ConsumeAndQuery_MatchInMemorySemantics()
     {
         var factory = new FakeNntpDbConnectionFactory();
-        factory.Users["alice"] = MemoryNntpUserRecordStore.Create("alice", "pw", accountType: 'B', byteLimit: 1000);
-        factory.Users["rate"] = MemoryNntpUserRecordStore.Create("rate", "pw", accountType: 'R', byteLimit: 50);
+        factory.Users["alice"] = MemoryNntpUserRecordStore.Create("alice", "pw", byteLimit: 1000);
+        factory.Users["rate"] = MemoryNntpUserRecordStore.Create("rate", "pw", rateLimitBps: 2_400, byteLimit: 50);
         await using var connection = (FakeNntpDbConnection)await factory.OpenAsync("Server=x;Database=y", CancellationToken.None);
 
         var consumed = await connection.ConsumeAccountBytesAsync("alice", 100, CancellationToken.None);
@@ -86,9 +87,9 @@ public sealed class AccountByteDurableStoreTests
         Assert.Equal(0, zero.Remaining);
         Assert.Equal(0, zero.Consumed);
 
-        Assert.Equal(
-            AccountByteConsumeStatus.NotByteAccount,
-            (await connection.ConsumeAccountBytesAsync("rate", 1, CancellationToken.None)).Status);
+        var rate = await connection.ConsumeAccountBytesAsync("rate", 1, CancellationToken.None);
+        Assert.Equal(AccountByteConsumeStatus.Consumed, rate.Status);
+        Assert.Equal(49, rate.Remaining);
         Assert.Equal(
             AccountByteConsumeStatus.AccountNotFound,
             (await connection.ConsumeAccountBytesAsync("ghost", 1, CancellationToken.None)).Status);
@@ -115,7 +116,7 @@ public sealed class AccountByteDurableStoreTests
     {
         Assert.Contains("WHEN account_byte_limit > @bytes THEN account_byte_limit - @bytes", NntpUserQueries.ConsumeAccountBytes, StringComparison.Ordinal);
         Assert.Contains("ELSE 0 END", NntpUserQueries.ConsumeAccountBytes, StringComparison.Ordinal);
-        Assert.Contains("account_type IN ('B', 'b')", NntpUserQueries.ConsumeAccountBytes, StringComparison.Ordinal);
+        Assert.DoesNotContain("account_type", NntpUserQueries.ConsumeAccountBytes, StringComparison.Ordinal);
         Assert.DoesNotContain("account_byte_limit = account_byte_limit - @bytes", NntpUserQueries.ConsumeAccountBytes, StringComparison.Ordinal);
         Assert.Contains("FOR UPDATE", NntpUserQueries.SelectByteQuotaForUpdate, StringComparison.Ordinal);
     }

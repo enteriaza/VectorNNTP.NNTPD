@@ -4,7 +4,7 @@ using VectorNNTP.NNTPD.NntpDb;
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
 /// <summary>
-/// Process-local B-account byte accumulator and crash-safe batch reconciler.
+/// Process-local account byte accumulator and crash-safe batch reconciler.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -164,12 +164,12 @@ internal sealed class AccountByteTracker : IAccountByteAccountant
             AccountByteLogMessages.DurableQueryFailed(_logger, ex, accountName);
         }
 
-        if (durable is { IsByteAccount: false })
+        if (durable is { Succeeded: false })
         {
             return null;
         }
 
-        var mysqlRemaining = durable is { IsByteAccount: true } row
+        var mysqlRemaining = durable is { Succeeded: true } row
             ? AccountByteEngine.ClampNonNegative(row.Remaining)
             : (long?)null;
 
@@ -377,7 +377,7 @@ internal sealed class AccountByteTracker : IAccountByteAccountant
             return;
         }
 
-        if (!result.IsByteAccount)
+        if (!result.Succeeded)
         {
             Interlocked.Exchange(ref ledger.InFlight, 0);
             ledger.BatchId = null;

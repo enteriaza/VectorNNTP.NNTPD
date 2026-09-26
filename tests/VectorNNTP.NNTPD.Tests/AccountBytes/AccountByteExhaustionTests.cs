@@ -2,7 +2,9 @@ using System.Buffers;
 using System.IO.Pipelines;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -173,13 +175,50 @@ public sealed class AccountByteExhaustionTests
     }
 
     [Fact]
-    public async Task RateAccount_DoesNotExhaust()
+    public async Task Authinfo_ZeroBytes_2400Bps_AttachesBoth_WithoutWriteOnObserve()
     {
         var durable = new InMemoryAccountByteDurableStore();
         var cluster = new InMemoryAccountByteStore();
-        durable.SeedRateAccount("alice", 0);
+        durable.SeedByteAccount("alice", 0);
+        var bytes = new AccountByteTracker(durable, cluster, NullLogger<AccountByteTracker>.Instance);
+        var rates = new AccountRateAllocator();
+        var admission = new InMemorySessionStateTracker(rates);
+        var cap = new FakeCap();
+        await using var duplex = new ExhaustionDuplex(
+            CreateProvider("alice", byteLimit: 0, rateLimitBps: 2_400),
+            bytes);
+        var session = duplex.CreateSession(admission, rates, cap);
+        var run = session.RunAsync();
+        await duplex.ReadGreetingAsync();
+        await duplex.WriteClientLineAsync("AUTHINFO USER alice");
+        Assert.StartsWith("381 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        await duplex.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.StartsWith("281 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.True(session.Authentication.IsAuthenticated);
+        Assert.True(bytes.IsExhausted("alice"));
+        Assert.Equal(2_400, session.AccountPolicy!.RateLimitBps);
+        Assert.Equal(300, cap.MaxSendBytesPerSecond);
+        Assert.Equal(0, cluster.ApplyCalls);
+        Assert.Equal(0, durable.ConsumeCalls);
+        Assert.True(cluster.ObserveCalls >= 1);
+        Assert.True(durable.QueryCalls >= 1);
+
+        await duplex.WriteClientLineAsync("HELP");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(300, cap.MaxSendBytesPerSecond);
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ZeroBytes_PositiveRate_Still281Then400()
+    {
+        var durable = new InMemoryAccountByteDurableStore();
+        var cluster = new InMemoryAccountByteStore();
+        durable.SeedByteAccount("alice", 0);
         var tracker = new AccountByteTracker(durable, cluster, NullLogger<AccountByteTracker>.Instance);
-        await using var duplex = new ExhaustionDuplex(CreateProvider("alice", byteLimit: 0, type: 'R'), tracker);
+        await using var duplex = new ExhaustionDuplex(
+            CreateProvider("alice", byteLimit: 0, rateLimitBps: 10_000_000),
+            tracker);
         var session = duplex.CreateSession();
         var run = session.RunAsync();
         await duplex.ReadGreetingAsync();
@@ -187,16 +226,19 @@ public sealed class AccountByteExhaustionTests
         await duplex.ReadClientLineAsync();
         await duplex.WriteClientLineAsync("AUTHINFO PASS secret");
         Assert.StartsWith("281 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.True(tracker.IsExhausted("alice"));
+        Assert.Equal(10_000_000, session.AccountPolicy!.RateLimitBps);
         await duplex.WriteClientLineAsync("DATE");
-        Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
-        await duplex.WriteClientLineAsync("QUIT");
-        await duplex.ReadClientLineAsync();
-        await run;
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private static INntpAuthenticationProvider CreateProvider(string user, long byteLimit, char type = 'B')
+    private static INntpAuthenticationProvider CreateProvider(
+        string user,
+        long byteLimit,
+        int rateLimitBps = 0)
     {
-        var record = MemoryNntpUserRecordStore.Create(user, "secret", accountType: type, byteLimit: byteLimit);
+        var record = MemoryNntpUserRecordStore.Create(user, "secret", rateLimitBps: rateLimitBps, byteLimit: byteLimit);
         var policy = NntpAccountPolicy.FromRecord(record);
         return new ScriptedProvider(user, policy);
     }
@@ -247,17 +289,23 @@ public sealed class AccountByteExhaustionTests
             _accountant = accountant;
         }
 
-        public NntpSession CreateSession()
+        public NntpSession CreateSession(
+            ISessionStateTracker? admission = null,
+            IAccountRateAllocator? rates = null,
+            IOutboundRateCap? outboundRate = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
                 _serverToClient.Writer,
-                ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)));
+                ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+                outboundRate);
             return new NntpSession(
                 connection,
                 NullLogger<NntpSession>.Instance,
                 authenticationProvider: _provider,
-                accountBytes: _accountant);
+                sessionAdmission: admission,
+                accountBytes: _accountant,
+                accountRates: rates);
         }
 
         public async Task ReadGreetingAsync()
@@ -298,12 +346,16 @@ public sealed class AccountByteExhaustionTests
         public PipeNntpConnection(
             PipeReader input,
             PipeWriter output,
-            ConnectionClientIdentity identity)
+            ConnectionClientIdentity identity,
+            IOutboundRateCap? outboundRate = null)
         {
             Input = input;
             Output = output;
             ClientIdentity = identity;
+            OutboundRate = outboundRate;
         }
+
+        public IOutboundRateCap? OutboundRate { get; }
 
         public PipeReader Input { get; }
 
@@ -366,5 +418,12 @@ public sealed class AccountByteExhaustionTests
             _cts.Dispose();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FakeCap : IOutboundRateCap
+    {
+        public long MaxSendBytesPerSecond { get; private set; }
+
+        public void UpdateMaxSendBytesPerSecond(long bytesPerSecond) => MaxSendBytesPerSecond = bytesPerSecond;
     }
 }

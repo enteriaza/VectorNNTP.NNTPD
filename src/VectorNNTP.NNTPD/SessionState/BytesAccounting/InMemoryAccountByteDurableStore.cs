@@ -1,4 +1,3 @@
-using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
@@ -18,25 +17,14 @@ internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
     /// <summary>Gets how many remaining-quota reads ran.</summary>
     public int QueryCalls { get; private set; }
 
-    /// <summary>Adds or replaces a B-account remaining quota.</summary>
+    /// <summary>Adds or replaces remaining quota for an account.</summary>
     public void SeedByteAccount(string accountName, long remaining)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         ArgumentOutOfRangeException.ThrowIfNegative(remaining);
         lock (_gate)
         {
-            _accounts[accountName] = new AccountRow(NntpAccountType.ByteLimited, remaining);
-        }
-    }
-
-    /// <summary>Adds a rate-oriented account that consume must not mutate.</summary>
-    public void SeedRateAccount(string accountName, long remaining)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
-        ArgumentOutOfRangeException.ThrowIfNegative(remaining);
-        lock (_gate)
-        {
-            _accounts[accountName] = new AccountRow(NntpAccountType.RateLimited, remaining);
+            _accounts[accountName] = new AccountRow(remaining);
         }
     }
 
@@ -73,12 +61,6 @@ internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
                     new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0));
             }
 
-            if (row.Type != NntpAccountType.ByteLimited)
-            {
-                return ValueTask.FromResult(
-                    new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0));
-            }
-
             var consumed = bytes > row.Remaining ? row.Remaining : bytes;
             row.Remaining -= consumed;
             return ValueTask.FromResult(
@@ -107,12 +89,6 @@ internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
                     new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0));
             }
 
-            if (row.Type != NntpAccountType.ByteLimited)
-            {
-                return ValueTask.FromResult(
-                    new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0));
-            }
-
             return ValueTask.FromResult(
                 new AccountByteConsumeResult(AccountByteConsumeStatus.Consumed, row.Remaining, 0));
         }
@@ -120,13 +96,7 @@ internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
 
     private sealed class AccountRow
     {
-        public AccountRow(NntpAccountType type, long remaining)
-        {
-            Type = type;
-            Remaining = remaining;
-        }
-
-        public NntpAccountType Type { get; }
+        public AccountRow(long remaining) => Remaining = remaining;
 
         public long Remaining { get; set; }
     }

@@ -240,12 +240,6 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
                     new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0));
             }
 
-            if (record.AccountType is not ('B' or 'b'))
-            {
-                return ValueTask.FromResult(
-                    new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0));
-            }
-
             var current = record.ByteLimit < 0 ? 0 : record.ByteLimit;
             var consumed = bytes > current ? current : bytes;
             var remaining = current - consumed;
@@ -271,12 +265,6 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         {
             return ValueTask.FromResult(
                 new AccountByteConsumeResult(AccountByteConsumeStatus.AccountNotFound, 0, 0));
-        }
-
-        if (record.AccountType is not ('B' or 'b'))
-        {
-            return ValueTask.FromResult(
-                new AccountByteConsumeResult(AccountByteConsumeStatus.NotByteAccount, 0, 0));
         }
 
         var remaining = record.ByteLimit < 0 ? 0 : record.ByteLimit;
@@ -313,7 +301,6 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
             record.ScramIterations,
             record.ScramStoredKey,
             record.ScramServerKey,
-            record.AccountType,
             record.RateLimitBps,
             byteLimit,
             record.SessionLimit,

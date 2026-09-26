@@ -298,10 +298,10 @@ public sealed class NntpSession
     /// <summary>Gets the AUTHINFO SASL service, if registered.</summary>
     public NntpSaslService? SaslService { get; }
 
-    /// <summary>Gets the B-account byte-quota accountant. No-op when the identity is not a B account.</summary>
+    /// <summary>Gets the account byte-quota accountant. No-op when unauthenticated.</summary>
     public IAccountByteAccountant AccountBytes { get; }
 
-    /// <summary>Gets the R-account rate allocator. No-op when the identity is not an R account.</summary>
+    /// <summary>Gets the account rate allocator. No-op when the rate is unlimited.</summary>
     public IAccountRateAllocator AccountRates { get; }
 
     /// <summary>Gets the unique id used for admission tracking.</summary>
@@ -423,8 +423,9 @@ public sealed class NntpSession
     }
 
     /// <summary>
-    /// Attaches B-account output accounting after AUTHINFO success and before the 281.
+    /// Attaches output accounting after AUTHINFO success and before the 281.
     /// Live remaining is observed from Redis/MySQL, not from the cached policy snapshot.
+    /// Every authenticated account participates.
     /// </summary>
     internal async ValueTask AttachByteAccountingAsync(
         NntpResponseWriter response,
@@ -432,7 +433,7 @@ public sealed class NntpSession
     {
         ArgumentNullException.ThrowIfNull(response);
         var policy = _accountPolicy;
-        if (policy is null || policy.AccountType != NntpAccountType.ByteLimited)
+        if (policy is null)
         {
             return;
         }
@@ -464,14 +465,13 @@ public sealed class NntpSession
         response.SetByteSink(AccountBytes.CreateSink(policy.Username));
     }
 
-    /// <summary>Gets whether this B-account session must reject the next command.</summary>
+    /// <summary>Gets whether this authenticated session must reject the next command.</summary>
     internal bool IsByteQuotaExhausted
     {
         get
         {
             var policy = _accountPolicy;
-            return policy is { AccountType: NntpAccountType.ByteLimited }
-                && AccountBytes.IsExhausted(policy.Username);
+            return policy is not null && AccountBytes.IsExhausted(policy.Username);
         }
     }
 

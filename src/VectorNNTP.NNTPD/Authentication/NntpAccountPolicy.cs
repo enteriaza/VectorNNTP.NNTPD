@@ -4,19 +4,20 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// Authenticated account policy copied from <c>nntpusers</c> after a successful credential check.
 /// </summary>
 /// <remarks>
+/// Every authenticated account has both remaining-byte and rate policies.
 /// Session and source-IP limits are enforced by
 /// <see cref="VectorNNTP.NNTPD.SessionState.ISessionStateTracker"/>.
 /// <see cref="RateLimitBps"/> is enforced by
 /// <see cref="VectorNNTP.NNTPD.SessionState.RateLimiting.IAccountRateAllocator"/>
 /// after SessionState admission. <see cref="ByteLimit"/> is the AUTHINFO-time
-/// remaining-byte snapshot for B accounts and is not enforced here.
+/// remaining-byte snapshot and is not enforced here; live remaining is observed by
+/// <see cref="VectorNNTP.NNTPD.SessionState.BytesAccounting.IAccountByteAccountant"/>.
 /// </remarks>
 public sealed class NntpAccountPolicy
 {
     /// <summary>Initializes a new account policy snapshot.</summary>
     public NntpAccountPolicy(
         string username,
-        NntpAccountType accountType,
         int rateLimitBps,
         long byteLimit,
         int sessionLimit,
@@ -25,7 +26,6 @@ public sealed class NntpAccountPolicy
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         Username = username;
-        AccountType = accountType;
         RateLimitBps = rateLimitBps;
         ByteLimit = byteLimit;
         SessionLimit = sessionLimit;
@@ -36,22 +36,20 @@ public sealed class NntpAccountPolicy
     /// <summary>Gets the plaintext wire username.</summary>
     public string Username { get; }
 
-    /// <summary>Gets the billing/enforcement model.</summary>
-    public NntpAccountType AccountType { get; }
-
     /// <summary>
     /// Gets <c>account_rate_limit</c> in bits per second.
-    /// Examples: <c>240</c> = 240 bps, <c>1_000_000</c> = 1 Mbps, <c>10_000_000</c> = 10 Mbps.
+    /// Examples: <c>240</c> = 240 bps, <c>2_400</c> = 2,400 bps = 300 B/s,
+    /// <c>1_000_000</c> = 1 Mbps, <c>10_000_000</c> = 10 Mbps.
     /// <c>0</c> is unlimited. Negative values are treated as unlimited.
     /// </summary>
     public int RateLimitBps { get; }
 
     /// <summary>
     /// Gets the AUTHINFO-time snapshot of <c>account_byte_limit</c>.
-    /// For B accounts this is remaining bytes at last user-record load: <c>0</c> is
-    /// exhausted, not unlimited. Live remaining is observed by
+    /// This is remaining bytes at last user-record load: <c>0</c> is exhausted,
+    /// not unlimited. Live remaining is observed by
     /// <see cref="VectorNNTP.NNTPD.SessionState.BytesAccounting.IAccountByteAccountant"/> and must not
-    /// be taken from this cached snapshot. R accounts do not participate in byte accounting.
+    /// be taken from this cached snapshot.
     /// </summary>
     public long ByteLimit { get; }
 
@@ -66,20 +64,15 @@ public sealed class NntpAccountPolicy
 
     /// <summary>
     /// Gets whether cluster admission must run: session limit, source-IP limit,
-    /// or an R-account rate share that needs a cluster session count.
+    /// or a positive rate that needs a cluster session count.
     /// </summary>
     public bool RequiresAdmission => SessionLimit > 0 || SrcIpLimit > 0 || RequiresRateTracking;
 
     /// <summary>
-    /// Gets whether this R-account has a positive <c>account_rate_limit</c>.
+    /// Gets whether this account has a positive <c>account_rate_limit</c>.
     /// <c>0</c> remains unlimited and does not participate in rate allocation.
     /// </summary>
-    public bool RequiresRateTracking =>
-        AccountType == NntpAccountType.RateLimited && RateLimitBps > 0;
-
-    /// <summary>Maps a database <c>account_type</c> octet. Only <c>R</c>/<c>r</c> are rate-limited.</summary>
-    public static NntpAccountType MapAccountType(char accountType) =>
-        accountType is 'R' or 'r' ? NntpAccountType.RateLimited : NntpAccountType.ByteLimited;
+    public bool RequiresRateTracking => RateLimitBps > 0;
 
     /// <summary>Builds policy from a validated user record.</summary>
     public static NntpAccountPolicy FromRecord(NntpUserRecord record)
@@ -87,7 +80,6 @@ public sealed class NntpAccountPolicy
         ArgumentNullException.ThrowIfNull(record);
         return new(
             record.AccountName,
-            MapAccountType(record.AccountType),
             record.RateLimitBps,
             record.ByteLimit,
             record.SessionLimit,

@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 namespace VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 /// <summary>
-/// Process-local map of R-account sessions to outbound caps. Cluster session
+/// Process-local map of account sessions to outbound caps. Cluster session
 /// counts come from SessionState admit/release/renew; the write path never
 /// consults this type.
 /// </summary>

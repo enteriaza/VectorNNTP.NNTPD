@@ -29,7 +29,7 @@ public interface ISessionStateTracker
 
     /// <summary>
     /// Admits a session and, when <paramref name="rateLimitBps"/> (bits per second)
-    /// is greater than zero, tracks the cluster session count for R-account rate allocation.
+    /// is greater than zero, tracks the cluster session count for rate allocation.
     /// </summary>
     ValueTask<SessionAdmissionResult> TryAdmitAsync(
         string accountName,

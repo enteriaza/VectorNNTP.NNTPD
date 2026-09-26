@@ -5,7 +5,7 @@ namespace VectorNNTP.NNTPD.SessionState;
 
 /// <summary>
 /// Sole periodic scheduler for SessionState: lease renewal, source-address
-/// ownership, B-account byte-quota reconciliation, and R-account rate observation.
+/// ownership, byte-quota reconciliation, and rate observation.
 /// </summary>
 /// <remarks>
 /// This service is a scheduler. It does not accept connections, authenticate clients,
@@ -13,7 +13,7 @@ namespace VectorNNTP.NNTPD.SessionState;
 /// MySQL remaining-quota consumes, then asks <see cref="ISessionStateLeaseManager"/>
 /// to renew currently active local ownership. When an account has both distributed
 /// ownership and a committed byte batch, renewal and Redis APPLY share one EVAL.
-/// B accounts with pending bytes but no SessionState ownership receive APPLY-only.
+/// Accounts with pending bytes but no SessionState ownership receive APPLY-only.
 /// Each account with distributed ownership is one Redis operation covering session
 /// count, every locally owned source IP, and byte state when present. Renewal is
 /// node liveness, not client activity: idle authenticated sessions keep consuming

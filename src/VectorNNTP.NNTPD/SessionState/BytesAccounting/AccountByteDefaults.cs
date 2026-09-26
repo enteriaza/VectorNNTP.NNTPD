@@ -1,6 +1,6 @@
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
 
-/// <summary>Operational timings for B-account byte-quota reconciliation.</summary>
+/// <summary>Operational timings for account byte-quota reconciliation.</summary>
 /// <remarks>
 /// There is no AccountBytes timer. <see cref="SessionStateService"/> owns the
 /// single ~10-second cycle. Batching is not byte-exact. Redis is never used on

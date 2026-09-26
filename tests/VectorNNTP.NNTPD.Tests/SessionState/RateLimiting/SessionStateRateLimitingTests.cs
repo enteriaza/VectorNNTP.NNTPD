@@ -17,27 +17,26 @@ public sealed class SessionStateRateLimitingTests
     [Fact]
     public void Policy_RateZero_IsUnlimitedAndDoesNotRequireTracking()
     {
-        var policy = new NntpAccountPolicy("alice", NntpAccountType.RateLimited, 0, 0, 10, 0, "c");
+        var policy = new NntpAccountPolicy("alice", 0, 0, 10, 0, "c");
         Assert.False(policy.RequiresRateTracking);
         Assert.True(policy.RequiresAdmission);
-        Assert.Equal(NntpAccountType.RateLimited, NntpAccountPolicy.MapAccountType('R'));
-        Assert.Equal(NntpAccountType.RateLimited, NntpAccountPolicy.MapAccountType('r'));
+        Assert.Equal(0, policy.RateLimitBps);
+        Assert.Equal(0, policy.ByteLimit);
     }
 
     [Fact]
-    public void Policy_ByteAccount_DoesNotTrackRateEvenWhenBpsIsSet()
+    public void Policy_PositiveRate_RequiresTrackingRegardlessOfByteLimit()
     {
-        var policy = new NntpAccountPolicy("alice", NntpAccountType.ByteLimited, 10, 100, 10, 0, "c");
-        Assert.False(policy.RequiresRateTracking);
-        Assert.Equal(NntpAccountType.ByteLimited, NntpAccountPolicy.MapAccountType('B'));
-        Assert.Equal(NntpAccountType.ByteLimited, NntpAccountPolicy.MapAccountType('b'));
-        Assert.Equal(NntpAccountType.ByteLimited, NntpAccountPolicy.MapAccountType('X'));
+        var policy = new NntpAccountPolicy("alice", 10, 100, 10, 0, "c");
+        Assert.True(policy.RequiresRateTracking);
+        Assert.Equal(10, policy.RateLimitBps);
+        Assert.Equal(100, policy.ByteLimit);
     }
 
     [Fact]
-    public void Policy_RateAccount_RequiresAdmissionWhenOnlyRateIsSet()
+    public void Policy_PositiveRate_RequiresAdmissionWhenSessionLimitsAreZero()
     {
-        var policy = new NntpAccountPolicy("alice", NntpAccountType.RateLimited, 240, 999, 0, 0, "c");
+        var policy = new NntpAccountPolicy("alice", 240, 999, 0, 0, "c");
         Assert.True(policy.RequiresRateTracking);
         Assert.True(policy.RequiresAdmission);
     }

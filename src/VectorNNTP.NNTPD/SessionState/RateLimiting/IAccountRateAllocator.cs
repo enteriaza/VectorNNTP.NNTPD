@@ -1,13 +1,13 @@
 namespace VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 /// <summary>
-/// Process-local R-account rate allocation. SessionState observes the cluster
+/// Process-local account rate allocation. SessionState observes the cluster
 /// session count; this type updates every registered local session cap.
 /// </summary>
 public interface IAccountRateAllocator
 {
     /// <summary>
-    /// Registers a connected R-account session. <paramref name="rateBps"/> is
+    /// Registers a connected session. <paramref name="rateBps"/> is
     /// <c>account_rate_limit</c> in bits per second, not Mbps. Applies the last
     /// observed cluster count, or one session when none has been observed yet.
     /// </summary>

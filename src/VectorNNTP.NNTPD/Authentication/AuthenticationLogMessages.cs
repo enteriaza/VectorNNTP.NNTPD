@@ -6,13 +6,14 @@ internal static partial class AuthenticationLogMessages
     [LoggerMessage(EventId = 2302, Level = LogLevel.Debug, Message = "Authentication rejected: invalid credentials mechanism={Mechanism} user={Username} ip={ClientIp}")]
     public static partial void InvalidCredentials(ILogger logger, string mechanism, string username, string clientIp);
 
-    [LoggerMessage(EventId = 2303, Level = LogLevel.Information, Message = "Authentication succeeded mechanism={Mechanism} user={Username} ip={ClientIp} type={AccountType} customer={CustomerId}")]
+    [LoggerMessage(EventId = 2303, Level = LogLevel.Information, Message = "Authentication succeeded mechanism={Mechanism} user={Username} ip={ClientIp} byteLimit={ByteLimit} rateLimitBps={RateLimitBps} customer={CustomerId}")]
     public static partial void Succeeded(
         ILogger logger,
         string mechanism,
         string username,
         string clientIp,
-        char accountType,
+        long byteLimit,
+        int rateLimitBps,
         string customerId);
 
     [LoggerMessage(EventId = 2304, Level = LogLevel.Error, Message = "Authentication backend failure mechanism={Mechanism} user={Username}")]

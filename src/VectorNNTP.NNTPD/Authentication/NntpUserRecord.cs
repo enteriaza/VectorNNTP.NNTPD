@@ -6,7 +6,8 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// <remarks>
 /// <see cref="AccountPassword"/>, <see cref="ScramStoredKey"/>, <see cref="ScramServerKey"/>,
 /// and <see cref="ScramSalt"/> are sensitive. They must not be logged or copied onto the
-/// session identity snapshot.
+/// session identity snapshot. <c>account_type</c> is not selected for NNTP policy.
+/// Every account has both remaining-byte and rate fields.
 /// </remarks>
 public sealed class NntpUserRecord
 {
@@ -20,7 +21,6 @@ public sealed class NntpUserRecord
         int scramIterations,
         ReadOnlyMemory<byte> scramStoredKey,
         ReadOnlyMemory<byte> scramServerKey,
-        char accountType,
         int rateLimitBps,
         long byteLimit,
         int sessionLimit,
@@ -38,7 +38,6 @@ public sealed class NntpUserRecord
         ScramIterations = scramIterations;
         ScramStoredKey = scramStoredKey;
         ScramServerKey = scramServerKey;
-        AccountType = accountType;
         RateLimitBps = rateLimitBps;
         ByteLimit = byteLimit;
         SessionLimit = sessionLimit;
@@ -71,19 +70,17 @@ public sealed class NntpUserRecord
     /// <summary>Gets SCRAM ServerKey. Sensitive.</summary>
     public ReadOnlyMemory<byte> ScramServerKey { get; }
 
-    /// <summary>Gets <c>account_type</c>. NULL at map time becomes <c>R</c>.</summary>
-    public char AccountType { get; }
-
     /// <summary>
     /// Gets <c>account_rate_limit</c> in bits per second.
     /// Examples: <c>240</c> = 240 bps, <c>1_000_000</c> = 1 Mbps, <c>10_000_000</c> = 10 Mbps.
-    /// <c>0</c> is unlimited. This is not megabits.
+    /// <c>0</c> is unlimited. NULL at map time becomes <c>0</c>. This is not megabits.
     /// </summary>
     public int RateLimitBps { get; }
 
     /// <summary>
-    /// Gets <c>account_byte_limit</c>. For B accounts this is remaining bytes
-    /// (<c>0</c> = exhausted). This snapshot is not live cluster remaining.
+    /// Gets <c>account_byte_limit</c> remaining bytes.
+    /// <c>0</c> is exhausted. NULL at map time becomes <c>0</c>. This snapshot is not
+    /// live cluster remaining.
     /// </summary>
     public long ByteLimit { get; }
 
