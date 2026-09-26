@@ -819,7 +819,7 @@ Exactly one ACK or NACK per settlement lease. The publisher cannot settle. A cra
 
 ### Explicit deferral
 
-Not implemented: Transit `TAKETHIS`, Listener/TLS serving, ACME, Cloudflare, MySQL account polling, control-plane capacity.
+Phase 7 implements Listener/TLS serving. Still not implemented: Transit `TAKETHIS`, ACME, Cloudflare, MySQL account polling, control-plane capacity.
 
 ### Phase 6 discrepancies
 
@@ -828,4 +828,84 @@ Not implemented: Transit `TAKETHIS`, Listener/TLS serving, ACME, Cloudflare, MyS
 3. **InvalidRequest without `requestId`.** Protocol still publishes when replyable. NNTPD will ignore a response that has no matching `RequestId` header. Settlement remains NACK `requeue=false` after confirm. Identities are not synthesized to make NNTPD accept the response.
 4. **`RetentionRejected`.** Still no terminal response (retryable). Not in the protocol outcome enum.
 5. **Confirm API.** Old publisher also used `BasicPublishAsync` on a confirm-tracking channel. Phase 6 keeps that RabbitMQ.Client 7.2 behavior behind `IBackFillerRabbitMqPublishChannel.PublishConfirmedAsync` so tests can fail confirm independently of enqueue.
+
+## Phase 7 — cache Listener / TLS article serving
+
+Implemented in `src/VectorNNTP.BackFiller/Listener`. This phase serves the Phase 5 retained payload advertised by the Phase 6 `cache://{Fqdn}:{BindPort}/{md5}` Success URI.
+
+### Ownership
+
+| Resource | Owner |
+|---|---|
+| TCP listen sockets and accepted connections | `CacheListenerService` |
+| Per-connection parse/write/ReceiptAck | `CacheListenerSession` |
+| TLS server certificate (already provisioned PFX) | `ICacheListenerCertificateSource` |
+| Retained article bytes | `ArticleRetentionAuthority` (unchanged) |
+| Read lease during Found + ReceiptAck | `CacheListenerRetentionHandler` |
+
+The listener does not own RabbitMQ, NNTP providers, Article Work settlement, or response publishing.
+
+Hosted-service order: RabbitMQ → NNTP registry → sweep → **cache Listener** → response publisher → Article Work consumers. Stop is reverse: the listener stops accept and drains connections while retention is still available.
+
+Listener states: `Created → Starting → Running → Retiring → Stopped`. Startup fails if no TLS certificate is available or no endpoint can be bound.
+
+### Exact protocol
+
+This is a **binary framed** protocol (not CRLF / NNTP). Every frame is a 16-byte big-endian header plus payload:
+
+`version(1) opcode(1) headerLength(2) requestId(4) payloadLength(4) reserved(4)`
+
+| Opcode | Direction | Payload |
+|---|---|---|
+| `GetRequest` `0x01` | client | 32 lowercase ASCII hex MD5 bytes |
+| `GetResponseFound` `0x11` | server | exact retained article bytes |
+| `GetResponseNotFound` `0x12` | server | `0x00` |
+| `GetResponseError` `0x13` | server | big-endian uint16 error code |
+| `GetReceiptAck` `0x21` | client | empty |
+
+`RequestId` must be non-zero. `headerLength` must be 16. `reserved` must be 0. Version must be `0x01`.
+
+Fatal inbound frames (forced session close): unsupported version, invalid header length, invalid frame length. Other parse failures emit `GetResponseError` and continue.
+
+Per-connection bounds (same as the old worker): 64 outstanding RequestIds, 8 concurrent handlers, 64 outbound responses. Phase 1 `MaxQueuedFoundPayloadBytes` and `ParserAccumulationMaxBytes` are enforced. Exceeding queued Found bytes returns `InternalError`.
+
+### Receipt acknowledgement and leases
+
+1. Valid GetRequest → `TryGetByMd5` (existing Phase 5 helper; no second MD5 implementation).
+2. Found → hold `ArticleLookupLease` so payload memory stays valid.
+3. Write Found header then payload with no mutation.
+4. Wait for `GetReceiptAck` with the same RequestId, bounded by `AwaitingReceiptAckTimeout`.
+5. Release the lease. **Do not evict the retained article.**
+
+Missing and expired identities both return `GetResponseNotFound`. An early ReceiptAck is remembered until the Found write completes. ReceiptAck timeout or session shutdown releases the lease without removing the article.
+
+### TLS
+
+TLS is mandatory (old listener is TLS-only). `Tls12 | Tls13`, no client certificate, no revocation check. Handshake bounded by `TlsHandshakeTimeout`. I/O no-progress bounded by `IoProgressTimeout` (this is the stall timeout while assembling a frame; there is no separate Phase 1 parser-timeout setting).
+
+Certificate boundary: `DirectoryCacheListenerCertificateSource` loads `{CertificateDirectory}/backfiller-listener.pfx` with `LetsEncrypt.PfxExportPassword`. It does not issue or renew certificates. ACME remains deferred. Startup fails if the PFX is missing or has no private key. Tests inject `ICacheListenerCertificateSource`.
+
+Private keys are loaded with `UserKeySet | Exportable` on Windows (Schannel cannot serve `EphemeralKeySet`) and `EphemeralKeySet | Exportable` elsewhere. The listener prefers `SslStreamCertificateContext` and falls back to `ServerCertificate` when context creation fails, matching the old worker's self-signed path.
+
+### Bind addresses
+
+Empty tokens → IPv4 `Any` + IPv6 `Any`. Wildcard tokens (`*`, `+`, `0.0.0.0`, `::`) do the same. Explicit addresses bind only that family. IPv6 sockets are IPv6-only (`DualMode = false`). If an implicit wildcard family is unsupported by the OS, that family is skipped; an explicit address bind failure fails startup.
+
+`MaxActiveConnections` is enforced after accept: excess sockets are closed immediately.
+
+### Shutdown
+
+Stop accept, cancel in-flight handshake/session tokens, drain admitted connections, close listen sockets, dispose the loaded certificate. Repeated dispose is safe. Shutdown does not remove retained articles.
+
+### Explicit deferral
+
+Not implemented: Transit `TAKETHIS`, ACME issuance/renewal, Cloudflare DNS, MySQL accounts, control-plane capacity, Listener-completion eviction of retained articles.
+
+### Phase 7 discrepancies
+
+1. **No CRLF grammar.** The user prompt mentioned CRLF. The old implementation and tests define a binary 16-byte header protocol. Phase 7 follows that authoritative wire contract.
+2. **No `MarkListenerCompleted` eviction.** Old handler marked listener completion after Found write + ReceiptAck so retention could drop the article when Transit had also completed. Phase 5 has no completion channels. Phase 7 releases the read lease only.
+3. **Certificate source.** Old worker used ACME-backed `BackFillerCertificateState`. Phase 7 loads an already-provisioned PFX or a test-injected certificate. No accept-all TLS on the server; clients in tests disable validation.
+4. **BackgroundService.** Old listener was a `BackgroundService`. Phase 7 is an `IHostedService` with the same local state machine used by RabbitMQ / consumers / publisher. Not NNTPD `ApplicationLifecycle`.
+
 

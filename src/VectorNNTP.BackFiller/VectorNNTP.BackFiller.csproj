@@ -5,7 +5,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.BackFiller</RootNamespace>
     <AssemblyName>VectorNNTP.BackFiller</AssemblyName>
-    <Description>Usenet article recovery worker. Phase 6 Article Work response publication, publisher confirms, and Success ACK.</Description>
+    <Description>Usenet article recovery worker. Phase 7 TLS cache Listener serving retained articles.</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

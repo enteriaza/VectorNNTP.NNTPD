@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
@@ -25,8 +26,9 @@ public static class BackFillerServiceCollectionExtensions
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
     /// connection cannot be established. Registers <see cref="NntpProviderRegistry"/> after
     /// the connection owner, then <see cref="ArticleRetentionSweepService"/>, then
-    /// <see cref="ArticleWorkResponsePublisher"/>, then <see cref="ArticleWorkConsumerService"/>.
-    /// Transit, listener, accounts, and certificates are not registered in Phase 6.
+    /// <see cref="CacheListenerService"/>, then <see cref="ArticleWorkResponsePublisher"/>,
+    /// then <see cref="ArticleWorkConsumerService"/>. Transit, ACME, accounts, and
+    /// control-plane capacity are not registered in Phase 7.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -92,6 +94,14 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<ILogger<ArticleRetentionSweepService>>()));
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleRetentionSweepService>());
+        builder.Services.TryAddSingleton<ICacheListenerCertificateSource, DirectoryCacheListenerCertificateSource>();
+        builder.Services.AddSingleton(static provider => new CacheListenerService(
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<ICacheListenerCertificateSource>(),
+            provider.GetRequiredService<IArticleRetentionAuthority>(),
+            provider.GetRequiredService<ILogger<CacheListenerService>>()));
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<CacheListenerService>());
         builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
         builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
             provider.GetRequiredService<IBackFillerRabbitMqService>(),

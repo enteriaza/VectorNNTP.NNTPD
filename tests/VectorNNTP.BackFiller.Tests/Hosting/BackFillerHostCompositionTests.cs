@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -6,6 +8,7 @@ using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Logging;
+using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
@@ -25,12 +28,13 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(5, hosted.Length);
+        Assert.Equal(6, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[1]);
         Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[2]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[3]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[4]);
+        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[4]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[5]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
@@ -104,14 +108,26 @@ public sealed class BackFillerHostCompositionTests
     private static IHost CreateHost(FakeBackFillerRabbitMqConnectionFactory? factory = null)
     {
         var builder = Host.CreateApplicationBuilder([]);
-        builder.Configuration.AddInMemoryCollection(BackFillerTestOptions.CreateValidConfigurationPairs());
+        var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
+        pairs["BackFiller:BindPort"] = GetFreePort().ToString();
+        builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
             factory ?? new FakeBackFillerRabbitMqConnectionFactory());
+        builder.Services.AddSingleton<ICacheListenerCertificateSource>(new StaticCacheListenerCertificateSource());
         builder.ConfigureBackFillerLogging();
         builder.ConfigureBackFillerPlatformHosting();
         builder.AddBackFillerHosting();
         return builder.Build();
+    }
+
+    private static int GetFreePort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 }
