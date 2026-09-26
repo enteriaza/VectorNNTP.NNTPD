@@ -108,6 +108,46 @@ public sealed class NntpProviderRegistrySnapshotTests
         Assert.Equal(8, replaced.Provider.MaxSessions);
     }
 
+    [Fact]
+    public async Task Stop_uses_one_shared_grace_token_across_pools()
+    {
+        var catalog = new ProviderConfigurationCatalog();
+        var transport = new ScriptedNntpTransportFactory();
+        NntpSessionPoolTests.EnqueueReadyServers(transport, count: 2);
+        await using var registry = new NntpProviderRegistry(
+            catalog,
+            transport,
+            NntpSessionOptions.Default with
+            {
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                CommandTimeout = TimeSpan.FromSeconds(2),
+                ReceiveTimeout = TimeSpan.FromSeconds(2),
+            },
+            TimeSpan.FromSeconds(30),
+            NullLogger<NntpProviderRegistry>.Instance);
+        await registry.ApplySnapshotAsync(
+            [CreateDefinition(), CreateDefinition("Eweka", "eweka.example.test")],
+            CancellationToken.None);
+        Assert.True(registry.TryGetPool("Giganews", out var giganews));
+        Assert.True(registry.TryGetPool("Eweka", out var eweka));
+        var first = await giganews.AcquireAsync(CancellationToken.None);
+        var second = await eweka.AcquireAsync(CancellationToken.None);
+
+        using var expired = new CancellationTokenSource();
+        await expired.CancelAsync();
+        await registry.StopAsync(expired.Token).WaitAsync(TimeSpan.FromSeconds(2));
+
+        await first.DisposeAsync();
+        await second.DisposeAsync();
+        Assert.False(registry.TryGetPool("Giganews", out _));
+        Assert.False(registry.TryGetPool("Eweka", out _));
+
+        var connects = transport.ConnectAttempts.Count;
+        await registry.ApplySnapshotAsync([CreateDefinition()], CancellationToken.None);
+        Assert.False(registry.TryGetPool("Giganews", out _));
+        Assert.Equal(connects, transport.ConnectAttempts.Count);
+    }
+
     private static NntpProviderRegistry CreateRegistry(
         ProviderConfigurationCatalog catalog,
         ScriptedNntpTransportFactory transport)

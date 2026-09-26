@@ -326,7 +326,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
                 return;
             }
 
-            await ReplaceChannelAsync(CancellationToken.None, startup: false).ConfigureAwait(false);
+            await ReplaceChannelAsync(_runCts.Token, startup: false).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

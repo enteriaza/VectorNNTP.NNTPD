@@ -54,6 +54,12 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
         lock (_gate)
         {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                pool = null!;
+                return false;
+            }
+
             if (!_catalog.TryGetProvider(backbone, out var provider))
             {
                 pool = null!;
@@ -90,6 +96,11 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
         var warming = new List<NntpSessionPool>();
         lock (_gate)
         {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
+
             if (_catalog is ProviderConfigurationCatalog live)
             {
                 live.Publish(providers);
@@ -179,26 +190,41 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// One shared grace token covers every pool. Pools are not given a fresh
+    /// <see cref="BackFillerShutdownRuntimeOptions.GracePeriod"/> budget each.
+    /// </remarks>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         using var grace = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         grace.CancelAfter(_shutdownGrace);
-        await DisposeAsync().ConfigureAwait(false);
+        await DisposeCoreAsync(grace.Token).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
+    {
+        using var grace = new CancellationTokenSource(_shutdownGrace);
+        await DisposeCoreAsync(grace.Token).ConfigureAwait(false);
+    }
+
+    private async Task DisposeCoreAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
         {
             return;
         }
 
-        foreach (var pool in _pools.Values)
+        List<NntpSessionPool> pools;
+        lock (_gate)
         {
-            await pool.DisposeAsync().ConfigureAwait(false);
+            pools = [.. _pools.Values];
+            _pools.Clear();
         }
 
-        _pools.Clear();
+        foreach (var pool in pools)
+        {
+            await pool.DrainAndDisposeAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 }

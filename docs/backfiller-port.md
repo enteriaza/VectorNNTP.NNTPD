@@ -547,7 +547,7 @@ RabbitMQ `MinConnections` / `MaxConnections` remain **RabbitMQ connection-pool p
 - Connect happens on first need (or warmup). One TCP session is not opened per ARTICLE when idle capacity exists.
 - Return vs retire is exclusive and exactly-once (`NntpSessionLease`).
 - Double-dispose of a lease is a no-op.
-- Shutdown cancels waiters, waits for active leases up to `BackFillerRuntimeOptions.Shutdown.GracePeriod`, then force-retires remaining live sessions. The grace period is the existing BackFiller shutdown budget, not a second global timeout.
+- Shutdown cancels waiters, then `NntpProviderRegistry` applies **one** shared grace token (`Shutdown.GracePeriod` linked with the host stop token) to every pool drain. A cancelled token force-retires remaining live sessions. Pools do not each receive a fresh full grace budget; sequential per-pool `DisposeAsync` waits would exceed the host shutdown budget.
 
 ### Authentication and TLS
 
@@ -652,7 +652,7 @@ FQDN is `BackFillerRuntimeOptions.Fqdn`. Port is `BindPort`. MD5 is not URL-enco
 - Sweep walks insertion order and stops at the first not-yet-expired entry (uniform TTL ⇒ FIFO).
 - Each entry has a generation. After expiry removal, a later insert of the same Message-ID is a new generation; a stale sweep cannot delete it because insert/sweep share the authority gate.
 
-Hosted-service order: RabbitMQ → NNTP registry → sweep → Article Work consumers. Stop is reverse: consumers drain, then sweep `BeginShutdown`.
+Hosted-service order: RabbitMQ → MySQL account control plane → NNTP registry → sweep → Cache Listener → response publisher → Article Work consumers. Stop is reverse. Consumers retire before the publisher, registry, and retention they may still need.
 
 ### Memory accounting
 
@@ -1153,5 +1153,28 @@ Retention is unchanged. If an article was already retained when shutdown cancels
 - If grace expires while settlement is still running, channel dispose can win; the broker redelivers. That is at-least-once, not a silent ACK.
 - `ScriptedNntpServer.BlockArticle` is a test-side hold; production NNTP I/O observes the work token.
 - Transit, ACME, Cloudflare, and live infrastructure tests remain out of scope.
+
+## Phase 11 — production-readiness audit
+
+Phase 11 did not add a feature. It audited the Phase 0–10 implementation for lifecycle, ownership, secrets, protocol, and shutdown defects.
+
+### Production defects fixed
+
+1. **`NntpProviderRegistry` shutdown budget.** `StopAsync` created a grace token and then called `DisposeAsync()`, which ignored that token and waited `DisposeAsync()` (full grace) on each pool in sequence. Two or more providers could exceed `Shutdown.GracePeriod` / host `ShutdownTimeout`. Stop/dispose now share one grace token and drain every pool with `DrainAndDisposeAsync` under that token.
+2. **Publisher rebuild cancellation.** Connection-replacement rebuild called `ReplaceChannelAsync(CancellationToken.None)`. `DisposeAsync` cancelled `_runCts` and then awaited that rebuild, so a blocked publish-channel create could hang shutdown. Rebuild now uses `_runCts.Token`.
+3. **Registry use-after-stop.** After dispose, `TryGetPool` / `ApplySnapshotAsync` could create new pools (the account poll can still run until that hosted service stops later). Both now no-op when the registry is disposed.
+
+### Documented as intentional (not changed)
+
+- Empty successful MySQL snapshots are valid and publish; query/refresh **exceptions** keep last-known-good. `keepalive` is parsed and unused (DATE deferred).
+- Listener TLS: TLS 1.2/1.3, no client certificate, `X509RevocationMode.NoCheck` (already documented).
+- Provider TLS uses platform certificate validation (no accept-all callback).
+- Fire-and-forget Listener ReceiptAck timers are tracked in `_receiptTimeouts` and cancelled on session completion.
+
+### Remaining risks
+
+- A control-plane **replacement** drain still waits on the refresh token (in-flight leases must finish or ARTICLE timeouts fire). That is the Phase 8 “active lease survives replacement” contract, not a second shutdown budget.
+- Grace-expired RabbitMQ settlement can lose the ACK/NACK race to channel close (at-least-once redelivery).
+- ACME, Cloudflare, Transit `TAKETHIS`, and live broker/MySQL/NNTP tests remain out of scope.
 
 

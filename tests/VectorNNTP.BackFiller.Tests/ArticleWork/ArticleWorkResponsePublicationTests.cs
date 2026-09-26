@@ -327,6 +327,24 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Fact]
+    public async Task Shutdown_cancels_a_blocked_publish_channel_rebuild()
+    {
+        await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
+        context.Factory.CreatePublishChannelStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        context.Factory.BlockCreatePublishChannel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        context.Factory.Connected = secondConnected;
+        context.Factory.LastConnection!.SimulateLost();
+        await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await context.Factory.CreatePublishChannelStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var disposing = context.Publisher.DisposeAsync().AsTask();
+        await disposing.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(ArticleWorkResponsePublisherState.Stopped, context.Publisher.State);
+    }
+
+    [Fact]
     public async Task Shutdown_during_confirm_does_not_ack()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Wait);

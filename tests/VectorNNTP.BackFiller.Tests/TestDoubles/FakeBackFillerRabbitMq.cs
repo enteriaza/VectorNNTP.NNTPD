@@ -31,6 +31,10 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
     public FakePublishConfirmBehavior DefaultPublishConfirmBehavior { get; set; } =
         FakePublishConfirmBehavior.Wait;
 
+    public TaskCompletionSource? BlockCreatePublishChannel { get; set; }
+
+    public TaskCompletionSource? CreatePublishChannelStarted { get; set; }
+
     public async Task<IBackFillerRabbitMqConnection> ConnectAsync(
         BackFillerRabbitMqRuntimeOptions options,
         string connectionName,
@@ -68,6 +72,8 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
         {
             IsOpen = !ReturnUnusableConnection,
             DefaultPublishConfirmBehavior = DefaultPublishConfirmBehavior,
+            BlockCreatePublishChannel = BlockCreatePublishChannel,
+            CreatePublishChannelStarted = CreatePublishChannelStarted,
         };
 
         LastConnection = connection;
