@@ -20,6 +20,9 @@ artifacts/
 ## Experimental / historical knowledge base (not production)
 .artifacts/
 
+## BenchmarkDotNet default output (do not use; configure ArtifactsPath under .artifacts/)
+BenchmarkDotNet.Artifacts/
+
 ## OS
 Thumbs.db
 Desktop.ini
