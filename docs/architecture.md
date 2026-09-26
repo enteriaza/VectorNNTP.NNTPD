@@ -58,7 +58,7 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - Optional: PlaceholderApplicationService (tests only)     │
 │  - RedisService (shared ConnectionMultiplexer)              │
 │  - RabbitMqService (critical broker connection lifecycle)   │
-│  - RabbitMqTopologyService (BackFiller article-retrieval)   │
+│  - RabbitMqTopologyService (BackFiller + storage.requests)  │
 │  - NntpDbService (lifecycle + SELECT 1; MySqlConnector pool)│
 │  - NewsgroupCatalogueService (immutable snapshot + 5 min)   │
 │  - ModeratorCatalogueService (nntpmoderators snapshot)      │
@@ -553,9 +553,14 @@ Startup order places `RedisService` after Cloudflare DNS reconciliation and befo
 
 `RabbitMqService` is generic infrastructure. It owns the top-level `RabbitMQ` configuration, one process-wide AMQP connection, a monotonic connection generation, and application-level replacement after connectivity loss. It does not declare exchanges, queues, or bindings, and it does not publish or consume messages.
 
-`RabbitMqTopologyService` is the next layer. It owns declaration of the fixed BackFiller article-retrieval topology and does not own connection lifecycle, reconnect, credentials, publishers, or consumers. Startup order is `RedisService` → `RabbitMqService` → `RabbitMqTopologyService` → `NntpDbService`. Topology declaration is fail-closed: missing current connection, rejected exchange/queue/bind, or incompatible existing entities (including a classic queue where quorum is required) prevent `Running`. Declarations use RabbitMQ's normal idempotent declare/bind operations. NNTPD never deletes, purges, or mutates existing entities to "fix" them.
+`RabbitMqTopologyService` is the next layer. It owns declaration of the required article-retrieval topology and does not own connection lifecycle, reconnect, credentials, publishers, or consumers. Startup order is `RedisService` → `RabbitMqService` → `RabbitMqTopologyService` → `NntpDbService`. Topology declaration is fail-closed: missing current connection, rejected exchange/queue/bind, or incompatible existing entities (including a classic queue where quorum is required) prevent `Running`. Declarations use RabbitMQ's normal idempotent declare/bind operations. NNTPD never deletes, purges, or mutates existing entities to "fix" them.
 
-The twelve provider identifiers are application constants (`Abavia`, `Altopia`, `BaseIP`, `Eweka`, `Elbracht`, `Giganews`, `GTT`, `Highwinds`, `ItsHosted`, `Novia`, `UExpress`, `UsenetNode1`). Entity names follow BackFiller's legacy rule `grabbers.{provider.ToLowerInvariant()}` for the exchange, queue, and routing key. Each exchange is durable fanout (not auto-delete). Each queue is durable, non-exclusive, not auto-delete, and declared with `x-queue-type=quorum`. The queue is bound to its exchange with that same routing key. NNTPD does not consume these queues.
+The topology has two namespaces:
+
+- `grabbers.<backbone>` — BackFiller article-retrieval requests for the twelve backbone providers (`Abavia`, `Altopia`, `BaseIP`, `Eweka`, `Elbracht`, `Giganews`, `GTT`, `Highwinds`, `ItsHosted`, `Novia`, `UExpress`, `UsenetNode1`). Entity names follow BackFiller's legacy rule `grabbers.{provider.ToLowerInvariant()}` for the exchange, queue, and routing key.
+- `storage.requests` — internal storage article-retrieval requests. This is not a BackFiller provider and is not generated from the `grabbers.*` rule. Exchange, queue, and routing key are exactly `storage.requests`.
+
+Each endpoint is a durable fanout exchange (not auto-delete), a durable non-exclusive non-auto-delete quorum queue (`x-queue-type=quorum`), and a binding that uses the same name as the routing key. NNTPD does not consume these queues. This phase does not define an RPC contract or a storage response format.
 
 Connection replacement does not redeclare topology in this phase. Client automatic recovery and topology recovery remain disabled. Durable broker entities are assumed to survive generation `N` → `N+1` on the same cluster. `RabbitMqTopologyService` does not subscribe to `ConnectionReplaced` and does not run a second recovery loop. Reconciliation after broker wipe or generation replacement is deferred until a later RPC/publisher phase.
 
@@ -648,7 +653,7 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 `NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. RabbitMQ binds from the top-level `RabbitMQ` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615. RabbitMQ lifecycle EventIds are 2800–2819. RabbitMQ topology EventIds are 2820–2823.
 
-Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), `Redis:Host`, and `RabbitMQ:Hosts`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs, then `RabbitMqService` establishes a usable broker connection, then `RabbitMqTopologyService` declares the BackFiller article-retrieval topology; any of those failures prevent `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
+Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), `Redis:Host`, and `RabbitMQ:Hosts`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs, then `RabbitMqService` establishes a usable broker connection, then `RabbitMqTopologyService` declares the BackFiller `grabbers.*` topology and the internal `storage.requests` topology; any of those failures prevent `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
 ## Testing strategy
 

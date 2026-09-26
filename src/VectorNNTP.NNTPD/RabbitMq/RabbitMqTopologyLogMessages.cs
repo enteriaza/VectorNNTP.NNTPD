@@ -6,23 +6,23 @@ internal static partial class RabbitMqTopologyLogMessages
     [LoggerMessage(
         EventId = 2820,
         Level = LogLevel.Information,
-        Message = "Establishing article-retrieval topology (providers={ProviderCount})")]
-    public static partial void Establishing(ILogger logger, int ProviderCount);
+        Message = "Establishing article-retrieval topology (endpoints={EndpointCount})")]
+    public static partial void Establishing(ILogger logger, int EndpointCount);
 
     [LoggerMessage(
         EventId = 2821,
         Level = LogLevel.Information,
-        Message = "Article-retrieval topology established (providers={ProviderCount}, generation={Generation})")]
-    public static partial void Established(ILogger logger, int ProviderCount, long Generation);
+        Message = "Article-retrieval topology established (endpoints={EndpointCount}, generation={Generation})")]
+    public static partial void Established(ILogger logger, int EndpointCount, long Generation);
 
     [LoggerMessage(
         EventId = 2822,
         Level = LogLevel.Error,
-        Message = "Article-retrieval topology declaration failed (provider={Provider}, exchange={Exchange}, queue={Queue})")]
+        Message = "Article-retrieval topology declaration failed (endpoint={Endpoint}, exchange={Exchange}, queue={Queue})")]
     public static partial void DeclarationFailed(
         ILogger logger,
         Exception exception,
-        string Provider,
+        string Endpoint,
         string Exchange,
         string Queue);
 

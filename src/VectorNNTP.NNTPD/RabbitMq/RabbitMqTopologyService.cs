@@ -3,14 +3,16 @@ using VectorNNTP.NNTPD.Core;
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Declares the fixed BackFiller article-retrieval exchanges, quorum queues, and bindings.
+/// Declares the required article-retrieval exchanges, quorum queues, and bindings.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This service owns application topology declaration only. <see cref="RabbitMqService"/>
-/// remains the sole connection lifecycle owner. The topology service obtains the current
-/// generation through <see cref="IRabbitMqService.TryGetCurrent"/> and opens one
-/// declare-only channel for the startup pass.
+/// This service owns application topology declaration only: the twelve BackFiller
+/// <c>grabbers.*</c> endpoints and the internal <c>storage.requests</c> endpoint.
+/// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
+/// topology service obtains the current generation through
+/// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel
+/// for the startup pass.
 /// </para>
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
@@ -76,7 +78,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Declares the twelve article-retrieval provider exchanges, quorum queues, and bindings.
+    /// Declares the twelve BackFiller endpoints and the internal <c>storage.requests</c> endpoint.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     /// <exception cref="InvalidOperationException">
@@ -84,7 +86,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
     /// </exception>
     internal async Task DeclareRequiredTopologyAsync(CancellationToken cancellationToken)
     {
-        var definitions = BackfillArticleRetrievalTopology.Definitions;
+        var definitions = ArticleRetrievalTopology.Required;
         RabbitMqTopologyLogMessages.Establishing(_logger, definitions.Count);
 
         if (!_rabbitMq.TryGetCurrent(out var handle))
@@ -94,7 +96,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
         }
 
         IRabbitMqTopologyChannel? channel = null;
-        BackfillArticleRetrievalTopologyDefinition? current = null;
+        RabbitMqArticleRetrievalEndpoint? current = null;
         try
         {
             channel = await handle.Connection
@@ -104,7 +106,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
             for (var i = 0; i < definitions.Count; i++)
             {
                 current = definitions[i];
-                await DeclareProviderAsync(channel, current, cancellationToken).ConfigureAwait(false);
+                await DeclareEndpointAsync(channel, current, cancellationToken).ConfigureAwait(false);
             }
 
             RabbitMqTopologyLogMessages.Established(_logger, definitions.Count, handle.Generation);
@@ -114,7 +116,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
             RabbitMqTopologyLogMessages.DeclarationFailed(
                 _logger,
                 ex,
-                current?.Provider ?? "(none)",
+                current?.ExchangeName ?? "(none)",
                 current?.ExchangeName ?? "(none)",
                 current?.QueueName ?? "(none)");
             throw;
@@ -128,9 +130,9 @@ public sealed class RabbitMqTopologyService : IApplicationService
         }
     }
 
-    private static async Task DeclareProviderAsync(
+    private static async Task DeclareEndpointAsync(
         IRabbitMqTopologyChannel channel,
-        BackfillArticleRetrievalTopologyDefinition definition,
+        RabbitMqArticleRetrievalEndpoint definition,
         CancellationToken cancellationToken)
     {
         await channel.ExchangeDeclareAsync(

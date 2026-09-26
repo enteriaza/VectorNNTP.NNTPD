@@ -1,5 +1,3 @@
-using RabbitMQ.Client;
-
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
@@ -27,7 +25,22 @@ internal sealed record BackfillArticleRetrievalTopologyDefinition(
     bool QueueExclusive,
     bool QueueAutoDelete,
     string RoutingKey,
-    IReadOnlyDictionary<string, object?> QueueArguments);
+    IReadOnlyDictionary<string, object?> QueueArguments)
+{
+    /// <summary>Projects this BackFiller definition onto the shared declare shape.</summary>
+    internal RabbitMqArticleRetrievalEndpoint ToEndpoint() =>
+        new(
+            ExchangeName,
+            ExchangeType,
+            ExchangeDurable,
+            ExchangeAutoDelete,
+            QueueName,
+            QueueDurable,
+            QueueExclusive,
+            QueueAutoDelete,
+            RoutingKey,
+            QueueArguments);
+}
 
 /// <summary>
 /// Fixed article-retrieval topology shared with VectorNNTP.BackFiller.
@@ -46,10 +59,10 @@ internal sealed record BackfillArticleRetrievalTopologyDefinition(
 internal static class BackfillArticleRetrievalTopology
 {
     /// <summary>Broker argument that selects the RabbitMQ queue type.</summary>
-    internal const string QueueTypeArgumentName = "x-queue-type";
+    internal const string QueueTypeArgumentName = RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName;
 
     /// <summary>Required queue type for every article-retrieval queue.</summary>
-    internal const string QuorumQueueType = "quorum";
+    internal const string QuorumQueueType = RabbitMqArticleRetrievalEndpoints.QuorumQueueType;
 
     /// <summary>
     /// Canonical BackFiller provider identifiers. Casing is significant and is not normalized.
@@ -100,22 +113,20 @@ internal static class BackfillArticleRetrievalTopology
                 continue;
             }
 
-            var entityName = BuildLegacyProviderEntityName(canonicalProvider);
+            var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(
+                BuildLegacyProviderEntityName(canonicalProvider));
             definitions.Add(new BackfillArticleRetrievalTopologyDefinition(
                 Provider: canonicalProvider,
-                ExchangeName: entityName,
-                ExchangeType: ExchangeType.Fanout,
-                ExchangeDurable: true,
-                ExchangeAutoDelete: false,
-                QueueName: entityName,
-                QueueDurable: true,
-                QueueExclusive: false,
-                QueueAutoDelete: false,
-                RoutingKey: entityName,
-                QueueArguments: new Dictionary<string, object?>(StringComparer.Ordinal)
-                {
-                    [QueueTypeArgumentName] = QuorumQueueType,
-                }));
+                ExchangeName: endpoint.ExchangeName,
+                ExchangeType: endpoint.ExchangeType,
+                ExchangeDurable: endpoint.ExchangeDurable,
+                ExchangeAutoDelete: endpoint.ExchangeAutoDelete,
+                QueueName: endpoint.QueueName,
+                QueueDurable: endpoint.QueueDurable,
+                QueueExclusive: endpoint.QueueExclusive,
+                QueueAutoDelete: endpoint.QueueAutoDelete,
+                RoutingKey: endpoint.RoutingKey,
+                QueueArguments: endpoint.QueueArguments));
         }
 
         return definitions;

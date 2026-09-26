@@ -15,7 +15,7 @@ namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 public sealed class RabbitMqTopologyServiceTests
 {
     [Fact]
-    public async Task StartAsync_DeclaresAllTwelveProviderTopologies_AsQuorumFanoutBindings()
+    public async Task StartAsync_DeclaresThirteenEndpoints_IncludingStorageRequests()
     {
         var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMqService(factory);
@@ -179,10 +179,14 @@ public sealed class RabbitMqTopologyServiceTests
 
     private static void AssertDeclaredTopology(FakeRabbitMqConnection connection, int expectedPasses)
     {
-        var definitions = BackfillArticleRetrievalTopology.Definitions;
-        Assert.Equal(12 * expectedPasses, connection.ExchangeDeclarations.Count);
-        Assert.Equal(12 * expectedPasses, connection.QueueDeclarations.Count);
-        Assert.Equal(12 * expectedPasses, connection.BindingDeclarations.Count);
+        var definitions = ArticleRetrievalTopology.Required;
+        Assert.Equal(13, definitions.Count);
+        Assert.Equal(13 * expectedPasses, connection.ExchangeDeclarations.Count);
+        Assert.Equal(13 * expectedPasses, connection.QueueDeclarations.Count);
+        Assert.Equal(13 * expectedPasses, connection.BindingDeclarations.Count);
+        Assert.Equal("storage.requests", definitions[^1].ExchangeName);
+        Assert.Equal("storage.requests", definitions[^1].QueueName);
+        Assert.Equal("storage.requests", definitions[^1].RoutingKey);
 
         for (var pass = 0; pass < expectedPasses; pass++)
         {
@@ -206,9 +210,9 @@ public sealed class RabbitMqTopologyServiceTests
                 Assert.NotNull(queue.Arguments);
                 Assert.Single(queue.Arguments);
                 Assert.True(queue.Arguments.TryGetValue(
-                    BackfillArticleRetrievalTopology.QueueTypeArgumentName,
+                    RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
                     out var queueType));
-                Assert.Equal(BackfillArticleRetrievalTopology.QuorumQueueType, queueType);
+                Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
 
                 var binding = connection.BindingDeclarations[offset + i];
                 Assert.Equal(definition.QueueName, binding.Queue);

@@ -26,6 +26,12 @@ public sealed class BackfillArticleRetrievalTopologyTests
         Assert.Equal(ExpectedProviders, BackfillArticleRetrievalTopology.Providers);
         Assert.Equal(12, BackfillArticleRetrievalTopology.Definitions.Count);
         Assert.Equal(ExpectedProviders, BackfillArticleRetrievalTopology.Definitions.Select(static d => d.Provider));
+        Assert.DoesNotContain("storage.requests", BackfillArticleRetrievalTopology.Providers, StringComparer.Ordinal);
+        Assert.DoesNotContain(
+            BackfillArticleRetrievalTopology.Definitions,
+            static definition =>
+                definition.ExchangeName == StorageArticleRetrievalTopology.EntityName
+                || definition.QueueName == StorageArticleRetrievalTopology.EntityName);
     }
 
     [Fact]
