@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Redis;
+using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.NntpDb;
@@ -127,6 +128,7 @@ internal static class TestHostFactory
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["Redis:Port"] = "6379",
+                ["RabbitMQ:Hosts:0"] = "127.0.0.1",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] = TestNntpDbConnectionString,
                 [$"{NntpdOptions.SectionName}:LogDir"] = NewTestLogDir(),
             });
@@ -135,6 +137,7 @@ internal static class TestHostFactory
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(localAssignee);
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
+        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         IsolateTransit(builder.Services);
 

@@ -57,6 +57,7 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - NntpTlsListenerService (implicit TLS accept/transport)   │
 │  - Optional: PlaceholderApplicationService (tests only)     │
 │  - RedisService (shared ConnectionMultiplexer)              │
+│  - RabbitMqService (critical broker connection lifecycle)   │
 │  - NntpDbService (lifecycle + SELECT 1; MySqlConnector pool)│
 │  - NewsgroupCatalogueService (immutable snapshot + 5 min)   │
 │  - ModeratorCatalogueService (nntpmoderators snapshot)      │
@@ -547,6 +548,12 @@ If `IApplicationService.Execution` faults or completes while `Running`, the mana
 
 Startup order places `RedisService` after Cloudflare DNS reconciliation and before listeners. If the initial connection cannot be established, startup fails. The multiplexer is long-lived; consumers do not connect per request. Multiple `Redis:Host` entries are multiplexer endpoints/seeds for one topology, not independently round-robined HistoryDB servers.
 
+## RabbitMQ
+
+`RabbitMqService` is generic infrastructure. It owns the top-level `RabbitMQ` configuration, one process-wide AMQP connection, a monotonic connection generation, and application-level replacement after connectivity loss. It does not declare exchanges, queues, or bindings, and it does not publish or consume messages.
+
+Startup order places `RabbitMqService` after `RedisService` and before `NntpDbService`. RabbitMQ is a critical dependency: invalid configuration or a failed initial connect prevents `Running`. Client automatic recovery is disabled; the service replaces the connection and increments the generation (`N` → `N+1`) so a stale connection cannot be treated as current. Shutdown is cancellation-aware, idempotent, and coordinated by `ApplicationServiceManager` like other application services.
+
 `HistoryDB` is a Redis consumer:
 
 ```text
@@ -632,9 +639,9 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615.
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. RabbitMQ binds from the top-level `RabbitMQ` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615. RabbitMQ lifecycle EventIds are 2800–2818.
 
-Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), and `Redis:Host`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs; either failure prevents `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
+Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), `Redis:Host`, and `RabbitMQ:Hosts`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs, then `RabbitMqService` establishes a usable broker connection; any of those failures prevent `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
 ## Testing strategy
 

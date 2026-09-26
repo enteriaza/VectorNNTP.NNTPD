@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Redis;
+using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
@@ -193,6 +194,12 @@ public static class NntpdServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<RedisOptions>, RedisOptionsValidator>();
 
         services
+            .AddOptions<RabbitMqOptions>()
+            .BindConfiguration(RabbitMqOptions.SectionName)
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
+
+        services
             .AddOptions<TransitPeersOptions>()
             .BindConfiguration(TransitPeersOptions.SectionName);
         // Validation is applied when building the immutable snapshot (startup throw /
@@ -279,7 +286,8 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
-        // Cloudflare DNS → Redis → NntpDB (hard dep; MySqlConnector pool) →
+        // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
+        // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
         // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
@@ -296,6 +304,18 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RedisService>(static sp =>
                 sp.GetRequiredService<RedisService>()));
+
+        services.TryAddSingleton<IRabbitMqBrokerConnector, RabbitMqBrokerConnector>();
+        services.TryAddSingleton(static sp =>
+            new RabbitMqService(
+                sp.GetRequiredService<IRabbitMqBrokerConnector>(),
+                sp.GetRequiredService<IOptions<RabbitMqOptions>>(),
+                sp.GetRequiredService<IOptions<NntpdOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RabbitMqService>>()));
+        services.TryAddSingleton<IRabbitMqService>(static sp => sp.GetRequiredService<RabbitMqService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
+                sp.GetRequiredService<RabbitMqService>()));
 
         services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
         services.TryAddSingleton<NntpDbService>();
@@ -430,6 +450,8 @@ public static class NntpdServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        builder.Configuration.AddNntpdPrefixedEnvironmentVariables();
+
         builder.Services.AddWindowsService(options =>
         {
             options.ServiceName = builder.Configuration[$"{NntpdOptions.SectionName}:ApplicationName"]
@@ -452,6 +474,23 @@ public static class NntpdServiceCollectionExtensions
         });
 
         return builder;
+    }
+
+    /// <summary>
+    /// Adds environment variables that use the NNTPD <c>nntpd__</c> prefix.
+    /// </summary>
+    /// <param name="builder">The configuration builder.</param>
+    /// <returns>The same <paramref name="builder"/> instance.</returns>
+    /// <remarks>
+    /// The established NNTPD environment-variable convention is prefix <c>nntpd</c>,
+    /// separator <c>__</c>, then the configuration path. After the prefix is stripped,
+    /// <c>nntpd__RabbitMQ__Username</c> binds to <c>RabbitMQ:Username</c> and
+    /// <c>nntpd__RabbitMQ__Password</c> binds to <c>RabbitMQ:Password</c>.
+    /// </remarks>
+    public static IConfigurationBuilder AddNntpdPrefixedEnvironmentVariables(this IConfigurationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        return builder.AddEnvironmentVariables(prefix: "nntpd__");
     }
 
     /// <summary>

@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
@@ -386,6 +386,62 @@ Requirements:
 - When the variable is set and Redis is unreachable, the tests fail.
 
 Do not commit credentials. Redis options have no password field; the unauthenticated connection path is used.
+
+## RabbitMQ
+
+Top-level `RabbitMQ` section (not nested under `Nntpd`). The property names, types, defaults, and validation semantics match BackFiller's `RabbitMQ` contract. RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`.
+
+`RabbitMqService` is the dedicated application service that owns the broker connection lifecycle. It establishes one process-wide connection, verifies that the connection is open, and replaces it on connectivity loss while incrementing a monotonic connection generation. Client automatic recovery is disabled.
+
+This phase does **not** declare exchanges, queues, or bindings, and does not publish or consume messages.
+
+| Key | Type | Default | Required? | Description |
+|-----|------|---------|-----------|-------------|
+| `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query) |
+| `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
+| `Username` | string | _(none)_ | no | Broker username. When set, `Password` is required. Supply via `nntpd__RabbitMQ__Username` |
+| `Password` | string | _(none)_ | no (secret) | Broker password. Supply via `nntpd__RabbitMQ__Password` or secrets. Never commit or log |
+| `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
+| `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS |
+| `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
+| `SocketTimeoutSeconds` | int | `30` | **yes** | Socket read/write timeout (`5–600`) |
+| `RequestedChannelMax` | int | `2047` | **yes** | Requested channel limit per connection (`1–65535`) |
+| `RpcTimeoutSeconds` | int | `30` | **yes** | Client continuation/handshake timeout (`1–3600`) |
+| `ConnectionBlockedTimeoutSeconds` | int | `30` | **yes** | Client connection timeout (`5–3600`; must be ≥ `RpcTimeoutSeconds`) |
+| `NetworkRecoveryIntervalSeconds` | int | `5` | **yes** | Client recovery-interval setting (`1–3600`; unused while automatic recovery is disabled) |
+| `PoolReconnectBaseDelayMs` | int | `250` | **yes** | Application reconnect base delay (`50–60000`) |
+| `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
+| `MaxConsecutiveRecoveryFailures` | int | `5` | **yes** | Consecutive reconnect failures before the service marks `Failed` (`1–100`) |
+| `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
+| `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Validated; reserved for later message work (`1–4096`) |
+| `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |
+| `MinConnections` | int | `4` | **yes** | Validated; reserved for later pool policy (`1–512`; ≤ `MaxConnections`) |
+| `MaxConnections` | int | `16` | **yes** | Validated; reserved for later pool policy (`1–512`) |
+| `MaxPendingLeaseWaiters` | int | `1024` | **yes** | Validated; reserved for later channel-pool policy (`0–65536`) |
+| `ConnectionScaleDownIdleSeconds` | int | `300` | **yes** | Validated; reserved for later pool policy (`30–86400`) |
+| `ScaleDownCooldownSeconds` | int | `30` | **yes** | Validated; reserved for later pool policy (`0–3600`) |
+| `MinimumConnectionLifetimeSeconds` | int | `300` | **yes** | Validated; reserved for later idle-retirement (`30–86400`) |
+| `PublishConfirmTimeoutSeconds` | int | `10` | **yes** | Validated; reserved for later publishers (`1–3600`) |
+| `MaximumShutdownDrainTimeoutSeconds` | int | `30` | **yes** | Validated; shutdown is cancellation-driven (`1–3600`) |
+| `DegradedThreshold` | double | `0.75` | **yes** | Validated; reserved for later health policy (`>0` and `≤1`) |
+| `UnhealthyThreshold` | int | `5` | **yes** | Validated; reserved for later health policy (`1–120`) |
+| `ConsumerPrefetchCount` | ushort | _(none)_ | no | Optional; reserved for later Basic.Qos (`1–65535`) |
+| `DiagnosticPayloadCorrelationId` | string | _(none)_ | no | Optional diagnostic gate; not used in this phase |
+
+There is no application-level RabbitMQ connection pool. One long-lived connection is owned by `RabbitMqService`. `MinConnections` / `MaxConnections` are validated for contract compatibility and are not enforced.
+
+Example (no secrets):
+
+```json
+"RabbitMQ": {
+  "Hosts": [ "rabbit-01.example.net" ],
+  "Port": 5672,
+  "EnableSsl": false,
+  "VirtualHost": "/"
+}
+```
+
+Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via the NNTPD-prefixed environment variables `nntpd__RabbitMQ__Username` and `nntpd__RabbitMQ__Password`, or user secrets.
 
 ## NntpDB (`ConnectionStrings:NntpDB` and `NntpDb`)
 
@@ -1051,6 +1107,8 @@ nntpd__cloudflareapikey
 nntpd__CloudFlareZoneId
 nntpd__ServerId
 nntpd__AcmeCertificatePassword
+nntpd__RabbitMQ__Username
+nntpd__RabbitMQ__Password
 ```
 
 Example (user scope, PowerShell — replace secret values locally; do not commit them):
@@ -1060,6 +1118,8 @@ Example (user scope, PowerShell — replace secret values locally; do not commit
 [Environment]::SetEnvironmentVariable("nntpd__CloudFlareZoneId", "5811a29d39a0732afb5f160c9b137c3d", "User")
 [Environment]::SetEnvironmentVariable("nntpd__ServerId", "1", "User")
 [Environment]::SetEnvironmentVariable("nntpd__AcmeCertificatePassword", "<YOUR_PFX_PASSWORD>", "User")
+[Environment]::SetEnvironmentVariable("nntpd__RabbitMQ__Username", "<YOUR_RABBITMQ_USERNAME>", "User")
+[Environment]::SetEnvironmentVariable("nntpd__RabbitMQ__Password", "<YOUR_RABBITMQ_PASSWORD>", "User")
 ```
 
 `DnsSuffix` should correspond to the zone identified by `CloudFlareZoneId`. The host validates DNS suffix **syntax** only; it does not verify zone membership via the Cloudflare API.

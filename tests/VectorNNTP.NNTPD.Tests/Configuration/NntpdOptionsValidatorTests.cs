@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Redis;
+using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
@@ -1305,6 +1306,7 @@ public sealed class NntpdConfigurationTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
+        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
             options.BindPortTls = 0;
@@ -1314,6 +1316,7 @@ public sealed class NntpdConfigurationTests
             new Dictionary<string, string?>
             {
                 ["Redis:Host:0"] = "127.0.0.1",
+                ["RabbitMQ:Hosts:0"] = "127.0.0.1",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
                     TestHostFactory.TestNntpDbConnectionString,
             });
@@ -1337,6 +1340,7 @@ public sealed class NntpdConfigurationTests
                 [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
+                ["RabbitMQ:Hosts:0"] = "127.0.0.1",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
                     TestHostFactory.TestNntpDbConnectionString,
             });
@@ -1350,6 +1354,7 @@ public sealed class NntpdConfigurationTests
             assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
+        builder.Services.AddSingleton<IRabbitMqBrokerConnector, FakeRabbitMqBrokerConnector>();
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         builder.Services.PostConfigure<NntpdOptions>(static options =>
         {
