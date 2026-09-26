@@ -3,8 +3,14 @@ using VectorNNTP.NNTPD.Core;
 namespace VectorNNTP.NNTPD.Cloudflare;
 
 /// <summary>
-/// NNTPD lifecycle wrapper around the shared Cloudflare DNS reconciliation implementation.
+/// Shared <see cref="IApplicationService"/> adapter around
+/// <see cref="CloudflareDnsReconciliationService"/>.
 /// </summary>
+/// <remarks>
+/// Applications register this type with their <c>ApplicationServiceManager</c>.
+/// It does not construct hostnames, resolve bind addresses, or call Cloudflare.
+/// Those remain on <see cref="CloudflareDnsReconciliationService"/>.
+/// </remarks>
 public sealed class CloudflareDnsReconciliationApplicationService : IApplicationService
 {
     private readonly CloudflareDnsReconciliationService _inner;

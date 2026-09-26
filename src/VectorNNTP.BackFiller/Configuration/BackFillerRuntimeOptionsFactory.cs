@@ -36,7 +36,6 @@ public static class BackFillerRuntimeOptionsFactory
         var acme = new AcmeCloudflareOptions
         {
             BindAddress = options.BindAddress is { Length: > 0 } ? options.BindAddress : ["*"],
-            BindPort = options.BindPort ?? options.BindPortTls ?? 1190,
             BindPortTls = options.BindPortTls ?? 0,
             Fqdn = options.Fqdn,
             IncludeNewsHostnameInCertificate = false,
@@ -64,21 +63,20 @@ public static class BackFillerRuntimeOptionsFactory
         ArgumentNullException.ThrowIfNull(connectionStrings);
         ArgumentNullException.ThrowIfNull(acme);
 
-        if (string.IsNullOrWhiteSpace(options.Name) || options.ServerId is not { } serverId)
+        if (options.ServerId is not { } serverId || string.IsNullOrWhiteSpace(options.Fqdn))
         {
             throw new InvalidOperationException("Validated BackFiller identity is required to build runtime options.");
         }
 
-        var name = BackFillerIdentity.CanonicalizeName(options.Name);
-        var dnsSuffix = BackFillerIdentity.CanonicalizeDnsSuffix(options.DnsSuffix);
-        var fqdn = BackFillerIdentity.BuildFqdn(name, serverId, dnsSuffix);
+        var dnsSuffix = ApplicationFqdn.CanonicalizeDnsSuffix(options.DnsSuffix);
+        var fqdn = options.Fqdn;
         if (acme.BindPortTls is < 1 or > 65535)
         {
             throw new InvalidOperationException(
                 "BindPortTls is required and must be 1–65535 because BackFiller is TLS-only. There is no cleartext fallback.");
         }
 
-        var bindPort = acme.BindPortTls;
+        var bindPortTls = acme.BindPortTls;
 
         var tokens = (acme.BindAddress ?? [])
             .Where(static x => !string.IsNullOrWhiteSpace(x))
@@ -118,13 +116,12 @@ public static class BackFillerRuntimeOptionsFactory
         var transit = options.TransitServer ?? throw new InvalidOperationException("BackFiller:TransitServer is required.");
 
         return new BackFillerRuntimeOptions(
-            Name: name,
             ServerId: serverId,
             DnsSuffix: dnsSuffix,
             Fqdn: fqdn,
             BindAddressTokens: tokens,
             CanonicalBindAddresses: addresses,
-            BindPort: bindPort,
+            BindPortTls: bindPortTls,
             LogDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(options.LogDirectory, contentRootPath),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             Shutdown: new BackFillerShutdownRuntimeOptions(
@@ -177,7 +174,7 @@ public static class BackFillerRuntimeOptionsFactory
                 RequestedChannelMax: rabbit.RequestedChannelMax ?? 2047,
                 ConsumerPrefetchCount: rabbit.ConsumerPrefetchCount,
                 DiagnosticPayloadCorrelationId: NullIfWhiteSpace(rabbit.DiagnosticPayloadCorrelationId)),
-            CertificateDomainNames: CertificateIdentitiesForRuntime(acme),
+            CertificateDomainNames: CertificateIdentities.ForFqdn(fqdn, acme.IncludeNewsHostnameInCertificate),
             CertificatePassword: acme.AcmeCertificatePassword,
             GrabberDb: new GrabberDbRuntimeOptions(
                 grabberDbValue!.Trim(),
@@ -185,16 +182,6 @@ public static class BackFillerRuntimeOptionsFactory
                 database!,
                 userId!),
             AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
-    }
-
-    private static IReadOnlyList<string> CertificateIdentitiesForRuntime(AcmeCloudflareOptions acme)
-    {
-        if (string.IsNullOrWhiteSpace(acme.Fqdn))
-        {
-            return [];
-        }
-
-        return CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate);
     }
 
     private static string? NullIfWhiteSpace(string? value) =>

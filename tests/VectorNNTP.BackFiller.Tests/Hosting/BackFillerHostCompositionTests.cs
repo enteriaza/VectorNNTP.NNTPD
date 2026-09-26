@@ -14,8 +14,11 @@ using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
@@ -32,22 +35,28 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(8, hosted.Length);
+        Assert.Equal(7, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[1]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[2]);
-        Assert.IsType<CloudflareDnsReconciliationHostedService>(hosted[3]);
-        Assert.IsType<BackFillerApplicationHostedService>(hosted[4]);
-        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[5]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[6]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[7]);
+        Assert.IsType<BackFillerApplicationHostedService>(hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[4]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[5]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[6]);
         Assert.DoesNotContain(
             hosted,
             static service => service.GetType().Name == "AcmeCertificateHostedService");
+        Assert.DoesNotContain(
+            hosted,
+            static service => service.GetType().Name == "CloudflareDnsReconciliationHostedService");
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(2, application.Length);
-        Assert.IsType<AcmeCertificateApplicationService>(application[0]);
-        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), application[1]);
+        Assert.Equal(3, application.Length);
+        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
+        Assert.Equal(
+            typeof(CloudflareDnsReconciliationService).Assembly,
+            application[0].GetType().Assembly);
+        Assert.IsType<AcmeCertificateApplicationService>(application[1]);
+        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), application[2]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
@@ -59,6 +68,10 @@ public sealed class BackFillerHostCompositionTests
         Assert.Same(
             host.Services.GetRequiredService<ArticleWorkResponsePublisher>(),
             host.Services.GetRequiredService<IArticleWorkResponsePublisher>());
+        var publisher = host.Services.GetRequiredService<IAcmeCertificatePublisher>();
+        Assert.Same(host.Services.GetRequiredService<TlsCertificateContextProvider>(), publisher);
+        Assert.Same(host.Services.GetRequiredService<ITlsCertificateContextProvider>(), publisher);
+        Assert.NotNull(host.Services.GetRequiredService<CloudflareDnsReconciliationService>());
     }
 
     [Fact]
@@ -153,7 +166,6 @@ public sealed class BackFillerHostCompositionTests
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
         var tlsPort = GetFreePort();
-        pairs["BackFiller:BindPort"] = tlsPort.ToString();
         pairs["BackFiller:BindPortTls"] = tlsPort.ToString();
         pairs["BackFiller:BindAddress:0"] = "*";
         builder.Configuration.AddInMemoryCollection(pairs);
@@ -162,7 +174,6 @@ public sealed class BackFillerHostCompositionTests
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
             factory ?? new FakeBackFillerRabbitMqConnectionFactory());
-        builder.Services.AddSingleton<ICacheListenerCertificateSource>(new StaticCacheListenerCertificateSource());
         if (injectAccountSource)
         {
             builder.Services.AddSingleton<IProviderAccountSource>(new FakeProviderAccountSource());

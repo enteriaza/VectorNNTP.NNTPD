@@ -128,6 +128,9 @@ public sealed class CloudflareDnsReconciliationServiceTests
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(CloudflareDnsReconciliationApplicationService), services[0].GetType());
+        Assert.Equal(
+            typeof(CloudflareDnsReconciliationService).Assembly,
+            services[0].GetType().Assembly);
         Assert.Equal(typeof(VectorNNTP.NNTPD.Redis.RedisService), services[1].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService), services[2].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), services[3].GetType());

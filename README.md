@@ -131,14 +131,14 @@ Section: `Nntpd` (`appsettings.json` / environment variables / command line). Se
 | `Systemd:NotifyReadyOnApplicationRunning` | `true` | Send `READY=1` at lifecycle `Running` |
 | `Systemd:NotifyStoppingOnApplicationShutdown` | `true` | Send `STOPPING=1` when shutdown begins |
 | `Systemd:WatchdogIntervalFraction` | `0.5` | Heartbeat interval as a fraction of systemd’s deadline |
-| `BindAddress` | `["*"]` when omitted | Listen addresses / wildcards; explicit IPs must be local NIC addresses |
-| `BindPort` | `119` | Cleartext TCP port (`1–65535`) |
-| `BindPortTls` | `0` | TLS TCP port; `0`/unset disables TLS; `1–65535` enables |
+| `Nntpd:BindAddress` | `["*"]` when omitted | Listen addresses / wildcards; explicit IPs must be local NIC addresses |
+| `Nntpd:BindPort` | `119` | Cleartext TCP port (`1–65535`) |
+| `Nntpd:BindPortTls` | `0` | TLS TCP port; `0`/unset disables TLS; `1–65535` enables |
 | `CloudFlareApiKey` | _(env only)_ | **Required** secret; set `nntpd__cloudflareapikey` — missing/blank fails startup; never commit |
 | `CloudFlareZoneId` | _(configured)_ | **Required**; `nntpd__CloudFlareZoneId` may supply it — missing/blank fails startup |
 | `DnsSuffix` | `usenet.ninja` | DNS suffix for generated FQDN |
 | `ServerId` | _(required; no default)_ | **Required** integer `1–99` (`nntpd__ServerId`); no silent default |
-| `Fqdn` | generated | `nntpd{ServerId:00}.{DnsSuffix}` — not independently configurable |
+| `Fqdn` | generated | `nntpd{ServerId:00}.{DnsSuffix}` — not independently configurable. BackFiller uses the distinct identity `backfiller{ServerId:00}.{DnsSuffix}`. The `nntpd` / `backfiller` prefixes are fixed application identity, not configuration. |
 
 Options are validated at startup via `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`) before the application enters `Running`.
 

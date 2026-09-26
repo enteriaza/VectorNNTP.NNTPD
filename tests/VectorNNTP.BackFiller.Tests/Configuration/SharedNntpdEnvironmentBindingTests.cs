@@ -19,10 +19,13 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal("VECTOR__ACMECERTIFICATEPASSWORD", AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable);
         Assert.Equal("VECTOR__ACMEACCOUNT", AcmeCloudflareOptions.AcmeAccountEnvironmentVariable);
         Assert.Equal("VECTOR__CLOUDFLAREZONEID", AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable);
-        Assert.Equal("BACKFILLER__NAME", BackFillerOptions.NameEnvironmentVariable);
-        Assert.Equal("BACKFILLER__SERVERID", BackFillerOptions.ServerIdEnvironmentVariable);
-        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.NameEnvironmentVariable));
-        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.ServerIdEnvironmentVariable));
+        Assert.Null(typeof(BackFillerOptions).GetField(
+            "NameEnvironmentVariable",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
+        Assert.Null(typeof(BackFillerOptions).GetField(
+            "ServerIdEnvironmentVariable",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
         Assert.Equal("VECTOR__RABBITMQ__USERNAME", BackFillerOptions.RabbitMqUsernameEnvironmentVariable);
         Assert.Equal("VECTOR__CONNECTIONSTRINGS__GRABBERDB", BackFillerOptions.GrabberDbEnvironmentVariable);
         Assert.Equal(VectorEnvironment.Prefix, BackFillerOptions.EnvironmentVariablePrefix);
@@ -53,8 +56,8 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
         Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
         Assert.Equal("0123456789abcdef0123456789abcdef", acme.CloudFlareZoneId);
-        Assert.Equal(1190, acme.BindPort);
         Assert.Equal(1190, acme.BindPortTls);
+        Assert.NotEqual(119, acme.BindPortTls);
         Assert.Equal(["127.0.0.1"], acme.BindAddress);
         Assert.Equal("usenet.ninja", acme.DnsSuffix);
         Assert.Equal(BackFillerOptions.DefaultAcmeDirectoryUrl, acme.AcmeDirectoryUrl);
@@ -76,7 +79,6 @@ public sealed class SharedNntpdEnvironmentBindingTests
         using var host = builder.Build();
         var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
         Assert.False(acme.IncludeNewsHostnameInCertificate);
-        Assert.Equal(1190, acme.BindPort);
         Assert.Equal(1190, acme.BindPortTls);
         Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
         Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);

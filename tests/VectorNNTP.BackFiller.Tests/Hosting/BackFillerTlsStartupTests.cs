@@ -15,6 +15,7 @@ using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting;
@@ -55,8 +56,8 @@ public sealed class BackFillerTlsStartupTests
             BackFillerTestOptions.CreateValidConnectionStrings(),
             acme);
 
-        Assert.Equal(5630, runtime.BindPort);
-        Assert.DoesNotContain(119, runtime.BindAddressTokens.Select(_ => runtime.BindPort).Distinct().Except([5630]));
+        Assert.Equal(5630, runtime.BindPortTls);
+        Assert.DoesNotContain(119, runtime.BindAddressTokens.Select(_ => runtime.BindPortTls).Distinct().Except([5630]));
     }
 
     [Fact]
@@ -84,7 +85,7 @@ public sealed class BackFillerTlsStartupTests
         var journal = new BackFillerStartupJournal();
         await using var service = new CacheListenerService(
             runtime,
-            new StaticCacheListenerCertificateSource(),
+            TestListenerCertificates.CreatePublishedProvider(),
             new ArticleRetentionAuthority(runtime, TimeProvider.System, NullLogger<ArticleRetentionAuthority>.Instance),
             readiness,
             journal,
@@ -106,7 +107,7 @@ public sealed class BackFillerTlsStartupTests
         var journal = new BackFillerStartupJournal();
         await using var service = new CacheListenerService(
             runtime,
-            new MissingCertificateSource(),
+            TestListenerCertificates.CreateUnavailableProvider(),
             new ArticleRetentionAuthority(runtime, TimeProvider.System, NullLogger<ArticleRetentionAuthority>.Instance),
             readiness,
             journal,
@@ -128,7 +129,7 @@ public sealed class BackFillerTlsStartupTests
         var journal = new BackFillerStartupJournal();
         await using var service = new CacheListenerService(
             runtime,
-            new StaticCacheListenerCertificateSource(),
+            TestListenerCertificates.CreatePublishedProvider(),
             new ArticleRetentionAuthority(runtime, TimeProvider.System, NullLogger<ArticleRetentionAuthority>.Instance),
             readiness,
             journal,
@@ -158,7 +159,7 @@ public sealed class BackFillerTlsStartupTests
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
         var port = GetFreePort();
         pairs["BackFiller:BindPortTls"] = port.ToString();
-        pairs["BackFiller:BindPort"] = "119";
+        pairs["BindPort"] = "119";
         pairs["BackFiller:BindAddress:0"] = "*";
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
@@ -168,7 +169,6 @@ public sealed class BackFillerTlsStartupTests
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
-        builder.Services.AddSingleton<ICacheListenerCertificateSource>(new StaticCacheListenerCertificateSource());
         builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
             new FakeProviderAccountSource());
         builder.AddBackFillerHosting();
@@ -181,8 +181,8 @@ public sealed class BackFillerTlsStartupTests
             var journal = host.Services.GetRequiredService<IBackFillerStartupJournal>();
             var stages = journal.Stages.ToList();
             Assert.Contains(BackFillerStartupStages.Configuration, stages);
-            Assert.Contains(BackFillerStartupStages.BindResolution, stages);
-            Assert.Contains(BackFillerStartupStages.CloudflareReconciled, stages);
+            Assert.DoesNotContain("bind-resolution", stages);
+            Assert.DoesNotContain("cloudflare-reconciled", stages);
             Assert.Contains(BackFillerStartupStages.AcmeCertificateReady, stages);
             Assert.Contains(BackFillerStartupStages.ListenerStarted, stages);
 
@@ -191,9 +191,10 @@ public sealed class BackFillerTlsStartupTests
             Assert.InRange(acmeIndex, 0, listenerIndex - 1);
 
             var application = host.Services.GetServices<IApplicationService>().ToArray();
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[0]);
+            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[1]);
             var listener = host.Services.GetRequiredService<CacheListenerService>();
-            Assert.Same(listener, application[1]);
+            Assert.Same(listener, application[2]);
             Assert.Equal(CacheListenerState.Running, listener.State);
             Assert.All(listener.LocalEndPoints, endpoint =>
             {
@@ -252,12 +253,4 @@ public sealed class BackFillerTlsStartupTests
         return port;
     }
 
-    private sealed class MissingCertificateSource : ICacheListenerCertificateSource
-    {
-        public bool TryGetCurrent(out CacheListenerCertificateMaterial material)
-        {
-            material = null!;
-            return false;
-        }
-    }
 }

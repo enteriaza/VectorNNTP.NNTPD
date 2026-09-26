@@ -46,7 +46,7 @@ public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudf
         ArgumentNullException.ThrowIfNull(failures);
 
         ValidateCloudFlareTimeout(options, failures);
-        ValidateBindAddresses(options, localIpAddressAssignee, failures);
+        CollectBindAddressFailures(options, localIpAddressAssignee, failures);
         ValidatePorts(options, failures);
         ValidateCloudFlare(options, failures);
         ValidateDnsSuffix(options, failures);
@@ -94,7 +94,10 @@ public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudf
         }
     }
 
-    private static void ValidateBindAddresses(
+    /// <summary>
+    /// Validates bind-address tokens: wildcards, IPv4/IPv6 literals, and NIC assignment.
+    /// </summary>
+    public static void CollectBindAddressFailures(
         AcmeCloudflareOptions options,
         ILocalIpAddressAssignee localIpAddressAssignee,
         List<string> failures)
@@ -136,11 +139,6 @@ public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudf
 
     private static void ValidatePorts(AcmeCloudflareOptions options, List<string> failures)
     {
-        if (options.BindPort is < 1 or > 65535)
-        {
-            failures.Add($"{nameof(AcmeCloudflareOptions.BindPort)} must be an integer in the range 1–65535.");
-        }
-
         if (options.BindPortTls is < 0 or > 65535)
         {
             failures.Add(

@@ -31,9 +31,6 @@ public sealed class BackFillerProcessStartupTests
             }
 
             process.StartInfo.ArgumentList.Add("--BackFiller:BindPortTls=0");
-            process.StartInfo.Environment[BackFillerOptions.NameEnvironmentVariable] =
-                "process-smoke";
-            process.StartInfo.Environment[BackFillerOptions.ServerIdEnvironmentVariable] = "1";
             process.StartInfo.Environment[BackFillerOptions.GrabberDbEnvironmentVariable] =
                 "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "unit-test-cloudflare-key-not-secret";
@@ -88,7 +85,6 @@ public sealed class BackFillerProcessStartupTests
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
-            process.StartInfo.Environment[BackFillerOptions.ServerIdEnvironmentVariable] = "";
             process.StartInfo.Environment["VECTOR__SERVERID"] = "";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "";
             process.StartInfo.Environment["VECTOR__ACMECERTIFICATEPASSWORD"] = "";
@@ -110,10 +106,11 @@ public sealed class BackFillerProcessStartupTests
             var output = string.Concat(await stdout, await stderr);
             Assert.Equal(1, process.ExitCode);
             Assert.True(
-                output.Contains("ServerId", StringComparison.Ordinal)
+                output.Contains("GrabberDB", StringComparison.Ordinal)
                 || output.Contains("CloudFlareApiKey", StringComparison.Ordinal),
                 output);
             Assert.DoesNotContain("Name is required", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("ServerId is required", output, StringComparison.Ordinal);
             Assert.DoesNotContain("Hosts must contain", output, StringComparison.Ordinal);
             Assert.DoesNotContain("super-secret", output, StringComparison.Ordinal);
         }

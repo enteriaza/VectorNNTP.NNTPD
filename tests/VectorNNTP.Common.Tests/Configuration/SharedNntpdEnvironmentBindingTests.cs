@@ -13,9 +13,6 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal("VECTOR__ACMECERTIFICATEPASSWORD", AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable);
         Assert.Equal("VECTOR__ACMEACCOUNT", AcmeCloudflareOptions.AcmeAccountEnvironmentVariable);
         Assert.Equal("VECTOR__CLOUDFLAREZONEID", AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable);
-        Assert.Equal("VECTOR__BINDADDRESS", AcmeCloudflareOptions.BindAddressEnvironmentVariable);
-        Assert.Equal("VECTOR__BINDPORT", AcmeCloudflareOptions.BindPortEnvironmentVariable);
-        Assert.Equal("VECTOR__BINDPORTTLS", AcmeCloudflareOptions.BindPortTlsEnvironmentVariable);
         Assert.Equal(AcmeCloudflareOptions.SectionName, string.Empty);
         Assert.Equal("CloudFlareApiKey", AcmeCloudflareOptions.CloudFlareApiKeyConfigurationKey);
         Assert.Equal("AcmeCertificatePassword", AcmeCloudflareOptions.AcmeCertificatePasswordConfigurationKey);
@@ -55,10 +52,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
                 ["CloudFlareApiKey"] = "AbC123xYz!",
                 ["AcmeCertificatePassword"] = "Pfx-CaseSensitive-Secret!",
                 ["CloudFlareZoneId"] = "5811a29d39a0732afb5f160c9b137c3d",
-                ["BindPort"] = "1190",
-                ["BindPortTls"] = "1190",
                 [AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "ops@example.org",
-                ["BindAddress:0"] = "*",
             })
             .Build();
 
@@ -68,9 +62,6 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal("AbC123xYz!", options.CloudFlareApiKey);
         Assert.Equal("Pfx-CaseSensitive-Secret!", options.AcmeCertificatePassword);
         Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", options.CloudFlareZoneId);
-        Assert.Equal(1190, options.BindPort);
-        Assert.Equal(1190, options.BindPortTls);
-        Assert.Equal("*", options.BindAddress[0]);
     }
 
     [Fact]
@@ -88,15 +79,49 @@ public sealed class SharedNntpdEnvironmentBindingTests
 
         var options = new AcmeCloudflareOptions
         {
+            BindAddress = ["198.18.0.66"],
+            BindPort = 1199,
+            BindPortTls = 5633,
             AcmeCertificatePassword = "from-nntpd-section-must-not-win",
             CloudFlareApiKey = "from-nntpd-section-must-not-win",
+            CloudFlareZoneId = "from-section-must-win",
+            DnsSuffix = "from-section.test",
         };
         AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
 
+        Assert.Equal(["198.18.0.66"], options.BindAddress);
+        Assert.Equal(1199, options.BindPort);
+        Assert.Equal(5633, options.BindPortTls);
         Assert.Equal(password, options.AcmeCertificatePassword);
         Assert.Equal("Cf-Key-MixedCASE-99", options.CloudFlareApiKey);
-        Assert.Equal("ZoneIdMixedCase", options.CloudFlareZoneId);
+        Assert.Equal("from-section-must-win", options.CloudFlareZoneId);
+        Assert.Equal("from-section.test", options.DnsSuffix);
         Assert.Equal(password, configuration["AcmeCertificatePassword"]);
+    }
+
+    [Fact]
+    public void OverlaySharedFromRoot_DoesNotCopyRootBindSettings()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BindAddress:0"] = "203.0.113.10",
+                ["BindPort"] = "2119",
+                ["BindPortTls"] = "2563",
+            })
+            .Build();
+
+        var options = new AcmeCloudflareOptions
+        {
+            BindAddress = ["127.0.0.1"],
+            BindPort = 1199,
+            BindPortTls = 5633,
+        };
+        AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
+
+        Assert.Equal(["127.0.0.1"], options.BindAddress);
+        Assert.Equal(1199, options.BindPort);
+        Assert.Equal(5633, options.BindPortTls);
     }
 
     [Fact]
@@ -166,7 +191,10 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Contains("VECTOR__CLOUDFLAREAPIKEY", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__ACMECERTIFICATEPASSWORD", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__ACMEACCOUNT", text, StringComparison.Ordinal);
-        Assert.Contains("VECTOR__CLOUDFLAREZONEID", text, StringComparison.Ordinal);
+        Assert.Contains("Nntpd:CloudFlareZoneId", text, StringComparison.Ordinal);
+        Assert.Contains("BackFiller:CloudFlareZoneId", text, StringComparison.Ordinal);
+        Assert.Contains("BackFiller:ServerId", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("BACKFILLER__SERVERID", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__RABBITMQ__USERNAME", text, StringComparison.Ordinal);
         Assert.DoesNotContain("nntpd__cloudflareapikey", text, StringComparison.Ordinal);
         Assert.DoesNotContain("nntpd__AcmeCertificatePassword", text, StringComparison.Ordinal);
@@ -178,6 +206,9 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.DoesNotContain("VECTOR__NEWSMASTERPASSWORD", text, StringComparison.Ordinal);
         Assert.DoesNotContain("VECTOR__NAME", text, StringComparison.Ordinal);
         Assert.DoesNotContain("VECTOR__SERVERID", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("VECTOR__BINDADDRESS", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("VECTOR__BINDPORT", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("VECTOR__BINDPORTTLS", text, StringComparison.Ordinal);
         Assert.Contains("NNTPD__XTRACEKEY", text, StringComparison.Ordinal);
         Assert.Contains("NNTPD__SERVERID", text, StringComparison.Ordinal);
     }

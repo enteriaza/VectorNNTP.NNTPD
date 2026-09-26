@@ -31,7 +31,7 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
 
         var failures = new List<string>();
         ValidateIdentity(options, failures);
-        ValidateBindPorts(options, failures);
+        ValidateBindPortTls(options, failures);
         ValidateAcme(options, failures);
         ValidateDirectories(options, failures);
         ValidateShutdown(options, failures);
@@ -48,22 +48,16 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
 
     private static void ValidateIdentity(BackFillerOptions options, List<string> failures)
     {
-        if (string.IsNullOrWhiteSpace(options.Name))
+        if (options.ServerId is not { } serverId)
         {
-            failures.Add("BackFiller:Name is required and cannot be empty.");
+            failures.Add(ServerIdRules.Validate(null, "BackFiller:ServerId")!);
             return;
         }
 
-        if (options.ServerId is null)
+        var serverIdFailure = ServerIdRules.Validate(serverId, "BackFiller:ServerId");
+        if (serverIdFailure is not null)
         {
-            failures.Add(
-                $"BackFiller:ServerId is required and must be an integer in the range {BackFillerIdentity.MinimumServerId}–{BackFillerIdentity.MaximumServerId} (old key: BackFiller:Id).");
-            return;
-        }
-
-        if (options.ServerId is < BackFillerIdentity.MinimumServerId or > BackFillerIdentity.MaximumServerId)
-        {
-            failures.Add($"BackFiller:ServerId must be between {BackFillerIdentity.MinimumServerId} and {BackFillerIdentity.MaximumServerId}.");
+            failures.Add(serverIdFailure);
             return;
         }
 
@@ -73,33 +67,28 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
             return;
         }
 
-        var canonicalName = BackFillerIdentity.CanonicalizeName(options.Name);
-        var canonicalSuffix = BackFillerIdentity.CanonicalizeDnsSuffix(options.DnsSuffix);
-
-        if (!BackFillerIdentity.IsValidDnsLabel(canonicalName))
+        if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
         {
-            failures.Add("BackFiller:Name must be a valid DNS label (letters, digits, hyphens; no leading/trailing hyphen; max 63 chars).");
+            failures.Add("BackFiller:CloudFlareZoneId is required and cannot be empty.");
+            return;
         }
 
+        var canonicalSuffix = ApplicationFqdn.CanonicalizeDnsSuffix(options.DnsSuffix);
         if (!BackFillerIdentity.IsValidDnsSuffix(canonicalSuffix))
         {
             failures.Add("BackFiller:DnsSuffix is not a syntactically valid DNS name.");
-        }
-
-        if (failures.Count > 0)
-        {
             return;
         }
 
-        var hostLabel = canonicalName + BackFillerIdentity.FormatServerId(options.ServerId.Value);
+        var fqdn = options.Fqdn;
+        var hostLabel = ApplicationFqdn.FormatHostLabel(BackFillerOptions.ApplicationPrefix, serverId);
         if (!BackFillerIdentity.IsValidDnsLabel(hostLabel))
         {
-            failures.Add("BackFiller:Name + ServerId produces an invalid host label (must be <=63 chars and DNS-label compliant).");
+            failures.Add("BackFiller generated host label is not a valid DNS label.");
             return;
         }
 
-        var fqdn = BackFillerIdentity.BuildFqdn(canonicalName, options.ServerId.Value, canonicalSuffix);
-        if (fqdn.Length > BackFillerIdentity.MaximumFqdnLength)
+        if (fqdn.Length > ApplicationFqdn.MaximumLength)
         {
             failures.Add("BackFiller:DnsSuffix produces an FQDN longer than 253 characters.");
         }
@@ -109,13 +98,8 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private static void ValidateBindPorts(BackFillerOptions options, List<string> failures)
+    private static void ValidateBindPortTls(BackFillerOptions options, List<string> failures)
     {
-        if (options.BindPort is { } bindPort && bindPort is < 1 or > 65535)
-        {
-            failures.Add("BackFiller:BindPort must be an integer in the range 1–65535.");
-        }
-
         if (options.BindPortTls is null or < 1 or > 65535)
         {
             failures.Add(

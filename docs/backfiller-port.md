@@ -839,7 +839,7 @@ Implemented in `src/VectorNNTP.BackFiller/Listener`. This phase serves the Phase
 |---|---|
 | TCP listen sockets and accepted connections | `CacheListenerService` |
 | Per-connection parse/write/ReceiptAck | `CacheListenerSession` |
-| TLS server certificate (already provisioned PFX) | `ICacheListenerCertificateSource` |
+| TLS server certificate | Common `TlsCertificateContextProvider` (`ITlsCertificateContextProvider` / `IAcmeCertificatePublisher`) |
 | Retained article bytes | `ArticleRetentionAuthority` (unchanged) |
 | Read lease during Found + ReceiptAck | `CacheListenerRetentionHandler` |
 
@@ -883,7 +883,7 @@ Missing and expired identities both return `GetResponseNotFound`. An early Recei
 
 TLS is mandatory (old listener is TLS-only). `Tls12 | Tls13`, no client certificate, no revocation check. Handshake bounded by `TlsHandshakeTimeout`. I/O no-progress bounded by `IoProgressTimeout` (this is the stall timeout while assembling a frame; there is no separate Phase 1 parser-timeout setting).
 
-Certificate boundary: `DirectoryCacheListenerCertificateSource` loads `{CertificateDirectory}/backfiller-listener.pfx` with `LetsEncrypt.PfxExportPassword`. It does not issue or renew certificates. ACME remains deferred. Startup fails if the PFX is missing or has no private key. Tests inject `ICacheListenerCertificateSource`.
+Certificate boundary: Common `AcmeCertificateService` obtains/renews the certificate for the canonical BackFiller FQDN and publishes it through `TlsCertificateContextProvider`. `CacheListenerService` acquires a lease per handshake. Startup fails if no certificate is published. There is no BackFiller-local PFX snapshot source.
 
 Private keys are loaded with `UserKeySet | Exportable` on Windows (Schannel cannot serve `EphemeralKeySet`) and `EphemeralKeySet | Exportable` elsewhere. The listener prefers `SslStreamCertificateContext` and falls back to `ServerCertificate` when context creation fails, matching the old worker's self-signed path.
 
@@ -1236,7 +1236,7 @@ SIGTERM of a **fully running** worker was not exercised here (startup cannot com
 | Absolute directories | Remain absolute |
 | PFX password | `BackFiller:LetsEncrypt:PfxExportPassword` / `backfiller__BackFiller__LetsEncrypt__PfxExportPassword`. Used only to load the PFX. Never logged |
 
-`DirectoryCacheListenerCertificateSource` uses `X509CertificateLoader.LoadPkcs12FromFile` with `CacheListenerCertificateMaterial.TlsServerKeyStorageFlags` (Windows: `UserKeySet \| Exportable`; elsewhere ephemeral). Material is disposed with the Listener. Private keys are not copied into logs.
+Common `TlsCertificateContextProvider` loads the ACME PFX with `UserKeySet | Exportable` (Schannel cannot serve `EphemeralKeySet`) and publishes an immutable `SslStreamCertificateContext`. Outstanding leases keep the previous generation alive after rotation. Private keys are not copied into logs.
 
 | PFX case | Behavior (automated) |
 |---|---|
@@ -1406,7 +1406,7 @@ Phase 13 extracts NNTPD's ACME, Cloudflare DNS, and bind-address implementation 
 
 ### Shared configuration
 
-Shared implementation does not imply shared/global configuration. Common owns the ACME, Cloudflare, and bind-address **implementations**. BackFiller owns the configuration values it supplies to that infrastructure. Bind, ACME directory, and DNS-suffix settings bind from the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPort`, `BackFiller:BindPortTls`, `BackFiller:AcmeDirectoryUrl`, `BackFiller:AcmeRenewalThresholdDays`, `BackFiller:AcmeStateDir`, `BackFiller:DnsSuffix`). Root-level copies of those keys are not used. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT`), not `BackFiller:AcmeEmail`.
+Shared implementation does not imply shared/global configuration. Common owns the ACME, Cloudflare, and bind-address **implementations**. BackFiller owns the configuration values it supplies to that infrastructure. Bind, ACME directory, and DNS-suffix settings bind from the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:AcmeDirectoryUrl`, `BackFiller:AcmeRenewalThresholdDays`, `BackFiller:AcmeStateDir`, `BackFiller:DnsSuffix`). There is no `BackFiller:BindPort`. Root-level copies of those keys are not used. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT`), not `BackFiller:AcmeEmail`.
 
 Cloudflare, ACME PKCS#12, and ACME account-email secrets remain root-level `VECTOR__*` values (not application-prefixed):
 
@@ -1420,17 +1420,17 @@ VECTOR__RABBITMQ__PASSWORD
 VECTOR__CONNECTIONSTRINGS__GRABBERDB
 ```
 
-BackFiller identity stays on the `BackFiller` section (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`). There are no `BACKFILLER__*` or `VECTOR__*` mappings for the nested bind/ACME/DNS-suffix settings. NNTPD identity and POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`.
+BackFiller identity is the generated FQDN `backfiller{ServerId:00}.{DnsSuffix}` from `BackFiller:ServerId` and `BackFiller:DnsSuffix`. There is no `BackFiller:Name` and no `BACKFILLER__NAME`. There are no `BACKFILLER__*` or `VECTOR__*` mappings for the nested bind/ACME/DNS-suffix settings. NNTPD identity is `nntpd{ServerId:00}.{DnsSuffix}`; POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`.
 
 ### Behaviour
 
-- BindAddress / BindPort use NNTPD resolution (`IBindAddressResolver`, `ListenEndpointPlanner`) and the same static-vs-runtime validation split.
+- BindAddress / BindPortTls use NNTPD resolution (`IBindAddressResolver`, `ListenEndpointPlanner`) and the same static-vs-runtime validation split.
 - Cloudflare A/AAAA reconciliation uses resolved listener addresses, then ACME DNS-01.
 - ACME account, key persistence, issuance, renewal, and challenge cleanup are the Common implementation. The account key is shared (`account/private_key.der`). Each certificate identity has one persistent journal file (`journal/{fqdn}.json`) and isolated live state under `live/{fqdn}/` (`current`, `.issuance.lock`, `dns01/`, `gens/`).
 - BackFiller is **TLS-only**. It binds `BindPortTls` only. `BindPortTls <= 0` fails startup. There is no cleartext fallback.
 - The BackFiller listener does not start until a usable ACME certificate has been loaded or issued. Certificate failure fails the process.
 - BackFiller certificates contain only `{BackFillerFqdn}`. They do not request `news.usenet.ninja` or `*.usenet.ninja`.
-- Application lifecycle wrappers stay in each host (`IApplicationService` in NNTPD; `IHostedService` in BackFiller). ACME readiness is an explicit gate, not HostedService order alone.
+- DNS lifecycle uses the shared Common `CloudflareDnsReconciliationApplicationService` adapter in BackFiller's `ApplicationServiceManager` (DNS → ACME → CacheListener), matching NNTPD. ACME readiness is an explicit gate, not HostedService order alone.
 
 Transit `TAKETHIS` remains out of scope. Live Let's Encrypt / Cloudflare calls are not made by unit tests.
 

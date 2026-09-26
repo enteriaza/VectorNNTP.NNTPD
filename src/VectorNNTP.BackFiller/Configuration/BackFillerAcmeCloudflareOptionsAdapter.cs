@@ -11,10 +11,11 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Common does not decide where application configuration lives. BackFiller
 /// binds those values from section <see cref="BackFillerOptions.SectionName"/>
 /// and this adapter feeds the reusable ACME/Cloudflare/networking types.
-/// Cloudflare, ACME PKCS#12, and ACME account-email secrets remain
+/// Cloudflare API key, ACME PKCS#12, and ACME account-email secrets remain
 /// root-level <c>VECTOR__*</c> values and are overlaid here. Root-level
 /// <c>BindAddress</c>, <c>BindPort</c>, <c>BindPortTls</c>,
-/// <c>DnsSuffix</c>, and ACME directory keys are ignored.
+/// <c>CloudFlareZoneId</c>, <c>DnsSuffix</c>, and ACME directory keys are ignored.
+/// Cleartext <c>BindPort</c> is not a BackFiller setting and is not copied.
 /// </remarks>
 public static class BackFillerAcmeCloudflareOptionsAdapter
 {
@@ -35,7 +36,6 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
         ArgumentNullException.ThrowIfNull(configuration);
 
         destination.BindAddress = source.BindAddress is { Length: > 0 } ? source.BindAddress : [];
-        destination.BindPort = source.BindPort ?? destination.BindPort;
         destination.BindPortTls = source.BindPortTls ?? 0;
         destination.AcmeDirectoryUrl = string.IsNullOrWhiteSpace(source.AcmeDirectoryUrl)
             ? AcmeCloudflareOptions.DefaultAcmeDirectoryUrl
@@ -43,6 +43,7 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
         destination.AcmeRenewalThresholdDays = source.AcmeRenewalThresholdDays;
         destination.AcmeStateDir = ResolveAcmeStateDir(source);
         destination.DnsSuffix = source.DnsSuffix;
+        destination.CloudFlareZoneId = source.CloudFlareZoneId ?? string.Empty;
         destination.Fqdn = source.Fqdn;
         destination.IncludeNewsHostnameInCertificate = false;
 
@@ -50,9 +51,9 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
     }
 
     /// <summary>
-    /// Copies Cloudflare, ACME PKCS#12, and ACME account-email secrets from
-    /// the configuration root. Does not copy bind, DNS suffix, or ACME
-    /// directory settings.
+    /// Copies Cloudflare API key, ACME PKCS#12, and ACME account-email secrets
+    /// from the configuration root. Does not copy bind, zone id, DNS suffix, or
+    /// ACME directory settings.
     /// </summary>
     /// <param name="destination">Common options instance to update.</param>
     /// <param name="configuration">Full configuration root.</param>
@@ -65,8 +66,6 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
             configuration[nameof(AcmeCloudflareOptions.AcmeCertificatePassword)] ?? string.Empty;
         destination.CloudFlareApiKey =
             configuration[nameof(AcmeCloudflareOptions.CloudFlareApiKey)] ?? string.Empty;
-        destination.CloudFlareZoneId =
-            configuration[nameof(AcmeCloudflareOptions.CloudFlareZoneId)] ?? string.Empty;
         AcmeCloudflareOptions.OverlayAcmeAccountEmail(destination, configuration);
 
         var timeout = configuration[nameof(AcmeCloudflareOptions.CloudFlareOperationTimeout)];

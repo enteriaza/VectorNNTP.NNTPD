@@ -255,11 +255,12 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
             ["AcmeEmail"] = RootEmail,
             ["AcmeRenewalThresholdDays"] = "30",
             ["AcmeStateDir"] = RootStateDir,
-            ["BindAddress:0"] = "*",
-            ["BindPortTls"] = "0",
+            [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
+            [$"{NntpdOptions.SectionName}:BindPortTls"] = "0",
             [NntpdOptions.CloudFlareApiKeyConfigurationKey] = TestHostFactory.TestCloudFlareApiKey,
-            [NntpdOptions.CloudFlareZoneIdConfigurationKey] = "5811a29d39a0732afb5f160c9b137c3d",
-            ["DnsSuffix"] = "usenet.ninja",
+            [$"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareZoneIdConfigurationKey}"] =
+                "5811a29d39a0732afb5f160c9b137c3d",
+            [$"{NntpdOptions.SectionName}:DnsSuffix"] = "usenet.ninja",
             ["Redis:Host:0"] = "127.0.0.1",
             ["RabbitMQ:Hosts:0"] = "127.0.0.1",
             [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =

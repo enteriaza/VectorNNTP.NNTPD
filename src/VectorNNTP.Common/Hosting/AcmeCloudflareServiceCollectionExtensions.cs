@@ -4,6 +4,7 @@ using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.Common.Hosting;
 
@@ -53,6 +54,11 @@ public static class AcmeCloudflareServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<CloudflareDnsClient>>());
         });
 
+        services.TryAddSingleton<TlsCertificateContextProvider>();
+        services.TryAddSingleton<ITlsCertificateContextProvider>(static sp =>
+            sp.GetRequiredService<TlsCertificateContextProvider>());
+        services.TryAddSingleton<IAcmeCertificatePublisher>(static sp =>
+            sp.GetRequiredService<TlsCertificateContextProvider>());
         services.TryAddSingleton<AcmeComponentFactory>();
         services.TryAddSingleton<IServerCertificateProvider>(static sp =>
             sp.GetRequiredService<AcmeComponentFactory>().GetCertificateProvider());

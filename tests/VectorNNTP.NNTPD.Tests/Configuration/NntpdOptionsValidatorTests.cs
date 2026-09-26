@@ -1,4 +1,7 @@
+using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Net;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -504,6 +507,123 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
+    public void Bind_ConsumesNntpdSectionBindSettings()
+    {
+        var json = """
+                   {
+                     "Nntpd": {
+                       "BindAddress": [ "127.0.0.1" ],
+                       "BindPort": 1199,
+                       "BindPortTls": 0,
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "ServerId": 1
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+
+        Assert.Equal(["127.0.0.1"], options.BindAddress);
+        Assert.Equal(1199, options.BindPort);
+        Assert.Equal(0, options.BindPortTls);
+        Assert.False(options.IsTlsListenerEnabled);
+    }
+
+    [Fact]
+    public void Bind_DoesNotConsumeRootLevelBindSettings()
+    {
+        var json = """
+                   {
+                     "BindAddress": [ "203.0.113.10" ],
+                     "BindPort": 2119,
+                     "BindPortTls": 2563,
+                     "Nntpd": {
+                       "BindAddress": [ "127.0.0.1" ],
+                       "BindPort": 1199,
+                       "BindPortTls": 0,
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "ServerId": 1
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json, forceTlsDisabled: false);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+
+        Assert.Equal(["127.0.0.1"], options.BindAddress);
+        Assert.Equal(1199, options.BindPort);
+        Assert.Equal(0, options.BindPortTls);
+        Assert.False(options.IsTlsListenerEnabled);
+    }
+
+    [Fact]
+    public void Bind_RootLevelBindSettingsAlone_DoNotReplaceNntpdDefaults()
+    {
+        var json = """
+                   {
+                     "BindAddress": [ "203.0.113.10" ],
+                     "BindPort": 2119,
+                     "BindPortTls": 2563,
+                     "Nntpd": {
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "ServerId": 1
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json, forceTlsDisabled: false);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+
+        Assert.Equal(["*"], options.BindAddress);
+        Assert.Equal(119, options.BindPort);
+        Assert.Equal(0, options.BindPortTls);
+    }
+
+    [Fact]
+    public void Bind_OverlayPreservesNntpdBindPortTlsAgainstRoot()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"{NntpdOptions.SectionName}:BindAddress:0"] = "127.0.0.1",
+                    [$"{NntpdOptions.SectionName}:BindPort"] = "1199",
+                    [$"{NntpdOptions.SectionName}:BindPortTls"] = "5633",
+                    ["BindAddress:0"] = "203.0.113.10",
+                    ["BindPort"] = "2119",
+                    ["BindPortTls"] = "2563",
+                })
+            .Build();
+
+        var options = new NntpdOptions();
+        configuration.GetSection(NntpdOptions.SectionName).Bind(options);
+        NntpdAcmeCloudflareOptionsOverlay.OverlaySharedFromRootPreservingApplicationAcme(
+            options,
+            configuration);
+
+        Assert.Equal(["127.0.0.1"], options.BindAddress);
+        Assert.Equal(1199, options.BindPort);
+        Assert.Equal(5633, options.BindPortTls);
+        Assert.True(options.IsTlsListenerEnabled);
+    }
+
+    [Fact]
+    public void Bind_HasNoDedicatedBindEnvironmentVariableConstants()
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy;
+        Assert.Null(typeof(AcmeCloudflareOptions).GetField("BindAddressEnvironmentVariable", flags));
+        Assert.Null(typeof(AcmeCloudflareOptions).GetField("BindPortEnvironmentVariable", flags));
+        Assert.Null(typeof(AcmeCloudflareOptions).GetField("BindPortTlsEnvironmentVariable", flags));
+        Assert.Null(typeof(NntpdOptions).GetField("BindAddressEnvironmentVariable", flags));
+        Assert.Null(typeof(NntpdOptions).GetField("BindPortEnvironmentVariable", flags));
+        Assert.Null(typeof(NntpdOptions).GetField("BindPortTlsEnvironmentVariable", flags));
+    }
+
+    [Fact]
     public void Bind_HonoursConfiguredLogDir()
     {
         var configuration = new ConfigurationBuilder()
@@ -558,6 +678,63 @@ public sealed class NntpdConfigurationTests
         Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("XTracePreviousKey", out _));
         Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("NewsmasterUser", out _));
         Assert.False(doc.RootElement.GetProperty("Nntpd").TryGetProperty("NewsmasterPassword", out _));
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresBindSettingsUnderNntpdOnly()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        var nntpd = root.GetProperty("Nntpd");
+
+        Assert.False(root.TryGetProperty("BindAddress", out _));
+        Assert.False(root.TryGetProperty("BindPort", out _));
+        Assert.False(root.TryGetProperty("BindPortTls", out _));
+        Assert.Equal("198.18.0.66", nntpd.GetProperty("BindAddress")[0].GetString());
+        Assert.Equal("2c0f:f030:1442:501:198:18:0:66", nntpd.GetProperty("BindAddress")[1].GetString());
+        Assert.Equal(1199, nntpd.GetProperty("BindPort").GetInt32());
+        Assert.Equal(5633, nntpd.GetProperty("BindPortTls").GetInt32());
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresZoneIdAndDnsSuffixUnderNntpdOnly()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        var nntpd = root.GetProperty("Nntpd");
+
+        Assert.False(root.TryGetProperty("CloudFlareZoneId", out _));
+        Assert.False(root.TryGetProperty("DnsSuffix", out _));
+        Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", nntpd.GetProperty("CloudFlareZoneId").GetString());
+        Assert.Equal("usenet.ninja", nntpd.GetProperty("DnsSuffix").GetString());
+    }
+
+    [Fact]
+    public void Bind_ConsumesNntpdZoneIdAndDnsSuffix()
+    {
+        var json = """
+                   {
+                     "CloudFlareZoneId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                     "DnsSuffix": "root-must-not-bind.example",
+                     "Nntpd": {
+                       "BindAddress": [ "*" ],
+                       "BindPortTls": 0,
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "DnsSuffix": "example.test",
+                       "ServerId": 7
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+
+        Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", options.CloudFlareZoneId);
+        Assert.Equal("example.test", options.DnsSuffix);
+        Assert.Equal("nntpd07.example.test", options.Fqdn);
     }
 
     [Fact]
@@ -661,15 +838,12 @@ public sealed class NntpdConfigurationTests
     public void EnvironmentVariables_UseExactCloudFlareNames()
     {
         const string envKey = "env-override-cloudflare-api-key";
-        const string envZone = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
         var previousKey = Environment.GetEnvironmentVariable(NntpdOptions.CloudFlareApiKeyEnvironmentVariable);
-        var previousZone = Environment.GetEnvironmentVariable(NntpdOptions.CloudFlareZoneIdEnvironmentVariable);
 
         try
         {
             Environment.SetEnvironmentVariable(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, envKey);
-            Environment.SetEnvironmentVariable(NntpdOptions.CloudFlareZoneIdEnvironmentVariable, envZone);
 
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(
@@ -678,9 +852,9 @@ public sealed class NntpdConfigurationTests
                         [$"{NntpdOptions.SectionName}:ServerId"] = "1",
                         [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] =
                             TestHostFactory.TestXTraceKey,
-                        ["BindAddress:0"] = "*",
+                        [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
                         [$"{NntpdOptions.SectionName}:CloudFlareApiKey"] = "from-json-should-be-overridden",
-                        [$"{NntpdOptions.SectionName}:CloudFlareZoneId"] = "from-json-should-be-overridden",
+                        [$"{NntpdOptions.SectionName}:CloudFlareZoneId"] = "5811a29d39a0732afb5f160c9b137c3d",
                     })
                 .AddVectorEnvironmentVariables()
                 .Build();
@@ -701,14 +875,12 @@ public sealed class NntpdConfigurationTests
             var options = provider.GetRequiredService<IOptions<NntpdOptions>>().Value;
 
             Assert.Equal(envKey, options.CloudFlareApiKey);
-            Assert.Equal(envZone, options.CloudFlareZoneId);
+            Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", options.CloudFlareZoneId);
             Assert.Equal(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, "VECTOR__CLOUDFLAREAPIKEY");
-            Assert.Equal(NntpdOptions.CloudFlareZoneIdEnvironmentVariable, "VECTOR__CLOUDFLAREZONEID");
         }
         finally
         {
             Environment.SetEnvironmentVariable(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, previousKey);
-            Environment.SetEnvironmentVariable(NntpdOptions.CloudFlareZoneIdEnvironmentVariable, previousZone);
         }
     }
 
@@ -1072,6 +1244,16 @@ public sealed class NntpdConfigurationTests
         options.DnsSuffix = "usenet.ninja";
 
         Assert.Equal(expected, options.Fqdn);
+        Assert.Equal(NntpdOptions.ApplicationPrefix, "nntpd");
+        Assert.Equal(
+            ApplicationFqdn.Build(NntpdOptions.ApplicationPrefix, serverId, "usenet.ninja"),
+            options.Fqdn);
+        Assert.Equal(
+            ApplicationFqdn.Build(NntpdOptions.ApplicationPrefix, serverId, "usenet.ninja"),
+            NntpdOptions.FormatFqdn(serverId, "usenet.ninja"));
+        Assert.NotEqual(
+            ApplicationFqdn.Build("backfiller", serverId, "usenet.ninja"),
+            options.Fqdn);
         Assert.DoesNotContain("nntpd.", options.Fqdn, StringComparison.Ordinal);
         Assert.StartsWith($"nntpd{serverId:00}.", options.Fqdn, StringComparison.Ordinal);
 
@@ -1104,6 +1286,44 @@ public sealed class NntpdConfigurationTests
             .Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains("1–99", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null, ServerIdValidationStatus.Missing, false)]
+    [InlineData(-1, ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(0, ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(1, ServerIdValidationStatus.Valid, true)]
+    [InlineData(8, ServerIdValidationStatus.Valid, true)]
+    [InlineData(99, ServerIdValidationStatus.Valid, true)]
+    [InlineData(100, ServerIdValidationStatus.OutOfRange, false)]
+    public void ServerId_DelegatesNumericRulesToCommon(
+        int? serverId,
+        ServerIdValidationStatus expectedStatus,
+        bool expectedValid)
+    {
+        Assert.Equal(expectedStatus, ServerIdRules.Classify(serverId));
+
+        var options = TestHostFactory.CreateValidOptions();
+        options.ServerId = serverId;
+        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
+            .Validate(null, options);
+
+        Assert.Equal(expectedValid, result.Succeeded);
+        if (!expectedValid)
+        {
+            Assert.Contains("1–99", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ServerId_RangeAttribute_UsesSharedCommonBounds()
+    {
+        var range = typeof(NntpdOptions)
+            .GetProperty(nameof(NntpdOptions.ServerId))
+            ?.GetCustomAttribute<RangeAttribute>();
+        Assert.NotNull(range);
+        Assert.Equal(ServerIdRules.MinimumInclusive, Convert.ToInt32(range.Minimum, CultureInfo.InvariantCulture));
+        Assert.Equal(ServerIdRules.MaximumInclusive, Convert.ToInt32(range.Maximum, CultureInfo.InvariantCulture));
     }
 
     [Theory]
@@ -1328,7 +1548,7 @@ public sealed class NntpdConfigurationTests
         Assert.True(string.IsNullOrEmpty(options.NewsmasterPassword));
     }
 
-    private static IHost CreateEmptyNntpdHost(string json)
+    private static IHost CreateEmptyNntpdHost(string json, bool forceTlsDisabled = true)
     {
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -1349,9 +1569,13 @@ public sealed class NntpdConfigurationTests
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
         builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeRabbitMqConnectionFactory>();
-        builder.Services.PostConfigure<NntpdOptions>(static options =>
+        builder.Services.PostConfigure<NntpdOptions>(options =>
         {
-            options.BindPortTls = 0;
+            if (forceTlsDisabled)
+            {
+                options.BindPortTls = 0;
+            }
+
             options.AcmeEmail = string.Empty;
         });
         builder.Configuration.AddInMemoryCollection(
@@ -1378,8 +1602,8 @@ public sealed class NntpdConfigurationTests
             {
                 [NntpdOptions.CloudFlareApiKeyConfigurationKey] =
                     TestHostFactory.TestCloudFlareApiKey,
-                ["BindAddress:0"] = "*",
-                ["BindAddress:1"] = null,
+                [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
+                [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",

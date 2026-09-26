@@ -24,16 +24,72 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
 
-        Assert.Equal("backfiller", options.Name);
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
         Assert.Equal(1, options.ServerId);
         Assert.Equal("usenet.ninja", options.DnsSuffix);
+        Assert.Equal("0123456789abcdef0123456789abcdef", options.CloudFlareZoneId);
         Assert.Equal(["127.0.0.1"], options.BindAddress ?? []);
-        Assert.Equal(1190, options.BindPort);
+        Assert.Null(typeof(BackFillerOptions).GetProperty("BindPort"));
         Assert.Equal(1190, options.BindPortTls);
         Assert.Equal(BackFillerOptions.DefaultAcmeDirectoryUrl, options.AcmeDirectoryUrl);
         Assert.Equal(30, options.AcmeRenewalThresholdDays);
         Assert.Equal("certs/", options.AcmeStateDir);
         Assert.Equal("backfiller01.usenet.ninja", options.Fqdn);
+    }
+
+    [Fact]
+    public void Production_appsettings_declares_bind_address_and_tls_port_without_bind_port()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        var section = root.GetProperty("BackFiller");
+
+        Assert.False(root.TryGetProperty("BindAddress", out _));
+        Assert.False(root.TryGetProperty("BindPort", out _));
+        Assert.False(root.TryGetProperty("BindPortTls", out _));
+        Assert.False(section.TryGetProperty("BindPort", out _));
+        Assert.Equal("*", section.GetProperty("BindAddress")[0].GetString());
+        Assert.Equal(1190, section.GetProperty("BindPortTls").GetInt32());
+        Assert.False(root.TryGetProperty("CloudFlareZoneId", out _));
+        Assert.False(root.TryGetProperty("DnsSuffix", out _));
+        Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", section.GetProperty("CloudFlareZoneId").GetString());
+        Assert.Equal("usenet.ninja", section.GetProperty("DnsSuffix").GetString());
+        Assert.False(root.TryGetProperty("ServerId", out _));
+        Assert.Equal(1, section.GetProperty("ServerId").GetInt32());
+        Assert.False(section.TryGetProperty("Name", out _));
+    }
+
+    [Fact]
+    public void Root_level_cloudflare_zone_id_is_not_used_by_backfiller()
+    {
+        var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
+        pairs["CloudFlareZoneId"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        pairs["BackFiller:CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef";
+
+        var (identity, acme, _) = BindThroughAdapter(pairs);
+
+        Assert.Equal("0123456789abcdef0123456789abcdef", identity.CloudFlareZoneId);
+        Assert.Equal("0123456789abcdef0123456789abcdef", acme.CloudFlareZoneId);
+        Assert.NotEqual("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", acme.CloudFlareZoneId);
+    }
+
+    [Fact]
+    public void Adapter_does_not_copy_or_require_cleartext_bind_port()
+    {
+        var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
+        pairs.Remove("BackFiller:BindPort");
+        pairs["BackFiller:BindPortTls"] = "5630";
+        pairs["BindPort"] = "2119";
+
+        var (identity, acme, runtime) = BindThroughAdapter(pairs);
+
+        Assert.Null(typeof(BackFillerOptions).GetProperty("BindPort"));
+        Assert.Equal(5630, identity.BindPortTls);
+        Assert.Equal(5630, acme.BindPortTls);
+        Assert.Equal(5630, runtime.BindPortTls);
+        Assert.NotEqual(2119, runtime.BindPortTls);
+        Assert.NotEqual(acme.BindPort, runtime.BindPortTls);
     }
 
     [Fact]
@@ -71,7 +127,7 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
             nestedKey: "BackFiller:BindPortTls",
             nestedValue: "1190",
             actual: static (_, acme, runtime) => acme.BindPortTls.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            runtimeActual: static runtime => runtime.BindPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            runtimeActual: static runtime => runtime.BindPortTls.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -102,6 +158,7 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         pairs["BackFiller:BindAddress:0"] = "127.0.0.1";
         pairs["BackFiller:BindPort"] = "1191";
         pairs["BackFiller:BindPortTls"] = "5630";
+        pairs["BindPort"] = "2119";
         pairs["BackFiller:AcmeDirectoryUrl"] = "https://acme-staging-v02.api.letsencrypt.org/directory";
         pairs["BackFiller:AcmeEmail"] = "ignored-section@example.test";
         pairs["BackFiller:AcmeRenewalThresholdDays"] = "14";
@@ -114,20 +171,21 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
 
         var (identity, acme, runtime) = BindThroughAdapter(pairs);
 
-        Assert.Equal("cache", identity.Name);
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
         Assert.Equal(7, identity.ServerId);
-        Assert.Equal("cache07.example.test", identity.Fqdn);
+        Assert.Equal("backfiller07.example.test", identity.Fqdn);
         Assert.Equal(5630, acme.BindPortTls);
-        Assert.Equal(1191, acme.BindPort);
+        Assert.NotEqual(1191, acme.BindPort);
+        Assert.NotEqual(2119, acme.BindPortTls);
         Assert.Equal("https://acme-staging-v02.api.letsencrypt.org/directory", acme.AcmeDirectoryUrl);
         Assert.Equal("ops@example.test", acme.AcmeEmail);
         Assert.Equal(14, acme.AcmeRenewalThresholdDays);
         Assert.Equal("nested-certs/", acme.AcmeStateDir);
         Assert.False(acme.IncludeNewsHostnameInCertificate);
-        Assert.Equal(["cache07.example.test"], CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate));
-        Assert.Equal(5630, runtime.BindPort);
-        Assert.Equal("cache07.example.test", runtime.Fqdn);
-        Assert.Equal(["cache07.example.test"], runtime.CertificateDomainNames);
+        Assert.Equal(["backfiller07.example.test"], CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate));
+        Assert.Equal(5630, runtime.BindPortTls);
+        Assert.Equal("backfiller07.example.test", runtime.Fqdn);
+        Assert.Equal(["backfiller07.example.test"], runtime.CertificateDomainNames);
         Assert.DoesNotContain("news.usenet.ninja", runtime.CertificateDomainNames);
     }
 
@@ -153,7 +211,7 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         Assert.Equal("backfiller01.usenet.ninja", acme.Fqdn);
         Assert.Equal(BackFillerOptions.DefaultAcmeDirectoryUrl, acme.AcmeDirectoryUrl);
         Assert.False(acme.IncludeNewsHostnameInCertificate);
-        Assert.Equal(1190, runtime.BindPort);
+        Assert.Equal(1190, runtime.BindPortTls);
         Assert.Equal("backfiller01.usenet.ninja", runtime.Fqdn);
         Assert.DoesNotContain("198.51.100.10", acme.BindAddress);
     }
@@ -266,11 +324,26 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<VectorNNTP.BackFiller.RabbitMq.IBackFillerRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
-        builder.Services.AddSingleton<VectorNNTP.BackFiller.Listener.ICacheListenerCertificateSource>(
-            new StaticCacheListenerCertificateSource());
         builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
             new FakeProviderAccountSource());
         builder.AddBackFillerHosting();
         return builder.Build();
+    }
+
+    private static string FindProductionAppsettings()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "appsettings.json");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate src/VectorNNTP.BackFiller/appsettings.json.");
     }
 }

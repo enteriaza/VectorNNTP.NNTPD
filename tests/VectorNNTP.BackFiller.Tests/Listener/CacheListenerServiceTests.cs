@@ -11,6 +11,7 @@ using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.BackFiller.Tests.Listener;
 
@@ -35,7 +36,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         var runtime = CreateRuntime(GetFreePort());
         var service = new CacheListenerService(
             runtime,
-            new StaticCacheListenerCertificateSource(available: false),
+            TestListenerCertificates.CreateUnavailableProvider(),
             ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
             NullLogger<CacheListenerService>.Instance);
 
@@ -56,6 +57,31 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         Assert.Equal(ListenerOpcode.GetResponseFound, found.Header.Opcode);
         Assert.Equal(payload, found.Payload);
         await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(21));
+    }
+
+    [Fact]
+    public async Task Renewal_publishes_to_the_running_listener_without_restart()
+    {
+        await using var context = await ListenerContext.StartAsync();
+        Assert.Equal(CacheListenerState.Running, context.Service.State);
+
+        await using (var initial = await ConnectAsync(context))
+        {
+            Assert.Contains(
+                "backfiller.test",
+                initial.Stream.RemoteCertificate!.Subject,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        using var renewed = TestListenerCertificates.CreateSelfSigned("backfiller-renewed.test");
+        context.Certificates.PublishFromPfx(renewed.Export(X509ContentType.Pfx, "test"), "test");
+
+        await using var client = await ConnectAsync(context);
+        var remote = client.Stream.RemoteCertificate;
+        Assert.NotNull(remote);
+        Assert.Contains("backfiller-renewed.test", remote.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("CN=backfiller.test", remote.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(CacheListenerState.Running, context.Service.State);
     }
 
     [Fact]
@@ -99,7 +125,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     public async Task Handshake_timeout_releases_the_connection_slot()
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.BindPort = GetFreePort();
+        options.BindPortTls = GetFreePort();
         options.BindAddress = ["127.0.0.1"];
         options.Listener.TlsHandshakeTimeoutSeconds = 1;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
@@ -123,7 +149,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     public async Task Io_timeout_closes_an_idle_authenticated_connection()
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.BindPort = GetFreePort();
+        options.BindPortTls = GetFreePort();
         options.BindAddress = ["127.0.0.1"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
@@ -144,7 +170,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     public async Task Wildcard_bind_listens_on_ipv4_any()
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.BindPort = GetFreePort();
+        options.BindPortTls = GetFreePort();
         options.BindAddress = ["*"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
@@ -152,7 +178,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
 
         await using var service = new CacheListenerService(
             runtime,
-            new StaticCacheListenerCertificateSource(),
+            TestListenerCertificates.CreatePublishedProvider(),
             ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
             NullLogger<CacheListenerService>.Instance);
         await service.StartAsync(CancellationToken.None);
@@ -229,7 +255,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         {
             service = new CacheListenerService(
                 runtime,
-                new StaticCacheListenerCertificateSource(),
+                TestListenerCertificates.CreatePublishedProvider(),
                 ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
                 NullLogger<CacheListenerService>.Instance);
             await service.StartAsync(CancellationToken.None);
@@ -315,7 +341,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     private static BackFillerRuntimeOptions CreateRuntime(int port, int maxConnections = 8)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.BindPort = port;
+        options.BindPortTls = port;
         options.BindAddress = ["127.0.0.1"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
@@ -400,13 +426,16 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
 
     private sealed class ListenerContext : IAsyncDisposable
     {
-        private ListenerContext(CacheListenerService service, int port)
+        private ListenerContext(CacheListenerService service, int port, TlsCertificateContextProvider certificates)
         {
             Service = service;
             Port = port;
+            Certificates = certificates;
         }
 
         public CacheListenerService Service { get; }
+
+        public TlsCertificateContextProvider Certificates { get; }
 
         public int Port { get; }
 
@@ -421,15 +450,20 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
                 authority.Retain(ArticleWorkTestDeliveries.CanonicalMessageId, payload);
             }
 
+            var certificates = TestListenerCertificates.CreatePublishedProvider();
             var service = new CacheListenerService(
                 runtime,
-                new StaticCacheListenerCertificateSource(),
+                certificates,
                 authority,
                 NullLogger<CacheListenerService>.Instance);
             await service.StartAsync(CancellationToken.None);
-            return new ListenerContext(service, runtime.BindPort);
+            return new ListenerContext(service, runtime.BindPortTls, certificates);
         }
 
-        public async ValueTask DisposeAsync() => await Service.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await Service.DisposeAsync();
+            await Certificates.DisposeAsync();
+        }
     }
 }

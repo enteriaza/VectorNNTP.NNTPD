@@ -1,20 +1,18 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using VectorNNTP.BackFiller.Listener;
+using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles;
 
 internal static class TestListenerCertificates
 {
-    internal static CacheListenerCertificateMaterial CreateMaterial() =>
-        new(CreateSelfSigned());
-
-    internal static X509Certificate2 CreateSelfSigned()
+    internal static X509Certificate2 CreateSelfSigned(string commonName = "backfiller.test")
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
-            "CN=backfiller.test",
+            "CN=" + commonName,
             rsa,
             HashAlgorithmName.SHA256,
             RSASignaturePadding.Pkcs1);
@@ -39,52 +37,17 @@ internal static class TestListenerCertificates
         return X509CertificateLoader.LoadPkcs12(
             created.Export(X509ContentType.Pfx, "test"),
             "test",
-            CacheListenerCertificateMaterial.TlsServerKeyStorageFlags);
+            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.UserKeySet);
     }
 
-    internal static void WritePkcs12(string path, string password)
+    internal static TlsCertificateContextProvider CreatePublishedProvider(string commonName = "backfiller.test")
     {
-        using var certificate = CreateSelfSigned();
-        File.WriteAllBytes(path, certificate.Export(X509ContentType.Pfx, password));
+        var provider = new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance);
+        using var certificate = CreateSelfSigned(commonName);
+        provider.PublishFromPfx(certificate.Export(X509ContentType.Pfx, "test"), "test");
+        return provider;
     }
 
-    internal static void WritePublicOnlyPkcs12(string path, string password)
-    {
-        using var certificate = CreateSelfSigned();
-        var publicBytes = certificate.Export(X509ContentType.Cert);
-        using var publicOnly = X509CertificateLoader.LoadCertificate(publicBytes);
-        File.WriteAllBytes(path, publicOnly.Export(X509ContentType.Pfx, password));
-    }
-}
-
-internal sealed class StaticCacheListenerCertificateSource : ICacheListenerCertificateSource
-{
-    private readonly byte[]? _pfx;
-
-    public StaticCacheListenerCertificateSource(bool available = true)
-    {
-        if (available)
-        {
-            using var cert = TestListenerCertificates.CreateSelfSigned();
-            _pfx = cert.Export(X509ContentType.Pfx, "test");
-        }
-    }
-
-    public bool Fail { get; set; }
-
-    public bool TryGetCurrent(out CacheListenerCertificateMaterial result)
-    {
-        if (Fail || _pfx is null)
-        {
-            result = null!;
-            return false;
-        }
-
-        result = new CacheListenerCertificateMaterial(
-            X509CertificateLoader.LoadPkcs12(
-                _pfx,
-                "test",
-                CacheListenerCertificateMaterial.TlsServerKeyStorageFlags));
-        return true;
-    }
+    internal static TlsCertificateContextProvider CreateUnavailableProvider() =>
+        new(NullLogger<TlsCertificateContextProvider>.Instance);
 }

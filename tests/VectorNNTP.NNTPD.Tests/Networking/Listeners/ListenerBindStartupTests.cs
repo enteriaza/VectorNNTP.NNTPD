@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -233,6 +234,42 @@ public sealed class ListenerBindStartupTests
         Assert.True(service.HasActiveAcceptLoops);
         await service.StopAsync(CancellationToken.None);
         Assert.False(service.HasActiveAcceptLoops);
+    }
+
+    [Fact]
+    public async Task PlainStartAsync_SuccessfulBind_UsesNntpdSectionBindSettings()
+    {
+        var port = TestHostFactory.GetFreeTcpPort();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"{NntpdOptions.SectionName}:BindAddress:0"] = "127.0.0.1",
+                    [$"{NntpdOptions.SectionName}:BindPort"] = port.ToString(),
+                    [$"{NntpdOptions.SectionName}:BindPortTls"] = "0",
+                    ["BindAddress:0"] = "203.0.113.10",
+                    ["BindPort"] = "2119",
+                    ["BindPortTls"] = "2563",
+                })
+            .Build();
+
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindAddress = [];
+        configuration.GetSection(NntpdOptions.SectionName).Bind(options);
+        NntpdAcmeCloudflareOptionsOverlay.OverlaySharedFromRootPreservingApplicationAcme(
+            options,
+            configuration);
+
+        await using var service = CreatePlain(options, listenBinder: null);
+        await service.StartAsync(CancellationToken.None);
+
+        Assert.Equal(["127.0.0.1"], options.BindAddress);
+        Assert.Equal(port, options.BindPort);
+        Assert.Equal(0, options.BindPortTls);
+        Assert.NotEmpty(service.LocalEndPoints);
+        Assert.Equal(port, service.LocalEndPoints[0].Port);
+        Assert.Equal(IPAddress.Loopback, service.LocalEndPoints[0].Address);
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]

@@ -1,10 +1,10 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the application-neutral root (shared bind/Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
-Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. Bind ports/DNS and `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`, `VECTOR__CLOUDFLAREZONEID`, `VECTOR__BINDADDRESS`, `VECTOR__BINDPORT`, `VECTOR__BINDPORTTLS`) overlay from the configuration root. VectorNNTP.BackFiller owns bind, ACME directory, and DNS-suffix values under the `BackFiller` section and adapts them into Common; it does not read those keys from the root. BackFiller still uses root `VECTOR__*` secrets for Cloudflare, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and `VECTOR__CONNECTIONSTRINGS__GRABBERDB`. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
+Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`) overlay from the configuration root. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, ACME directory, DNS-suffix, and ServerId values under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; it does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses root `VECTOR__*` secrets for the Cloudflare API key, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and `VECTOR__CONNECTIONSTRINGS__GRABBERDB`. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
-NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller application settings stay under section `BackFiller`. Identity may still be supplied by `BACKFILLER__NAME` and `BACKFILLER__SERVERID`. `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default 60, range 5–3600) is how often BackFiller polls MySQL for provider/account rows. It is not the per-account NNTP DATE keepalive; that value is the MySQL `nntpbackfilleraccounts.keepalive` column. There is no `BackFiller:Accounts` section and no dedicated environment-variable mapping for the refresh interval.
+NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller application settings stay under section `BackFiller`. `ServerId` binds from `BackFiller:ServerId` only (required integer `1–99`, same bounds as NNTPD; no default; no ServerId environment-variable overlay). There is no `BackFiller:Name` and no `BACKFILLER__NAME`. The canonical BackFiller FQDN is `backfiller{ServerId:00}.{DnsSuffix}`; the `backfiller` prefix is fixed application identity, not configuration. `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default 60, range 5–3600) is how often BackFiller polls MySQL for provider/account rows. It is not the per-account NNTP DATE keepalive; that value is the MySQL `nntpbackfilleraccounts.keepalive` column. There is no `BackFiller:Accounts` section and no dedicated environment-variable mapping for the refresh interval.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
@@ -17,9 +17,9 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `StartupTimeout` | `TimeSpan?` | `null` | no | Optional startup bound; `null` means host cancellation only |
 | `StopHostOnUnexpectedServiceTermination` | bool | `true` | no | Request host stop when a service fails while `Running` |
 | `Systemd:*` | object | see existing docs | no | systemd notify / watchdog options |
-| `BindAddress` | string array | omitted → `["*"]` after normalize | no | Local listen addresses (see below) |
-| `BindPort` | int | `119` | no | Cleartext NNTP TCP port (`1–65535`) |
-| `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. |
+| `Nntpd:BindAddress` | string array | omitted → `["*"]` after normalize | no | Local listen addresses (see below). Root-level `BindAddress` is not consumed. |
+| `Nntpd:BindPort` | int | `119` | no | Cleartext NNTP TCP port (`1–65535`). Root-level `BindPort` is not consumed. |
+| `Nntpd:BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. Root-level `BindPortTls` is not consumed. |
 | `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` and AUTHINFO SASL when the connection is not TLS-protected (see below) |
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `ACMEACCOUNT` / `VECTOR__ACMEACCOUNT` | string | _(none)_ | **yes when TLS enabled** | Shared ACME account contact email used by every Common ACME client. Not `Nntpd:AcmeEmail` or `BackFiller:AcmeEmail`. Ignored when `BindPortTls` is `0`. |
@@ -28,9 +28,9 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
 | `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
-| `CloudFlareZoneId` | string | _(none)_ | **yes** | Cloudflare zone identifier |
+| `Nntpd:CloudFlareZoneId` | string | _(none)_ | **yes** | Cloudflare zone identifier. Root-level `CloudFlareZoneId` is not consumed. |
 | `CloudFlareOperationTimeout` | duration | `00:02:00` | no | Wall-clock budget for one reconcile or cleanup operation (shared by HTTP 429 retries and reconciler attempt backoffs) |
-| `DnsSuffix` | string | `usenet.ninja` | no | DNS suffix used to generate the FQDN |
+| `Nntpd:DnsSuffix` | string | `usenet.ninja` | no | DNS suffix used to generate the FQDN. Root-level `DnsSuffix` is not consumed. |
 | `ServerId` | int | _(none)_ | **yes** | Server identity `1–99`; no silent default |
 | `ProxyHosts` | string array | `[]` (empty) | no | Trusted HAProxy PROXY-protocol peer IPs (see below) |
 | `Fqdn` | _(generated)_ | `nntpd{ServerId:00}.{DnsSuffix}` | n/a | **Not configurable** |
@@ -644,7 +644,7 @@ The current `appsettings.json` snapshot was taken from the INN source (`Last mod
 
 ## Bind addresses
 
-`BindAddress` is a JSON array of one or more entries. Every entry is validated; none are silently dropped.
+`Nntpd:BindAddress` is a JSON array of one or more entries. Every entry is validated; none are silently dropped. Root-level `BindAddress` is not consumed by NNTPD.
 
 | Form | Meaning |
 |------|---------|
@@ -682,13 +682,17 @@ If the resolved set is empty, **startup fails** with a clear error. The host doe
 Example:
 
 ```json
-"BindAddress": [ "*" ]
+"Nntpd": {
+  "BindAddress": [ "*" ]
+}
 ```
 
 Multiple addresses:
 
 ```json
-"BindAddress": [ "198.18.0.66", "2001:db8::1" ]
+"Nntpd": {
+  "BindAddress": [ "198.18.0.66", "2001:db8::1" ]
+}
 ```
 
 ## ProxyHosts (HAProxy PROXY protocol)
@@ -909,10 +913,12 @@ Example:
 
 ## TCP ports
 
+NNTPD bind ports come only from the `Nntpd` section.
+
 | Setting | Default | Valid values | Behavior |
 |---------|---------|--------------|----------|
-| `BindPort` | `119` | `1–65535` | Missing → default; invalid → hard startup failure |
-| `BindPortTls` | `0` | `0` or `1–65535` | `0` / unset → TLS disabled (`IsTlsListenerEnabled == false`); `1–65535` → TLS enabled |
+| `Nntpd:BindPort` | `119` | `1–65535` | Missing → default; invalid → hard startup failure |
+| `Nntpd:BindPortTls` | `0` | `0` or `1–65535` | `0` / unset → TLS disabled (`IsTlsListenerEnabled == false`); `1–65535` → TLS enabled |
 | `AllowCleartextAuth` | `true` | bool | Missing → default `true` (cleartext AUTHINFO USER/PASS permitted) |
 
 Negative values and values above `65535` fail validation. Dependents use `BindPortTls` / `IsTlsListenerEnabled` to distinguish disabled vs enabled TLS listener configuration.
@@ -989,7 +995,7 @@ NNTPD TLS certificates must include exactly these DNS names (no wildcards, no ex
 1. The generated `{Fqdn}` (for example `nntpd01.usenet.ninja`)
 2. `news.usenet.ninja`
 
-BackFiller requests only `{BackFillerFqdn}` and must not include `news.usenet.ninja`. The ACME implementation is shared; only the requested name set is application-specific.
+BackFiller requests only its canonical FQDN `backfiller{ServerId:00}.{DnsSuffix}` (for example `backfiller01.usenet.ninja`) and must not include `news.usenet.ninja`. The ACME implementation is shared; only the requested name set is application-specific. The `nntpd` and `backfiller` prefixes are fixed application identity, not configuration.
 
 Requested names must fall under `DnsSuffix` (label-boundary zone coverage) because DNS-01 challenges are published in the single Cloudflare zone identified by `CloudFlareZoneId`.
 
@@ -1047,7 +1053,7 @@ There is **no** silent disable path and **no** skip of DNS integration for missi
 
 This host is **authoritative for the entire configured `{Fqdn}`** inside `CloudFlareZoneId`. Ownership is the **exact** DNS name only (not the zone, not a textual suffix, not parent or child names such as `other.{Fqdn}`).
 
-After options validation, `CloudflareDnsReconciliationService` (an `IApplicationService`) is registered **first** among application services:
+After options validation, Common `CloudflareDnsReconciliationApplicationService` (a thin `IApplicationService` adapter around `CloudflareDnsReconciliationService`) is registered **first** among application services in NNTPD and BackFiller:
 
 - **Start:** reconciles and verifies A/AAAA before other services start. The host reaches `Running` only when reconciliation **and verification** succeed for **both** A and AAAA.
 - **Stop (reverse order):** after other application services stop (future listeners stop accepting connections first), cleanup **deletes every DNS record for the exact `{Fqdn}`**, regardless of type (A, AAAA, CNAME, TXT, MX, SRV, CAA, HTTPS, SVCB, and any other types returned by Cloudflare for that exact name), including duplicates. Success requires a post-delete list showing **no** remaining records for that exact name.
@@ -1152,20 +1158,21 @@ Example (user scope, PowerShell — replace secret values locally; do not commit
 
 ## Generated FQDN
 
-The FQDN is computed only from validated `ServerId` and `DnsSuffix`:
+Each application computes one canonical FQDN from its fixed prefix, validated `ServerId`, and `DnsSuffix`. The prefix is application identity, not configuration. There is no `Nntpd:Name` and no `BackFiller:Name`.
 
 ```text
-nntpd{ServerId:00}.{DnsSuffix}
+NNTPD:      nntpd{ServerId:00}.{DnsSuffix}
+BackFiller: backfiller{ServerId:00}.{DnsSuffix}
 ```
 
-There is **no** dot between `nntpd` and the two-digit id.
+There is **no** dot between the prefix and the two-digit id. Output is invariant lowercase. The two applications never share a hostname for the same `ServerId` / `DnsSuffix`.
 
-| `ServerId` | FQDN |
-| ---------: | ---- |
-| 1 | `nntpd01.usenet.ninja` |
-| 8 | `nntpd08.usenet.ninja` |
-| 9 | `nntpd09.usenet.ninja` |
-| 10 | `nntpd10.usenet.ninja` |
-| 99 | `nntpd99.usenet.ninja` |
+| `ServerId` | NNTPD | BackFiller |
+| ---------: | ----- | ---------- |
+| 1 | `nntpd01.usenet.ninja` | `backfiller01.usenet.ninja` |
+| 8 | `nntpd08.usenet.ninja` | `backfiller08.usenet.ninja` |
+| 9 | `nntpd09.usenet.ninja` | `backfiller09.usenet.ninja` |
+| 10 | `nntpd10.usenet.ninja` | `backfiller10.usenet.ninja` |
+| 99 | `nntpd99.usenet.ninja` | `backfiller99.usenet.ninja` |
 
-The FQDN cannot be set in `appsettings.json` or overridden by an environment variable. Dependent services must use the generated value only after source settings have been validated.
+The FQDN cannot be set in `appsettings.json` or overridden by an environment variable. After validation, hostname-dependent consumers (ACME, certificate SANs, Cloudflare, journal/live paths) use the generated value and do not reconstruct it independently.

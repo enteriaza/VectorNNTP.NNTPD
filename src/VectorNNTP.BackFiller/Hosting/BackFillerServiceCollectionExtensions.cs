@@ -13,8 +13,10 @@ using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.BackFiller.Hosting;
 
@@ -33,9 +35,9 @@ public static class BackFillerServiceCollectionExtensions
     /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
     /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
     /// after the connection owner, then <see cref="NntpProviderRegistry"/>,
-    /// then <see cref="CloudflareDnsReconciliationHostedService"/>, then
-    /// <see cref="BackFillerApplicationHostedService"/> (starts
-    /// <see cref="AcmeCertificateApplicationService"/> then
+    /// then <see cref="BackFillerApplicationHostedService"/> (starts
+    /// <see cref="CloudflareDnsReconciliationApplicationService"/>, then
+    /// <see cref="AcmeCertificateApplicationService"/>, then
     /// <see cref="CacheListenerService"/>), then
     /// <see cref="ArticleRetentionSweepService"/>, then
     /// <see cref="ArticleWorkResponsePublisher"/>,
@@ -87,7 +89,6 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, AcmeCloudflareOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
         builder.Services.AddAcmeCloudflareInfrastructure();
-        builder.Services.TryAddSingleton<IAcmeCertificatePublisher, CacheListenerCertificatePublisher>();
 
         builder.Services
             .AddOptions<BackFillerConnectionStringsOptions>()
@@ -143,7 +144,8 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<ProviderAccountConfigurationService>());
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<NntpProviderRegistry>());
-        builder.Services.AddSingleton<IHostedService, CloudflareDnsReconciliationHostedService>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
         builder.Services.TryAddSingleton<INntpArticleRetriever, NntpArticleRetriever>();
@@ -156,10 +158,9 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton(static provider => new ArticleRetentionSweepService(
             provider.GetRequiredService<IArticleRetentionAuthority>(),
             provider.GetRequiredService<ILogger<ArticleRetentionSweepService>>()));
-        builder.Services.TryAddSingleton<ICacheListenerCertificateSource, AcmeCacheListenerCertificateSource>();
         builder.Services.AddSingleton(static provider => new CacheListenerService(
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
-            provider.GetRequiredService<ICacheListenerCertificateSource>(),
+            provider.GetRequiredService<ITlsCertificateContextProvider>(),
             provider.GetRequiredService<IArticleRetentionAuthority>(),
             provider.GetRequiredService<IAcmeCertificateReadiness>(),
             provider.GetRequiredService<IBackFillerStartupJournal>(),

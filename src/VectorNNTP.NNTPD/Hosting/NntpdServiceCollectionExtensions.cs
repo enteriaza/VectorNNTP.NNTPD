@@ -13,7 +13,6 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting.Systemd;
 using VectorNNTP.NNTPD.Networking;
-using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
@@ -60,11 +59,6 @@ public static class NntpdServiceCollectionExtensions
 
         services.TryAddSingleton<ITrustedProxyHosts, TrustedProxyHosts>();
         services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
-        services.TryAddSingleton<TlsCertificateContextProvider>();
-        services.TryAddSingleton<ITlsCertificateContextProvider>(static sp =>
-            sp.GetRequiredService<TlsCertificateContextProvider>());
-        services.TryAddSingleton<IAcmeCertificatePublisher>(static sp =>
-            sp.GetRequiredService<TlsCertificateContextProvider>());
         // Newsmaster (when configured) then MySQL nntpusers. Reader-authority only.
         // Transit AUTHINFO is MODE STREAM / Transit authority and never enters this provider.
         services.TryAddSingleton<MySqlUserRecordStore>();
@@ -78,7 +72,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<DistributedSessionStateTracker>(static sp =>
         {
             var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
-            var nodeId = options.ServerId is int id ? $"nntpd{id:00}" : "nntpd";
+            var nodeId = options.ServerId is { } id
+                ? ApplicationFqdn.FormatHostLabel(NntpdOptions.ApplicationPrefix, id)
+                : NntpdOptions.ApplicationPrefix;
             return new DistributedSessionStateTracker(
                 sp.GetRequiredService<ISessionStateStore>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedSessionStateTracker>>(),
@@ -108,7 +104,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<DistributedTransitPeerStateTracker>(static sp =>
         {
             var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
-            var nodeId = options.ServerId is int id ? $"nntpd{id:00}" : "nntpd";
+            var nodeId = options.ServerId is { } id
+                ? ApplicationFqdn.FormatHostLabel(NntpdOptions.ApplicationPrefix, id)
+                : NntpdOptions.ApplicationPrefix;
             return new DistributedTransitPeerStateTracker(
                 sp.GetRequiredService<ITransitPeerStateStore>(),
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedTransitPeerStateTracker>>(),

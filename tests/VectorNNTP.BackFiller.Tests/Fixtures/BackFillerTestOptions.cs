@@ -15,11 +15,10 @@ internal static class BackFillerTestOptions
     {
         return new BackFillerOptions
         {
-            Name = "backfiller",
             ServerId = 1,
             DnsSuffix = "usenet.ninja",
+            CloudFlareZoneId = "0123456789abcdef0123456789abcdef",
             BindAddress = ["127.0.0.1"],
-            BindPort = 1190,
             BindPortTls = 1190,
             AcmeDirectoryUrl = BackFillerOptions.DefaultAcmeDirectoryUrl,
             AcmeRenewalThresholdDays = BackFillerOptions.DefaultAcmeRenewalThresholdDays,
@@ -40,12 +39,11 @@ internal static class BackFillerTestOptions
     {
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
-            ["BackFiller:Name"] = "backfiller",
             ["BackFiller:ServerId"] = "1",
             ["BackFiller:DnsSuffix"] = "usenet.ninja",
+            ["BackFiller:CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
             ["BackFiller:LogDirectory"] = "logs",
             ["BackFiller:BindAddress:0"] = "127.0.0.1",
-            ["BackFiller:BindPort"] = "1190",
             ["BackFiller:BindPortTls"] = "1190",
             ["BackFiller:AcmeDirectoryUrl"] = BackFillerOptions.DefaultAcmeDirectoryUrl,
             [AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "security@usenet.ninja",
@@ -57,7 +55,6 @@ internal static class BackFillerTestOptions
             ["RabbitMQ:EnableSsl"] = "false",
             ["AcmeCertificatePassword"] = SecretPfx,
             ["CloudFlareApiKey"] = SecretToken,
-            ["CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
             ["BackFiller:Shutdown:GracePeriodSeconds"] = "45",
             ["ConnectionStrings:GrabberDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
         };
@@ -93,7 +90,6 @@ internal static class BackFillerTestOptions
         return new AcmeCloudflareOptions
         {
             BindAddress = identity.BindAddress is { Length: > 0 } ? identity.BindAddress : ["127.0.0.1"],
-            BindPort = identity.BindPort ?? 1190,
             BindPortTls = identity.BindPortTls ?? 1190,
             Fqdn = identity.Fqdn,
             IncludeNewsHostnameInCertificate = false,
@@ -103,7 +99,7 @@ internal static class BackFillerTestOptions
             AcmeCertificatePassword = SecretPfx,
             AcmeStateDir = string.IsNullOrWhiteSpace(identity.AcmeStateDir) ? identity.CertificateDirectory : identity.AcmeStateDir,
             CloudFlareApiKey = SecretToken,
-            CloudFlareZoneId = "0123456789abcdef0123456789abcdef",
+            CloudFlareZoneId = identity.CloudFlareZoneId,
             DnsSuffix = identity.DnsSuffix,
         };
     }

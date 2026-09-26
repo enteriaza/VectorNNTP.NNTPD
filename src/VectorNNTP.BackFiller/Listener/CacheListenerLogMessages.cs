@@ -6,8 +6,8 @@ internal static partial class CacheListenerLogMessages
     [LoggerMessage(
         EventId = 5400,
         Level = LogLevel.Information,
-        Message = "Cache Listener starting bindPort={BindPort} endpoints={EndpointCount}")]
-    public static partial void Starting(ILogger logger, int BindPort, int EndpointCount);
+        Message = "Cache Listener starting bindPortTls={BindPortTls} endpoints={EndpointCount}")]
+    public static partial void Starting(ILogger logger, int BindPortTls, int EndpointCount);
 
     [LoggerMessage(
         EventId = 5401,
@@ -18,8 +18,8 @@ internal static partial class CacheListenerLogMessages
     [LoggerMessage(
         EventId = 5402,
         Level = LogLevel.Information,
-        Message = "Cache Listener running sockets={SocketCount} bindPort={BindPort}")]
-    public static partial void Running(ILogger logger, int SocketCount, int BindPort);
+        Message = "Cache Listener running sockets={SocketCount} bindPortTls={BindPortTls}")]
+    public static partial void Running(ILogger logger, int SocketCount, int BindPortTls);
 
     [LoggerMessage(
         EventId = 5403,

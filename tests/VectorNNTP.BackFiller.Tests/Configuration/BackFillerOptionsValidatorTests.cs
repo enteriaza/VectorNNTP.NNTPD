@@ -27,46 +27,39 @@ public sealed class BackFillerOptionsValidatorTests
 
     [Theory]
     [InlineData(-1)]
+    [InlineData(0)]
     [InlineData(100)]
-    public void Validate_fails_for_server_id_outside_0_to_99(int serverId)
+    public void Validate_fails_for_server_id_outside_1_to_99(int serverId)
     {
         var options = BackFillerTestOptions.CreateValid();
         options.ServerId = serverId;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("ServerId", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static f => f.Contains("1–99", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Validate_allows_server_id_zero()
+    public void Validate_does_not_require_a_configurable_name()
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.ServerId = 0;
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Succeeded);
-        Assert.Equal("backfiller00.usenet.ninja", options.Fqdn);
+        Assert.Equal("backfiller01.usenet.ninja", options.Fqdn);
     }
 
     [Fact]
-    public void Validate_fails_when_name_is_missing()
-    {
-        var options = BackFillerTestOptions.CreateValid();
-        options.Name = " ";
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("Name", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Validate_fails_when_shared_bind_port_is_invalid()
+    public void Validate_does_not_require_common_cleartext_bind_port()
     {
         var acme = BackFillerTestOptions.CreateValidAcme();
         acme.BindPort = 0;
-        acme.BindPortTls = 0;
         var result = new AcmeCloudflareOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, acme);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("BindPort", StringComparison.Ordinal));
+        Assert.True(result.Succeeded);
+        Assert.DoesNotContain(
+            result.Failures ?? [],
+            static f => f.Contains("BindPort", StringComparison.Ordinal)
+                        && !f.Contains("BindPortTls", StringComparison.Ordinal));
     }
 
     [Fact]

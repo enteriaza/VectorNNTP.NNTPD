@@ -5,7 +5,6 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
-using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
@@ -118,7 +117,6 @@ public sealed class BackFillerPlatformHostingTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
-        builder.Services.AddSingleton<ICacheListenerCertificateSource>(new StaticCacheListenerCertificateSource());
         builder.ConfigureBackFillerPlatformHosting();
         builder.AddBackFillerHosting();
         return builder.Build();

@@ -11,13 +11,12 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Never log a complete instance: it contains RabbitMQ, ACME, and GrabberDB secrets.
 /// </remarks>
 public sealed record BackFillerRuntimeOptions(
-    string Name,
     int ServerId,
     string DnsSuffix,
     string Fqdn,
     IReadOnlyList<string> BindAddressTokens,
     IReadOnlyList<IPAddress> CanonicalBindAddresses,
-    int BindPort,
+    int BindPortTls,
     string LogDirectory,
     string CertificateDirectory,
     BackFillerShutdownRuntimeOptions Shutdown,

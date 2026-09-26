@@ -8,19 +8,21 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// Shared bind, ACME, and Cloudflare settings owned by VectorNNTP.Common.
 /// </summary>
 /// <remarks>
-/// Bound from the configuration root (application-neutral). NNTPD and BackFiller
-/// consume the same contract. Environment variables use
-/// <see cref="VectorEnvironment.Prefix"/> only
-/// (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
-/// <c>VECTOR__ACMEACCOUNT</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
-/// <c>VECTOR__BINDADDRESS</c>, <c>VECTOR__BINDPORT</c>,
-/// <c>VECTOR__BINDPORTTLS</c>). There is no application-specific prefix and no alias.
+/// Shared ACME/Cloudflare secrets overlay from the configuration root.
+/// Bind addresses, ports, Cloudflare zone id, and DNS suffix are
+/// application-section configuration (NNTPD: <c>Nntpd</c>; BackFiller:
+/// <c>BackFiller</c>) and are not overlaid from the root. Environment
+/// variables for shared secrets use <see cref="VectorEnvironment.Prefix"/>
+/// only (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
+/// <c>VECTOR__ACMEACCOUNT</c>).
+/// There is no application-specific prefix and no alias for those secrets.
 /// Never log a complete instance: it contains API keys and PFX passwords.
 /// </remarks>
 public class AcmeCloudflareOptions
 {
     /// <summary>
-    /// Shared settings bind from the configuration root. There is no application section name.
+    /// Shared ACME/Cloudflare secrets bind from the configuration root. There is no
+    /// application section name for those secrets.
     /// </summary>
     public const string SectionName = "";
 
@@ -60,24 +62,6 @@ public class AcmeCloudflareOptions
     /// </summary>
     public const string AcmeAccountEnvironmentVariable = "VECTOR__ACMEACCOUNT";
 
-    /// <summary>
-    /// Environment variable that supplies <see cref="BindAddress"/>
-    /// (<c>VECTOR__BINDADDRESS</c>).
-    /// </summary>
-    public const string BindAddressEnvironmentVariable = "VECTOR__BINDADDRESS";
-
-    /// <summary>
-    /// Environment variable that supplies <see cref="BindPort"/>
-    /// (<c>VECTOR__BINDPORT</c>).
-    /// </summary>
-    public const string BindPortEnvironmentVariable = "VECTOR__BINDPORT";
-
-    /// <summary>
-    /// Environment variable that supplies <see cref="BindPortTls"/>
-    /// (<c>VECTOR__BINDPORTTLS</c>).
-    /// </summary>
-    public const string BindPortTlsEnvironmentVariable = "VECTOR__BINDPORTTLS";
-
     /// <summary>Default Let's Encrypt staging ACME directory URL.</summary>
     public const string DefaultAcmeDirectoryUrl =
         "https://acme-staging-v02.api.letsencrypt.org/directory";
@@ -96,8 +80,12 @@ public class AcmeCloudflareOptions
     /// <summary>Gets or sets the local listen addresses.</summary>
     public string[] BindAddress { get; set; } = [];
 
-    /// <summary>Gets or sets the cleartext TCP port used by NNTPD. BackFiller does not listen on this port.</summary>
-    [Range(1, 65535)]
+    /// <summary>
+    /// Gets or sets the cleartext TCP port used by NNTPD.
+    /// </summary>
+    /// <remarks>
+    /// NNTPD validates this property. TLS-only hosts do not supply or consume it.
+    /// </remarks>
     public int BindPort { get; set; } = 119;
 
     /// <summary>
@@ -182,8 +170,10 @@ public class AcmeCloudflareOptions
     }
 
     /// <summary>
-    /// Overwrites shared properties from the configuration root so application
-    /// sections cannot alias these keys.
+    /// Overwrites shared ACME/Cloudflare secrets and Cloudflare operation
+    /// timeout from the configuration root so application sections cannot
+    /// alias those keys. Bind addresses, ports, zone id, and DNS suffix are
+    /// left unchanged.
     /// </summary>
     /// <param name="options">The options instance to update.</param>
     /// <param name="configuration">The full configuration root.</param>
@@ -192,9 +182,6 @@ public class AcmeCloudflareOptions
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        options.BindAddress = configuration.GetSection(nameof(BindAddress)).Get<string[]>() ?? [];
-        options.BindPort = configuration.GetValue(nameof(BindPort), 119);
-        options.BindPortTls = configuration.GetValue(nameof(BindPortTls), 0);
         options.AcmeDirectoryUrl = configuration[nameof(AcmeDirectoryUrl)] ?? DefaultAcmeDirectoryUrl;
         OverlayAcmeAccountEmail(options, configuration);
         options.AcmeStateDir = configuration[nameof(AcmeStateDir)] ?? DefaultAcmeStateDir;
@@ -203,8 +190,6 @@ public class AcmeCloudflareOptions
             DefaultAcmeRenewalThresholdDays);
         options.AcmeCertificatePassword = configuration[nameof(AcmeCertificatePassword)] ?? string.Empty;
         options.CloudFlareApiKey = configuration[nameof(CloudFlareApiKey)] ?? string.Empty;
-        options.CloudFlareZoneId = configuration[nameof(CloudFlareZoneId)] ?? string.Empty;
-        options.DnsSuffix = configuration[nameof(DnsSuffix)] ?? "usenet.ninja";
 
         var timeout = configuration[nameof(CloudFlareOperationTimeout)];
         if (!string.IsNullOrWhiteSpace(timeout) && TimeSpan.TryParse(timeout, out var parsed))

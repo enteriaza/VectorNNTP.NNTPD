@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Configuration;
@@ -17,8 +18,12 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Bind, ACME directory, and DNS-suffix values are BackFiller-owned and bind
 /// only from section <see cref="SectionName"/>. Root-level
 /// <c>BindAddress</c>, <c>BindPort</c>, <c>BindPortTls</c>, <c>DnsSuffix</c>,
-/// and ACME directory keys are not used. Identity may still be supplied by
-/// <c>BACKFILLER__NAME</c> and <c>BACKFILLER__SERVERID</c>. RabbitMQ uses
+/// and ACME directory keys are not used. There is no
+/// <c>BackFiller:BindPort</c>; the listener port is
+/// <see cref="BindPortTls"/> only. <see cref="ServerId"/> binds from
+/// <c>BackFiller:ServerId</c> only. The FQDN is
+/// <c>backfiller{ServerId:00}.{DnsSuffix}</c>; there is no configurable Name.
+/// RabbitMQ uses
 /// <c>VECTOR__RABBITMQ__*</c>. GrabberDB uses
 /// <c>VECTOR__CONNECTIONSTRINGS__GRABBERDB</c>. Cloudflare secrets use
 /// <c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
@@ -40,11 +45,8 @@ public sealed class BackFillerOptions
     /// <summary>Canonical VectorNNTP environment-variable prefix.</summary>
     public const string EnvironmentVariablePrefix = VectorEnvironment.Prefix;
 
-    /// <summary>Application environment variable that supplies <see cref="Name"/>.</summary>
-    public const string NameEnvironmentVariable = "BACKFILLER__NAME";
-
-    /// <summary>Application environment variable that supplies <see cref="ServerId"/>.</summary>
-    public const string ServerIdEnvironmentVariable = "BACKFILLER__SERVERID";
+    /// <summary>Fixed FQDN host-label prefix. Not configuration.</summary>
+    public const string ApplicationPrefix = "backfiller";
 
     /// <summary>Canonical environment variable that supplies RabbitMQ username.</summary>
     public const string RabbitMqUsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
@@ -83,17 +85,16 @@ public sealed class BackFillerOptions
     public const int MaximumAccountRefreshIntervalSeconds = 3600;
 
     /// <summary>
-    /// Gets or sets the instance name used as the FQDN host-label prefix.
-    /// </summary>
-    /// <remarks>Required. Must be a DNS label. Canonicalized to lowercase for FQDN construction.</remarks>
-    public string? Name { get; set; }
-
-    /// <summary>
     /// Gets or sets the BackFiller server identifier.
     /// </summary>
     /// <remarks>
-    /// Required. Range 0–99 (old <c>BackFiller:Id</c> contract). Nullable so missing is distinct from 0.
+    /// Required. No default. Must be explicitly configured as an integer in
+    /// <c>1–99</c> via <c>BackFiller:ServerId</c> (same bounds as NNTPD).
+    /// Typed as <see cref="Nullable{T}"/> so a missing value remains distinguishable
+    /// from an explicit <c>0</c> (both fail validation).
     /// </remarks>
+    [Required]
+    [Range(ServerIdRules.MinimumInclusive, ServerIdRules.MaximumInclusive)]
     public int? ServerId { get; set; }
 
     /// <summary>
@@ -102,14 +103,22 @@ public sealed class BackFillerOptions
     public string DnsSuffix { get; set; } = DefaultDnsSuffix;
 
     /// <summary>
-    /// Gets the generated FQDN. Not independently configurable.
+    /// Gets or sets the Cloudflare zone identifier.
     /// </summary>
+    /// <remarks>
+    /// Required. Binds from <c>BackFiller:CloudFlareZoneId</c> only.
+    /// </remarks>
+    public string CloudFlareZoneId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets the generated FQDN <c>backfiller{ServerId:00}.{DnsSuffix}</c>.
+    /// </summary>
+    /// <remarks>Not independently configurable. The <c>backfiller</c> prefix is fixed.</remarks>
     public string Fqdn =>
-        !string.IsNullOrWhiteSpace(Name)
-        && ServerId is { } serverId
-        && serverId is >= BackFillerIdentity.MinimumServerId and <= BackFillerIdentity.MaximumServerId
+        ServerId is { } serverId
+        && ServerIdRules.IsInRange(serverId)
         && !string.IsNullOrWhiteSpace(DnsSuffix)
-            ? BackFillerIdentity.BuildFqdn(Name, serverId, DnsSuffix)
+            ? ApplicationFqdn.Build(ApplicationPrefix, serverId, DnsSuffix)
             : string.Empty;
 
     /// <summary>
@@ -120,15 +129,6 @@ public sealed class BackFillerOptions
     /// Explicit addresses must be locally assigned. Wildcards: <c>*</c>, <c>0.0.0.0</c>, <c>::</c>.
     /// </remarks>
     public string[]? BindAddress { get; set; }
-
-    /// <summary>
-    /// Gets or sets the TCP port used by all listener bind addresses.
-    /// </summary>
-    /// <remarks>
-    /// BackFiller does not listen on this cleartext port. Range 1–65535 when set.
-    /// <see cref="BindPortTls"/> is the listen port.
-    /// </remarks>
-    public int? BindPort { get; set; }
 
     /// <summary>
     /// Gets or sets the TLS TCP port used by the Cache Listener.
@@ -220,22 +220,8 @@ public sealed class BackFillerOptions
     /// </summary>
     /// <param name="entry">Configured token.</param>
     /// <returns><see langword="true"/> for all-interface wildcards.</returns>
-    public static bool IsBindAddressWildcard(string entry)
-    {
-        if (string.IsNullOrWhiteSpace(entry))
-        {
-            return false;
-        }
-
-        var trimmed = entry.Trim();
-        if (trimmed is "*" or "+")
-        {
-            return true;
-        }
-
-        return System.Net.IPAddress.TryParse(trimmed, out var address)
-               && (address.Equals(System.Net.IPAddress.Any) || address.Equals(System.Net.IPAddress.IPv6Any));
-    }
+    public static bool IsBindAddressWildcard(string entry) =>
+        AcmeCloudflareOptions.IsBindAddressWildcard(entry);
 }
 
 /// <summary>Graceful shutdown policy.</summary>

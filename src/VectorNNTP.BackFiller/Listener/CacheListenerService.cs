@@ -9,6 +9,7 @@ using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener;
@@ -20,7 +21,7 @@ namespace VectorNNTP.BackFiller.Listener;
 public sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
 {
     private readonly BackFillerRuntimeOptions _runtime;
-    private readonly ICacheListenerCertificateSource _certificates;
+    private readonly ITlsCertificateContextProvider _certificates;
     private readonly IArticleRetentionAuthority _retention;
     private readonly IAcmeCertificateReadiness _readiness;
     private readonly IBackFillerStartupJournal _journal;
@@ -30,7 +31,6 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     private readonly ConcurrentDictionary<Task, byte> _connections = new();
     private readonly CancellationTokenSource _runCts = new();
 
-    private CacheListenerCertificateMaterial? _certificate;
     private Task? _acceptTask;
     private CacheListenerState _state = CacheListenerState.Created;
     private int _started;
@@ -40,7 +40,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
     public CacheListenerService(
         BackFillerRuntimeOptions runtime,
-        ICacheListenerCertificateSource certificates,
+        ITlsCertificateContextProvider certificates,
         IArticleRetentionAuthority retention,
         ILogger<CacheListenerService> logger)
         : this(runtime, certificates, retention, CreateReadyGate(), new BackFillerStartupJournal(), logger)
@@ -50,7 +50,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     /// <summary>Initializes the Listener service.</summary>
     public CacheListenerService(
         BackFillerRuntimeOptions runtime,
-        ICacheListenerCertificateSource certificates,
+        ITlsCertificateContextProvider certificates,
         IArticleRetentionAuthority retention,
         IAcmeCertificateReadiness readiness,
         IBackFillerStartupJournal journal,
@@ -131,20 +131,19 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
                     "Cache Listener cannot start because the ACME certificate is not ready. BackFiller is TLS-only and the listener must wait for a usable certificate.");
             }
 
-            if (!_certificates.TryGetCurrent(out var material))
+            if (!_certificates.IsAvailable)
             {
                 throw new InvalidOperationException(
                     $"Cache Listener cannot start because no TLS certificate is available from ACME state '{_runtime.CertificateDirectory}'.");
             }
 
-            _certificate = material;
-            var bindings = ListenEndpointPlanner.Plan(_runtime.BindAddressTokens, _runtime.BindPort);
+            var bindings = ListenEndpointPlanner.Plan(_runtime.BindAddressTokens, _runtime.BindPortTls);
             if (bindings.Count == 0)
             {
                 throw new InvalidOperationException("Cache Listener has no bind endpoints.");
             }
 
-            CacheListenerLogMessages.Starting(_logger, _runtime.BindPort, bindings.Count);
+            CacheListenerLogMessages.Starting(_logger, _runtime.BindPortTls, bindings.Count);
             BindEndpoints(bindings);
             if (_listenSockets.Count == 0)
             {
@@ -156,7 +155,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
                 _state = CacheListenerState.Running;
             }
 
-            CacheListenerLogMessages.Running(_logger, _listenSockets.Count, _runtime.BindPort);
+            CacheListenerLogMessages.Running(_logger, _listenSockets.Count, _runtime.BindPortTls);
             _journal.Record(BackFillerStartupStages.ListenerStarted);
             _acceptTask = AcceptAllAsync(_runCts.Token);
         }
@@ -320,22 +319,15 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
         try
         {
             await using var network = new NetworkStream(accepted, ownsSocket: true);
-            var certificate = _certificate ?? throw new InvalidOperationException("Listener certificate is unavailable.");
+            using var lease = _certificates.Acquire();
             await using var ssl = new SslStream(network, leaveInnerStreamOpen: true);
             var options = new SslServerAuthenticationOptions
             {
                 EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                 ClientCertificateRequired = false,
                 CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                ServerCertificateContext = lease.Context,
             };
-            if (certificate.Context is not null)
-            {
-                options.ServerCertificateContext = certificate.Context;
-            }
-            else
-            {
-                options.ServerCertificate = certificate.Certificate;
-            }
 
             using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             handshakeCts.CancelAfter(_runtime.Listener.TlsHandshakeTimeout);
@@ -440,8 +432,8 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     private async Task DisposeBoundResourcesAsync()
     {
         CloseListenSockets();
-        _certificate?.Dispose();
-        _certificate = null;
+        // Certificate publication is owned by the Common TLS provider; outstanding leases
+        // keep retired generations alive until each connection completes.
         await Task.CompletedTask.ConfigureAwait(false);
     }
 }

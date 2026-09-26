@@ -38,27 +38,32 @@ public sealed class BackFillerConfigurationBindingTests
         Assert.Equal("BackFiller", BackFillerOptions.SectionName);
         Assert.Equal("ConnectionStrings", BackFillerConnectionStringsOptions.SectionName);
 
-        Assert.Equal("BackFiller:Name", ToApplicationConfigurationPath(BackFillerOptions.NameEnvironmentVariable));
-        Assert.Equal("BackFiller:ServerId", ToApplicationConfigurationPath(BackFillerOptions.ServerIdEnvironmentVariable));
+        Assert.Null(typeof(BackFillerOptions).GetField(
+            "NameEnvironmentVariable",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
         Assert.Equal("RABBITMQ:USERNAME", ToConfigurationPath(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
         Assert.Equal("RABBITMQ:PASSWORD", ToConfigurationPath(BackFillerOptions.RabbitMqPasswordEnvironmentVariable));
         Assert.Equal("CONNECTIONSTRINGS:GRABBERDB", ToConfigurationPath(BackFillerOptions.GrabberDbEnvironmentVariable));
-        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.NameEnvironmentVariable));
-        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.ServerIdEnvironmentVariable));
         Assert.True(VectorEnvironment.IsCanonicalName(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
     }
 
     [Fact]
     public void Bind_populates_options_from_canonical_prefixed_paths()
     {
-        var configuration = ConfigurationFromEnvironmentVariables(
-            (BackFillerOptions.NameEnvironmentVariable, "canonical-name"),
-            (BackFillerOptions.ServerIdEnvironmentVariable, "8"),
-            (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "canonical-user"),
-            (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
-            (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
-            (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
-            (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
+        var configuration = new ConfigurationBuilder()
+            .AddConfiguration(ConfigurationFromEnvironmentVariables(
+                (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "canonical-user"),
+                (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
+                (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
+                (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
+                (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz")))
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BackFiller:ServerId"] = "8",
+                ["BackFiller:DnsSuffix"] = "usenet.ninja",
+            })
+            .Build();
 
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
@@ -70,8 +75,11 @@ public sealed class BackFillerConfigurationBindingTests
         var connectionStrings = new BackFillerConnectionStringsOptions();
         configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
 
-        Assert.Equal("canonical-name", options.Name);
         Assert.Equal(8, options.ServerId);
+        Assert.Equal("backfiller08.usenet.ninja", options.Fqdn);
+        Assert.Equal(
+            ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, 8, "usenet.ninja"),
+            options.Fqdn);
         Assert.Equal("canonical-user", options.RabbitMQ.Username);
         Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
         Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
@@ -143,8 +151,6 @@ public sealed class BackFillerConfigurationBindingTests
     public void Prefixed_environment_variables_reach_runtime_options()
     {
         using var environment = new IsolatedEnvironment(
-            (BackFillerOptions.NameEnvironmentVariable, "env-name"),
-            (BackFillerOptions.ServerIdEnvironmentVariable, "8"),
             (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "env-user"),
             (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
             (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
@@ -152,7 +158,13 @@ public sealed class BackFillerConfigurationBindingTests
             (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
             (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
 
-        var configuration = environment.BuildHostConfiguration();
+        var configuration = new ConfigurationBuilder()
+            .AddConfiguration(environment.BuildHostConfiguration())
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BackFiller:ServerId"] = "8",
+            })
+            .Build();
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
         var rabbit = new BackFillerRabbitMqOptions();
@@ -163,7 +175,6 @@ public sealed class BackFillerConfigurationBindingTests
         var connectionStrings = new BackFillerConnectionStringsOptions();
         configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
 
-        Assert.Equal("env-name", options.Name);
         Assert.Equal(8, options.ServerId);
         Assert.Equal("env-user", options.RabbitMQ.Username);
         Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
@@ -173,35 +184,30 @@ public sealed class BackFillerConfigurationBindingTests
     }
 
     [Fact]
-    public void Whitespace_name_from_the_prefixed_environment_fails_validation()
+    public void Leftover_name_environment_variable_does_not_bind_or_change_fqdn()
     {
         using var environment = new IsolatedEnvironment(
-            (BackFillerOptions.NameEnvironmentVariable, "   "));
+            ("BACKFILLER__NAME", "cache"));
 
         var configuration = environment.BuildHostConfiguration();
         var options = BackFillerTestOptions.CreateValid();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
 
-        Assert.True(string.IsNullOrWhiteSpace(options.Name));
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
+        Assert.Equal("backfiller01.usenet.ninja", options.Fqdn);
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static failure => failure.Contains("Name", StringComparison.Ordinal));
-        Assert.All(
-            result.Failures!,
-            failure =>
-            {
-                Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, failure, StringComparison.Ordinal);
-                Assert.DoesNotContain(BackFillerTestOptions.SecretPfx, failure, StringComparison.Ordinal);
-            });
+        Assert.True(result.Succeeded);
     }
 
     [Fact]
-    public void Malformed_server_id_from_the_prefixed_environment_fails_at_bind()
+    public void Malformed_server_id_from_the_section_fails_at_bind()
     {
-        using var environment = new IsolatedEnvironment(
-            (BackFillerOptions.ServerIdEnvironmentVariable, "not-an-integer"));
-
-        var configuration = environment.BuildHostConfiguration();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BackFiller:ServerId"] = "not-an-integer",
+            })
+            .Build();
         var options = BackFillerTestOptions.CreateValid();
         var ex = Assert.Throws<InvalidOperationException>(
             () => configuration.GetSection(BackFillerOptions.SectionName).Bind(options));
@@ -233,7 +239,7 @@ public sealed class BackFillerConfigurationBindingTests
         var configuration = environment.BuildHostConfiguration();
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        Assert.True(string.IsNullOrWhiteSpace(options.Name));
+        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
         Assert.Null(options.ServerId);
     }
 
@@ -261,12 +267,7 @@ public sealed class BackFillerConfigurationBindingTests
     {
         Assert.StartsWith("BACKFILLER__", environmentVariable, StringComparison.Ordinal);
         var remainder = environmentVariable["BACKFILLER__".Length..];
-        return remainder switch
-        {
-            "NAME" => "BackFiller:Name",
-            "SERVERID" => "BackFiller:ServerId",
-            _ => "BackFiller:" + remainder,
-        };
+        return "BackFiller:" + remainder;
     }
 
     private static string ToAnyConfigurationPath(string environmentVariable) =>

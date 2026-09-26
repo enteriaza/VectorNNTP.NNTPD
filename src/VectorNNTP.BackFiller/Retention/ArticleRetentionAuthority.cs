@@ -31,7 +31,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         : this(
             (runtime ?? throw new ArgumentNullException(nameof(runtime))).ArticleRetention,
             runtime.Fqdn,
-            runtime.BindPort,
+            runtime.BindPortTls,
             time,
             logger)
     {

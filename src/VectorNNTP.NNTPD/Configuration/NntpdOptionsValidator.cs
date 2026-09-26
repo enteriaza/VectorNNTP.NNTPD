@@ -36,7 +36,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateApplicationName(options, failures);
         ValidateTimeouts(options, failures);
         ValidateSystemd(options, failures);
-        ValidateBindAddresses(options, failures);
+        AcmeCloudflareOptionsValidator.CollectBindAddressFailures(options, _localIpAddressAssignee, failures);
         ValidateProxyHosts(options, failures);
         ValidatePorts(options, failures);
         ValidateCloudFlare(options, failures);
@@ -307,43 +307,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         }
     }
 
-    private void ValidateBindAddresses(NntpdOptions options, List<string> failures)
-    {
-        if (options.BindAddress is null || options.BindAddress.Length == 0)
-        {
-            failures.Add($"{nameof(NntpdOptions.BindAddress)} must contain at least one address or wildcard entry.");
-            return;
-        }
-
-        for (var i = 0; i < options.BindAddress.Length; i++)
-        {
-            var entry = options.BindAddress[i];
-            if (string.IsNullOrWhiteSpace(entry))
-            {
-                failures.Add($"{nameof(NntpdOptions.BindAddress)}[{i}] must not be empty.");
-                continue;
-            }
-
-            var trimmed = entry.Trim();
-            if (NntpdOptions.IsBindAddressWildcard(trimmed))
-            {
-                continue;
-            }
-
-            if (!IPAddress.TryParse(trimmed, out var address))
-            {
-                failures.Add($"{nameof(NntpdOptions.BindAddress)}[{i}] is not a valid IPv4 or IPv6 address.");
-                continue;
-            }
-
-            if (!_localIpAddressAssignee.IsLocallyAssigned(address))
-            {
-                failures.Add(
-                    $"{nameof(NntpdOptions.BindAddress)}[{i}] '{FormatAddressForMessage(address)}' is not assigned to any local network interface.");
-            }
-        }
-    }
-
     private static void ValidateProxyHosts(NntpdOptions options, List<string> failures)
     {
         if (options.ProxyHosts is null)
@@ -442,12 +405,11 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         }
 
         // DNS-01 identities (FQDN + news.usenet.ninja) must fall under DnsSuffix / Cloudflare zone.
-        if (options.ServerId is >= 1 and <= 99 && !string.IsNullOrWhiteSpace(options.DnsSuffix))
+        if (!string.IsNullOrWhiteSpace(options.Fqdn) && !string.IsNullOrWhiteSpace(options.DnsSuffix))
         {
             try
             {
-                var fqdn = NntpdOptions.FormatFqdn(options.ServerId.Value, options.DnsSuffix.Trim().TrimEnd('.'));
-                var identities = Acme.CertificateIdentities.ForFqdn(fqdn);
+                var identities = Acme.CertificateIdentities.ForFqdn(options.Fqdn);
                 Acme.DnsZoneCoverage.RequireIdentitiesInDnsZone(identities, options.DnsSuffix);
             }
             catch (Acme.AcmeConfigurationException ex)
@@ -500,20 +462,22 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
         {
             failures.Add(
-                $"{NntpdOptions.CloudFlareZoneIdConfigurationKey} must be configured (use environment variable {NntpdOptions.CloudFlareZoneIdEnvironmentVariable} or root key {NntpdOptions.CloudFlareZoneIdConfigurationKey}).");
+                $"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareZoneIdConfigurationKey} must be configured.");
         }
     }
 
     private static void ValidateDnsSuffixAndServerId(NntpdOptions options, List<string> failures)
     {
-        if (options.ServerId is null)
+        switch (ServerIdRules.Classify(options.ServerId))
         {
-            failures.Add(
-                $"{nameof(NntpdOptions.ServerId)} is required and must be an integer in the range 1–99 (no default; set {NntpdOptions.SectionName}:{nameof(NntpdOptions.ServerId)} or {NntpdOptions.ServerIdEnvironmentVariable}).");
-        }
-        else if (options.ServerId is < 1 or > 99)
-        {
-            failures.Add($"{nameof(NntpdOptions.ServerId)} must be an integer in the range 1–99.");
+            case ServerIdValidationStatus.Missing:
+                failures.Add(
+                    $"{nameof(NntpdOptions.ServerId)} is required and must be an integer in the range {ServerIdRules.MinimumInclusive}–{ServerIdRules.MaximumInclusive} (no default; set {NntpdOptions.SectionName}:{nameof(NntpdOptions.ServerId)} or {NntpdOptions.ServerIdEnvironmentVariable}).");
+                break;
+            case ServerIdValidationStatus.OutOfRange:
+                failures.Add(
+                    $"{nameof(NntpdOptions.ServerId)} must be an integer in the range {ServerIdRules.MinimumInclusive}–{ServerIdRules.MaximumInclusive}.");
+                break;
         }
 
         if (string.IsNullOrWhiteSpace(options.DnsSuffix))
@@ -530,13 +494,9 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         }
 
         // Ensure the generated FQDN stays within DNS length limits without allowing overrides.
-        if (options.ServerId is >= 1 and <= 99)
+        if (!string.IsNullOrWhiteSpace(options.Fqdn) && options.Fqdn.Length > ApplicationFqdn.MaximumLength)
         {
-            var fqdn = NntpdOptions.FormatFqdn(options.ServerId.Value, suffix);
-            if (fqdn.Length > 253)
-            {
-                failures.Add($"{nameof(NntpdOptions.DnsSuffix)} produces an FQDN longer than 253 characters.");
-            }
+            failures.Add($"{nameof(NntpdOptions.DnsSuffix)} produces an FQDN longer than 253 characters.");
         }
     }
 
@@ -593,12 +553,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
 
     private static bool IsDnsLabelChar(char ch) =>
         char.IsAsciiLetterOrDigit(ch) || ch == '-';
-
-    private static string FormatAddressForMessage(IPAddress address)
-    {
-        // Keep messages free of secrets; addresses themselves are not secrets.
-        return address.ToString();
-    }
 
     /// <summary>
     /// Returns whether <paramref name="text"/> contains a configured secret (for tests / diagnostics hygiene).

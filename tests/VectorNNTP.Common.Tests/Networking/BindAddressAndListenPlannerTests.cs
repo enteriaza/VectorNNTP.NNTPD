@@ -68,14 +68,17 @@ public sealed class BindAddressAndListenPlannerTests
     [Theory]
     [InlineData(0)]
     [InlineData(65536)]
-    public void Validator_RejectsInvalidBindPort(int port)
+    public void Validator_DoesNotRequireCleartextBindPort(int port)
     {
         var options = ValidOptions();
         options.BindPort = port;
         var result = new AcmeCloudflareOptionsValidator(new FakeLocalAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("BindPort", StringComparison.Ordinal));
+        Assert.True(result.Succeeded);
+        Assert.DoesNotContain(
+            result.Failures ?? [],
+            static f => f.Contains("BindPort", StringComparison.Ordinal)
+                        && !f.Contains("BindPortTls", StringComparison.Ordinal));
     }
 
     [Fact]

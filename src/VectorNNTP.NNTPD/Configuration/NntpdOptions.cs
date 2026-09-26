@@ -8,14 +8,15 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <remarks>
 /// <para>
 /// NNTPD-specific settings bind from section <see cref="SectionName"/> and
-/// <c>NNTPD__*</c> environment variables. ACME directory URL, renewal
-/// threshold, and state directory are NNTPD-owned and bind from
-/// <c>Nntpd</c> only. The ACME account email is shared Common configuration
+/// <c>NNTPD__*</c> environment variables. Bind addresses and ports, ACME
+/// directory URL, renewal threshold, and state directory are NNTPD-owned
+/// and bind from <c>Nntpd</c> only. Cloudflare zone id and DNS suffix also
+/// bind from <c>Nntpd</c> only. The ACME account email is shared Common
+/// configuration
 /// (<see cref="AcmeCloudflareOptions.AcmeAccountEnvironmentVariable"/>).
-/// Shared bind/DNS settings and <c>VECTOR__</c> secrets
+/// <c>VECTOR__</c> secrets
 /// (<see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>,
-/// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>,
-/// <see cref="AcmeCloudflareOptions.CloudFlareZoneId"/>) overlay from the
+/// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>) overlay from the
 /// configuration root. RabbitMQ settings bind from the top-level
 /// <c>RabbitMQ</c> section.
 /// </para>
@@ -34,6 +35,9 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
 {
     /// <summary>NNTPD-specific configuration section name.</summary>
     public new const string SectionName = "Nntpd";
+
+    /// <summary>Fixed FQDN host-label prefix. Not configuration.</summary>
+    public const string ApplicationPrefix = "nntpd";
 
     /// <summary>
     /// Environment variable that supplies <see cref="ServerId"/>
@@ -168,7 +172,7 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// </para>
     /// </remarks>
     [Required]
-    [Range(1, 99)]
+    [Range(ServerIdRules.MinimumInclusive, ServerIdRules.MaximumInclusive)]
     public int? ServerId { get; set; }
 
     /// <summary>
@@ -181,7 +185,9 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// can inspect the object; dependent services must use this only after validation succeeds.
     /// </remarks>
     public override string Fqdn =>
-        ServerId is { } serverId && !string.IsNullOrWhiteSpace(DnsSuffix)
+        ServerId is { } serverId
+        && ServerIdRules.IsInRange(serverId)
+        && !string.IsNullOrWhiteSpace(DnsSuffix)
             ? FormatFqdn(serverId, DnsSuffix)
             : string.Empty;
 
@@ -191,11 +197,8 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// <param name="serverId">Server id in 1–99.</param>
     /// <param name="dnsSuffix">DNS suffix without a trailing dot.</param>
     /// <returns>The FQDN string.</returns>
-    public static string FormatFqdn(int serverId, string dnsSuffix)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(dnsSuffix);
-        return $"nntpd{serverId:00}.{dnsSuffix.Trim().TrimEnd('.')}";
-    }
+    public static string FormatFqdn(int serverId, string dnsSuffix) =>
+        ApplicationFqdn.Build(ApplicationPrefix, serverId, dnsSuffix);
 
     /// <summary>
     /// Gets or sets NNTPD-local transit runtime options (STREAM TX depth).

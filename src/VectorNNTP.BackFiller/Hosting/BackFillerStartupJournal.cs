@@ -6,12 +6,6 @@ public static class BackFillerStartupStages
     /// <summary>Shared and application configuration has been bound and validated.</summary>
     public const string Configuration = "configuration";
 
-    /// <summary>Runtime bind addresses were resolved.</summary>
-    public const string BindResolution = "bind-resolution";
-
-    /// <summary>Cloudflare A/AAAA reconciliation completed.</summary>
-    public const string CloudflareReconciled = "cloudflare-reconciled";
-
     /// <summary>A usable ACME certificate has been loaded or issued.</summary>
     public const string AcmeCertificateReady = "acme-certificate-ready";
 
