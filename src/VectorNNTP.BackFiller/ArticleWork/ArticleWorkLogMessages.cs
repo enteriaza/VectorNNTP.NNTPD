@@ -52,6 +52,24 @@ internal static partial class ArticleWorkLogMessages
     public static partial void ConsumerReplaceFailed(ILogger logger, string Reason);
 
     [LoggerMessage(
+        EventId = 5308,
+        Level = LogLevel.Information,
+        Message = "Article Work consumer shutdown policy backbone={Backbone} generation={Generation} drainQueuedWork={DrainQueuedWork} finishActiveArticles={FinishActiveArticles} graceSeconds={GraceSeconds}")]
+    public static partial void ConsumerShutdownPolicy(
+        ILogger logger,
+        string Backbone,
+        long Generation,
+        bool DrainQueuedWork,
+        bool FinishActiveArticles,
+        int GraceSeconds);
+
+    [LoggerMessage(
+        EventId = 5309,
+        Level = LogLevel.Warning,
+        Message = "Article Work consumer shutdown grace expired backbone={Backbone} generation={Generation}")]
+    public static partial void ConsumerShutdownGraceExpired(ILogger logger, string Backbone, long Generation);
+
+    [LoggerMessage(
         EventId = 5310,
         Level = LogLevel.Information,
         Message = "Article Work response publisher starting generation={Generation}")]

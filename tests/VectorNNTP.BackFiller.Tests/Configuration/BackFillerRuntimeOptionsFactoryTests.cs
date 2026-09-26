@@ -28,6 +28,8 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.Equal("127.0.0.1", runtime.GrabberDb.Server);
         Assert.Equal("nntp", runtime.GrabberDb.Database);
         Assert.Equal(TimeSpan.FromSeconds(30), runtime.Shutdown.GracePeriod);
+        Assert.True(runtime.Shutdown.DrainQueuedWork);
+        Assert.True(runtime.Shutdown.FinishActiveArticles);
         options.Name = "mutated-after-snapshot";
         options.RabbitMQ.Hosts = ["203.0.113.10"];
         Assert.Equal("backfiller", runtime.Name);
@@ -49,5 +51,25 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.NotSame(runtime, withName);
         Assert.Equal("backfiller", runtime.Name);
         Assert.Equal("other", withName.Name);
+    }
+
+    [Fact]
+    public void Shutdown_flags_are_snapshotted_independently_and_do_not_follow_later_option_mutation()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Shutdown.DrainQueuedWork = false;
+        options.Shutdown.FinishActiveArticles = false;
+        options.Shutdown.GracePeriodSeconds = 45;
+        var runtime = BackFillerRuntimeOptionsFactory.Create(
+            options,
+            BackFillerTestOptions.CreateValidConnectionStrings());
+
+        options.Shutdown.DrainQueuedWork = true;
+        options.Shutdown.FinishActiveArticles = true;
+        options.Shutdown.GracePeriodSeconds = 90;
+
+        Assert.False(runtime.Shutdown.DrainQueuedWork);
+        Assert.False(runtime.Shutdown.FinishActiveArticles);
+        Assert.Equal(TimeSpan.FromSeconds(45), runtime.Shutdown.GracePeriod);
     }
 }

@@ -80,15 +80,18 @@ public sealed class BackFillerOptionsValidatorTests
                         && f.Contains("GracePeriodSeconds", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void Validate_fails_when_drain_queued_work_requires_finish_active_articles()
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void Validate_accepts_independent_drain_and_finish_shutdown_flags(bool drainQueuedWork, bool finishActiveArticles)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.Shutdown.DrainQueuedWork = true;
-        options.Shutdown.FinishActiveArticles = false;
+        options.Shutdown.DrainQueuedWork = drainQueuedWork;
+        options.Shutdown.FinishActiveArticles = finishActiveArticles;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("DrainQueuedWork", StringComparison.Ordinal));
+        Assert.False(result.Failed);
     }
 
     [Fact]

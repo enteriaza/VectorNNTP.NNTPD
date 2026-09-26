@@ -221,6 +221,10 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
 
     public Exception? NackException { get; set; }
 
+    public TaskCompletionSource? AckStarted { get; set; }
+
+    public TaskCompletionSource? AckGate { get; set; }
+
     public Task<string> BasicConsumeAsync(
         string queue,
         ushort prefetchCount,
@@ -257,7 +261,7 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
         return Task.CompletedTask;
     }
 
-    public Task BasicAckAsync(ulong deliveryTag, CancellationToken cancellationToken)
+    public async Task BasicAckAsync(ulong deliveryTag, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ObjectDisposedException.ThrowIf(DisposeCount > 0, this);
@@ -266,13 +270,18 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
             throw new InvalidOperationException("RabbitMQ channel is not open for ACK.");
         }
 
+        AckStarted?.TrySetResult();
+        if (AckGate is not null)
+        {
+            await AckGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (AckException is not null)
         {
             throw AckException;
         }
 
         Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: true, Requeue: false));
-        return Task.CompletedTask;
     }
 
     public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)

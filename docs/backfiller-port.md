@@ -1046,7 +1046,7 @@ A refresh publishes the new snapshot and new pool under the registry lock. An in
 
 ### Shutdown
 
-Hosted stop order is reverse of start (consumers first). `ArticleWorkConsumerSession` drains admitted work with `CancellationToken.None`; `FinishActiveArticles` / `DrainQueuedWork` are validated configuration and are not yet wired as a second cancellation policy. Pipeline-level cancellation (tests and explicit tokens) yields `Cancelled`, no publish, NACK requeue. No ACK is issued because shutdown was requested.
+Hosted stop order is reverse of start (consumers first). Phase 10 wires `DrainQueuedWork` and `FinishActiveArticles` into `ArticleWorkConsumerSession` retirement. See Phase 10.
 
 ### Ownership (unchanged)
 
@@ -1065,6 +1065,93 @@ Hosted stop order is reverse of start (consumers first). `ArticleWorkConsumerSes
 
 ### Explicit deferral
 
-Transit `TAKETHIS`, ACME, Cloudflare, distributed cache/dedup, wiring `FinishActiveArticles` into consumer cancellation, and live MySQL/RabbitMQ/NNTP infrastructure tests.
+Transit `TAKETHIS`, ACME, Cloudflare, distributed cache/dedup, and live MySQL/RabbitMQ/NNTP infrastructure tests.
+
+## Phase 10 — configured Article Work shutdown drain semantics
+
+Phase 10 makes the already-validated shutdown snapshot authoritative for Article Work consumers. `DrainQueuedWork` and `FinishActiveArticles` are independent booleans. The validator no longer requires `FinishActiveArticles` when `DrainQueuedWork` is true.
+
+### Queued vs active
+
+These are application states, not RabbitMQ prefetch states.
+
+| State | Definition |
+|---|---|
+| Broker-delivered | The consumer callback ran. Not yet admitted. |
+| Admitted / queued | `TryAdmit` succeeded while `Running`, and the delivery is waiting for the per-session dispatch lock (including the optional queued-to-active test hold). |
+| Active | The delivery holds the dispatch lock and has entered `ArticleWorkDeliveryPipeline.ProcessAsync`. |
+| Completed / settled | The pipeline attempted ACK/NACK on the original channel, or skipped settlement because the generation/channel was stale. |
+
+Prefetch is not admission. A broker-prefetched delivery that arrives after `BasicCancel` / retirement fails `TryAdmit` and is not settled by the session. Channel dispose is the broker redelivery safety net for that case.
+
+Default production prefetch remains 1 unless `RabbitMQ:ConsumerPrefetchCount` is set. Queued and active coexist on one session only when prefetch is greater than 1 (tests use 2 or 3).
+
+### DrainQueuedWork
+
+Captured on `BackFillerRuntimeOptions.Shutdown` at snapshot time. The session stores that record and does not re-read bindable options.
+
+- **true** (default): admitted-but-not-yet-started work may wait for the dispatch lock and start, subject to `FinishActiveArticles` and the host grace token.
+- **false**: `_queueCts` is cancelled as soon as the session enters `Retiring`. Waiters on the dispatch lock leave the queue without starting the handler and are settled as `Cancelled` (NACK `requeue=true`, no publish). They do not wait for the current active item to finish.
+
+### FinishActiveArticles
+
+- **true** (default): work already inside `ProcessAsync` continues with a live work token until it completes or the host grace token fires.
+- **false**: `_workCts` is cancelled when the session enters `Retiring`. Cancellation flows through the existing handler / provider lease / publish-confirm path. The planner still maps `Cancelled` to NACK requeue and no publish. Settlement itself uses `CancellationToken.None`, so a confirm that already completed can still ACK if the original channel is current.
+
+The two flags are not collapsed. `DrainQueuedWork=true` + `FinishActiveArticles=false` lets queued work acquire dispatch and then observe an already-cancelled work token (no handler call). `DrainQueuedWork=false` + `FinishActiveArticles=true` NACKs queued work immediately while the active item may finish and ACK.
+
+### Shutdown lifecycle
+
+```
+Running
+  → application stop / session retire
+Retiring
+  → BasicCancel (stop accepting new admissions)
+  → apply DrainQueuedWork / FinishActiveArticles
+  → wait for admitted work, or until the host shutdown token cancels
+  → on grace expiry: cancel both queue and work tokens, then release the channel
+Stopped
+```
+
+`ArticleWorkConsumerService.StopAsync` forwards the Generic Host token (already bounded by `HostOptions.ShutdownTimeout` = `Shutdown.GracePeriod`). `DisposeAsync` uses a `CancelAfter(GracePeriod)` token when `StopAsync` has not already run. Connection-generation replacement still retires sessions with `CancellationToken.None` so in-flight work on a dead generation can finish its local path; stale-generation fencing still prevents settlement on a newer channel.
+
+Retirement is single-flight. Repeated `RetireAsync` / `DisposeAsync` joins the same task.
+
+Hosted stop order is unchanged (reverse of start): Article Work consumers, then the response publisher, then the Cache Listener, then retention sweep, then the NNTP registry, then the MySQL account service, then the RabbitMQ connection. Consumers therefore retire before the publisher, registry, and retention authority they may still need. The Cache Listener is independently owned and is not cancelled merely because Article Work consumers retire.
+
+### Grace period
+
+`Shutdown.GracePeriodSeconds` is the only shutdown budget. There is no second Article Work timeout. When the host token cancels, remaining owned work is forced toward cancellation and the consume channel is disposed. Cooperative work settles as `Cancelled` if the channel is still current. Work that ignores cancellation cannot block process exit: the host/supervisor kill is the backstop. Channel-close redelivery remains the broker safety net when settlement loses the race with channel dispose.
+
+### RabbitMQ settlement
+
+Unchanged planner and lease rules:
+
+- Shutdown cancellation → `Cancelled` → NACK `requeue=true`, no terminal response, no ACK.
+- Successful finish (including `FinishActiveArticles=true`) still requires publish + confirm + current original channel before ACK.
+- Confirm still in flight when the work token cancels → publish failure → retryable NACK, never ACK.
+- Confirm already completed and the original context is still current → ACK may proceed (`TrySettleAsync` uses `CancellationToken.None`).
+- Stale generation / replaced channel → no settlement (exactly-once lease, no double ACK).
+- Never-admitted post-retirement deliveries are not ACKed or NACKed by the session.
+
+### Provider / session / retention
+
+Cancelled active work uses the existing retrieval token. A cancelled NNTP lease follows Phase 4 health/retirement rules (do not return a corrupted session; do not dispose a session owned by another lease). Provider-pool replacement from Phase 8 is unchanged.
+
+Retention is unchanged. If an article was already retained when shutdown cancels publication, the payload stays indexed under the existing TTL/capacity rules. Shutdown does not invent eviction.
+
+### Deliberate deviations from old BackFiller
+
+- No `ShutdownCoordinator` / Transit drain machine. Article Work uses the session state machine plus the Generic Host shutdown token.
+- The old worker coupled some drain flags to Transit `TAKETHIS`. This port applies the two flags only to Article Work admission/dispatch.
+- `DrainQueuedWork=true` no longer requires `FinishActiveArticles=true`.
+- Prefetch is not treated as queued application work.
+
+### Remaining limitations
+
+- Prefetch 1 means queued+active almost never coexist in production unless `ConsumerPrefetchCount` is raised.
+- If grace expires while settlement is still running, channel dispose can win; the broker redelivers. That is at-least-once, not a silent ACK.
+- `ScriptedNntpServer.BlockArticle` is a test-side hold; production NNTP I/O observes the work token.
+- Transit, ACME, Cloudflare, and live infrastructure tests remain out of scope.
 
 

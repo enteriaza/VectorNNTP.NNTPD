@@ -186,11 +186,6 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
             failures.Add(
                 $"BackFiller:Shutdown:GracePeriodSeconds must be between {BackFillerShutdownOptions.MinimumGracePeriodSeconds} and {BackFillerShutdownOptions.MaximumGracePeriodSeconds}.");
         }
-
-        if (shutdown.DrainQueuedWork && !shutdown.FinishActiveArticles)
-        {
-            failures.Add("BackFiller:Shutdown:DrainQueuedWork requires FinishActiveArticles to be true.");
-        }
     }
 
     private static void ValidateListener(BackFillerOptions options, List<string> failures)

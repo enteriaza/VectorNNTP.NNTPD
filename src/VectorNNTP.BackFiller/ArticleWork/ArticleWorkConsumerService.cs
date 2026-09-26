@@ -96,11 +96,22 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        await DisposeAsync().ConfigureAwait(false);
+        await ShutdownAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
+    {
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return;
+        }
+
+        using var grace = new CancellationTokenSource(_runtime.Shutdown.GracePeriod);
+        await ShutdownAsync(grace.Token).ConfigureAwait(false);
+    }
+
+    private async Task ShutdownAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
         {
@@ -131,7 +142,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
         await _replaceGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopSessionsAsync().ConfigureAwait(false);
+            await StopSessionsAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -160,7 +171,8 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
                     prefetch,
                     pipeline,
                     _connections,
-                    _logger);
+                    _logger,
+                    _runtime.Shutdown);
                 await session.StartAsync(cancellationToken).ConfigureAwait(false);
                 started.Add(session);
             }
@@ -194,7 +206,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
         }
     }
 
-    private async Task StopSessionsAsync()
+    private async Task StopSessionsAsync(CancellationToken cancellationToken = default)
     {
         List<ArticleWorkConsumerSession> sessions;
         lock (_gate)
@@ -205,6 +217,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
 
         foreach (var session in sessions)
         {
+            await session.RetireAsync(cancellationToken).ConfigureAwait(false);
             await session.DisposeAsync().ConfigureAwait(false);
         }
     }

@@ -29,10 +29,18 @@ public sealed record BackFillerRuntimeOptions(
     GrabberDbRuntimeOptions GrabberDb,
     BackFillerAccountsRuntimeOptions Accounts);
 
-/// <summary>Validated shutdown policy.</summary>
-/// <param name="GracePeriod">Complete shutdown budget.</param>
-/// <param name="DrainQueuedWork">Whether admitted queued work continues.</param>
-/// <param name="FinishActiveArticles">Whether active work may finish.</param>
+/// <summary>Validated shutdown policy captured in the runtime snapshot.</summary>
+/// <param name="GracePeriod">Complete application shutdown budget. Also drives host <c>ShutdownTimeout</c>.</param>
+/// <param name="DrainQueuedWork">
+/// When <see langword="true"/>, admitted-but-not-yet-started Article Work may acquire
+/// the session dispatch lock and start. When <see langword="false"/>, that work is
+/// cancelled without starting and settled as <c>Cancelled</c> (NACK requeue).
+/// </param>
+/// <param name="FinishActiveArticles">
+/// When <see langword="true"/>, work that has entered <c>ProcessAsync</c> may finish
+/// inside <paramref name="GracePeriod"/>. When <see langword="false"/>, that work is
+/// cooperatively cancelled through the existing pipeline.
+/// </param>
 public sealed record BackFillerShutdownRuntimeOptions(
     TimeSpan GracePeriod,
     bool DrainQueuedWork,

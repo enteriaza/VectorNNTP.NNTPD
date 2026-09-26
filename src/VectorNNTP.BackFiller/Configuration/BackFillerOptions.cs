@@ -191,14 +191,26 @@ public sealed class BackFillerShutdownOptions
     public int GracePeriodSeconds { get; set; } = 30;
 
     /// <summary>
-    /// Gets or sets whether already-admitted queued work continues during shutdown.
+    /// Gets or sets whether already-admitted queued (not-yet-started) Article Work may
+    /// proceed to start during shutdown.
     /// </summary>
-    /// <remarks>Requires <see cref="FinishActiveArticles"/> to be <see langword="true"/>.</remarks>
+    /// <remarks>
+    /// Independent of <see cref="FinishActiveArticles"/>. When <see langword="false"/>,
+    /// admitted work that has not entered <c>ProcessAsync</c> is settled as cancelled
+    /// (NACK requeue) and does not start. Broker-prefetched deliveries that were never
+    /// admitted are not drained by this setting.
+    /// </remarks>
     public bool DrainQueuedWork { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether active article work may finish during shutdown.
+    /// Gets or sets whether Article Work that has already started processing may finish
+    /// during shutdown.
     /// </summary>
+    /// <remarks>
+    /// Independent of <see cref="DrainQueuedWork"/>. When <see langword="false"/>, active
+    /// work is cooperatively cancelled through the existing pipeline. Cancellation never
+    /// ACKs the RabbitMQ delivery.
+    /// </remarks>
     public bool FinishActiveArticles { get; set; } = true;
 }
 

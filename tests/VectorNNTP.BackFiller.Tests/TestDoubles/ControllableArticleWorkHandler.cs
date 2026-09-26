@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using VectorNNTP.BackFiller.ArticleWork;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles;
@@ -16,6 +17,8 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
 
     public TaskCompletionSource? Started { get; set; }
 
+    public ConcurrentQueue<ArticleWorkControlStage> Stages { get; } = new();
+
     public int HandleCount { get; private set; }
 
     public ArticleWorkItem? LastItem { get; private set; }
@@ -27,6 +30,23 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
         ArgumentNullException.ThrowIfNull(item);
         LastItem = item;
         HandleCount++;
+        if (Stages.TryDequeue(out var stage))
+        {
+            stage.Started.TrySetResult();
+            if (stage.Gate is not null)
+            {
+                await stage.Gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (stage.Throw is not null)
+            {
+                throw stage.Throw;
+            }
+
+            return new ArticleWorkHandlerResult(stage.Outcome, stage.Error, CacheUri: stage.CacheUri);
+        }
+
         Started?.TrySetResult();
         if (Gate is not null)
         {
@@ -42,3 +62,11 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
         return new ArticleWorkHandlerResult(Outcome, Error, CacheUri: CacheUri);
     }
 }
+
+internal sealed record ArticleWorkControlStage(
+    TaskCompletionSource Started,
+    TaskCompletionSource? Gate,
+    ArticleWorkOutcome Outcome,
+    string? Error = null,
+    string? CacheUri = null,
+    Exception? Throw = null);
