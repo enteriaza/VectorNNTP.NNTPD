@@ -6,8 +6,8 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <remarks>
 /// Terminal protocol outcomes are <see cref="Success"/>, <see cref="ArticleNotFound"/>,
 /// <see cref="InvalidArticle"/>, and <see cref="InvalidRequest"/>. Retryable internal
-/// outcomes are <see cref="ProviderFailure"/>, <see cref="Cancelled"/>, and
-/// <see cref="UnexpectedFailure"/>.
+/// outcomes are <see cref="ProviderFailure"/>, <see cref="Cancelled"/>,
+/// <see cref="UnexpectedFailure"/>, and <see cref="RetentionRejected"/>.
 /// </remarks>
 public enum ArticleWorkOutcome
 {
@@ -31,4 +31,11 @@ public enum ArticleWorkOutcome
 
     /// <summary>Unexpected failure. No terminal RPC response.</summary>
     UnexpectedFailure = 6,
+
+    /// <summary>
+    /// Retrieval succeeded but retention could not admit the payload.
+    /// Distinct from <see cref="ArticleNotFound"/> and <see cref="ProviderFailure"/>.
+    /// Phase 5 temporary settlement is NACK requeue; Phase 6 decides the final policy.
+    /// </summary>
+    RetentionRejected = 7,
 }

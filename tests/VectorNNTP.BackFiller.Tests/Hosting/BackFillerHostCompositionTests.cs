@@ -8,6 +8,7 @@ using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
+using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
@@ -24,10 +25,14 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(3, hosted.Length);
+        Assert.Equal(4, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[1]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[2]);
+        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[2]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[3]);
+        Assert.Same(
+            host.Services.GetRequiredService<ArticleRetentionAuthority>(),
+            host.Services.GetRequiredService<IArticleRetentionAuthority>());
         Assert.IsType<ProviderArticleWorkHandler>(host.Services.GetRequiredService<IArticleWorkHandler>());
         Assert.IsType<RecordingArticleWorkResponsePublisher>(
             host.Services.GetRequiredService<IArticleWorkResponsePublisher>());
@@ -66,10 +71,12 @@ public sealed class BackFillerHostCompositionTests
             Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, consumer.Sessions.Count);
             Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, factory.LastConnection!.Channels.Count);
             Assert.Equal(1, factory.ConnectCount);
+            Assert.Contains(
+                host.Services.GetServices<IHostedService>(),
+                static service => service is ArticleRetentionSweepService);
             Assert.DoesNotContain(
                 host.Services.GetServices<IHostedService>(),
-                static service => service.GetType().Name.Contains("BackgroundService", StringComparison.Ordinal)
-                                  && service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly);
+                static service => service.GetType().Name == "PlaceholderBackgroundService");
         }
         finally
         {

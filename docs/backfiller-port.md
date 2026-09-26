@@ -596,11 +596,11 @@ Timeout → ProviderFailure, session retired. Caller cancel → Cancelled, not A
 
 ### Success must not ACK yet
 
-`IArticleWorkResponsePublisher.CompletesSuccessPublication` is false on the Phase 3/4 recording seam. A retrieved article is classified Success at the disposition boundary but is settled as NACK `requeue=true` with **no** Success RPC publish. That matches the old “cannot finish Success without retain + publish confirm” edge (retention admission failure requeues). Phase 5 must publish a URI then ACK.
+`IArticleWorkResponsePublisher.CompletesSuccessPublication` is false on the Phase 3/4 recording seam. A retrieved article is classified Success at the disposition boundary but is settled as NACK `requeue=true` with **no** Success RPC publish. That matches the old “cannot finish Success without retain + publish confirm” edge (retention admission failure requeues). Phase 5 retains and produces a URI but still does not publish or ACK.
 
 ### Explicit deferral
 
-Not implemented: article retention authority, `cache://` URI, real response publish + confirms, Transit, Listener/TLS serving, ACME, Cloudflare, MySQL `nntpbackfilleraccounts` polling, control-plane capacity, DATE keepalive, STARTTLS for providers, yEnc.
+Phase 4 deferred retention. Phase 5 implements the in-memory retention authority and `cache://` identity. Still deferred: real response publish + confirms, Success ACK, Transit, Listener/TLS serving, ACME, Cloudflare, MySQL accounts, control-plane capacity, DATE keepalive, STARTTLS for providers, yEnc.
 
 ### Phase 4 discrepancies
 
@@ -610,3 +610,109 @@ Not implemented: article retention authority, `cache://` URI, real response publ
 4. **Article validation depth.** Old grabber parsed headers/dates/newsgroups and ran yEnc before Success. Phase 4 only destuffs and requires a header/body separator. yEnc remains a later stage.
 5. **AuthenticationFailure** is a retrieval kind but maps to Article Work `ProviderFailure` (old processor contract).
 6. **Success ACK.** Old Success ACKs only after retain + confirmed publish. Phase 4 never ACKs Success.
+
+## Phase 5 — article retention authority
+
+Implemented in `src/VectorNNTP.BackFiller/Retention`. One process-wide owner of retained article bytes. Independent of RabbitMQ, NNTP sessions, and Transit.
+
+### Ownership
+
+| Resource | Owner |
+|---|---|
+| Destuffed payload after ARTICLE | `RetrievedArticle` until `TryDetach` |
+| After successful retain | `ArticleRetentionAuthority` (`RetainedEntry`) |
+| Lookup | `ArticleLookupLease` (refcount). Dispose releases the lease only. |
+
+`RetrievedArticle.TryDetach` transfers the `byte[]`. After `Retained`, the provider session may already have been released (Phase 4). Callers cannot dispose authority storage by disposing a lease.
+
+### Identity
+
+`ArticleIdentity.FromExactMessageId`:
+
+1. Exact Message-ID string (no trim, case-fold, bracket change, or Unicode normalize).
+2. ASCII bytes (`Encoding.ASCII.GetBytes`).
+3. MD5.
+4. Lowercase hex (32 characters).
+
+Known vectors: `<12345@example.invalid>` → `30edc94157aa16fe644a45a1f1ffe160`; `<abc@example.invalid>` → `de438dc83d64b1fa9206cf4da9eed5cc`.
+
+The identity is stored on the entry. It is not recomputed on lookup.
+
+### Cache URI
+
+`CacheArticleUri.Create(fqdn, bindPort, identity)` → `cache://{Fqdn}:{BindPort}/{md5}`.
+
+FQDN is `BackFillerRuntimeOptions.Fqdn`. Port is `BindPort`. MD5 is not URL-encoded. This is the only formatter; the future listener must use it.
+
+### TTL / sweep
+
+- Expiry = insertion UTC + `ArticleRetention.RetentionTtl` (default 60 s).
+- **Lookup checks expiry.** An expired entry is not returned (`Expired`), then unindexed.
+- `ArticleRetentionSweepService` (`BackgroundService`) sweeps at `SweepInterval` (default 1 s). First sweep runs immediately; one sweep at a time.
+- Sweep walks insertion order and stops at the first not-yet-expired entry (uniform TTL ⇒ FIFO).
+- Each entry has a generation. After expiry removal, a later insert of the same Message-ID is a new generation; a stale sweep cannot delete it because insert/sweep share the authority gate.
+
+Hosted-service order: RabbitMQ → NNTP registry → sweep → Article Work consumers. Stop is reverse: consumers drain, then sweep `BeginShutdown`.
+
+### Memory accounting
+
+Only destuffed retained payload bytes are counted.
+
+- Retain: `retainedBytes += size`, `physicalCount++`
+- Physical dispose: subtract size (floor at 0), `physicalCount--`
+- Rejected insert does not change totals
+- Duplicate does not add
+- Logically removed but still leased entries keep their bytes until the last lease releases
+
+### Duplicate identity
+
+Old first-wins: same exact Message-ID → `AlreadyPresent`. Incoming payload is not taken. Existing URI remains. Article Work treats this as Success (article is available).
+
+Same MD5 / different Message-ID → `Md5Collision` (hard reject). Not a replacement.
+
+There is no replace-in-place path, so an expired sweep cannot remove a newer generation of the same key.
+
+### Capacity
+
+Uses Phase 1 `BackFiller:ArticleRetention` only (default 4 GiB, 80% physical-memory ceiling already validated).
+
+| Condition | Result |
+|---|---|
+| Single payload > total capacity | `PayloadExceedsCapacity`. No eviction. |
+| Remaining capacity insufficient | Expire eligible first, then FIFO-evict oldest until the new article fits or the set is empty. |
+| Still insufficient | `CapacityUnavailable`. |
+
+This is insertion-order pressure eviction (old worker), not LRU. An enormous article that exceeds the **total** cap does not evict others.
+
+### Lookup
+
+`TryGetByMessageId` / `TryGetByMd5` → `Found` + lease, `Missing`, or `Expired`.
+
+The lease exposes `ReadOnlyMemory<byte>` and the cache URI. One caller disposing a lease cannot invalidate another caller's lease or the authority payload.
+
+### Shutdown
+
+`BeginShutdown` closes admission (`ShuttingDown`). Existing entries remain until expiry, eviction, or `DisposeAsync`, which force-releases remaining physical storage.
+
+### Article Work integration
+
+`ProviderArticleWorkHandler` detaches `RetrievedArticle` and calls `Retain`.
+
+| Retention | Article Work | Phase 5 settlement |
+|---|---|---|
+| `Retained` / `AlreadyPresent` | Success + `CacheUri` | NACK `requeue=true`, **no** publish, **no** ACK (`CompletesSuccessPublication` remains false) |
+| Capacity / collision / invalid / shutdown | `RetentionRejected` | NACK `requeue=true`, no publish. Not `ArticleNotFound`, not `ProviderFailure` |
+
+`RetentionRejected` is a new distinguishable outcome. Temporary Phase 5 settlement matches the old sink (retention failure requeues). Phase 6 decides the final ACK/publish policy.
+
+### Explicit deferral
+
+Not implemented: real RPC publish + confirms, Success ACK, Transit completion channels, Listener protocol, ACME, Cloudflare, MySQL accounts, control-plane capacity.
+
+### Phase 5 discrepancies
+
+1. **Lookup TTL.** Old read-lease acquisition did not check TTL; expired-but-unswept entries remained readable. Phase 5 lookup rejects expired entries. Documented tightening.
+2. **Transit/Listener completion.** Old removal also happened when both consumers completed. Phase 5 does not implement those channels. TTL, FIFO pressure eviction, and dispose are the removal paths.
+3. **FQDN property name.** Old URI used `CanonicalBackFillerFqdn`. Phase 1 runtime uses `Fqdn` (same validated identity).
+4. **Success ACK.** Old ACK required retain + confirmed publish. Phase 5 retains and produces a URI but still does not publish or ACK.
+5. **Expire-before-evict.** Old `RecoverCapacity` only pressure-evicted insertion order. Phase 5 expires eligible entries first, then evicts. With uniform TTL this matches oldest-first.

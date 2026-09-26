@@ -1,20 +1,23 @@
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.BackFiller.Retention;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
-/// Phase 4 handler: retrieves from a backbone provider and maps the result onto Article Work outcomes.
-/// Successful ARTICLE does not complete Success publication; the pipeline must not ACK yet.
+/// Phase 5 handler: retrieves, retains, and exposes a cache URI. Does not complete Success publication.
 /// </summary>
 public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {
     private readonly INntpArticleRetriever _retriever;
+    private readonly IArticleRetentionAuthority _retention;
 
     /// <summary>Initializes the handler.</summary>
-    public ProviderArticleWorkHandler(INntpArticleRetriever retriever)
+    public ProviderArticleWorkHandler(INntpArticleRetriever retriever, IArticleRetentionAuthority retention)
     {
         ArgumentNullException.ThrowIfNull(retriever);
+        ArgumentNullException.ThrowIfNull(retention);
         _retriever = retriever;
+        _retention = retention;
     }
 
     /// <summary>Gets the last retrieval classification (tests).</summary>
@@ -23,12 +26,20 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     /// <summary>Gets a copy of the last retrieved payload (tests). Independent of the session.</summary>
     public byte[]? LastPayload { get; private set; }
 
+    /// <summary>Gets the last retention classification (tests).</summary>
+    public ArticleRetentionKind? LastRetentionKind { get; private set; }
+
+    /// <summary>Gets the last cache URI (tests).</summary>
+    public string? LastCacheUri { get; private set; }
+
     /// <inheritdoc />
     public async ValueTask<ArticleWorkHandlerResult> HandleAsync(
         ArticleWorkItem item,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(item);
+        LastRetentionKind = null;
+        LastCacheUri = null;
         if (cancellationToken.IsCancellationRequested)
         {
             LastKind = ArticleRetrievalKind.Cancelled;
@@ -52,18 +63,43 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
         {
             LastKind = retrieval.Kind;
             LastPayload = retrieval.Article is null ? null : retrieval.Article.Memory.ToArray();
-            return Map(retrieval);
+            if (retrieval.Kind != ArticleRetrievalKind.ArticleRetrieved)
+            {
+                return MapRetrieval(retrieval);
+            }
+
+            if (retrieval.Article is null || !retrieval.Article.TryDetach(out var payload))
+            {
+                LastRetentionKind = ArticleRetentionKind.InvalidPayload;
+                return new ArticleWorkHandlerResult(
+                    ArticleWorkOutcome.RetentionRejected,
+                    "Retrieved article payload could not be transferred into retention.");
+            }
+
+            var retained = _retention.Retain(item.Request.MessageId, payload);
+            LastRetentionKind = retained.Kind;
+            LastCacheUri = retained.CacheUri;
+            if (retained.IsAvailable)
+            {
+                return new ArticleWorkHandlerResult(
+                    ArticleWorkOutcome.Success,
+                    null,
+                    Article: null,
+                    CacheUri: retained.CacheUri);
+            }
+
+            return new ArticleWorkHandlerResult(
+                ArticleWorkOutcome.RetentionRejected,
+                retained.Kind.ToString(),
+                Article: null,
+                CacheUri: null);
         }
     }
 
-    private static ArticleWorkHandlerResult Map(ArticleRetrievalResult retrieval)
+    private static ArticleWorkHandlerResult MapRetrieval(ArticleRetrievalResult retrieval)
     {
         return retrieval.Kind switch
         {
-            ArticleRetrievalKind.ArticleRetrieved => new ArticleWorkHandlerResult(
-                ArticleWorkOutcome.Success,
-                null,
-                retrieval.Article is null ? null : new RetrievedArticle(retrieval.Article.Memory.ToArray())),
             ArticleRetrievalKind.ArticleNotFound => new ArticleWorkHandlerResult(
                 ArticleWorkOutcome.ArticleNotFound,
                 retrieval.Reason),

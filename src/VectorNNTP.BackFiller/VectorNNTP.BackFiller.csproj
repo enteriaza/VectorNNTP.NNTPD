@@ -5,7 +5,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.BackFiller</RootNamespace>
     <AssemblyName>VectorNNTP.BackFiller</AssemblyName>
-    <Description>Usenet article recovery worker. Phase 4 provider ARTICLE retrieval; retention and response publication are not implemented yet.</Description>
+    <Description>Usenet article recovery worker. Phase 5 in-memory article retention and cache:// identity; response publication is not implemented yet.</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

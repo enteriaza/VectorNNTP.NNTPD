@@ -17,6 +17,7 @@ public sealed class ArticleWorkSettlementTests
     [InlineData(ArticleWorkOutcome.ProviderFailure, false, true, false)]
     [InlineData(ArticleWorkOutcome.Cancelled, false, true, false)]
     [InlineData(ArticleWorkOutcome.UnexpectedFailure, false, true, false)]
+    [InlineData(ArticleWorkOutcome.RetentionRejected, false, true, false)]
     public void Planner_maps_terminal_and_retryable_outcomes(
         ArticleWorkOutcome outcome,
         bool acknowledge,

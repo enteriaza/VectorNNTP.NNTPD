@@ -37,6 +37,7 @@ public static class ArticleWorkDispositionPlanner
             ArticleWorkOutcome.ProviderFailure => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
             ArticleWorkOutcome.Cancelled => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
             ArticleWorkOutcome.UnexpectedFailure => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
+            ArticleWorkOutcome.RetentionRejected => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
             _ => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
         };
     }

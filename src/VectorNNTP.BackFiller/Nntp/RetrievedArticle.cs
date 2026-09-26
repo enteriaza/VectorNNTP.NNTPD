@@ -29,9 +29,28 @@ public sealed class RetrievedArticle : IDisposable
     /// <summary>Gets the payload length.</summary>
     public int Length => Memory.Length;
 
+    /// <summary>
+    /// Transfers ownership of the payload to the caller. After success this instance is empty
+    /// and <see cref="Dispose"/> is a no-op.
+    /// </summary>
+    /// <param name="payload">Detached bytes when this method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when this instance still owned a payload.</returns>
+    public bool TryDetach(out byte[] payload)
+    {
+        var bytes = Interlocked.Exchange(ref _bytes, null);
+        if (bytes is null)
+        {
+            payload = [];
+            return false;
+        }
+
+        payload = bytes;
+        return true;
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
-        _bytes = null;
+        _ = Interlocked.Exchange(ref _bytes, null);
     }
 }
