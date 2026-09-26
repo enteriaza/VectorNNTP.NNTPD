@@ -5,7 +5,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.BackFiller</RootNamespace>
     <AssemblyName>VectorNNTP.BackFiller</AssemblyName>
-    <Description>Usenet article recovery worker. Phase 8 MySQL provider-account control plane.</Description>
+    <Description>Usenet article recovery worker. Phase 9 end-to-end integration and concurrency hardening.</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

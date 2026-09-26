@@ -28,6 +28,9 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
 
     public bool ReturnUnusableConnection { get; set; }
 
+    public FakePublishConfirmBehavior DefaultPublishConfirmBehavior { get; set; } =
+        FakePublishConfirmBehavior.Wait;
+
     public async Task<IBackFillerRabbitMqConnection> ConnectAsync(
         BackFillerRabbitMqRuntimeOptions options,
         string connectionName,
@@ -64,6 +67,7 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
             connectionName)
         {
             IsOpen = !ReturnUnusableConnection,
+            DefaultPublishConfirmBehavior = DefaultPublishConfirmBehavior,
         };
 
         LastConnection = connection;

@@ -998,4 +998,73 @@ Not implemented: table/database provisioning, DATE keepalive from `keepalive`, T
 4. **Last-known-good after startup.** A temporary GrabberDB outage keeps the last successful providers. That is the Phase 8 policy; it is not “fail-open to an invented catalog”.
 5. **No live MySQL in the test suite.** Tests use `IProviderAccountSource` fakes. There is no Testcontainers convention in this repository for GrabberDB.
 
+## Phase 9 — end-to-end integration and concurrency hardening
+
+Phase 9 does not add a feature. It exercises the seams between Phases 2–8 with deterministic fakes at RabbitMQ, MySQL, and upstream NNTP, using the real production pipeline (`ProviderAccountConfigurationService` → catalog → `NntpProviderRegistry` → `NntpArticleRetriever` → `ProviderArticleWorkHandler` → `ArticleRetentionAuthority` → `ArticleWorkDeliveryPipeline` → `ArticleWorkResponsePublisher` → `CacheListenerRetentionHandler` / `CacheListenerSession`).
+
+### Architecture verified
+
+```
+NNTPD Article Work
+  → RabbitMQ consume (generation-fenced)
+  → provider snapshot (MySQL control plane, not request path)
+  → NntpSessionPool lease
+  → upstream ARTICLE
+  → retain exact destuffed bytes
+  → cache:// URI
+  → publish + publisher confirm
+  → re-check original consumer generation/channel
+  → ACK
+NNTPD cache:// fetch
+  → Listener TLS / binary v1
+  → MD5 lookup lease
+  → Found exact bytes
+  → ReceiptAck releases the lookup lease only
+```
+
+Transit `TAKETHIS` remains out of scope. NNTPD is the transit path.
+
+### Settlement ordering
+
+Required success order is unchanged: retrieve → retain → serialize → publish → confirm → re-check settlement context → ACK.
+
+- Confirm success + current original channel → ACK.
+- Publish or confirm failure → NACK `requeue=true`, never ACK.
+- Consumer generation stale or original channel closed after confirm → no settlement.
+- Shutdown during confirm → no ACK; retryable NACK if the original context is still current.
+- Confirm success then ACK RPC failure: `ArticleWorkSettlementLease` marks the lease settled, swallows the ACK exception, and records no ACK. The pipeline still returns the work outcome (`Success`). That is not permission to treat the delivery as settled. Redelivery is a new lease (at-least-once).
+
+The publisher never ACK/NACKs the original delivery.
+
+### Retention lifecycle
+
+Retention is independent of publication and Listener receipt. ReceiptAck / connection close release the lookup lease and do not evict. TTL/sweep unindexes an expired entry; a held lease keeps the payload bytes until release, then physical dispose reclaims accounting. Subsequent lookups follow Phase 5 (`Found` / `Expired` / `Missing`). Same exact Message-ID is first-wins (`AlreadyPresent`). Distinct Message-IDs are distinct identities. A true MD5 collision of two different Message-IDs is rejected (`Md5Collision`); this suite cannot construct such inputs.
+
+### Provider replacement
+
+A refresh publishes the new snapshot and new pool under the registry lock. An in-flight Article Work lease stays on the retired pool until ARTICLE completes. New work uses the new pool. Removal stops `TryGetPool`. Reappearance creates a new pool. A MySQL refresh failure keeps last-known-good. Unrelated backbones are not replaced.
+
+### Shutdown
+
+Hosted stop order is reverse of start (consumers first). `ArticleWorkConsumerSession` drains admitted work with `CancellationToken.None`; `FinishActiveArticles` / `DrainQueuedWork` are validated configuration and are not yet wired as a second cancellation policy. Pipeline-level cancellation (tests and explicit tokens) yields `Cancelled`, no publish, NACK requeue. No ACK is issued because shutdown was requested.
+
+### Ownership (unchanged)
+
+| Resource | Owner |
+|---|---|
+| RabbitMQ connection | `BackFillerRabbitMqService` |
+| Consume channels | `ArticleWorkConsumerSession` |
+| Publish channel | `ArticleWorkResponsePublisher` |
+| Provider snapshot | `ProviderAccountConfigurationService` / catalog |
+| Session pools | `NntpProviderRegistry` |
+| NNTP session | `NntpSessionLease` while leased, then pool |
+| Retained bytes | `ArticleRetentionAuthority` |
+| Lookup lease | `ArticleLookupLease` / Listener `RequestContext` |
+| Listener sockets | `CacheListenerService` |
+| Settlement | `ArticleWorkSettlementLease` (exactly once per delivery) |
+
+### Explicit deferral
+
+Transit `TAKETHIS`, ACME, Cloudflare, distributed cache/dedup, wiring `FinishActiveArticles` into consumer cancellation, and live MySQL/RabbitMQ/NNTP infrastructure tests.
+
 

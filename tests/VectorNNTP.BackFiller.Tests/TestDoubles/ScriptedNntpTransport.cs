@@ -85,6 +85,12 @@ internal sealed class ScriptedNntpServer
 
     public bool LastCommandUsedCrlf { get; private set; }
 
+    /// <summary>Set when an ARTICLE command is read, before any optional block.</summary>
+    public TaskCompletionSource? ArticleStarted { get; set; }
+
+    /// <summary>When set, ARTICLE waits here before the scripted response is written.</summary>
+    public TaskCompletionSource? BlockArticle { get; set; }
+
     public void Respond(Func<string, string> responder)
     {
         ArgumentNullException.ThrowIfNull(responder);
@@ -133,6 +139,15 @@ internal sealed class ScriptedNntpServer
                 if (text.StartsWith("QUIT", StringComparison.OrdinalIgnoreCase))
                 {
                     break;
+                }
+
+                if (text.StartsWith("ARTICLE", StringComparison.OrdinalIgnoreCase))
+                {
+                    ArticleStarted?.TrySetResult();
+                    if (BlockArticle is not null)
+                    {
+                        await BlockArticle.Task.ConfigureAwait(false);
+                    }
                 }
 
                 var response = _onCommand(text);
