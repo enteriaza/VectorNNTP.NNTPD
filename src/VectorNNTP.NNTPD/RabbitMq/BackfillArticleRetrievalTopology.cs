@@ -48,8 +48,9 @@ internal sealed record BackfillArticleRetrievalTopologyDefinition(
 /// <remarks>
 /// <para>
 /// Provider identifiers are application constants, not configuration. The twelve names
-/// match BackFiller's backbone set. Entity names follow BackFiller's legacy rule
-/// <c>grabbers.{provider.ToLowerInvariant()}</c> for the exchange, queue, and routing key.
+/// match BackFiller's backbone set. Entity names are <c>backfiller.{provider}</c>
+/// after <see cref="RabbitMqTopologyNames"/> normalization, for the exchange, queue,
+/// and routing key.
 /// </para>
 /// <para>
 /// Every queue is declared as a RabbitMQ quorum queue. NNTPD does not consume these
@@ -114,7 +115,7 @@ internal static class BackfillArticleRetrievalTopology
             }
 
             var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(
-                BuildLegacyProviderEntityName(canonicalProvider));
+                BuildProviderEntityName(canonicalProvider));
             definitions.Add(new BackfillArticleRetrievalTopologyDefinition(
                 Provider: canonicalProvider,
                 ExchangeName: endpoint.ExchangeName,
@@ -133,13 +134,10 @@ internal static class BackfillArticleRetrievalTopology
     }
 
     /// <summary>
-    /// Builds the BackFiller legacy exchange, queue, and routing-key name for a provider.
+    /// Builds the NNTPD BackFiller exchange, queue, and routing-key name for a provider.
     /// </summary>
-    /// <param name="provider">Canonical provider identifier.</param>
-    /// <returns>The lower-cased legacy entity name in the form <c>grabbers.{provider}</c>.</returns>
-    internal static string BuildLegacyProviderEntityName(string provider)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
-        return $"grabbers.{provider.Trim().ToLowerInvariant()}";
-    }
+    /// <param name="provider">Provider identifier. Casing and surrounding whitespace are normalized.</param>
+    /// <returns>The normalized entity name in the form <c>backfiller.{provider}</c>.</returns>
+    internal static string BuildProviderEntityName(string provider) =>
+        RabbitMqTopologyNames.Compose("backfiller", provider);
 }

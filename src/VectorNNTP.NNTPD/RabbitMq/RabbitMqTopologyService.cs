@@ -8,7 +8,7 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <remarks>
 /// <para>
 /// This service owns application topology declaration only: the twelve BackFiller
-/// <c>grabbers.*</c> endpoints and the internal <c>storage.requests</c> endpoint.
+/// <c>backfiller.*</c> provider endpoints and the internal <c>backfiller.storage</c> endpoint.
 /// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
 /// topology service obtains the current generation through
 /// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel
@@ -78,7 +78,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Declares the twelve BackFiller endpoints and the internal <c>storage.requests</c> endpoint.
+    /// Declares the twelve BackFiller endpoints and the internal <c>backfiller.storage</c> endpoint.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     /// <exception cref="InvalidOperationException">

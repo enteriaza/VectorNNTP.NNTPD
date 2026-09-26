@@ -92,7 +92,7 @@ public sealed class RabbitMqTopologyServiceTests
     {
         var factory = new FakeRabbitMqConnectionFactory
         {
-            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'grabbers.abavia'"),
+            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'backfiller.abavia'"),
         };
         await using var rabbit = CreateRabbitMqService(factory);
         var topology = new RabbitMqTopologyService(rabbit, NullLogger<RabbitMqTopologyService>.Instance);
@@ -184,9 +184,18 @@ public sealed class RabbitMqTopologyServiceTests
         Assert.Equal(13 * expectedPasses, connection.ExchangeDeclarations.Count);
         Assert.Equal(13 * expectedPasses, connection.QueueDeclarations.Count);
         Assert.Equal(13 * expectedPasses, connection.BindingDeclarations.Count);
-        Assert.Equal("storage.requests", definitions[^1].ExchangeName);
-        Assert.Equal("storage.requests", definitions[^1].QueueName);
-        Assert.Equal("storage.requests", definitions[^1].RoutingKey);
+        Assert.Equal("backfiller.abavia", definitions[0].ExchangeName);
+        Assert.Equal("backfiller.storage", definitions[^1].ExchangeName);
+        Assert.Equal("backfiller.storage", definitions[^1].QueueName);
+        Assert.Equal("backfiller.storage", definitions[^1].RoutingKey);
+        Assert.All(
+            definitions,
+            static definition =>
+            {
+                Assert.StartsWith("backfiller.", definition.ExchangeName, StringComparison.Ordinal);
+                Assert.DoesNotContain("storage.requests", definition.ExchangeName, StringComparison.Ordinal);
+                Assert.DoesNotContain("grabbers.", definition.ExchangeName, StringComparison.Ordinal);
+            });
 
         for (var pass = 0; pass < expectedPasses; pass++)
         {

@@ -5,8 +5,9 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is not a BackFiller backbone. Entity names are exactly <c>storage.requests</c>
-/// and are not generated from the <c>grabbers.{provider}</c> rule.
+/// This is not a BackFiller backbone. Entity names are exactly <c>backfiller.storage</c>
+/// after <see cref="RabbitMqTopologyNames"/> normalization. The name lives in the
+/// <c>backfiller.*</c> namespace but is not generated from the provider list.
 /// </para>
 /// <para>
 /// Broker semantics match the BackFiller article-retrieval endpoints: durable fanout,
@@ -17,7 +18,7 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 internal static class StorageArticleRetrievalTopology
 {
     /// <summary>Exchange, queue, and routing-key name for storage retrieval requests.</summary>
-    internal const string EntityName = "storage.requests";
+    internal const string EntityName = "backfiller.storage";
 
     /// <summary>Single storage request endpoint.</summary>
     internal static RabbitMqArticleRetrievalEndpoint Definition { get; } =

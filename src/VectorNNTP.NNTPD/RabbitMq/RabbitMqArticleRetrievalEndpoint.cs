@@ -31,8 +31,8 @@ internal sealed record RabbitMqArticleRetrievalEndpoint(
 /// Shared factory for NNTPD article-retrieval broker entities.
 /// </summary>
 /// <remarks>
-/// BackFiller backbone endpoints and the internal <c>storage.requests</c> endpoint share
-/// these broker semantics. They do not share a naming namespace.
+/// BackFiller backbone endpoints and the internal <c>backfiller.storage</c> endpoint share
+/// these broker semantics. Storage is not a BackFiller provider.
 /// </remarks>
 internal static class RabbitMqArticleRetrievalEndpoints
 {
@@ -44,12 +44,11 @@ internal static class RabbitMqArticleRetrievalEndpoints
 
     /// <summary>
     /// Builds a durable fanout exchange, durable quorum queue, and binding that share
-    /// <paramref name="entityName"/> as the exchange, queue, and routing key.
+    /// the normalized <paramref name="entityName"/> as the exchange, queue, and routing key.
     /// </summary>
     internal static RabbitMqArticleRetrievalEndpoint CreateFanoutQuorumBinding(string entityName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(entityName);
-        var name = entityName.Trim();
+        var name = RabbitMqTopologyNames.Normalize(entityName);
         return new RabbitMqArticleRetrievalEndpoint(
             ExchangeName: name,
             ExchangeType: ExchangeType.Fanout,
@@ -71,8 +70,8 @@ internal static class RabbitMqArticleRetrievalEndpoints
 /// Complete article-retrieval topology declared by <see cref="RabbitMqTopologyService"/>.
 /// </summary>
 /// <remarks>
-/// Twelve BackFiller <c>grabbers.*</c> endpoints plus one internal <c>storage.requests</c>
-/// endpoint. Storage is not a BackFiller provider.
+/// Twelve BackFiller <c>backfiller.*</c> provider endpoints plus one internal
+/// <c>backfiller.storage</c> endpoint. Storage is not a BackFiller provider.
 /// </remarks>
 internal static class ArticleRetrievalTopology
 {

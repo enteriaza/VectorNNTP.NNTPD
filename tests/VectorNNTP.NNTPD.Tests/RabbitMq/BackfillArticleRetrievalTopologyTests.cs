@@ -26,23 +26,29 @@ public sealed class BackfillArticleRetrievalTopologyTests
         Assert.Equal(ExpectedProviders, BackfillArticleRetrievalTopology.Providers);
         Assert.Equal(12, BackfillArticleRetrievalTopology.Definitions.Count);
         Assert.Equal(ExpectedProviders, BackfillArticleRetrievalTopology.Definitions.Select(static d => d.Provider));
+        Assert.DoesNotContain("storage", BackfillArticleRetrievalTopology.Providers, StringComparer.OrdinalIgnoreCase);
         Assert.DoesNotContain("storage.requests", BackfillArticleRetrievalTopology.Providers, StringComparer.Ordinal);
         Assert.DoesNotContain(
             BackfillArticleRetrievalTopology.Definitions,
             static definition =>
                 definition.ExchangeName == StorageArticleRetrievalTopology.EntityName
-                || definition.QueueName == StorageArticleRetrievalTopology.EntityName);
+                || definition.QueueName == StorageArticleRetrievalTopology.EntityName
+                || definition.ExchangeName.Contains("storage.requests", StringComparison.Ordinal)
+                || definition.ExchangeName.Contains("grabbers.", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Definitions_UseBackFillerLegacyEntityNamesAndFanoutBinding()
+    public void Definitions_UseNormalizedBackFillerEntityNamesAndFanoutBinding()
     {
         foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
         {
-            var entityName = $"grabbers.{definition.Provider.ToLowerInvariant()}";
+            var entityName = $"backfiller.{definition.Provider.ToLowerInvariant()}";
             Assert.Equal(entityName, definition.ExchangeName);
             Assert.Equal(entityName, definition.QueueName);
             Assert.Equal(entityName, definition.RoutingKey);
+            Assert.Equal(definition.ExchangeName, definition.QueueName);
+            Assert.Equal(definition.QueueName, definition.RoutingKey);
+            Assert.DoesNotContain("grabbers.", definition.ExchangeName, StringComparison.Ordinal);
             Assert.Equal("fanout", definition.ExchangeType);
             Assert.True(definition.ExchangeDurable);
             Assert.False(definition.ExchangeAutoDelete);
@@ -51,12 +57,14 @@ public sealed class BackfillArticleRetrievalTopologyTests
             Assert.False(definition.QueueAutoDelete);
         }
 
-        Assert.Equal("grabbers.abavia", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("Abavia"));
-        Assert.Equal("grabbers.gtt", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("GTT"));
-        Assert.Equal("grabbers.usenetnode1", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("UsenetNode1"));
-        Assert.Equal("grabbers.baseip", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("BaseIP"));
-        Assert.Equal("grabbers.itshosted", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("ItsHosted"));
-        Assert.Equal("grabbers.uexpress", BackfillArticleRetrievalTopology.BuildLegacyProviderEntityName("UExpress"));
+        Assert.Equal("backfiller.abavia", BackfillArticleRetrievalTopology.BuildProviderEntityName("Abavia"));
+        Assert.Equal("backfiller.abavia", BackfillArticleRetrievalTopology.BuildProviderEntityName("  Abavia  "));
+        Assert.Equal("backfiller.abavia", BackfillArticleRetrievalTopology.BuildProviderEntityName("AbAvIa"));
+        Assert.Equal("backfiller.gtt", BackfillArticleRetrievalTopology.BuildProviderEntityName("GTT"));
+        Assert.Equal("backfiller.usenetnode1", BackfillArticleRetrievalTopology.BuildProviderEntityName("UsenetNode1"));
+        Assert.Equal("backfiller.baseip", BackfillArticleRetrievalTopology.BuildProviderEntityName("BaseIP"));
+        Assert.Equal("backfiller.itshosted", BackfillArticleRetrievalTopology.BuildProviderEntityName("ItsHosted"));
+        Assert.Equal("backfiller.uexpress", BackfillArticleRetrievalTopology.BuildProviderEntityName("UExpress"));
     }
 
     [Fact]
@@ -76,13 +84,27 @@ public sealed class BackfillArticleRetrievalTopologyTests
     }
 
     [Fact]
-    public void BuildDefinitions_PreservesProviderCasing_AndLowercasesOnlyEntityNames()
+    public void BuildDefinitions_PreservesProviderCasing_AndNormalizesOnlyEntityNames()
     {
         var definition = Assert.Single(BackfillArticleRetrievalTopology.BuildDefinitions(["Giganews"]));
         Assert.Equal("Giganews", definition.Provider);
-        Assert.Equal("grabbers.giganews", definition.ExchangeName);
-        Assert.Equal("grabbers.giganews", definition.QueueName);
-        Assert.Equal("grabbers.giganews", definition.RoutingKey);
+        Assert.Equal("backfiller.giganews", definition.ExchangeName);
+        Assert.Equal("backfiller.giganews", definition.QueueName);
+        Assert.Equal("backfiller.giganews", definition.RoutingKey);
+    }
+
+    [Fact]
+    public void BuildDefinitions_NormalizesWhitespaceAndMixedCaseProviderNames()
+    {
+        var definition = Assert.Single(BackfillArticleRetrievalTopology.BuildDefinitions(["  Abavia  "]));
+        Assert.Equal("Abavia", definition.Provider);
+        Assert.Equal("backfiller.abavia", definition.ExchangeName);
+        Assert.Equal("backfiller.abavia", definition.QueueName);
+        Assert.Equal("backfiller.abavia", definition.RoutingKey);
+
+        var mixed = Assert.Single(BackfillArticleRetrievalTopology.BuildDefinitions(["AbAvIa"]));
+        Assert.Equal("AbAvIa", mixed.Provider);
+        Assert.Equal("backfiller.abavia", mixed.ExchangeName);
     }
 
     [Fact]
