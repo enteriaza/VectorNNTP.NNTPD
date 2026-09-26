@@ -131,6 +131,33 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_accepts_configured_four_gib_below_the_physical_memory_ceiling()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.ArticleRetention.MaximumRetainedPayloadGigabytes = 4;
+        var result = BackFillerTestOptions
+            .CreateValidator(memory: new FakePhysicalMemoryProvider(16L * 1024 * 1024 * 1024))
+            .Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_fails_when_physical_memory_cannot_be_determined()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        var result = BackFillerTestOptions
+            .CreateValidator(memory: new FailingPhysicalMemoryProvider())
+            .Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("total physical memory could not be determined", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            result.Failures!,
+            static f => f.Contains("80% physical-memory ceiling", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_fails_when_explicit_bind_address_is_not_local()
     {
         var acme = BackFillerTestOptions.CreateValidAcme();

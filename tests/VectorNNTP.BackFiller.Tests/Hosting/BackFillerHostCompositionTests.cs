@@ -114,6 +114,19 @@ public sealed class BackFillerHostCompositionTests
     }
 
     [Fact]
+    public void AddBackFillerHosting_registers_os_physical_memory_provider()
+    {
+        var builder = Host.CreateApplicationBuilder([]);
+        builder.AddBackFillerHosting();
+
+        var descriptor = Assert.Single(
+            builder.Services,
+            static service => service.ServiceType == typeof(IPhysicalMemoryProvider));
+        Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+        Assert.Equal(typeof(OsPhysicalMemoryProvider), descriptor.ImplementationType);
+    }
+
+    [Fact]
     public void AddBackFillerHosting_defaults_to_the_mysql_account_source()
     {
         using var host = CreateHost(injectAccountSource: false);

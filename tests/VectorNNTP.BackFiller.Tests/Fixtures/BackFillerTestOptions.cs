@@ -134,3 +134,9 @@ internal sealed class FakePhysicalMemoryProvider(long totalBytes) : IPhysicalMem
 {
     public long GetTotalPhysicalMemoryBytes() => totalBytes;
 }
+
+internal sealed class FailingPhysicalMemoryProvider : IPhysicalMemoryProvider
+{
+    public long GetTotalPhysicalMemoryBytes() =>
+        throw new InvalidOperationException("Total physical memory could not be determined.");
+}

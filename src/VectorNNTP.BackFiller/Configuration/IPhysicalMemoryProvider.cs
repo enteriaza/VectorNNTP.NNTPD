@@ -1,8 +1,12 @@
 namespace VectorNNTP.BackFiller.Configuration;
 
 /// <summary>
-/// Supplies total physical memory for article-retention capacity validation.
+/// Supplies total physical RAM for article-retention startup capacity validation.
 /// </summary>
+/// <remarks>
+/// Implementations must return total physical system memory, not available memory,
+/// process memory, GC heap limits, or container/cgroup limits.
+/// </remarks>
 public interface IPhysicalMemoryProvider
 {
     /// <summary>
@@ -10,23 +14,6 @@ public interface IPhysicalMemoryProvider
     /// </summary>
     /// <returns>Total physical memory in bytes.</returns>
     /// <exception cref="InvalidOperationException">Thrown when physical memory cannot be determined.</exception>
+    /// <exception cref="PlatformNotSupportedException">Thrown when the current OS has no supported physical-memory source.</exception>
     long GetTotalPhysicalMemoryBytes();
-}
-
-/// <summary>
-/// Resolves physical memory from <see cref="GC.GetGCMemoryInfo()"/>.
-/// </summary>
-public sealed class GcPhysicalMemoryProvider : IPhysicalMemoryProvider
-{
-    /// <inheritdoc />
-    public long GetTotalPhysicalMemoryBytes()
-    {
-        var total = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        if (total <= 0)
-        {
-            throw new InvalidOperationException("Total physical memory could not be determined.");
-        }
-
-        return total;
-    }
 }

@@ -47,7 +47,7 @@ public static class BackFillerServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
-        builder.Services.TryAddSingleton<IPhysicalMemoryProvider, GcPhysicalMemoryProvider>();
+        builder.Services.TryAddSingleton<IPhysicalMemoryProvider, OsPhysicalMemoryProvider>();
         builder.Services.TryAddSingleton(TimeProvider.System);
 
         builder.Services.TryAddSingleton<IBackFillerStartupJournal, BackFillerStartupJournal>();
