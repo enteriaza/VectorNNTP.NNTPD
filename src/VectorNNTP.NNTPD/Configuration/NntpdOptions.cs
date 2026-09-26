@@ -1,5 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using System.Net;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -8,58 +7,32 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Listener and Cloudflare settings use PascalCase configuration names that match the
-/// property names (<c>BindAddress</c>, <c>CloudFlareZoneId</c>, …). The configuration
-/// section name is <see cref="SectionName"/> (<c>Nntpd</c>; case-insensitive).
+/// NNTPD-specific settings bind from section <see cref="SectionName"/> and
+/// <c>NNTPD__*</c> environment variables. Shared bind, ACME, Cloudflare, and
+/// RabbitMQ settings bind from the configuration root
+/// (<see cref="AcmeCloudflareOptions"/>) and <c>VECTOR__*</c>.
 /// </para>
 /// <para>
-/// <see cref="Fqdn"/> is generated from <see cref="ServerId"/> and <see cref="DnsSuffix"/> and cannot
+/// <see cref="Fqdn"/> is generated from <see cref="ServerId"/> and <see cref="AcmeCloudflareOptions.DnsSuffix"/> and cannot
 /// be bound or overridden from configuration or environment variables.
 /// </para>
 /// <para>
 /// Never log complete <see cref="NntpdOptions"/> instances:
-/// <see cref="CloudFlareApiKey"/>, <see cref="AcmeCertificatePassword"/>,
+/// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>, <see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>,
 /// <see cref="XTraceKey"/> / <see cref="XTracePreviousKey"/>, and
 /// <see cref="NewsmasterPassword"/> are secrets.
 /// </para>
 /// </remarks>
-public sealed class NntpdOptions
+public sealed class NntpdOptions : AcmeCloudflareOptions
 {
-    /// <summary>Configuration section name.</summary>
-    public const string SectionName = "Nntpd";
-
-    /// <summary>Configuration key for the Cloudflare API key secret.</summary>
-    public const string CloudFlareApiKeyConfigurationKey = "CloudFlareApiKey";
-
-    /// <summary>Configuration key for the ACME PKCS#12 password secret.</summary>
-    public const string AcmeCertificatePasswordConfigurationKey = "AcmeCertificatePassword";
-
-    /// <summary>Configuration key for the Cloudflare zone id.</summary>
-    public const string CloudFlareZoneIdConfigurationKey = "CloudFlareZoneId";
-
-    /// <summary>
-    /// Environment variable that supplies <see cref="CloudFlareApiKey"/>
-    /// (<c>nntpd__cloudflareapikey</c>).
-    /// </summary>
-    public const string CloudFlareApiKeyEnvironmentVariable = "nntpd__cloudflareapikey";
-
-    /// <summary>
-    /// Environment variable that supplies <see cref="AcmeCertificatePassword"/>
-    /// (<c>nntpd__AcmeCertificatePassword</c>).
-    /// </summary>
-    public const string AcmeCertificatePasswordEnvironmentVariable = "nntpd__AcmeCertificatePassword";
-
-    /// <summary>
-    /// Environment variable that supplies <see cref="CloudFlareZoneId"/>
-    /// (<c>nntpd__CloudFlareZoneId</c>).
-    /// </summary>
-    public const string CloudFlareZoneIdEnvironmentVariable = "nntpd__CloudFlareZoneId";
+    /// <summary>NNTPD-specific configuration section name.</summary>
+    public new const string SectionName = "Nntpd";
 
     /// <summary>
     /// Environment variable that supplies <see cref="ServerId"/>
-    /// (<c>nntpd__ServerId</c>).
+    /// (<c>NNTPD__SERVERID</c>).
     /// </summary>
-    public const string ServerIdEnvironmentVariable = "nntpd__ServerId";
+    public const string ServerIdEnvironmentVariable = "NNTPD__SERVERID";
 
     /// <summary>Configuration key for the POST <c>X-Trace</c> AES-256 key secret.</summary>
     public const string XTraceKeyConfigurationKey = "XTraceKey";
@@ -69,15 +42,15 @@ public sealed class NntpdOptions
 
     /// <summary>
     /// Environment variable that supplies <see cref="XTraceKey"/>
-    /// (<c>nntpd__XTraceKey</c>).
+    /// (<c>NNTPD__XTRACEKEY</c>).
     /// </summary>
-    public const string XTraceKeyEnvironmentVariable = "nntpd__XTraceKey";
+    public const string XTraceKeyEnvironmentVariable = "NNTPD__XTRACEKEY";
 
     /// <summary>
     /// Environment variable that supplies <see cref="XTracePreviousKey"/>
-    /// (<c>nntpd__XTracePreviousKey</c>).
+    /// (<c>NNTPD__XTRACEPREVIOUSKEY</c>).
     /// </summary>
-    public const string XTracePreviousKeyEnvironmentVariable = "nntpd__XTracePreviousKey";
+    public const string XTracePreviousKeyEnvironmentVariable = "NNTPD__XTRACEPREVIOUSKEY";
 
     /// <summary>Configuration key for the optional newsmaster AUTHINFO username.</summary>
     public const string NewsmasterUserConfigurationKey = "NewsmasterUser";
@@ -87,15 +60,15 @@ public sealed class NntpdOptions
 
     /// <summary>
     /// Environment variable that supplies <see cref="NewsmasterUser"/>
-    /// (<c>nntpd__NewsmasterUser</c>).
+    /// (<c>NNTPD__NEWSMASTERUSER</c>).
     /// </summary>
-    public const string NewsmasterUserEnvironmentVariable = "nntpd__NewsmasterUser";
+    public const string NewsmasterUserEnvironmentVariable = "NNTPD__NEWSMASTERUSER";
 
     /// <summary>
     /// Environment variable that supplies <see cref="NewsmasterPassword"/>
-    /// (<c>nntpd__NewsmasterPassword</c>).
+    /// (<c>NNTPD__NEWSMASTERPASSWORD</c>).
     /// </summary>
-    public const string NewsmasterPasswordEnvironmentVariable = "nntpd__NewsmasterPassword";
+    public const string NewsmasterPasswordEnvironmentVariable = "NNTPD__NEWSMASTERPASSWORD";
 
     /// <summary>Gets or sets the application display name used in logs and service registration metadata.</summary>
     [Required(AllowEmptyStrings = false)]
@@ -121,16 +94,6 @@ public sealed class NntpdOptions
     /// When <see langword="null"/>, startup is bounded only by the host cancellation token.
     /// </remarks>
     public TimeSpan? StartupTimeout { get; set; }
-
-    /// <summary>
-    /// Gets or sets the maximum wall-clock duration for a single Cloudflare reconcile or clean-up operation.
-    /// </summary>
-    /// <remarks>
-    /// Default is two minutes. Nested HTTP 429 retries and reconciler attempt backoffs share this budget
-    /// together with the caller's cancellation token; the earlier deadline wins. Failed-start clean-up uses
-    /// a shorter dedicated budget (15 seconds).
-    /// </remarks>
-    public TimeSpan CloudFlareOperationTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Gets or sets a value indicating whether the process should exit if an application service
@@ -162,43 +125,6 @@ public sealed class NntpdOptions
     public string[] ProxyHosts { get; set; } = [];
 
     /// <summary>
-    /// Gets or sets the local listen addresses for NNTPD.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Prefer a JSON array. Each entry is either:
-    /// </para>
-    /// <list type="bullet">
-    /// <item><description><c>*</c> — wildcard for all local interfaces.</description></item>
-    /// <item><description><c>0.0.0.0</c> / <c>::</c> — IPv4 / IPv6 any-address wildcards.</description></item>
-    /// <item><description>An explicit IPv4 or IPv6 address that must be assigned to a local NIC.</description></item>
-    /// </list>
-    /// <para>
-    /// When omitted, post-configure normalization sets <c>["*"]</c>. Assigned public and private
-    /// addresses are accepted. Configuration validation does not bind sockets.
-    /// </para>
-    /// </remarks>
-    public string[] BindAddress { get; set; } = [];
-
-    /// <summary>
-    /// Gets or sets the cleartext NNTP TCP port.
-    /// </summary>
-    /// <remarks>Default is <c>119</c>. Valid range is 1–65535.</remarks>
-    [Range(1, 65535)]
-    public int BindPort { get; set; } = 119;
-
-    /// <summary>
-    /// Gets or sets the TLS NNTP TCP port.
-    /// </summary>
-    /// <remarks>
-    /// Default and unset behaviour is <c>0</c>, which disables TLS listeners.
-    /// Values <c>1–65535</c> enable TLS listener configuration.
-    /// See <see cref="IsTlsListenerEnabled"/>.
-    /// </remarks>
-    [Range(0, 65535)]
-    public int BindPortTls { get; set; }
-
-    /// <summary>
     /// Gets or sets whether <c>AUTHINFO USER/PASS</c> is permitted when the connection is not TLS-protected.
     /// </summary>
     /// <remarks>
@@ -214,116 +140,13 @@ public sealed class NntpdOptions
     /// </remarks>
     public bool AllowCleartextAuth { get; set; } = true;
 
-    /// <summary>
-    /// Gets a value indicating whether TLS listener configuration is enabled.
-    /// </summary>
-    /// <remarks>
-    /// <see langword="false"/> when <see cref="BindPortTls"/> is <c>0</c> (disabled / unset default).
-    /// <see langword="true"/> when <see cref="BindPortTls"/> is in <c>1–65535</c>.
-    /// When enabled, ACME certificate acquisition is required (see <see cref="AcmeEmail"/>).
-    /// </remarks>
-    public bool IsTlsListenerEnabled => BindPortTls > 0;
-
-    /// <summary>
-    /// Default Let's Encrypt <strong>staging</strong> ACME directory URL.
-    /// </summary>
-    public const string DefaultAcmeDirectoryUrl =
-        "https://acme-staging-v02.api.letsencrypt.org/directory";
-
-    /// <summary>Default relative ACME state directory.</summary>
-    public const string DefaultAcmeStateDir = "certs/";
-
     /// <summary>Default relative Serilog file-log directory.</summary>
     public const string DefaultLogDir = "logs/";
-
-    /// <summary>Default certificate renewal lead time in days.</summary>
-    public const int DefaultAcmeRenewalThresholdDays = 30;
-
-    /// <summary>
-    /// Gets or sets the ACME directory URL (Let's Encrypt staging by default).
-    /// </summary>
-    /// <remarks>
-    /// The configured value is authoritative. Production Let's Encrypt requires an explicit
-    /// override (for example <c>https://acme-v02.api.letsencrypt.org/directory</c>).
-    /// Used only when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
-    /// </remarks>
-    public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
-
-    /// <summary>
-    /// Gets or sets the ACME account contact email.
-    /// </summary>
-    /// <remarks>
-    /// No default. Required when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
-    /// Ignored when TLS is disabled — missing email must not prevent non-TLS startup.
-    /// </remarks>
-    public string AcmeEmail { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the filesystem directory for ACME account and certificate state.
-    /// </summary>
-    /// <remarks>
-    /// Default is <c>certs/</c>. The TLS server credential is a PKCS#12/PFX file; the ACME account
-    /// private key is stored separately as PKCS#8 DER. The Windows Certificate Store is not used.
-    /// </remarks>
-    public string AcmeStateDir { get; set; } = DefaultAcmeStateDir;
 
     /// <summary>
     /// Gets or sets the filesystem directory for Serilog daily rolling application logs.
     /// </summary>
-    /// <remarks>
-    /// Default is <c>logs/</c>. Relative paths resolve with
-    /// <see cref="System.IO.Path.GetFullPath(string)"/> of the trimmed value, matching
-    /// <see cref="AcmeStateDir"/>.
-    /// </remarks>
     public string LogDir { get; set; } = DefaultLogDir;
-
-    /// <summary>
-    /// Gets or sets how many days before <c>NotAfter</c> a certificate is considered due for renewal.
-    /// </summary>
-    /// <remarks>Default is <c>30</c>. Valid range is <c>1–90</c>.</remarks>
-    [Range(1, 90)]
-    public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
-
-    /// <summary>
-    /// Gets or sets the password used to protect and load the TLS server PKCS#12/PFX file.
-    /// </summary>
-    /// <remarks>
-    /// No default. Required when <see cref="IsTlsListenerEnabled"/> is <see langword="true"/>.
-    /// Supply via <see cref="AcmeCertificatePasswordEnvironmentVariable"/> or user/deployment secrets —
-    /// never commit this value. Do not log it or include it in exception messages.
-    /// Ignored when TLS is disabled.
-    /// </remarks>
-    public string AcmeCertificatePassword { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the Cloudflare API key used for DNS integration.
-    /// </summary>
-    /// <remarks>
-    /// Required. Supply via <see cref="CloudFlareApiKeyEnvironmentVariable"/> — never commit this value.
-    /// Do not store in <c>appsettings.json</c>. Missing or blank values fail startup validation.
-    /// </remarks>
-    [Required(AllowEmptyStrings = false)]
-    public string CloudFlareApiKey { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the Cloudflare DNS zone identifier.
-    /// </summary>
-    /// <remarks>
-    /// Required. May also be supplied via <see cref="CloudFlareZoneIdEnvironmentVariable"/>.
-    /// Missing or blank values fail startup validation.
-    /// </remarks>
-    [Required(AllowEmptyStrings = false)]
-    public string CloudFlareZoneId { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Gets or sets the DNS suffix used when generating <see cref="Fqdn"/>.
-    /// </summary>
-    /// <remarks>
-    /// Default is <c>usenet.ninja</c>. Must be a syntactically valid DNS name.
-    /// This value is expected to correspond to the Cloudflare zone identified by
-    /// <see cref="CloudFlareZoneId"/>; that correspondence is not verified by live API calls.
-    /// </remarks>
-    public string DnsSuffix { get; set; } = "usenet.ninja";
 
     /// <summary>
     /// Gets or sets the numeric server identity used when generating <see cref="Fqdn"/>.
@@ -350,7 +173,7 @@ public sealed class NntpdOptions
     /// Returns an empty string when <see cref="ServerId"/> is unset so data-annotation validation
     /// can inspect the object; dependent services must use this only after validation succeeds.
     /// </remarks>
-    public string Fqdn =>
+    public override string Fqdn =>
         ServerId is { } serverId && !string.IsNullOrWhiteSpace(DnsSuffix)
             ? FormatFqdn(serverId, DnsSuffix)
             : string.Empty;
@@ -540,28 +363,4 @@ public sealed class NntpdOptions
     /// </remarks>
     [Required]
     public ArticleIngestionOptions ArticleIngestion { get; set; } = new();
-
-    /// <summary>
-    /// Returns whether a bind-address entry is a wildcard (all interfaces / any-address).
-    /// </summary>
-    public static bool IsBindAddressWildcard(string entry)
-    {
-        if (string.IsNullOrWhiteSpace(entry))
-        {
-            return false;
-        }
-
-        var trimmed = entry.Trim();
-        if (trimmed is "*" or "+")
-        {
-            return true;
-        }
-
-        if (!IPAddress.TryParse(trimmed, out var address))
-        {
-            return false;
-        }
-
-        return address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any);
-    }
 }

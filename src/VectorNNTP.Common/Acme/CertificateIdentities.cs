@@ -7,11 +7,15 @@ public static class CertificateIdentities
     public const string NewsHostname = "news.usenet.ninja";
 
     /// <summary>
-    /// Returns the exact DNS SAN set for issuance: <paramref name="fqdn"/> and <see cref="NewsHostname"/>.
+    /// Returns the exact DNS SAN set for issuance.
     /// </summary>
     /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
-    /// <returns>Lowercased, deduplicated identities preserving the required pair.</returns>
-    public static IReadOnlyList<string> ForFqdn(string fqdn)
+    /// <param name="includeNewsHostname">
+    /// When <see langword="true"/> (NNTPD), also include <see cref="NewsHostname"/>.
+    /// When <see langword="false"/> (BackFiller), request only <paramref name="fqdn"/>.
+    /// </param>
+    /// <returns>Lowercased, deduplicated identities.</returns>
+    public static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
 
@@ -26,20 +30,29 @@ public static class CertificateIdentities
             throw new ArgumentException("wildcard identities are not permitted.", nameof(fqdn));
         }
 
-        var news = NewsHostname.ToLowerInvariant();
         var ordered = new List<string>(2);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in new[] { cleanedFqdn, news })
+        if (seen.Add(cleanedFqdn))
         {
-            if (seen.Add(name))
-            {
-                ordered.Add(name);
-            }
+            ordered.Add(cleanedFqdn);
         }
 
-        if (!seen.Contains(cleanedFqdn) || !seen.Contains(news))
+        if (includeNewsHostname)
         {
-            throw new InvalidOperationException("required certificate identities missing after normalization.");
+            var news = NewsHostname.ToLowerInvariant();
+            if (seen.Add(news))
+            {
+                ordered.Add(news);
+            }
+
+            if (!seen.Contains(cleanedFqdn) || !seen.Contains(news))
+            {
+                throw new InvalidOperationException("required certificate identities missing after normalization.");
+            }
+        }
+        else if (!seen.Contains(cleanedFqdn))
+        {
+            throw new InvalidOperationException("required certificate identity missing after normalization.");
         }
 
         return ordered;

@@ -239,15 +239,15 @@ public sealed class CloudflareDnsAdversarialTests
         var resolver = new BindAddressResolver(
             new FakeLocalIpAddressAssignee(IPAddress.Parse("10.0.0.9"), IPAddress.Parse("fd00::9")),
             NullLogger<BindAddressResolver>.Instance);
-        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         var dns = new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             resolver,
             reconciler,
             NullLogger<CloudflareDnsReconciliationService>.Instance);
 
         var other = new FakeApplicationService("other");
-        await using var lifecycle = TestHostFactory.CreateLifecycle([dns, other], options);
+        await using var lifecycle = TestHostFactory.CreateLifecycle([TestHostFactory.WrapDns(dns), other], options);
 
         await Assert.ThrowsAsync<CloudflareDnsException>(() => lifecycle.StartAsync(CancellationToken.None));
         Assert.Equal(ApplicationState.Stopped, lifecycle.State);
@@ -271,7 +271,7 @@ public sealed class CloudflareDnsAdversarialTests
         };
         var client = new CloudflareDnsClient(
             httpClient,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsClient>.Instance);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
@@ -309,7 +309,7 @@ public sealed class CloudflareDnsAdversarialTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));

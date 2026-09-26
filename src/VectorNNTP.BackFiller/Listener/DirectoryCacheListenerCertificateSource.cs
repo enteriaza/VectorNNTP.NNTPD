@@ -18,7 +18,7 @@ public sealed class DirectoryCacheListenerCertificateSource : ICacheListenerCert
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _pfxPath = Path.Combine(runtime.CertificateDirectory, ListenerProtocol.ListenerPfxFileName);
-        _password = runtime.LetsEncrypt.PfxExportPassword;
+        _password = runtime.CertificatePassword;
     }
 
     /// <inheritdoc />

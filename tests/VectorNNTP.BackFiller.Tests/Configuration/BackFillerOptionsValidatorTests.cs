@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
@@ -57,11 +58,13 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_fails_when_bind_port_is_missing()
+    public void Validate_fails_when_shared_bind_port_is_invalid()
     {
-        var options = BackFillerTestOptions.CreateValid();
-        options.BindPort = null;
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        var acme = BackFillerTestOptions.CreateValidAcme();
+        acme.BindPort = 0;
+        acme.BindPortTls = 0;
+        var result = new AcmeCloudflareOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
+            .Validate(null, acme);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures!, static f => f.Contains("BindPort", StringComparison.Ordinal));
     }
@@ -108,11 +111,10 @@ public sealed class BackFillerOptionsValidatorTests
     [Fact]
     public void Validate_fails_when_explicit_bind_address_is_not_local()
     {
-        var options = BackFillerTestOptions.CreateValid();
-        options.BindAddress = ["198.51.100.10"];
-        var result = BackFillerTestOptions
-            .CreateValidator(assignee: new FakeLocalIpAddressAssignee(assignAll: false))
-            .Validate(null, options);
+        var acme = BackFillerTestOptions.CreateValidAcme();
+        acme.BindAddress = ["198.51.100.10"];
+        var result = new AcmeCloudflareOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: false))
+            .Validate(null, acme);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures!, static f => f.Contains("BindAddress", StringComparison.Ordinal));
     }
@@ -169,8 +171,6 @@ public sealed class BackFillerOptionsValidatorTests
         var options = BackFillerTestOptions.CreateValid();
         options.ServerId = null;
         options.RabbitMQ.Password = BackFillerTestOptions.SecretPassword;
-        options.LetsEncrypt.CloudFlareApiToken = BackFillerTestOptions.SecretToken;
-        options.LetsEncrypt.PfxExportPassword = BackFillerTestOptions.SecretPfx;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.All(

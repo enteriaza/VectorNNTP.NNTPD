@@ -37,6 +37,7 @@ internal static class AdminApp
         configuration.GetSection(NntpCancelMessageOptions.SectionName).Bind(admin);
         var nntpd = new NntpdOptions();
         configuration.GetSection(NntpdOptions.SectionName).Bind(nntpd);
+        AcmeCloudflareOptions.OverlaySharedFromRoot(nntpd, configuration);
 
         if (!AdminSettings.TryCreate(arguments, admin, nntpd, out var settings, out var settingsError))
         {
@@ -193,6 +194,7 @@ internal static class AdminApp
             .SetBasePath(basePath)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
+            .AddVectorEnvironmentVariables()
             .Build();
     }
 

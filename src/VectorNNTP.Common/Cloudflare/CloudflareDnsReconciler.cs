@@ -36,7 +36,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     internal const int MaxAttempts = 3;
 
     private readonly ICloudflareDnsClient _client;
-    private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly ILogger<CloudflareDnsReconciler> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -51,7 +51,7 @@ public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     /// </summary>
     public CloudflareDnsReconciler(
         ICloudflareDnsClient client,
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         ILogger<CloudflareDnsReconciler> logger)
     {
         ArgumentNullException.ThrowIfNull(client);

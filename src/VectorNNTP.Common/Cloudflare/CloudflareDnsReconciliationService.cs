@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking;
 
 namespace VectorNNTP.NNTPD.Cloudflare;
@@ -18,15 +16,15 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// Registered first among application services so reverse-order stop runs clean-up after other services
 /// (including future listeners) have stopped. Startup failure after reconcile work begins attempts clean-up
 /// so partial A/AAAA publications are not left without a recovery path. Concurrent start/stop are rejected
-/// by <see cref="ApplicationServiceManager"/>; reconcile and clean-up share the reconciler gate.
+/// by the application host; reconcile and clean-up share the reconciler gate.
 /// </para>
 /// </remarks>
-public sealed class CloudflareDnsReconciliationService : IApplicationService
+public sealed class CloudflareDnsReconciliationService
 {
     /// <summary>Maximum wall-clock budget for best-effort clean-up after a failed or cancelled startup reconcile.</summary>
     public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
 
-    private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly IBindAddressResolver _bindAddressResolver;
     private readonly ICloudflareDnsReconciler _reconciler;
     private readonly ILogger<CloudflareDnsReconciliationService> _logger;
@@ -36,7 +34,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
     /// Initializes a new instance of the <see cref="CloudflareDnsReconciliationService"/> class.
     /// </summary>
     public CloudflareDnsReconciliationService(
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         IBindAddressResolver bindAddressResolver,
         ICloudflareDnsReconciler reconciler,
         ILogger<CloudflareDnsReconciliationService> logger)
@@ -72,7 +70,7 @@ public sealed class CloudflareDnsReconciliationService : IApplicationService
         if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
         {
             throw new InvalidOperationException(
-                $"{NntpdOptions.CloudFlareZoneIdConfigurationKey} is required for DNS reconciliation.");
+                $"{AcmeCloudflareOptions.CloudFlareZoneIdConfigurationKey} is required for DNS reconciliation.");
         }
 
         CloudflareLogMessages.StartingReconciliation(_logger, fqdn, options.CloudFlareZoneId);

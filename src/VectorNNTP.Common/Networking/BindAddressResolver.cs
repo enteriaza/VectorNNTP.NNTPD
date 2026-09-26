@@ -1,11 +1,11 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Networking;
 
 /// <summary>
-/// Resolves <see cref="NntpdOptions.BindAddress"/> into the eligible IP set used for DNS reconciliation.
+/// Resolves <see cref="AcmeCloudflareOptions.BindAddress"/> into the eligible IP set used for DNS reconciliation.
 /// </summary>
 /// <remarks>
 /// Wildcard entries expand to eligible unicast addresses from <see cref="ILocalIpAddressAssignee"/>.
@@ -33,7 +33,7 @@ public sealed class BindAddressResolver : IBindAddressResolver
     }
 
     /// <inheritdoc />
-    public ResolvedBindAddresses Resolve(NntpdOptions options)
+    public ResolvedBindAddresses Resolve(AcmeCloudflareOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -50,7 +50,7 @@ public sealed class BindAddressResolver : IBindAddressResolver
             }
 
             var trimmed = entry.Trim();
-            if (NntpdOptions.IsBindAddressWildcard(trimmed))
+            if (AcmeCloudflareOptions.IsBindAddressWildcard(trimmed))
             {
                 localUnicast ??= _localIpAddressAssignee.GetAssignedUnicastAddresses();
                 AppendWildcardAddresses(trimmed, localUnicast, collected);

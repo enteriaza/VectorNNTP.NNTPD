@@ -26,7 +26,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
 
     private const int KeySizeBits = 2048;
 
-    private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly AccountStore _accountStore;
     private readonly Dns01Solver _dnsSolver;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -36,7 +36,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
 
     /// <summary>Initializes a new instance of the <see cref="CertesAcmeIssuer"/> class.</summary>
     public CertesAcmeIssuer(
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         AccountStore accountStore,
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
@@ -54,7 +54,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
 
     /// <summary>Test constructor with injectable readiness poll timing.</summary>
     internal CertesAcmeIssuer(
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         AccountStore accountStore,
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
@@ -254,7 +254,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
             authzViews);
     }
 
-    private AcmeAccountState EnsureAccount(NntpdOptions options, CancellationToken cancellationToken)
+    private AcmeAccountState EnsureAccount(AcmeCloudflareOptions options, CancellationToken cancellationToken)
     {
         return _accountStore.EnsureRegistered(
             options.AcmeDirectoryUrl.Trim(),
@@ -269,7 +269,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         return rsa.ExportPkcs8PrivateKey();
     }
 
-    private (string AccountUri, string RegistrationBody) RegisterAccount(NntpdOptions options, byte[] keyDer)
+    private (string AccountUri, string RegistrationBody) RegisterAccount(AcmeCloudflareOptions options, byte[] keyDer)
     {
         try
         {

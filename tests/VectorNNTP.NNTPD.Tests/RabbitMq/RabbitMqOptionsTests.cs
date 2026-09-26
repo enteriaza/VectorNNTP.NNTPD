@@ -261,8 +261,8 @@ public sealed class RabbitMqOptionsTests
     [Fact]
     public void EnvironmentVariables_DocumentedCredentialNames_AreExact()
     {
-        Assert.Equal("nntpd__RabbitMQ__Username", RabbitMqOptions.UsernameEnvironmentVariable);
-        Assert.Equal("nntpd__RabbitMQ__Password", RabbitMqOptions.PasswordEnvironmentVariable);
+        Assert.Equal("VECTOR__RABBITMQ__USERNAME", RabbitMqOptions.UsernameEnvironmentVariable);
+        Assert.Equal("VECTOR__RABBITMQ__PASSWORD", RabbitMqOptions.PasswordEnvironmentVariable);
         Assert.Equal("Username", RabbitMqOptions.UsernameConfigurationKey);
         Assert.Equal("Password", RabbitMqOptions.PasswordConfigurationKey);
     }

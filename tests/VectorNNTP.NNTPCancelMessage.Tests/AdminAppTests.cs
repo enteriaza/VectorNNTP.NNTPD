@@ -361,7 +361,7 @@ public sealed class AdminAppTests : IClassFixture<SharedPgpKeyFixture>
             ["NntpCancelMessage:UseTls"] = "false",
             ["NntpCancelMessage:Port"] = "1199",
             ["NntpCancelMessage:From"] = "newsmaster@usenet.ninja",
-            ["Nntpd:BindPort"] = "1199",
+            ["BindPort"] = "1199",
             ["Nntpd:XTraceKey"] = TestKey,
         };
         if (includeCredentials)

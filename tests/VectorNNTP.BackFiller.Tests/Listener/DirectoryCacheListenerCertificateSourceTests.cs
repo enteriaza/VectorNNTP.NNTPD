@@ -42,7 +42,7 @@ public sealed class DirectoryCacheListenerCertificateSourceTests(ITestOutputHelp
             NullLogger<CacheListenerService>.Instance);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.StartAsync(CancellationToken.None));
-        Assert.Contains(workspace.PfxPath, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(workspace.Runtime.CertificateDirectory, ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(BackFillerTestOptions.SecretPfx, ex.Message, StringComparison.Ordinal);
     }
 
@@ -132,9 +132,12 @@ public sealed class DirectoryCacheListenerCertificateSourceTests(ITestOutputHelp
             var options = BackFillerTestOptions.CreateValid();
             options.CertificateDirectory = root;
             options.LogDirectory = Path.Combine(root, "logs");
+            var acme = BackFillerTestOptions.CreateValidAcme(options);
+            acme.AcmeStateDir = root;
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
                 BackFillerTestOptions.CreateValidConnectionStrings(),
+                acme,
                 root);
             return new CertificateWorkspace(
                 root,

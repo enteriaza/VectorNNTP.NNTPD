@@ -5,7 +5,10 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener;
 
@@ -18,6 +21,8 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
     private readonly BackFillerRuntimeOptions _runtime;
     private readonly ICacheListenerCertificateSource _certificates;
     private readonly IArticleRetentionAuthority _retention;
+    private readonly IAcmeCertificateReadiness _readiness;
+    private readonly IBackFillerStartupJournal _journal;
     private readonly ILogger<CacheListenerService> _logger;
     private readonly object _gate = new();
     private readonly List<Socket> _listenSockets = [];
@@ -31,21 +36,44 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
     private int _disposed;
     private int _activeConnections;
 
-    /// <summary>Initializes the Listener service.</summary>
+    /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
     public CacheListenerService(
         BackFillerRuntimeOptions runtime,
         ICacheListenerCertificateSource certificates,
         IArticleRetentionAuthority retention,
         ILogger<CacheListenerService> logger)
+        : this(runtime, certificates, retention, CreateReadyGate(), new BackFillerStartupJournal(), logger)
+    {
+    }
+
+    /// <summary>Initializes the Listener service.</summary>
+    public CacheListenerService(
+        BackFillerRuntimeOptions runtime,
+        ICacheListenerCertificateSource certificates,
+        IArticleRetentionAuthority retention,
+        IAcmeCertificateReadiness readiness,
+        IBackFillerStartupJournal journal,
+        ILogger<CacheListenerService> logger)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(certificates);
         ArgumentNullException.ThrowIfNull(retention);
+        ArgumentNullException.ThrowIfNull(readiness);
+        ArgumentNullException.ThrowIfNull(journal);
         ArgumentNullException.ThrowIfNull(logger);
         _runtime = runtime;
         _certificates = certificates;
         _retention = retention;
+        _readiness = readiness;
+        _journal = journal;
         _logger = logger;
+    }
+
+    private static IAcmeCertificateReadiness CreateReadyGate()
+    {
+        var readiness = new AcmeCertificateReadiness();
+        readiness.MarkReady();
+        return readiness;
     }
 
     /// <summary>Gets the local lifecycle state.</summary>
@@ -90,22 +118,27 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
 
         try
         {
+            if (!_readiness.IsReady)
+            {
+                throw new InvalidOperationException(
+                    "Cache Listener cannot start because the ACME certificate is not ready. BackFiller is TLS-only and the listener must wait for a usable certificate.");
+            }
+
             if (!_certificates.TryGetCurrent(out var material))
             {
-                var expected = Path.Combine(_runtime.CertificateDirectory, ListenerProtocol.ListenerPfxFileName);
                 throw new InvalidOperationException(
-                    $"Cache Listener cannot start because no TLS certificate is available at '{expected}'. ACME provisioning is deferred; place {ListenerProtocol.ListenerPfxFileName} in CertificateDirectory.");
+                    $"Cache Listener cannot start because no TLS certificate is available from ACME state '{_runtime.CertificateDirectory}'.");
             }
 
             _certificate = material;
-            var endpoints = CacheListenerEndpoints.Build(_runtime);
-            if (endpoints.Count == 0)
+            var bindings = ListenEndpointPlanner.Plan(_runtime.BindAddressTokens, _runtime.BindPort);
+            if (bindings.Count == 0)
             {
                 throw new InvalidOperationException("Cache Listener has no bind endpoints.");
             }
 
-            CacheListenerLogMessages.Starting(_logger, _runtime.BindPort, endpoints.Count);
-            BindEndpoints(endpoints);
+            CacheListenerLogMessages.Starting(_logger, _runtime.BindPort, bindings.Count);
+            BindEndpoints(bindings);
             if (_listenSockets.Count == 0)
             {
                 throw new InvalidOperationException("Cache Listener failed to bind any endpoint.");
@@ -117,6 +150,7 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
             }
 
             CacheListenerLogMessages.Running(_logger, _listenSockets.Count, _runtime.BindPort);
+            _journal.Record(BackFillerStartupStages.ListenerStarted);
             _acceptTask = AcceptAllAsync(_runCts.Token);
         }
         catch (Exception ex)
@@ -179,25 +213,25 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
         CacheListenerLogMessages.Stopped(_logger);
     }
 
-    private void BindEndpoints(IReadOnlyList<IPEndPoint> endpoints)
+    private void BindEndpoints(IReadOnlyList<ListenBinding> bindings)
     {
-        foreach (var endpoint in endpoints)
+        foreach (var binding in bindings)
         {
             try
             {
-                var socket = CacheListenerEndpoints.CreateBoundListenSocket(endpoint);
+                var socket = CacheListenerEndpoints.CreateBoundListenSocket(binding);
                 lock (_gate)
                 {
                     _listenSockets.Add(socket);
                 }
 
-                CacheListenerLogMessages.EndpointBound(_logger, endpoint.ToString(), endpoint.AddressFamily.ToString());
+                CacheListenerLogMessages.EndpointBound(_logger, binding.EndPoint.ToString(), binding.Address.AddressFamily.ToString());
             }
             catch (SocketException ex) when (
-                IsImplicitWildcard(endpoint)
+                IsImplicitWildcard(binding.EndPoint)
                 && ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.ProtocolNotSupported or SocketError.AddressNotAvailable)
             {
-                CacheListenerLogMessages.WildcardFamilySkipped(_logger, endpoint.AddressFamily.ToString(), ex.SocketErrorCode.ToString());
+                CacheListenerLogMessages.WildcardFamilySkipped(_logger, binding.Address.AddressFamily.ToString(), ex.SocketErrorCode.ToString());
             }
         }
     }

@@ -1,3 +1,5 @@
+using VectorNNTP.NNTPD.Configuration;
+
 namespace VectorNNTP.BackFiller.Configuration;
 
 /// <summary>
@@ -6,15 +8,19 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <remarks>
 /// <para>
 /// Property names are PascalCase. Generated <see cref="Fqdn"/> cannot be bound.
-/// Never log a complete instance: RabbitMQ, Let's Encrypt, and GrabberDB secrets live here.
+/// Never log a complete instance: RabbitMQ and GrabberDB secrets live here.
+/// Shared ACME/Cloudflare/bind secrets live on <see cref="AcmeCloudflareOptions"/>.
 /// </para>
 /// <para>
-/// There is one canonical environment contract: prefix <see cref="EnvironmentVariablePrefix"/>
-/// plus the configuration path with <c>__</c> separators. RabbitMQ and Let's Encrypt are nested
-/// under this section, so the prefixed paths include <c>BackFiller__</c>. Short-form names such
-/// as <c>backfiller__RabbitMQ__Username</c> are not aliases and do not bind here. The old worker
-/// used unprefixed <c>BackFiller__*</c> / <c>ConnectionStrings__GrabberDB</c> with no custom
-/// prefix; that is not a second first-class contract.
+/// Shared ACME, Cloudflare, BindAddress, and BindPort settings bind from the
+/// configuration root and <c>VECTOR__*</c> environment variables
+/// (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
+/// <c>VECTOR__CLOUDFLAREZONEID</c>, <c>VECTOR__BINDADDRESS</c>,
+/// <c>VECTOR__BINDPORT</c>, <c>VECTOR__BINDPORTTLS</c>). Identity binds from
+/// section <see cref="SectionName"/> (<c>BACKFILLER__NAME</c>,
+/// <c>BACKFILLER__SERVERID</c>). RabbitMQ uses <c>VECTOR__RABBITMQ__*</c>.
+/// GrabberDB uses <c>VECTOR__CONNECTIONSTRINGS__GRABBERDB</c>. Shared
+/// components do not use an application-specific prefix or alias.
 /// </para>
 /// <para>
 /// Intentional key rename from the old worker: <c>BackFiller:Id</c> is now
@@ -27,29 +33,23 @@ public sealed class BackFillerOptions
     /// <summary>Configuration section name.</summary>
     public const string SectionName = "BackFiller";
 
-    /// <summary>Environment-variable prefix, including the trailing separator.</summary>
-    public const string EnvironmentVariablePrefix = "backfiller__";
+    /// <summary>Canonical VectorNNTP environment-variable prefix.</summary>
+    public const string EnvironmentVariablePrefix = VectorEnvironment.Prefix;
 
-    /// <summary>Canonical environment variable that supplies <see cref="Name"/>.</summary>
-    public const string NameEnvironmentVariable = "backfiller__BackFiller__Name";
+    /// <summary>Application environment variable that supplies <see cref="Name"/>.</summary>
+    public const string NameEnvironmentVariable = "BACKFILLER__NAME";
 
-    /// <summary>Canonical environment variable that supplies <see cref="ServerId"/>.</summary>
-    public const string ServerIdEnvironmentVariable = "backfiller__BackFiller__ServerId";
+    /// <summary>Application environment variable that supplies <see cref="ServerId"/>.</summary>
+    public const string ServerIdEnvironmentVariable = "BACKFILLER__SERVERID";
 
     /// <summary>Canonical environment variable that supplies RabbitMQ username.</summary>
-    public const string RabbitMqUsernameEnvironmentVariable = "backfiller__BackFiller__RabbitMQ__Username";
+    public const string RabbitMqUsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
 
     /// <summary>Canonical environment variable that supplies RabbitMQ password.</summary>
-    public const string RabbitMqPasswordEnvironmentVariable = "backfiller__BackFiller__RabbitMQ__Password";
+    public const string RabbitMqPasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
 
     /// <summary>Canonical environment variable that supplies GrabberDB.</summary>
-    public const string GrabberDbEnvironmentVariable = "backfiller__ConnectionStrings__GrabberDB";
-
-    /// <summary>Canonical environment variable that supplies the Cloudflare API token.</summary>
-    public const string CloudFlareApiTokenEnvironmentVariable = "backfiller__BackFiller__LetsEncrypt__CloudFlareApiToken";
-
-    /// <summary>Canonical environment variable that supplies the PKCS#12 export password.</summary>
-    public const string PfxExportPasswordEnvironmentVariable = "backfiller__BackFiller__LetsEncrypt__PfxExportPassword";
+    public const string GrabberDbEnvironmentVariable = "VECTOR__CONNECTIONSTRINGS__GRABBERDB";
 
     /// <summary>Default DNS suffix when the key is omitted.</summary>
     public const string DefaultDnsSuffix = "usenet.ninja";
@@ -124,11 +124,6 @@ public sealed class BackFillerOptions
     /// The Listener loads <c>backfiller-listener.pfx</c> from this directory.
     /// </remarks>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;
-
-    /// <summary>
-    /// Gets or sets Let's Encrypt / ACME settings.
-    /// </summary>
-    public BackFillerLetsEncryptOptions LetsEncrypt { get; set; } = new();
 
     /// <summary>
     /// Gets or sets RabbitMQ settings.

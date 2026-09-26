@@ -9,7 +9,7 @@ namespace VectorNNTP.NNTPD.Acme;
 /// </summary>
 public class AcmeComponentFactory
 {
-    private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly ICloudflareDnsClient _cloudflareDnsClient;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
@@ -19,7 +19,7 @@ public class AcmeComponentFactory
 
     /// <summary>Initializes a new instance of the <see cref="AcmeComponentFactory"/> class.</summary>
     public AcmeComponentFactory(
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         ICloudflareDnsClient cloudflareDnsClient,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory)
@@ -53,7 +53,7 @@ public class AcmeComponentFactory
             }
 
             var stateDir = Path.GetFullPath(options.AcmeStateDir.Trim());
-            var domains = CertificateIdentities.ForFqdn(options.Fqdn);
+            var domains = CertificateIdentities.ForFqdn(options.Fqdn, options.IncludeNewsHostnameInCertificate);
             var renewalThreshold = TimeSpan.FromDays(options.AcmeRenewalThresholdDays);
             var accountStore = new AccountStore(stateDir);
             var certificateStore = new CertificateStore(
@@ -81,7 +81,8 @@ public class AcmeComponentFactory
                 issuer,
                 options.AcmeCertificatePassword,
                 renewalThreshold,
-                _loggerFactory.CreateLogger<CertificateManager>());
+                _loggerFactory.CreateLogger<CertificateManager>(),
+                options.IncludeNewsHostnameInCertificate);
             _provider = new ServerCertificateProvider(_manager);
             return _manager;
         }

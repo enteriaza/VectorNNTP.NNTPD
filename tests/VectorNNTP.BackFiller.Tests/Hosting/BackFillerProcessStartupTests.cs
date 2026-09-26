@@ -32,7 +32,13 @@ public sealed class BackFillerProcessStartupTests
 
             process.StartInfo.Environment[BackFillerOptions.NameEnvironmentVariable] =
                 "process-smoke";
-            process.StartInfo.Environment["backfiller__BackFiller__BindPort"] = "0";
+            process.StartInfo.Environment[BackFillerOptions.ServerIdEnvironmentVariable] = "1";
+            process.StartInfo.Environment[BackFillerOptions.GrabberDbEnvironmentVariable] =
+                "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz";
+            process.StartInfo.Environment["VECTOR__BINDPORT"] = "1190";
+            process.StartInfo.Environment["VECTOR__BINDPORTTLS"] = "0";
+            process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "unit-test-cloudflare-key-not-secret";
+            process.StartInfo.Environment["VECTOR__CLOUDFLAREZONEID"] = "0123456789abcdef0123456789abcdef";
 
             Assert.True(process.Start());
             var stdout = process.StandardOutput.ReadToEndAsync();
@@ -45,12 +51,12 @@ public sealed class BackFillerProcessStartupTests
             catch (OperationCanceledException)
             {
                 TryKill(process);
-                Assert.Fail("BackFiller process did not exit within 20s after invalid BindPort.");
+                Assert.Fail("BackFiller process did not exit within 20s after invalid BindPortTls.");
             }
 
             var output = string.Concat(await stdout, await stderr);
             Assert.Equal(1, process.ExitCode);
-            Assert.Contains("BindPort", output, StringComparison.Ordinal);
+            Assert.Contains("BindPortTls", output, StringComparison.Ordinal);
             Assert.DoesNotContain("super-secret", output, StringComparison.Ordinal);
         }
         finally
@@ -83,6 +89,11 @@ public sealed class BackFillerProcessStartupTests
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
+            process.StartInfo.Environment[BackFillerOptions.ServerIdEnvironmentVariable] = "";
+            process.StartInfo.Environment["VECTOR__SERVERID"] = "";
+            process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "";
+            process.StartInfo.Environment["VECTOR__ACMECERTIFICATEPASSWORD"] = "";
+
             Assert.True(process.Start());
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
@@ -99,7 +110,10 @@ public sealed class BackFillerProcessStartupTests
 
             var output = string.Concat(await stdout, await stderr);
             Assert.Equal(1, process.ExitCode);
-            Assert.Contains("ServerId", output, StringComparison.Ordinal);
+            Assert.True(
+                output.Contains("ServerId", StringComparison.Ordinal)
+                || output.Contains("CloudFlareApiKey", StringComparison.Ordinal),
+                output);
             Assert.DoesNotContain("Name is required", output, StringComparison.Ordinal);
             Assert.DoesNotContain("Hosts must contain", output, StringComparison.Ordinal);
             Assert.DoesNotContain("super-secret", output, StringComparison.Ordinal);

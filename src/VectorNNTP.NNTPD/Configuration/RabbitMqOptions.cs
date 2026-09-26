@@ -23,15 +23,15 @@ public sealed class RabbitMqOptions
 
     /// <summary>
     /// Environment variable that supplies <see cref="Username"/>
-    /// (<c>nntpd__RabbitMQ__Username</c>).
+    /// (<c>VECTOR__RABBITMQ__USERNAME</c>).
     /// </summary>
-    public const string UsernameEnvironmentVariable = "nntpd__RabbitMQ__Username";
+    public const string UsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
 
     /// <summary>
     /// Environment variable that supplies <see cref="Password"/>
-    /// (<c>nntpd__RabbitMQ__Password</c>).
+    /// (<c>VECTOR__RABBITMQ__PASSWORD</c>).
     /// </summary>
-    public const string PasswordEnvironmentVariable = "nntpd__RabbitMQ__Password";
+    public const string PasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
 
     /// <summary>
     /// Maximum RabbitMQ work-request envelope size, in bytes, admitted before a future

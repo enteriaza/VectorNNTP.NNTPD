@@ -158,7 +158,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         await service.StartAsync(CancellationToken.None);
         Assert.Contains(
             service.LocalEndPoints,
-            static endpoint => endpoint is IPEndPoint ip && ip.Address.Equals(IPAddress.Any));
+            static endpoint => endpoint is IPEndPoint ip && ip.Address.Equals(IPAddress.IPv6Any));
         await service.DisposeAsync();
         Assert.Equal(CacheListenerState.Stopped, service.State);
     }

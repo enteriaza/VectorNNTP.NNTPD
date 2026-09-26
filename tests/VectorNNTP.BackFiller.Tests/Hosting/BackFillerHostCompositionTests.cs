@@ -13,6 +13,7 @@ using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
@@ -23,20 +24,22 @@ public sealed class BackFillerHostCompositionTests
     [Fact]
     public void AddBackFillerHosting_registers_rabbitmq_then_article_work_consumers()
     {
-        using var host = CreateHost();
+        using var host = CreateHost(replaceAcme: false);
 
         Assert.Same(TimeProvider.System, host.Services.GetRequiredService<TimeProvider>());
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(7, hosted.Length);
+        Assert.Equal(9, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[1]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[2]);
-        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[3]);
-        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[4]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[5]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[6]);
+        Assert.IsType<CloudflareDnsReconciliationHostedService>(hosted[3]);
+        Assert.IsType<AcmeCertificateHostedService>(hosted[4]);
+        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[5]);
+        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[6]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[7]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[8]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
@@ -124,13 +127,18 @@ public sealed class BackFillerHostCompositionTests
 
     private static IHost CreateHost(
         FakeBackFillerRabbitMqConnectionFactory? factory = null,
-        bool injectAccountSource = true)
+        bool injectAccountSource = true,
+        bool replaceAcme = true)
     {
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
-        pairs["BackFiller:BindPort"] = GetFreePort().ToString();
+        var tlsPort = GetFreePort();
+        pairs["BindPort"] = tlsPort.ToString();
+        pairs["BindPortTls"] = tlsPort.ToString();
+        pairs["BindAddress:0"] = "*";
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
+        builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
         builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
             factory ?? new FakeBackFillerRabbitMqConnectionFactory());
@@ -143,7 +151,23 @@ public sealed class BackFillerHostCompositionTests
         builder.ConfigureBackFillerLogging();
         builder.ConfigureBackFillerPlatformHosting();
         builder.AddBackFillerHosting();
+        if (replaceAcme)
+        {
+            ReplaceAcmeHostedServiceWithImmediateReady(builder.Services);
+        }
+
         return builder.Build();
+    }
+
+    private static void ReplaceAcmeHostedServiceWithImmediateReady(IServiceCollection services)
+    {
+        for (var i = 0; i < services.Count; i++)
+        {
+            if (services[i].ImplementationType == typeof(AcmeCertificateHostedService))
+            {
+                services[i] = ServiceDescriptor.Singleton<IHostedService, ImmediateAcmeReadyHostedService>();
+            }
+        }
     }
 
     private static int GetFreePort()

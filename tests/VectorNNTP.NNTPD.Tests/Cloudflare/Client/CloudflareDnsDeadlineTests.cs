@@ -91,7 +91,7 @@ public sealed class CloudflareDnsDeadlineTests
         };
         var client = new CloudflareDnsClient(
             http,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsClient>.Instance);
 
         using var budget = CloudflareOperationBudget.Begin(TimeSpan.FromMilliseconds(40), CancellationToken.None, out var opToken);
@@ -113,7 +113,7 @@ public sealed class CloudflareDnsDeadlineTests
         };
         var client = new CloudflareDnsClient(
             http,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsClient>.Instance);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
@@ -144,7 +144,7 @@ public sealed class CloudflareDnsDeadlineTests
         options.CloudFlareOperationTimeout = TimeSpan.FromMilliseconds(80);
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             NullLogger<CloudflareDnsReconciler>.Instance)
         {
             DelayAsync = async (_, ct) =>
@@ -192,7 +192,7 @@ public sealed class CloudflareDnsDeadlineTests
         options.CloudFlareOperationTimeout = TimeSpan.FromMinutes(2);
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             NullLogger<CloudflareDnsReconciler>.Instance);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -220,13 +220,13 @@ public sealed class CloudflareDnsDeadlineTests
 
         var options = TestHostFactory.CreateValidOptions();
         var service = new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             new BindAddressResolver(
                 new FakeLocalIpAddressAssignee(TestHostFactory.TestIpv4, TestHostFactory.TestIpv6),
                 NullLogger<BindAddressResolver>.Instance),
             new CloudflareDnsReconciler(
                 client,
-                Options.Create(options),
+                Options.Create<AcmeCloudflareOptions>(options),
                 NullLogger<CloudflareDnsReconciler>.Instance),
             NullLogger<CloudflareDnsReconciliationService>.Instance);
 
@@ -259,7 +259,7 @@ public sealed class CloudflareDnsDeadlineTests
 
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsReconciler>.Instance);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -275,7 +275,7 @@ public sealed class CloudflareDnsDeadlineTests
         };
         return new CloudflareDnsClient(
             http,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsClient>.Instance);
     }
 

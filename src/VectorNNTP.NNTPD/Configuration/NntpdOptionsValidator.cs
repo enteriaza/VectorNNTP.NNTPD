@@ -500,7 +500,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
         {
             failures.Add(
-                $"{NntpdOptions.CloudFlareZoneIdConfigurationKey} must be configured (use environment variable {NntpdOptions.CloudFlareZoneIdEnvironmentVariable} or {NntpdOptions.SectionName}:{NntpdOptions.CloudFlareZoneIdConfigurationKey}).");
+                $"{NntpdOptions.CloudFlareZoneIdConfigurationKey} must be configured (use environment variable {NntpdOptions.CloudFlareZoneIdEnvironmentVariable} or root key {NntpdOptions.CloudFlareZoneIdConfigurationKey}).");
         }
     }
 

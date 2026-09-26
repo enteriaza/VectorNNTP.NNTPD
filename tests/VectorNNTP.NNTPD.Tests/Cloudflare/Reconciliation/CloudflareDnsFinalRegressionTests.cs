@@ -450,7 +450,7 @@ public sealed class CloudflareDnsFinalRegressionTests
         var options = TestHostFactory.CreateValidOptions();
         options.BindAddress = ["127.0.0.1"];
         var service = new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             new BindAddressResolver(new FakeLocalIpAddressAssignee(IPAddress.Loopback), NullLogger<BindAddressResolver>.Instance),
             CreateReconciler(new FakeCloudflareDnsClient()),
             NullLogger<CloudflareDnsReconciliationService>.Instance);
@@ -499,7 +499,7 @@ public sealed class CloudflareDnsFinalRegressionTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));

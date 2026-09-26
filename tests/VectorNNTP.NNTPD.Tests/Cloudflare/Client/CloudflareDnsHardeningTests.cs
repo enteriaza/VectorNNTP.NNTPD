@@ -82,7 +82,7 @@ public sealed class CloudflareDnsHardeningTests
         options.CloudFlareOperationTimeout = TimeSpan.FromMilliseconds(50);
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             NullLogger<CloudflareDnsReconciler>.Instance)
         {
             DelayAsync = (_, ct) => Task.Delay(TimeSpan.FromSeconds(30), ct),
@@ -172,7 +172,7 @@ public sealed class CloudflareDnsHardeningTests
         var client = CreateClient(handler);
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsReconciler>.Instance);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
@@ -278,7 +278,7 @@ public sealed class CloudflareDnsHardeningTests
         var client = new FakeCloudflareDnsClient();
         await new CloudflareDnsReconciler(
                 client,
-                Options.Create(TestHostFactory.CreateValidOptions()),
+                Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
                 NullLogger<CloudflareDnsReconciler>.Instance)
             .ReconcileAsync(ZoneId, Fqdn, Desired("198.18.0.10"), CancellationToken.None);
 
@@ -312,10 +312,10 @@ public sealed class CloudflareDnsHardeningTests
             NullLogger<BindAddressResolver>.Instance);
         var reconciler = new CloudflareDnsReconciler(
             client,
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             NullLogger<CloudflareDnsReconciler>.Instance);
         var service = new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             resolver,
             reconciler,
             NullLogger<CloudflareDnsReconciliationService>.Instance);
@@ -347,7 +347,7 @@ public sealed class CloudflareDnsHardeningTests
         };
         return new CloudflareDnsClient(
             httpClient,
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()),
             NullLogger<CloudflareDnsClient>.Instance);
     }
 

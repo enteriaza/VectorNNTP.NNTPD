@@ -340,7 +340,7 @@ Implemented in `src/VectorNNTP.BackFiller/Configuration` and `Hosting`. Bindable
 | Environment-variable prefix | `backfiller__` (stripped, then `__` → `:`) |
 | Identity | `backfiller__BackFiller__Name`, `backfiller__BackFiller__ServerId` |
 | RabbitMQ secrets | `backfiller__BackFiller__RabbitMQ__Username`, `backfiller__BackFiller__RabbitMQ__Password` |
-| ACME secrets | `backfiller__BackFiller__LetsEncrypt__CloudFlareApiToken`, `backfiller__BackFiller__LetsEncrypt__PfxExportPassword` |
+| ACME / Cloudflare secrets | **Phase 13:** `nntpd__cloudflareapikey`, `nntpd__AcmeCertificatePassword`, `nntpd__CloudFlareZoneId`. The leftover `backfiller__BackFiller__LetsEncrypt__*` names are not the runtime contract. |
 | GrabberDB | `backfiller__ConnectionStrings__GrabberDB` |
 
 Other `BackFiller:*` keys follow the same rule: `backfiller__` + section path with `__` separators (for example `backfiller__BackFiller__BindPort`).
@@ -1396,9 +1396,45 @@ Not done: SIGTERM of a process that had already connected to RabbitMQ, MySQL, a 
 - No live RabbitMQ, MySQL, or commercial NNTP in this environment.
 - No Windows Service SCM install and no Linux systemd unit for BackFiller.
 - `LogDirectory` is unused (stdout only).
-- Cloudflare / ACME values are mandatory at validation and inert at runtime.
+- Live Let's Encrypt / Cloudflare calls are not made by unit tests; they are real runtime dependencies via `VectorNNTP.Common`.
 - Transit `TAKETHIS` remains out of scope.
 - Self-contained / single-file / ReadyToRun / RID-specific publish were not added.
 - Process-level SIGTERM of a fully connected worker remains a manual step.
+
+## Phase 13 — shared ACME/Cloudflare infrastructure
+
+Phase 13 extracts NNTPD's ACME, Cloudflare DNS, and bind-address implementation into `src/VectorNNTP.Common/` (class library, no `Program.cs`). NNTPD and BackFiller both reference that library. There is one implementation.
+
+### Shared configuration
+
+The shared contract is Common-owned `AcmeCloudflareOptions` at the **configuration root** (application-neutral). Option names are `BindAddress`, `BindPort`, `BindPortTls`, `AcmeEmail`, `AcmeCertificatePassword`, `AcmeStateDir`, `CloudFlareApiKey`, `CloudFlareZoneId`, `DnsSuffix`, and the other ACME/Cloudflare operational keys. They are not nested under `Nntpd` or `BackFiller`.
+
+Shared environment variables are uppercase `VECTOR__` with no application-specific identifier. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for shared settings:
+
+```text
+VECTOR__CLOUDFLAREAPIKEY
+VECTOR__ACMECERTIFICATEPASSWORD
+VECTOR__CLOUDFLAREZONEID
+VECTOR__BINDADDRESS
+VECTOR__BINDPORT
+VECTOR__BINDPORTTLS
+VECTOR__RABBITMQ__USERNAME
+VECTOR__RABBITMQ__PASSWORD
+VECTOR__CONNECTIONSTRINGS__GRABBERDB
+```
+
+BackFiller identity is application-specific and stays on the `BackFiller` section (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`). NNTPD identity and POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`. The shared `VECTOR__` variables can be supplied to either process.
+
+### Behaviour
+
+- BindAddress / BindPort use NNTPD resolution (`IBindAddressResolver`, `ListenEndpointPlanner`) and the same static-vs-runtime validation split.
+- Cloudflare A/AAAA reconciliation uses resolved listener addresses, then ACME DNS-01.
+- ACME account, key persistence, issuance, renewal, and challenge cleanup are the Common implementation.
+- BackFiller is **TLS-only**. It binds `BindPortTls` only. `BindPortTls <= 0` fails startup. There is no cleartext fallback.
+- The BackFiller listener does not start until a usable ACME certificate has been loaded or issued. Certificate failure fails the process.
+- BackFiller certificates contain only `{BackFillerFqdn}`. They do not request `news.usenet.ninja` or `*.usenet.ninja`.
+- Application lifecycle wrappers stay in each host (`IApplicationService` in NNTPD; `IHostedService` in BackFiller). ACME readiness is an explicit gate, not HostedService order alone.
+
+Transit `TAKETHIS` remains out of scope. Live Let's Encrypt / Cloudflare calls are not made by unit tests.
 
 

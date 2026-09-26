@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -11,7 +11,7 @@ namespace VectorNNTP.NNTPD.Cloudflare;
 /// HTTP client for the Cloudflare DNS Records API (v4).
 /// </summary>
 /// <remarks>
-/// Authenticates with <c>Authorization: Bearer</c> using <see cref="NntpdOptions.CloudFlareApiKey"/>.
+/// Authenticates with <c>Authorization: Bearer</c> using <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>.
 /// Never logs the API key or authorization headers. Treats <c>success: false</c> and non-success
 /// HTTP statuses as failures. Transport failures and per-request timeouts during mutations are marked
 /// <see cref="CloudflareDnsException.IsOutcomeUncertain"/> because Cloudflare may already have applied them.
@@ -47,7 +47,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     };
 
     private readonly HttpClient _httpClient;
-    private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly ILogger<CloudflareDnsClient> _logger;
 
     /// <summary>
@@ -61,7 +61,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     /// </summary>
     public CloudflareDnsClient(
         HttpClient httpClient,
-        IOptions<NntpdOptions> options,
+        IOptions<AcmeCloudflareOptions> options,
         ILogger<CloudflareDnsClient> logger)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
@@ -459,7 +459,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             throw new CloudflareDnsException(
-                $"{NntpdOptions.CloudFlareApiKeyConfigurationKey} is not configured.")
+                $"{AcmeCloudflareOptions.CloudFlareApiKeyConfigurationKey} is not configured.")
             {
                 FailedOperation = "Authenticate",
                 IsPermanentFailure = true,

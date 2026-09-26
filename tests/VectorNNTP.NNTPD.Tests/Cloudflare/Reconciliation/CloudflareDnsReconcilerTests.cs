@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking;
 
 namespace VectorNNTP.NNTPD.Tests.Cloudflare.Reconciliation;
@@ -347,7 +348,7 @@ public sealed class CloudflareDnsReconcilerTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static ResolvedBindAddresses Desired(params string[] addresses) =>
         new(addresses.Select(IPAddress.Parse));

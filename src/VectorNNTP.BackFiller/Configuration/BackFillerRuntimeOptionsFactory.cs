@@ -1,4 +1,6 @@
 using System.Net;
+using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Configuration;
 
@@ -20,13 +22,43 @@ public static class BackFillerRuntimeOptionsFactory
     /// </param>
     /// <returns>Immutable snapshot.</returns>
     /// <exception cref="InvalidOperationException">Thrown when a required value is missing after validation.</exception>
+    /// <remarks>
+    /// The three-argument overload maps leftover BackFiller bind/certificate fields only when
+    /// a shared <see cref="AcmeCloudflareOptions"/> instance is not supplied (tests).
+    /// </remarks>
     public static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         BackFillerConnectionStringsOptions connectionStrings,
         string? contentRootPath = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var acme = new AcmeCloudflareOptions
+        {
+            BindAddress = options.BindAddress is { Length: > 0 } ? options.BindAddress : ["*"],
+            BindPort = options.BindPort ?? 1190,
+            BindPortTls = options.BindPort ?? 1190,
+            Fqdn = options.Fqdn,
+            IncludeNewsHostnameInCertificate = false,
+            AcmeEmail = "security@usenet.ninja",
+            AcmeCertificatePassword = string.Empty,
+            AcmeStateDir = options.CertificateDirectory,
+            CloudFlareApiKey = string.Empty,
+            CloudFlareZoneId = string.Empty,
+            DnsSuffix = options.DnsSuffix,
+        };
+        return Create(options, connectionStrings, acme, contentRootPath);
+    }
+
+    /// <inheritdoc cref="Create(BackFillerOptions,BackFillerConnectionStringsOptions,string?)"/>
+    public static BackFillerRuntimeOptions Create(
+        BackFillerOptions options,
+        BackFillerConnectionStringsOptions connectionStrings,
+        AcmeCloudflareOptions acme,
+        string? contentRootPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(connectionStrings);
+        ArgumentNullException.ThrowIfNull(acme);
 
         if (string.IsNullOrWhiteSpace(options.Name) || options.ServerId is not { } serverId)
         {
@@ -36,10 +68,15 @@ public static class BackFillerRuntimeOptionsFactory
         var name = BackFillerIdentity.CanonicalizeName(options.Name);
         var dnsSuffix = BackFillerIdentity.CanonicalizeDnsSuffix(options.DnsSuffix);
         var fqdn = BackFillerIdentity.BuildFqdn(name, serverId, dnsSuffix);
-        var bindPort = options.BindPort
-            ?? throw new InvalidOperationException("BackFiller:BindPort is required to build runtime options.");
+        if (acme.BindPortTls is < 1 or > 65535)
+        {
+            throw new InvalidOperationException(
+                "BindPortTls is required and must be 1–65535 because BackFiller is TLS-only. There is no cleartext fallback.");
+        }
 
-        var tokens = (options.BindAddress ?? [])
+        var bindPort = acme.BindPortTls;
+
+        var tokens = (acme.BindAddress ?? [])
             .Where(static x => !string.IsNullOrWhiteSpace(x))
             .Select(static x => x.Trim())
             .ToArray();
@@ -47,7 +84,7 @@ public static class BackFillerRuntimeOptionsFactory
         var addresses = new List<IPAddress>();
         foreach (var token in tokens)
         {
-            if (BackFillerOptions.IsBindAddressWildcard(token))
+            if (AcmeCloudflareOptions.IsBindAddressWildcard(token))
             {
                 continue;
             }
@@ -71,7 +108,6 @@ public static class BackFillerRuntimeOptionsFactory
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var letsEncrypt = options.LetsEncrypt ?? throw new InvalidOperationException("BackFiller:LetsEncrypt is required.");
         var retention = options.ArticleRetention ?? throw new InvalidOperationException("BackFiller:ArticleRetention is required.");
         var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
         var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
@@ -87,7 +123,7 @@ public static class BackFillerRuntimeOptionsFactory
             CanonicalBindAddresses: addresses,
             BindPort: bindPort,
             LogDirectory: ResolveConfiguredDirectory(options.LogDirectory, contentRootPath),
-            CertificateDirectory: ResolveConfiguredDirectory(options.CertificateDirectory, contentRootPath),
+            CertificateDirectory: ResolveConfiguredDirectory(acme.AcmeStateDir, contentRootPath),
             Shutdown: new BackFillerShutdownRuntimeOptions(
                 TimeSpan.FromSeconds(shutdown.GracePeriodSeconds),
                 shutdown.DrainQueuedWork,
@@ -138,28 +174,8 @@ public static class BackFillerRuntimeOptionsFactory
                 RequestedChannelMax: rabbit.RequestedChannelMax ?? 2047,
                 ConsumerPrefetchCount: rabbit.ConsumerPrefetchCount,
                 DiagnosticPayloadCorrelationId: NullIfWhiteSpace(rabbit.DiagnosticPayloadCorrelationId)),
-            LetsEncrypt: new BackFillerLetsEncryptRuntimeOptions(
-                AcmeAccountEmail: letsEncrypt.AcmeAccountEmail.Trim(),
-                AcmeAccountKeyPem: letsEncrypt.AcmeAccountKeyPem.Trim(),
-                AcmeTransientRetryMaxAttempts: letsEncrypt.AcmeTransientRetryMaxAttempts ?? 5,
-                ClockSkewCheckTtl: TimeSpan.FromMinutes(letsEncrypt.ClockSkewCheckTtlMinutes ?? 5),
-                ClockSkewMax: TimeSpan.FromMinutes(letsEncrypt.ClockSkewMaxMinutes ?? 10),
-                DnsAuthoritativeNsCache: TimeSpan.FromMinutes(letsEncrypt.DnsAuthoritativeNsCacheMinutes ?? 5),
-                DnsAuthoritativeQuorumRatio: letsEncrypt.DnsAuthoritativeQuorumRatio ?? 0.7,
-                DnsPropagationDelay: TimeSpan.FromSeconds(letsEncrypt.DnsPropagationDelaySeconds ?? 15),
-                DnsTxtPollInterval: TimeSpan.FromSeconds(letsEncrypt.DnsTxtPollIntervalSeconds ?? 3),
-                DnsTxtPollTimeout: TimeSpan.FromSeconds(letsEncrypt.DnsTxtPollTimeoutSeconds ?? 600),
-                DomainNames: (letsEncrypt.DomainNames ?? [])
-                    .Where(static x => !string.IsNullOrWhiteSpace(x))
-                    .Select(static x => x.Trim())
-                    .ToArray(),
-                PfxExportPassword: letsEncrypt.PfxExportPassword ?? string.Empty,
-                RenewalCheckInterval: TimeSpan.FromHours(letsEncrypt.RenewalCheckIntervalHours ?? 6),
-                RenewalJitterRatio: letsEncrypt.RenewalJitterRatio ?? 0.1,
-                RenewBeforeExpiryDays: letsEncrypt.RenewBeforeExpiryDays ?? 7,
-                UseStagingDirectory: letsEncrypt.UseStagingDirectory,
-                CloudFlareApiToken: letsEncrypt.CloudFlareApiToken ?? string.Empty,
-                CloudFlareZoneId: letsEncrypt.CloudFlareZoneId?.Trim() ?? string.Empty),
+            CertificateDomainNames: CertificateIdentitiesForRuntime(acme),
+            CertificatePassword: acme.AcmeCertificatePassword,
             GrabberDb: new GrabberDbRuntimeOptions(
                 grabberDbValue!.Trim(),
                 server!,
@@ -168,6 +184,16 @@ public static class BackFillerRuntimeOptionsFactory
             Accounts: new BackFillerAccountsRuntimeOptions(
                 TimeSpan.FromSeconds(accounts.RefreshIntervalSeconds),
                 TimeSpan.FromSeconds(accounts.CommandTimeoutSeconds)));
+    }
+
+    private static IReadOnlyList<string> CertificateIdentitiesForRuntime(AcmeCloudflareOptions acme)
+    {
+        if (string.IsNullOrWhiteSpace(acme.Fqdn))
+        {
+            return [];
+        }
+
+        return CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate);
     }
 
     private static string? NullIfWhiteSpace(string? value) =>

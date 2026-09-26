@@ -27,7 +27,7 @@ internal static class NntpdFileLogging
     public const Serilog.Events.LogEventLevel ConsoleMinimumLevel = Serilog.Events.LogEventLevel.Information;
 
     /// <summary>
-    /// Resolves <paramref name="logDir"/> the same way ACME resolves <see cref="NntpdOptions.AcmeStateDir"/>.
+    /// Resolves <paramref name="logDir"/> the same way ACME resolves <see cref="AcmeCloudflareOptions.AcmeStateDir"/>.
     /// </summary>
     public static string ResolveDirectory(string? logDir)
     {

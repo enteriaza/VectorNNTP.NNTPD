@@ -1,6 +1,10 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the `Nntpd` section (case-insensitive), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the application-neutral root (shared bind/ACME/Cloudflare), the `Nntpd` section (NNTPD-specific settings), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+
+Shared ACME, Cloudflare, bind-address, and RabbitMQ settings are owned by `VectorNNTP.Common` (`AcmeCloudflareOptions` at the configuration root) or other shared sections. VectorNNTP.NNTPD and VectorNNTP.BackFiller bind that shared tree with the same environment-variable names. Shared environment variables are uppercase, use prefix `VECTOR__`, and contain no application-specific identifier. Values are case-sensitive and are not transformed. Examples: `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__CLOUDFLAREZONEID`, `VECTOR__BINDADDRESS`, `VECTOR__BINDPORT`, `VECTOR__BINDPORTTLS`, `VECTOR__RABBITMQ__USERNAME`. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for shared settings.
+
+NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller identity stays under section `BackFiller` (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`).
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
@@ -34,10 +38,10 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `IdleTime` | int (seconds) | `300` | no | Disconnect an established NNTP session after this many seconds with no executed NNTP command (`1`–`86400`). `0` is invalid (not disabled). Resets when a command is accepted; in-flight CHECK/TAKETHIS/POST (including article receive and validation) keep the session non-idle. Not TCP/TLS/socket receive idle. |
 | `MaxArticleSize` | int | `5242880` (5 MiB) | no | Maximum destuffed POST article size in bytes (`1`–`104857600`). Enforced during streaming receive (headers + blank separator + body; terminator excluded; stuffing dots are not counted). Exceeding the limit ends reception and returns `441 Posting failed`. Distinct from `ArticleIngestion:MaxArticleBytes` (IHAVE/TAKETHIS). |
 | `MailComplaintsTo` | string | `abuse@usenet.ninja` | no | Mailbox emitted as `mail-complaints-to` on server-generated POST `Injection-Info`. Must be a plausible mailbox. Client `Injection-Info` is discarded. |
-| `XTraceKey` | string | _(none)_ | **yes** (secret) | 32-byte AES-256 key that protects POST `X-Trace` (64 hex characters or Base64). Supply via `nntpd__XTraceKey` or secrets. Never commit. |
-| `XTracePreviousKey` | string | _(none)_ | no (secret) | Optional previous AES-256 key retained for one-generation decrypt after rotation. Supply via `nntpd__XTracePreviousKey`. |
+| `XTraceKey` | string | _(none)_ | **yes** (secret) | 32-byte AES-256 key that protects POST `X-Trace` (64 hex characters or Base64). Supply via `NNTPD__XTRACEKEY` or secrets. Never commit. |
+| `XTracePreviousKey` | string | _(none)_ | no (secret) | Optional previous AES-256 key retained for one-generation decrypt after rotation. Supply via `NNTPD__XTRACEPREVIOUSKEY`. |
 | `NewsmasterUser` | string | _(none)_ | no | AUTHINFO username that may POST a well-formed `Control: cancel <message-id>` article. When set, `NewsmasterPassword` is required. |
-| `NewsmasterPassword` | string | _(none)_ | no (secret) | AUTHINFO password for `NewsmasterUser`. Supply via `nntpd__NewsmasterPassword` or secrets. Never commit. |
+| `NewsmasterPassword` | string | _(none)_ | no (secret) | AUTHINFO password for `NewsmasterUser`. Supply via `NNTPD__NEWSMASTERPASSWORD` or secrets. Never commit. |
 | `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
@@ -187,8 +191,8 @@ The limiter sits under TLS/DEFLATE, so it throttles octets written toward the so
 Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
 
 ```text
-nntpd__NewsmasterUser=newsmaster
-nntpd__NewsmasterPassword=<secret>
+NNTPD__NEWSMASTERUSER=newsmaster
+NNTPD__NEWSMASTERPASSWORD=<secret>
 ```
 
 ## Newsmaster utility (`NNTPCancelMessage`)
@@ -256,8 +260,8 @@ If multiple signing-capable secret keys are present and `KeyId` is omitted, CANC
 Example environment:
 
 ```text
-nntpd__XTraceKey=<64-hex-or-base64-32-byte-key>
-nntpd__XTracePreviousKey=<optional-previous-key>
+NNTPD__XTRACEKEY=<64-hex-or-base64-32-byte-key>
+NNTPD__XTRACEPREVIOUSKEY=<optional-previous-key>
 ```
 
 POST returns `240 Article received OK` only after the article has been streamed into one stuffed IHAVE/TAKETHIS queue representation (dot-stuffed wire, NNTP terminator omitted) and admitted with `IArticleIngestionQueue.TryAdmit`. POST does not persist, deliver, or propagate the article; existing ingestion workers own that work after admission. Admission failure returns `441 Posting failed`.
@@ -401,8 +405,8 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 |-----|------|---------|-----------|-------------|
 | `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query) |
 | `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
-| `Username` | string | _(none)_ | no | Broker username. When set, `Password` is required. Supply via `nntpd__RabbitMQ__Username` |
-| `Password` | string | _(none)_ | no (secret) | Broker password. Supply via `nntpd__RabbitMQ__Password` or secrets. Never commit or log |
+| `Username` | string | _(none)_ | no | Broker username. When set, `Password` is required. Supply via `VECTOR__RABBITMQ__USERNAME` |
+| `Password` | string | _(none)_ | no (secret) | Broker password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
 | `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
 | `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS |
 | `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
@@ -442,7 +446,7 @@ Example (no secrets):
 }
 ```
 
-Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via the NNTPD-prefixed environment variables `nntpd__RabbitMQ__Username` and `nntpd__RabbitMQ__Password`, or user secrets.
+Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via `VECTOR__RABBITMQ__USERNAME` and `VECTOR__RABBITMQ__PASSWORD`, or user secrets.
 
 ## NntpDB (`ConnectionStrings:NntpDB` and `NntpDb`)
 
@@ -963,7 +967,7 @@ Example (TLS enabled against staging — values are illustrative; supply secrets
 ```
 
 ```text
-nntpd__AcmeCertificatePassword=<secret>
+VECTOR__ACMECERTIFICATEPASSWORD=<secret>
 ```
 
 Production directory (explicit only):
@@ -976,12 +980,14 @@ Staging certificates are **not** trusted by normal clients. Use staging for inte
 
 ### Certificate identities (SANs)
 
-Every TLS certificate must include exactly these DNS names (no wildcards, no extras):
+NNTPD TLS certificates must include exactly these DNS names (no wildcards, no extras):
 
 1. The generated `{Fqdn}` (for example `nntpd01.usenet.ninja`)
 2. `news.usenet.ninja`
 
-Both names must fall under `DnsSuffix` (label-boundary zone coverage) because DNS-01 challenges are published in the single Cloudflare zone identified by `CloudFlareZoneId`.
+BackFiller requests only `{BackFillerFqdn}` and must not include `news.usenet.ninja`. The ACME implementation is shared; only the requested name set is application-specific.
+
+Requested names must fall under `DnsSuffix` (label-boundary zone coverage) because DNS-01 challenges are published in the single Cloudflare zone identified by `CloudFlareZoneId`.
 
 ### Challenge mechanism
 
@@ -1104,30 +1110,32 @@ NNTP listeners bind configured `BindAddress` entries on `BindPort` (plain) and, 
 Use these exact names:
 
 ```text
-nntpd__cloudflareapikey
-nntpd__CloudFlareZoneId
-nntpd__ServerId
-nntpd__AcmeCertificatePassword
-nntpd__RabbitMQ__Username
-nntpd__RabbitMQ__Password
+VECTOR__CLOUDFLAREAPIKEY
+VECTOR__CLOUDFLAREZONEID
+VECTOR__ACMECERTIFICATEPASSWORD
+VECTOR__RABBITMQ__USERNAME
+VECTOR__RABBITMQ__PASSWORD
+NNTPD__SERVERID
 ```
+
+Names are uppercase on Windows and Linux. Values are case-sensitive and must be passed unchanged.
 
 Example (user scope, PowerShell — replace secret values locally; do not commit them):
 
 ```powershell
-[Environment]::SetEnvironmentVariable("nntpd__cloudflareapikey", "<YOUR_API_KEY>", "User")
-[Environment]::SetEnvironmentVariable("nntpd__CloudFlareZoneId", "5811a29d39a0732afb5f160c9b137c3d", "User")
-[Environment]::SetEnvironmentVariable("nntpd__ServerId", "1", "User")
-[Environment]::SetEnvironmentVariable("nntpd__AcmeCertificatePassword", "<YOUR_PFX_PASSWORD>", "User")
-[Environment]::SetEnvironmentVariable("nntpd__RabbitMQ__Username", "<YOUR_RABBITMQ_USERNAME>", "User")
-[Environment]::SetEnvironmentVariable("nntpd__RabbitMQ__Password", "<YOUR_RABBITMQ_PASSWORD>", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__CLOUDFLAREAPIKEY", "<YOUR_API_KEY>", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__CLOUDFLAREZONEID", "5811a29d39a0732afb5f160c9b137c3d", "User")
+[Environment]::SetEnvironmentVariable("NNTPD__SERVERID", "1", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__ACMECERTIFICATEPASSWORD", "<YOUR_PFX_PASSWORD>", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__USERNAME", "<YOUR_RABBITMQ_USERNAME>", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__PASSWORD", "<YOUR_RABBITMQ_PASSWORD>", "User")
 ```
 
 `DnsSuffix` should correspond to the zone identified by `CloudFlareZoneId`. The host validates DNS suffix **syntax** only; it does not verify zone membership via the Cloudflare API.
 
 ## ServerId (required)
 
-`ServerId` has **no default**. It must be configured explicitly as an integer from `1` through `99` (for example via `Nntpd:ServerId` or `nntpd__ServerId`). Missing, null, unparsable, `0`, negative, or greater-than-`99` values cause a hard startup failure. A missing value is distinguishable from an explicit `0` (both fail). The CLR default must not make an omitted setting appear valid (`int?` remains unset until configured).
+`ServerId` has **no default**. It must be configured explicitly as an integer from `1` through `99` (for example via `Nntpd:ServerId` or `NNTPD__SERVERID`). Missing, null, unparsable, `0`, negative, or greater-than-`99` values cause a hard startup failure. A missing value is distinguishable from an explicit `0` (both fail). The CLR default must not make an omitted setting appear valid (`int?` remains unset until configured).
 
 ## Generated FQDN
 

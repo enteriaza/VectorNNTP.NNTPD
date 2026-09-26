@@ -25,7 +25,8 @@ public sealed record BackFillerRuntimeOptions(
     BackFillerArticleRetentionRuntimeOptions ArticleRetention,
     BackFillerTransitServerRuntimeOptions TransitServer,
     BackFillerRabbitMqRuntimeOptions RabbitMq,
-    BackFillerLetsEncryptRuntimeOptions LetsEncrypt,
+    IReadOnlyList<string> CertificateDomainNames,
+    string CertificatePassword,
     GrabberDbRuntimeOptions GrabberDb,
     BackFillerAccountsRuntimeOptions Accounts);
 
@@ -77,27 +78,6 @@ public sealed record GrabberDbRuntimeOptions(
     string Server,
     string Database,
     string UserId);
-
-/// <summary>Validated Let's Encrypt runtime projection.</summary>
-public sealed record BackFillerLetsEncryptRuntimeOptions(
-    string AcmeAccountEmail,
-    string AcmeAccountKeyPem,
-    int AcmeTransientRetryMaxAttempts,
-    TimeSpan ClockSkewCheckTtl,
-    TimeSpan ClockSkewMax,
-    TimeSpan DnsAuthoritativeNsCache,
-    double DnsAuthoritativeQuorumRatio,
-    TimeSpan DnsPropagationDelay,
-    TimeSpan DnsTxtPollInterval,
-    TimeSpan DnsTxtPollTimeout,
-    IReadOnlyList<string> DomainNames,
-    string PfxExportPassword,
-    TimeSpan RenewalCheckInterval,
-    double RenewalJitterRatio,
-    int RenewBeforeExpiryDays,
-    bool UseStagingDirectory,
-    string CloudFlareApiToken,
-    string CloudFlareZoneId);
 
 /// <summary>Validated RabbitMQ runtime projection.</summary>
 public sealed record BackFillerRabbitMqRuntimeOptions(

@@ -32,6 +32,7 @@ using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Email.Smtp;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
+using VectorNNTP.Common.Hosting;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -57,12 +58,13 @@ public static class NntpdServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
-        services.TryAddSingleton<IBindAddressResolver, BindAddressResolver>();
         services.TryAddSingleton<ITrustedProxyHosts, TrustedProxyHosts>();
         services.TryAddSingleton<IListenSocketBinder>(static _ => SocketListenBinder.Instance);
-        services.TryAddSingleton<ICloudflareDnsReconciler, CloudflareDnsReconciler>();
-        services.TryAddSingleton<ITlsCertificateContextProvider, TlsCertificateContextProvider>();
+        services.TryAddSingleton<TlsCertificateContextProvider>();
+        services.TryAddSingleton<ITlsCertificateContextProvider>(static sp =>
+            sp.GetRequiredService<TlsCertificateContextProvider>());
+        services.TryAddSingleton<IAcmeCertificatePublisher>(static sp =>
+            sp.GetRequiredService<TlsCertificateContextProvider>());
         // Newsmaster (when configured) then MySQL nntpusers. Reader-authority only.
         // Transit AUTHINFO is MODE STREAM / Transit authority and never enters this provider.
         services.TryAddSingleton<MySqlUserRecordStore>();
@@ -137,41 +139,13 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<TransitConfigurationHotReload>();
         services.TryAddSingleton<ISpeedTestCoordinator, SpeedTestCoordinator>();
 
-        services.AddHttpClient(CloudflareDnsClient.HttpClientName, static client =>
-        {
-            client.BaseAddress = new Uri("https://api.cloudflare.com/client/v4/");
-            // Stall protection is per-request via CloudflareDnsClient (CancelAfter of
-            // min(PerRequestTimeout, remaining operation budget)). Disabling HttpClient.Timeout
-            // avoids a second, uncoordinated timer that can outlive a short remaining budget.
-            client.Timeout = Timeout.InfiniteTimeSpan;
-            client.DefaultRequestHeaders.ExpectContinue = false;
-        });
-
-        services.AddHttpClient(CertesAcmeIssuer.HttpClientName, static client =>
-        {
-            // ACME directory / order HTTP. Stall protection is left to call cancellation;
-            // avoid a hard HttpClient.Timeout that races with application shutdown budgets.
-            client.Timeout = Timeout.InfiniteTimeSpan;
-            client.DefaultRequestHeaders.ExpectContinue = false;
-        });
-
-        services.TryAddSingleton<ICloudflareDnsClient>(static sp =>
-        {
-            var httpClient = sp.GetRequiredService<IHttpClientFactory>()
-                .CreateClient(CloudflareDnsClient.HttpClientName);
-            return new CloudflareDnsClient(
-                httpClient,
-                sp.GetRequiredService<IOptions<NntpdOptions>>(),
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CloudflareDnsClient>>());
-        });
-
-        services.TryAddSingleton<AcmeComponentFactory>();
-        services.TryAddSingleton<IServerCertificateProvider>(static sp =>
-            sp.GetRequiredService<AcmeComponentFactory>().GetCertificateProvider());
-
         var optionsBuilder = services
             .AddOptions<NntpdOptions>()
             .BindConfiguration(NntpdOptions.SectionName)
+            .Configure<IConfiguration>(static (options, configuration) =>
+            {
+                AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
+            })
             .ValidateDataAnnotations()
             .ValidateOnStart()
             .PostConfigure(static options =>
@@ -187,6 +161,9 @@ public static class NntpdServiceCollectionExtensions
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
+        services.AddSingleton<IOptions<AcmeCloudflareOptions>>(static sp =>
+            Options.Create<AcmeCloudflareOptions>(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
+        services.AddAcmeCloudflareInfrastructure();
 
         services
             .AddOptions<RedisOptions>()
@@ -299,7 +276,7 @@ public static class NntpdServiceCollectionExtensions
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationService>());
+            ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
 
         services.TryAddSingleton<IRedisConnectionFactory, StackExchangeRedisConnectionFactory>();
         services.TryAddSingleton<RedisService>();
@@ -392,10 +369,8 @@ public static class NntpdServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, NntpPlainListenerService>(static sp =>
                 sp.GetRequiredService<NntpPlainListenerService>()));
 
-        services.TryAddSingleton<AcmeCertificateService>();
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateService>(static sp =>
-                sp.GetRequiredService<AcmeCertificateService>()));
+            ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
 
         services.TryAddSingleton<NntpTlsListenerService>();
         services.TryAddEnumerable(
@@ -460,7 +435,7 @@ public static class NntpdServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.Configuration.AddNntpdPrefixedEnvironmentVariables();
+        builder.Configuration.AddVectorEnvironmentVariables();
 
         builder.Services.AddWindowsService(options =>
         {
@@ -487,20 +462,14 @@ public static class NntpdServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Adds environment variables that use the NNTPD <c>nntpd__</c> prefix.
+    /// Adds the canonical <c>VECTOR__</c> environment-variable source.
     /// </summary>
     /// <param name="builder">The configuration builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
-    /// <remarks>
-    /// The established NNTPD environment-variable convention is prefix <c>nntpd</c>,
-    /// separator <c>__</c>, then the configuration path. After the prefix is stripped,
-    /// <c>nntpd__RabbitMQ__Username</c> binds to <c>RabbitMQ:Username</c> and
-    /// <c>nntpd__RabbitMQ__Password</c> binds to <c>RabbitMQ:Password</c>.
-    /// </remarks>
     public static IConfigurationBuilder AddNntpdPrefixedEnvironmentVariables(this IConfigurationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        return builder.AddEnvironmentVariables(prefix: "nntpd__");
+        return builder.AddVectorEnvironmentVariables();
     }
 
     /// <summary>

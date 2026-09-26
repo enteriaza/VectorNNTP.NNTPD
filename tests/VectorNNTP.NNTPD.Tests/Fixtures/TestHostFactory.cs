@@ -17,6 +17,9 @@ namespace VectorNNTP.NNTPD.Tests.Fixtures;
 
 internal static class TestHostFactory
 {
+    internal static IApplicationService WrapDns(CloudflareDnsReconciliationService service) =>
+        new CloudflareDnsReconciliationApplicationService(service);
+
     public const string TestCloudFlareApiKey = "unit-test-cloudflare-api-key";
 
     /// <summary>64-hex AES-256 test key for POST <c>X-Trace</c> (not a production secret).</summary>
@@ -121,11 +124,12 @@ internal static class TestHostFactory
         builder.Configuration.AddInMemoryCollection(
             new Dictionary<string, string?>
             {
-                [$"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareApiKeyConfigurationKey}"] = TestCloudFlareApiKey,
+                [NntpdOptions.CloudFlareApiKeyConfigurationKey] = TestCloudFlareApiKey,
                 [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] = TestXTraceKey,
+                [NntpdOptions.XTraceKeyConfigurationKey] = TestXTraceKey,
                 // Replace appsettings BindAddress entirely (in-memory must clear leftover indices).
-                [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
-                [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
+                ["BindAddress:0"] = "*",
+                ["BindAddress:1"] = null,
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["Redis:Port"] = "6379",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",
@@ -139,6 +143,7 @@ internal static class TestHostFactory
         builder.Services.AddSingleton<IRedisConnectionFactory, FakeRedisConnectionFactory>();
         builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeRabbitMqConnectionFactory>();
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
+        PromoteSharedKeysToRoot(builder.Configuration);
         IsolateTransit(builder.Services);
 
         // Ensure machine-specific appsettings bind entries cannot leak into host tests.
@@ -152,6 +157,57 @@ internal static class TestHostFactory
             options.BindPortTls = 0;
             options.AcmeEmail = string.Empty;
         });
+    }
+
+    /// <summary>
+    /// Copies leftover <c>Nntpd:</c> shared keys to the configuration root so older
+    /// test fixtures keep working after the Common-owned root contract.
+    /// </summary>
+    public static void PromoteSharedKeysToRoot(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration is not IConfigurationBuilder builder)
+        {
+            return;
+        }
+
+        var extras = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        string[] keys =
+        [
+            NntpdOptions.CloudFlareApiKeyConfigurationKey,
+            NntpdOptions.CloudFlareZoneIdConfigurationKey,
+            nameof(NntpdOptions.BindPort),
+            nameof(NntpdOptions.BindPortTls),
+            nameof(NntpdOptions.AcmeEmail),
+            nameof(NntpdOptions.AcmeCertificatePassword),
+            nameof(NntpdOptions.AcmeStateDir),
+            nameof(NntpdOptions.AcmeDirectoryUrl),
+            nameof(NntpdOptions.AcmeRenewalThresholdDays),
+            nameof(NntpdOptions.DnsSuffix),
+        ];
+
+        foreach (var key in keys)
+        {
+            if (configuration[key] is null && configuration[$"{NntpdOptions.SectionName}:{key}"] is { } value)
+            {
+                extras[key] = value;
+            }
+        }
+
+        for (var i = 0; i < 8; i++)
+        {
+            var destination = $"BindAddress:{i}";
+            var source = configuration[$"{NntpdOptions.SectionName}:BindAddress:{i}"];
+            if (configuration[destination] is null && source is not null)
+            {
+                extras[destination] = source;
+            }
+        }
+
+        if (extras.Count > 0)
+        {
+            builder.AddInMemoryCollection(extras);
+        }
     }
 
     /// <summary>

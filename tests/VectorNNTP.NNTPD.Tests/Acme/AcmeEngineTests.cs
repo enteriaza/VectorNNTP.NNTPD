@@ -119,7 +119,7 @@ public sealed class AcmeConfigurationTests
     [Fact]
     public void EnvironmentVariable_PasswordName_IsExact()
     {
-        Assert.Equal("nntpd__AcmeCertificatePassword", NntpdOptions.AcmeCertificatePasswordEnvironmentVariable);
+        Assert.Equal("VECTOR__ACMECERTIFICATEPASSWORD", NntpdOptions.AcmeCertificatePasswordEnvironmentVariable);
     }
 }
 
@@ -591,14 +591,15 @@ public sealed class AcmeLifecycleServiceTests
         options.AcmeCertificatePassword = string.Empty;
 
         var factory = new AcmeComponentFactory(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             new FakeCloudflareDnsClient(),
             new FakeHttpClientFactory(),
             NullLoggerFactory.Instance);
         var service = new AcmeCertificateService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             factory,
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            new AcmeCertificateReadiness(),
             NullLogger<AcmeCertificateService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -638,11 +639,12 @@ public sealed class AcmeLifecycleServiceTests
             TimeSpan.FromDays(30),
             NullLogger<CertificateManager>.Instance);
 
-        var factory = new InjectedManagerFactory(manager, Options.Create(options));
+        var factory = new InjectedManagerFactory(manager, Options.Create<AcmeCloudflareOptions>(options));
         var service = new AcmeCertificateService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             factory,
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            new AcmeCertificateReadiness(),
             NullLogger<AcmeCertificateService>.Instance);
         await service.StartAsync(CancellationToken.None);
         Assert.True(service.AcmeInitialized);
@@ -674,11 +676,12 @@ public sealed class AcmeLifecycleServiceTests
             TimeSpan.FromDays(30),
             NullLogger<CertificateManager>.Instance);
 
-        var factory = new InjectedManagerFactory(manager, Options.Create(options));
+        var factory = new InjectedManagerFactory(manager, Options.Create<AcmeCloudflareOptions>(options));
         var service = new AcmeCertificateService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             factory,
             new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance),
+            new AcmeCertificateReadiness(),
             NullLogger<AcmeCertificateService>.Instance);
         await Assert.ThrowsAsync<AcmeOrderException>(() => service.StartAsync(CancellationToken.None));
         await service.DisposeAsync();
@@ -688,7 +691,7 @@ public sealed class AcmeLifecycleServiceTests
     {
         private readonly CertificateManager _manager;
 
-        public InjectedManagerFactory(CertificateManager manager, IOptions<NntpdOptions> options)
+        public InjectedManagerFactory(CertificateManager manager, IOptions<AcmeCloudflareOptions> options)
             : base(
                 options,
                 new FakeCloudflareDnsClient(),

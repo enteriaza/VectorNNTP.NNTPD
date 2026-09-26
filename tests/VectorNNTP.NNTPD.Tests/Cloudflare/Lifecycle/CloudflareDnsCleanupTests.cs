@@ -360,7 +360,7 @@ public sealed class CloudflareDnsCleanupTests
 
         var dns = CreateService(options, client);
         var other = new FakeApplicationService("listener");
-        await using var lifecycle = TestHostFactory.CreateLifecycle([dns, other], options);
+        await using var lifecycle = TestHostFactory.CreateLifecycle([TestHostFactory.WrapDns(dns), other], options);
 
         await lifecycle.StartAsync(CancellationToken.None);
         Assert.Equal(ApplicationState.Running, lifecycle.State);
@@ -383,7 +383,7 @@ public sealed class CloudflareDnsCleanupTests
         var order = new List<string>();
 
         var dns = CreateService(options, client);
-        var trackingDns = new OrderedStopService(dns, order, "dns");
+        var trackingDns = new OrderedStopService(TestHostFactory.WrapDns(dns), order, "dns");
         var other = new FakeApplicationService(
             "listener",
             onStop: _ =>
@@ -411,7 +411,7 @@ public sealed class CloudflareDnsCleanupTests
             "failing",
             onStart: _ => throw new InvalidOperationException("boom"));
 
-        await using var lifecycle = TestHostFactory.CreateLifecycle([dns, failing], options);
+        await using var lifecycle = TestHostFactory.CreateLifecycle([TestHostFactory.WrapDns(dns), failing], options);
         await Assert.ThrowsAsync<InvalidOperationException>(() => lifecycle.StartAsync(CancellationToken.None));
 
         Assert.DoesNotContain(client.Snapshot(), r => NamesEqual(r.Name, options.Fqdn));
@@ -515,7 +515,7 @@ public sealed class CloudflareDnsCleanupTests
 
         var client = new FakeCloudflareDnsClient();
         var dns = CreateService(options, client);
-        await using var lifecycle = TestHostFactory.CreateLifecycle([dns], options);
+        await using var lifecycle = TestHostFactory.CreateLifecycle([TestHostFactory.WrapDns(dns)], options);
         await lifecycle.StartAsync(CancellationToken.None);
 
         client.OnMutate = async ct =>
@@ -541,7 +541,7 @@ public sealed class CloudflareDnsCleanupTests
     }
 
     private static CloudflareDnsReconciler CreateReconciler(ICloudflareDnsClient client) =>
-        new(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        new(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
     private static CloudflareDnsReconciliationService CreateService(NntpdOptions options, ICloudflareDnsClient client)
     {
@@ -549,7 +549,7 @@ public sealed class CloudflareDnsCleanupTests
             new FakeLocalIpAddressAssignee(TestHostFactory.TestIpv4, TestHostFactory.TestIpv6),
             NullLogger<BindAddressResolver>.Instance);
         return new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             resolver,
             CreateReconciler(client),
             NullLogger<CloudflareDnsReconciliationService>.Instance);
@@ -561,7 +561,7 @@ public sealed class CloudflareDnsCleanupTests
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.cloudflare.com/client/v4/") };
         return new CloudflareDnsClient(
             http,
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             NullLogger<CloudflareDnsClient>.Instance);
     }
 

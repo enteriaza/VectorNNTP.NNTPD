@@ -24,7 +24,8 @@ public sealed class CertificateManager
         ICertificateIssuer issuer,
         string pfxPassword,
         TimeSpan renewalThreshold,
-        ILogger<CertificateManager> logger)
+        ILogger<CertificateManager> logger,
+        bool includeNewsHostname = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
         ArgumentNullException.ThrowIfNull(store);
@@ -36,7 +37,7 @@ public sealed class CertificateManager
             throw new ArgumentOutOfRangeException(nameof(renewalThreshold));
         }
 
-        _domains = CertificateIdentities.ForFqdn(fqdn);
+        _domains = CertificateIdentities.ForFqdn(fqdn, includeNewsHostname);
         _store = store;
         _issuer = issuer;
         _pfxPassword = pfxPassword;

@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Configuration;
 
@@ -12,19 +13,14 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// </remarks>
 public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOptions>
 {
-    private readonly ILocalIpAddressAssignee _localIpAddressAssignee;
     private readonly IPhysicalMemoryProvider _physicalMemoryProvider;
 
     /// <summary>
     /// Initializes a new validator.
     /// </summary>
-    /// <param name="localIpAddressAssignee">NIC probe for explicit bind addresses.</param>
     /// <param name="physicalMemoryProvider">Physical-memory probe for retention capacity.</param>
-    public BackFillerOptionsValidator(
-        ILocalIpAddressAssignee localIpAddressAssignee,
-        IPhysicalMemoryProvider physicalMemoryProvider)
+    public BackFillerOptionsValidator(IPhysicalMemoryProvider physicalMemoryProvider)
     {
-        _localIpAddressAssignee = localIpAddressAssignee ?? throw new ArgumentNullException(nameof(localIpAddressAssignee));
         _physicalMemoryProvider = physicalMemoryProvider ?? throw new ArgumentNullException(nameof(physicalMemoryProvider));
     }
 
@@ -35,14 +31,12 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
 
         var failures = new List<string>();
         ValidateIdentity(options, failures);
-        ValidateBind(options, failures);
         ValidateDirectories(options, failures);
         ValidateShutdown(options, failures);
         ValidateListener(options, failures);
         ValidateAccounts(options, failures);
         ValidateArticleRetention(options, failures);
         ValidateTransitServer(options, failures);
-        ValidateLetsEncrypt(options, failures);
         ValidateRabbitMq(options, failures);
 
         return failures.Count > 0
@@ -113,67 +107,11 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private void ValidateBind(BackFillerOptions options, List<string> failures)
-    {
-        if (options.BindPort is null)
-        {
-            failures.Add("BackFiller:BindPort is required.");
-        }
-        else if (options.BindPort is < 1 or > 65535)
-        {
-            failures.Add("BackFiller:BindPort must be between 1 and 65535.");
-        }
-
-        if (options.BindAddress is null || options.BindAddress.Length == 0)
-        {
-            return;
-        }
-
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < options.BindAddress.Length; i++)
-        {
-            var entry = options.BindAddress[i];
-            if (string.IsNullOrWhiteSpace(entry))
-            {
-                failures.Add($"BackFiller:BindAddress[{i}] must not be empty.");
-                continue;
-            }
-
-            var trimmed = entry.Trim();
-            if (!seen.Add(trimmed))
-            {
-                failures.Add($"BackFiller:BindAddress[{i}] duplicate addresses are not allowed.");
-                continue;
-            }
-
-            if (BackFillerOptions.IsBindAddressWildcard(trimmed))
-            {
-                continue;
-            }
-
-            if (!IPAddress.TryParse(trimmed, out var address))
-            {
-                failures.Add($"BackFiller:BindAddress[{i}] is not a valid IPv4 or IPv6 address.");
-                continue;
-            }
-
-            if (!_localIpAddressAssignee.IsLocallyAssigned(address))
-            {
-                failures.Add($"BackFiller:BindAddress[{i}] is not assigned to any local network interface.");
-            }
-        }
-    }
-
     private static void ValidateDirectories(BackFillerOptions options, List<string> failures)
     {
         if (string.IsNullOrWhiteSpace(options.LogDirectory))
         {
             failures.Add("BackFiller:LogDirectory is required and cannot be empty (old key: DirLogs).");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.CertificateDirectory))
-        {
-            failures.Add("BackFiller:CertificateDirectory is required and cannot be empty (old key: DirCerts).");
         }
     }
 
@@ -306,91 +244,6 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         if (transit.Port is < 1 or > 65535)
         {
             failures.Add("BackFiller:TransitServer:Port must be between 1 and 65535.");
-        }
-    }
-
-    private static void ValidateLetsEncrypt(BackFillerOptions options, List<string> failures)
-    {
-        var acme = options.LetsEncrypt ?? new BackFillerLetsEncryptOptions();
-        if (string.IsNullOrWhiteSpace(acme.AcmeAccountEmail) || !IsPlausibleEmail(acme.AcmeAccountEmail))
-        {
-            failures.Add("BackFiller:LetsEncrypt:AcmeAccountEmail is required and must be a valid email address.");
-        }
-
-        if (string.IsNullOrWhiteSpace(acme.AcmeAccountKeyPem))
-        {
-            failures.Add("BackFiller:LetsEncrypt:AcmeAccountKeyPem is required and cannot be empty.");
-        }
-
-        RequireRange(acme.AcmeTransientRetryMaxAttempts, 1, 10, "BackFiller:LetsEncrypt:AcmeTransientRetryMaxAttempts", failures);
-        RequireRange(acme.ClockSkewCheckTtlMinutes, 1, 60, "BackFiller:LetsEncrypt:ClockSkewCheckTtlMinutes", failures);
-        RequireRange(acme.ClockSkewMaxMinutes, 1, 60, "BackFiller:LetsEncrypt:ClockSkewMaxMinutes", failures);
-        RequireRange(acme.DnsAuthoritativeNsCacheMinutes, 1, 60, "BackFiller:LetsEncrypt:DnsAuthoritativeNsCacheMinutes", failures);
-        RequireRange(acme.DnsPropagationDelaySeconds, 0, 600, "BackFiller:LetsEncrypt:DnsPropagationDelaySeconds", failures);
-        RequireRange(acme.DnsTxtPollIntervalSeconds, 1, 60, "BackFiller:LetsEncrypt:DnsTxtPollIntervalSeconds", failures);
-        RequireRange(acme.DnsTxtPollTimeoutSeconds, 1, 3600, "BackFiller:LetsEncrypt:DnsTxtPollTimeoutSeconds", failures);
-        RequireRange(acme.RenewalCheckIntervalHours, 1, 168, "BackFiller:LetsEncrypt:RenewalCheckIntervalHours", failures);
-        RequireRange(acme.RenewBeforeExpiryDays, 1, 60, "BackFiller:LetsEncrypt:RenewBeforeExpiryDays", failures);
-
-        if (acme.DnsAuthoritativeQuorumRatio is null
-            || acme.DnsAuthoritativeQuorumRatio is <= 0d or > 1d)
-        {
-            failures.Add("BackFiller:LetsEncrypt:DnsAuthoritativeQuorumRatio must be greater than 0 and less than or equal to 1.");
-        }
-
-        if (acme.RenewalJitterRatio is null
-            || acme.RenewalJitterRatio is < 0d or >= 1d)
-        {
-            failures.Add("BackFiller:LetsEncrypt:RenewalJitterRatio must be between 0 (inclusive) and 1 (exclusive).");
-        }
-
-        if (string.IsNullOrWhiteSpace(acme.PfxExportPassword))
-        {
-            failures.Add(
-                $"BackFiller:LetsEncrypt:PfxExportPassword is required (use environment variable {BackFillerOptions.PfxExportPasswordEnvironmentVariable}; never commit the value).");
-        }
-
-        if (string.IsNullOrWhiteSpace(acme.CloudFlareApiToken))
-        {
-            failures.Add(
-                $"BackFiller:LetsEncrypt:CloudFlareApiToken is required (use environment variable {BackFillerOptions.CloudFlareApiTokenEnvironmentVariable}; never commit the value).");
-        }
-
-        if (string.IsNullOrWhiteSpace(acme.CloudFlareZoneId))
-        {
-            failures.Add("BackFiller:LetsEncrypt:CloudFlareZoneId is required.");
-        }
-
-        if (acme.DomainNames is null)
-        {
-            return;
-        }
-
-        for (var i = 0; i < acme.DomainNames.Length; i++)
-        {
-            var domain = acme.DomainNames[i];
-            if (string.IsNullOrWhiteSpace(domain))
-            {
-                failures.Add($"BackFiller:LetsEncrypt:DomainNames[{i}] must not be empty.");
-                continue;
-            }
-
-            var trimmed = domain.Trim();
-            if (trimmed.StartsWith("*.", StringComparison.Ordinal))
-            {
-                var suffix = trimmed[2..];
-                if (!BackFillerIdentity.IsValidDnsSuffix(BackFillerIdentity.CanonicalizeDnsSuffix(suffix)))
-                {
-                    failures.Add($"BackFiller:LetsEncrypt:DomainNames[{i}] wildcard entries must be valid DNS names in the form *.example.com.");
-                }
-
-                continue;
-            }
-
-            if (Uri.CheckHostName(trimmed) != UriHostNameType.Dns)
-            {
-                failures.Add($"BackFiller:LetsEncrypt:DomainNames[{i}] must be a valid DNS name.");
-            }
         }
     }
 
@@ -568,22 +421,4 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private static bool IsPlausibleEmail(string email)
-    {
-        var trimmed = email.Trim();
-        if (trimmed.Length is 0 or > 254)
-        {
-            return false;
-        }
-
-        var at = trimmed.IndexOf('@');
-        if (at <= 0 || at != trimmed.LastIndexOf('@') || at == trimmed.Length - 1)
-        {
-            return false;
-        }
-
-        var domain = trimmed[(at + 1)..];
-        return domain.Contains('.', StringComparison.Ordinal)
-               && BackFillerIdentity.IsValidDnsSuffix(BackFillerIdentity.CanonicalizeDnsSuffix(domain));
-    }
 }

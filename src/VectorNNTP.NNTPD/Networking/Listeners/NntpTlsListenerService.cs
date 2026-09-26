@@ -29,7 +29,7 @@ namespace VectorNNTP.NNTPD.Networking.Listeners;
 /// Application service that binds implicit-TLS NNTP listeners after a usable certificate context exists.
 /// </summary>
 /// <remarks>
-/// Idle when <see cref="NntpdOptions.IsTlsListenerEnabled"/> is <see langword="false"/>.
+/// Idle when <see cref="AcmeCloudflareOptions.IsTlsListenerEnabled"/> is <see langword="false"/>.
 /// Does not rebind or restart on certificate rotation; new handshakes observe the latest context.
 /// PROXY preamble (when required) is consumed on the cleartext socket before TLS.
 /// When TLS is enabled, <see cref="StartAsync"/> succeeds only after every planned endpoint has

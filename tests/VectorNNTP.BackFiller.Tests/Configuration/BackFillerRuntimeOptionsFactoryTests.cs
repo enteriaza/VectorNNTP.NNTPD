@@ -40,6 +40,18 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
     }
 
     [Fact]
+    public void Runtime_certificate_names_are_only_the_backfiller_fqdn()
+    {
+        var runtime = BackFillerRuntimeOptionsFactory.Create(
+            BackFillerTestOptions.CreateValid(),
+            BackFillerTestOptions.CreateValidConnectionStrings(),
+            BackFillerTestOptions.CreateValidAcme());
+
+        Assert.Equal(["backfiller01.usenet.ninja"], runtime.CertificateDomainNames);
+        Assert.DoesNotContain("news.usenet.ninja", runtime.CertificateDomainNames);
+    }
+
+    [Fact]
     public void Runtime_options_are_immutable_records()
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(

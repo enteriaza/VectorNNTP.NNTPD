@@ -618,7 +618,8 @@ public sealed class NntpdConfigurationTests
                        "ServerId": 7,
                        "DnsSuffix": "example.test",
                        "CloudFlareApiKey": "unit-test-cloudflare-api-key",
-                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d"
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "XTraceKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                      }
                    }
                    """;
@@ -675,18 +676,24 @@ public sealed class NntpdConfigurationTests
                     new Dictionary<string, string?>
                     {
                         [$"{NntpdOptions.SectionName}:ServerId"] = "1",
-                        [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
+                        [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] =
+                            TestHostFactory.TestXTraceKey,
+                        ["BindAddress:0"] = "*",
                         [$"{NntpdOptions.SectionName}:CloudFlareApiKey"] = "from-json-should-be-overridden",
                         [$"{NntpdOptions.SectionName}:CloudFlareZoneId"] = "from-json-should-be-overridden",
                     })
-                .AddEnvironmentVariables()
+                .AddVectorEnvironmentVariables()
                 .Build();
 
             var services = new ServiceCollection();
             services.AddSingleton<IConfiguration>(configuration);
             services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
             services.AddOptions<NntpdOptions>()
-                .Bind(configuration.GetSection(NntpdOptions.SectionName))
+                .BindConfiguration(NntpdOptions.SectionName)
+                .Configure<IConfiguration>(static (options, config) =>
+                {
+                    AcmeCloudflareOptions.OverlaySharedFromRoot(options, config);
+                })
                 .ValidateOnStart();
             services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
 
@@ -695,8 +702,8 @@ public sealed class NntpdConfigurationTests
 
             Assert.Equal(envKey, options.CloudFlareApiKey);
             Assert.Equal(envZone, options.CloudFlareZoneId);
-            Assert.Equal(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, "nntpd__cloudflareapikey");
-            Assert.Equal(NntpdOptions.CloudFlareZoneIdEnvironmentVariable, "nntpd__CloudFlareZoneId");
+            Assert.Equal(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, "VECTOR__CLOUDFLAREAPIKEY");
+            Assert.Equal(NntpdOptions.CloudFlareZoneIdEnvironmentVariable, "VECTOR__CLOUDFLAREZONEID");
         }
         finally
         {
@@ -817,7 +824,8 @@ public sealed class NntpdConfigurationTests
                      "Nntpd": {
                        "CloudFlareApiKey": "unit-test-cloudflare-api-key",
                        "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
-                       "ServerId": 1
+                       "ServerId": 1,
+                       "XTraceKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                      }
                    }
                    """;
@@ -1284,9 +1292,40 @@ public sealed class NntpdConfigurationTests
     [Fact]
     public void EnvironmentVariables_DocumentedNames_AreExact()
     {
-        Assert.Equal("nntpd__cloudflareapikey", NntpdOptions.CloudFlareApiKeyEnvironmentVariable);
-        Assert.Equal("nntpd__CloudFlareZoneId", NntpdOptions.CloudFlareZoneIdEnvironmentVariable);
-        Assert.Equal("nntpd__ServerId", NntpdOptions.ServerIdEnvironmentVariable);
+        Assert.Equal("VECTOR__CLOUDFLAREAPIKEY", NntpdOptions.CloudFlareApiKeyEnvironmentVariable);
+        Assert.Equal("VECTOR__CLOUDFLAREZONEID", NntpdOptions.CloudFlareZoneIdEnvironmentVariable);
+        Assert.Equal("NNTPD__SERVERID", NntpdOptions.ServerIdEnvironmentVariable);
+        Assert.Equal("NNTPD__XTRACEKEY", NntpdOptions.XTraceKeyEnvironmentVariable);
+        Assert.Equal("NNTPD__XTRACEPREVIOUSKEY", NntpdOptions.XTracePreviousKeyEnvironmentVariable);
+        Assert.Equal("NNTPD__NEWSMASTERUSER", NntpdOptions.NewsmasterUserEnvironmentVariable);
+        Assert.Equal("NNTPD__NEWSMASTERPASSWORD", NntpdOptions.NewsmasterPasswordEnvironmentVariable);
+        Assert.False(VectorEnvironment.IsCanonicalName(NntpdOptions.ServerIdEnvironmentVariable));
+        Assert.False(VectorEnvironment.IsCanonicalName(NntpdOptions.XTraceKeyEnvironmentVariable));
+        Assert.False(VectorEnvironment.IsCanonicalName(NntpdOptions.NewsmasterPasswordEnvironmentVariable));
+    }
+
+    [Fact]
+    public void ApplicationSpecificSettings_BindFromNntpdSection_NotVectorRootKeys()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Nntpd:ServerId"] = "12",
+                    ["Nntpd:XTraceKey"] = TestHostFactory.TestXTraceKey,
+                    ["ServerId"] = "99",
+                    ["XTraceKey"] = new string('a', 64),
+                    ["NewsmasterPassword"] = "vector-must-not-bind",
+                })
+            .Build();
+
+        var options = new NntpdOptions();
+        configuration.GetSection(NntpdOptions.SectionName).Bind(options);
+        AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
+
+        Assert.Equal(12, options.ServerId);
+        Assert.Equal(TestHostFactory.TestXTraceKey, options.XTraceKey);
+        Assert.True(string.IsNullOrEmpty(options.NewsmasterPassword));
     }
 
     private static IHost CreateEmptyNntpdHost(string json)
@@ -1298,10 +1337,13 @@ public sealed class NntpdConfigurationTests
         });
 
         builder.Configuration.AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)));
+        TestHostFactory.PromoteSharedKeysToRoot(builder.Configuration);
         builder.Configuration.AddInMemoryCollection(
             new Dictionary<string, string?>
             {
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
+                [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] =
+                    TestHostFactory.TestXTraceKey,
             });
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsClient>(new FakeCloudflareDnsClient());
@@ -1334,10 +1376,10 @@ public sealed class NntpdConfigurationTests
         builder.Configuration.AddInMemoryCollection(
             new Dictionary<string, string?>
             {
-                [$"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareApiKeyConfigurationKey}"] =
+                [NntpdOptions.CloudFlareApiKeyConfigurationKey] =
                     TestHostFactory.TestCloudFlareApiKey,
-                [$"{NntpdOptions.SectionName}:BindAddress:0"] = "*",
-                [$"{NntpdOptions.SectionName}:BindAddress:1"] = null,
+                ["BindAddress:0"] = "*",
+                ["BindAddress:1"] = null,
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",

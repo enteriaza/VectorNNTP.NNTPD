@@ -393,7 +393,7 @@ public sealed class CloudflareDnsClientTests
             """{ "success": true, "result": [ { "id": "1", "type": "A", "name": "nntpd01.usenet.ninja", "content": "198.18.0.99", "ttl": 1, "proxied": false } ] }""");
 
         var client = CreateClient(handler);
-        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         var desired = new ResolvedBindAddresses([IPAddress.Parse("198.18.0.10")]);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
@@ -423,7 +423,7 @@ public sealed class CloudflareDnsClientTests
             """);
 
         var client = CreateClient(handler);
-        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         var desired = new ResolvedBindAddresses([IPAddress.Parse("198.18.0.10")]);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
@@ -449,7 +449,7 @@ public sealed class CloudflareDnsClientTests
             """);
 
         var client = CreateClient(handler);
-        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
 
         var ex = await Assert.ThrowsAsync<CloudflareDnsException>(() =>
             reconciler.RemoveAllRecordsForFqdnAsync(ZoneId, Fqdn, CancellationToken.None));
@@ -634,7 +634,7 @@ public sealed class CloudflareDnsClientTests
             BaseAddress = new Uri("https://api.cloudflare.com/client/v4/"),
         };
 
-        var options = Options.Create(TestHostFactory.CreateValidOptions());
+        var options = Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions());
         return new CloudflareDnsClient(httpClient, options, NullLogger<CloudflareDnsClient>.Instance);
     }
 

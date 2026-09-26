@@ -117,7 +117,7 @@ public sealed class TlsCertificateLease : IDisposable
 /// leases keep their leased context objects alive until those leases are disposed.
 /// </para>
 /// </remarks>
-public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAsyncDisposable
+public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAcmeCertificatePublisher, IAsyncDisposable
 {
     private readonly ILogger<TlsCertificateContextProvider> _logger;
     private readonly object _gate = new();

@@ -74,7 +74,7 @@ public sealed class CloudflareDnsReconciliationServiceTests
             SharedStartOrder = order,
         };
 
-        var trackingDns = new TrackingApplicationService(dnsService, order, "dns");
+        var trackingDns = new TrackingApplicationService(TestHostFactory.WrapDns(dnsService), order, "dns");
 
         await using var lifecycle = TestHostFactory.CreateLifecycle([trackingDns, other], options);
         await lifecycle.StartAsync(CancellationToken.None);
@@ -100,7 +100,7 @@ public sealed class CloudflareDnsReconciliationServiceTests
             client);
 
         var other = new FakeApplicationService("other");
-        await using var lifecycle = TestHostFactory.CreateLifecycle([dnsService, other], options);
+        await using var lifecycle = TestHostFactory.CreateLifecycle([TestHostFactory.WrapDns(dnsService), other], options);
 
         await Assert.ThrowsAsync<CloudflareDnsException>(() => lifecycle.StartAsync(CancellationToken.None));
         Assert.Equal(ApplicationState.Stopped, lifecycle.State);
@@ -127,7 +127,7 @@ public sealed class CloudflareDnsReconciliationServiceTests
 
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(typeof(CloudflareDnsReconciliationService), services[0].GetType());
+        Assert.Equal(typeof(CloudflareDnsReconciliationApplicationService), services[0].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Redis.RedisService), services[1].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService), services[2].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), services[3].GetType());
@@ -143,7 +143,7 @@ public sealed class CloudflareDnsReconciliationServiceTests
         Assert.Equal(typeof(SessionStateService), services[13].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService), services[14].GetType());
         Assert.Equal(typeof(NntpPlainListenerService), services[15].GetType());
-        Assert.Equal(typeof(AcmeCertificateService), services[16].GetType());
+        Assert.Equal(typeof(AcmeCertificateApplicationService), services[16].GetType());
         Assert.Equal(typeof(NntpTlsListenerService), services[17].GetType());
         Assert.DoesNotContain(services, static s => s.GetType().Name == "AccountByteService");
         Assert.Equal(1, services.Count(static s => s is SessionStateService));
@@ -176,9 +176,9 @@ public sealed class CloudflareDnsReconciliationServiceTests
         ICloudflareDnsClient client)
     {
         var resolver = new BindAddressResolver(assignee, NullLogger<BindAddressResolver>.Instance);
-        var reconciler = new CloudflareDnsReconciler(client, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
+        var reconciler = new CloudflareDnsReconciler(client, Options.Create<AcmeCloudflareOptions>(TestHostFactory.CreateValidOptions()), NullLogger<CloudflareDnsReconciler>.Instance);
         return new CloudflareDnsReconciliationService(
-            Options.Create(options),
+            Options.Create<AcmeCloudflareOptions>(options),
             resolver,
             reconciler,
             NullLogger<CloudflareDnsReconciliationService>.Instance);

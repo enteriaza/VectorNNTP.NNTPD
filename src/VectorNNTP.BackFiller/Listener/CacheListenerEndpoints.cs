@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener;
 
@@ -57,8 +58,14 @@ public static class CacheListenerEndpoints
         return [.. endpoints];
     }
 
+    /// <summary>Creates, binds, and listens on <paramref name="binding"/>.</summary>
+    public static Socket CreateBoundListenSocket(ListenBinding binding)
+    {
+        return CreateBoundListenSocket(binding.EndPoint, binding.DualMode);
+    }
+
     /// <summary>Creates, binds, and listens on <paramref name="endpoint"/>.</summary>
-    public static Socket CreateBoundListenSocket(IPEndPoint endpoint)
+    public static Socket CreateBoundListenSocket(IPEndPoint endpoint, bool dualMode = false)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
@@ -68,7 +75,7 @@ public static class CacheListenerEndpoints
 
         if (endpoint.AddressFamily == AddressFamily.InterNetworkV6)
         {
-            socket.DualMode = false;
+            socket.DualMode = dualMode;
         }
 
         try

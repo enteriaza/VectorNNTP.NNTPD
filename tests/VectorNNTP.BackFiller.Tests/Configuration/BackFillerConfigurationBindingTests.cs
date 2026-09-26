@@ -1,25 +1,51 @@
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
 public sealed class BackFillerConfigurationBindingTests
 {
     [Fact]
-    public void Canonical_environment_variable_names_map_to_nested_configuration_paths()
+    public void Shared_acme_cloudflare_environment_variables_are_vector_names()
     {
-        Assert.Equal("backfiller__", BackFillerOptions.EnvironmentVariablePrefix);
+        Assert.Equal("CLOUDFLAREAPIKEY", StripVectorPrefix("VECTOR__CLOUDFLAREAPIKEY"));
+        Assert.Equal("ACMECERTIFICATEPASSWORD", StripVectorPrefix("VECTOR__ACMECERTIFICATEPASSWORD"));
+        Assert.Equal("CLOUDFLAREZONEID", StripVectorPrefix("VECTOR__CLOUDFLAREZONEID"));
+        Assert.Equal("BINDPORT", StripVectorPrefix("VECTOR__BINDPORT"));
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["CloudFlareApiKey"] = BackFillerTestOptions.SecretToken,
+                ["AcmeCertificatePassword"] = BackFillerTestOptions.SecretPfx,
+                ["CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
+            })
+            .Build();
+
+        var options = new AcmeCloudflareOptions();
+        configuration.Bind(options);
+        Assert.Equal(BackFillerTestOptions.SecretToken, options.CloudFlareApiKey);
+        Assert.Equal(BackFillerTestOptions.SecretPfx, options.AcmeCertificatePassword);
+        Assert.Equal("0123456789abcdef0123456789abcdef", options.CloudFlareZoneId);
+    }
+
+    [Fact]
+    public void Canonical_environment_variable_names_map_to_root_configuration_paths()
+    {
+        Assert.Equal(VectorEnvironment.Prefix, BackFillerOptions.EnvironmentVariablePrefix);
         Assert.Equal("BackFiller", BackFillerOptions.SectionName);
         Assert.Equal("ConnectionStrings", BackFillerConnectionStringsOptions.SectionName);
 
-        Assert.Equal("BackFiller:Name", ToConfigurationPath(BackFillerOptions.NameEnvironmentVariable));
-        Assert.Equal("BackFiller:ServerId", ToConfigurationPath(BackFillerOptions.ServerIdEnvironmentVariable));
-        Assert.Equal("BackFiller:RabbitMQ:Username", ToConfigurationPath(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
-        Assert.Equal("BackFiller:RabbitMQ:Password", ToConfigurationPath(BackFillerOptions.RabbitMqPasswordEnvironmentVariable));
-        Assert.Equal("BackFiller:LetsEncrypt:CloudFlareApiToken", ToConfigurationPath(BackFillerOptions.CloudFlareApiTokenEnvironmentVariable));
-        Assert.Equal("BackFiller:LetsEncrypt:PfxExportPassword", ToConfigurationPath(BackFillerOptions.PfxExportPasswordEnvironmentVariable));
-        Assert.Equal("ConnectionStrings:GrabberDB", ToConfigurationPath(BackFillerOptions.GrabberDbEnvironmentVariable));
+        Assert.Equal("BackFiller:Name", ToApplicationConfigurationPath(BackFillerOptions.NameEnvironmentVariable));
+        Assert.Equal("BackFiller:ServerId", ToApplicationConfigurationPath(BackFillerOptions.ServerIdEnvironmentVariable));
+        Assert.Equal("RABBITMQ:USERNAME", ToConfigurationPath(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
+        Assert.Equal("RABBITMQ:PASSWORD", ToConfigurationPath(BackFillerOptions.RabbitMqPasswordEnvironmentVariable));
+        Assert.Equal("CONNECTIONSTRINGS:GRABBERDB", ToConfigurationPath(BackFillerOptions.GrabberDbEnvironmentVariable));
+        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.NameEnvironmentVariable));
+        Assert.False(VectorEnvironment.IsCanonicalName(BackFillerOptions.ServerIdEnvironmentVariable));
+        Assert.True(VectorEnvironment.IsCanonicalName(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
     }
 
     [Fact]
@@ -30,12 +56,17 @@ public sealed class BackFillerConfigurationBindingTests
             (BackFillerOptions.ServerIdEnvironmentVariable, "8"),
             (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "canonical-user"),
             (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
-            (BackFillerOptions.CloudFlareApiTokenEnvironmentVariable, BackFillerTestOptions.SecretToken),
-            (BackFillerOptions.PfxExportPasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
+            (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
+            (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
             (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
 
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        var rabbit = new BackFillerRabbitMqOptions();
+        configuration.GetSection("RabbitMQ").Bind(rabbit);
+        options.RabbitMQ = rabbit;
+        var acme = new AcmeCloudflareOptions();
+        configuration.Bind(acme);
         var connectionStrings = new BackFillerConnectionStringsOptions();
         configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
 
@@ -43,34 +74,45 @@ public sealed class BackFillerConfigurationBindingTests
         Assert.Equal(8, options.ServerId);
         Assert.Equal("canonical-user", options.RabbitMQ.Username);
         Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
-        Assert.Equal(BackFillerTestOptions.SecretToken, options.LetsEncrypt.CloudFlareApiToken);
-        Assert.Equal(BackFillerTestOptions.SecretPfx, options.LetsEncrypt.PfxExportPassword);
+        Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
+        Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
         Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", connectionStrings.GrabberDB);
     }
 
     [Theory]
+    [InlineData("nntpd__RabbitMQ__Username", "nntpd__RabbitMQ__Password")]
     [InlineData("backfiller__RabbitMQ__Username", "backfiller__RabbitMQ__Password")]
     [InlineData("backfiller__LetsEncrypt__CloudFlareApiToken", "backfiller__LetsEncrypt__PfxExportPassword")]
-    public void Bind_does_not_accept_short_form_secret_aliases(string usernameOrToken, string passwordOrPfx)
+    public void Bind_does_not_accept_obsolete_application_prefixes(string usernameOrToken, string passwordOrPfx)
     {
-        var configuration = ConfigurationFromEnvironmentVariables(
-            (usernameOrToken, "short-form-user-or-token"),
-            (passwordOrPfx, BackFillerTestOptions.SecretPassword));
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [usernameOrToken.Replace("__", ":", StringComparison.Ordinal)] = "short-form-user-or-token",
+                [passwordOrPfx.Replace("__", ":", StringComparison.Ordinal)] = BackFillerTestOptions.SecretPassword,
+            })
+            .Build();
 
         var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        configuration.Bind(options);
+        var acme = new AcmeCloudflareOptions();
+        configuration.Bind(acme);
 
         Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
         Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
-        Assert.True(string.IsNullOrWhiteSpace(options.LetsEncrypt.CloudFlareApiToken));
-        Assert.True(string.IsNullOrWhiteSpace(options.LetsEncrypt.PfxExportPassword));
+        Assert.True(string.IsNullOrWhiteSpace(acme.CloudFlareApiKey));
+        Assert.True(string.IsNullOrWhiteSpace(acme.AcmeCertificatePassword));
     }
 
     [Fact]
     public void Bind_does_not_map_legacy_id_key_to_server_id()
     {
-        var configuration = ConfigurationFromEnvironmentVariables(
-            ("backfiller__BackFiller__Id", "7"));
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BackFiller:Id"] = "7",
+            })
+            .Build();
 
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
@@ -105,14 +147,19 @@ public sealed class BackFillerConfigurationBindingTests
             (BackFillerOptions.ServerIdEnvironmentVariable, "8"),
             (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "env-user"),
             (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
-            (BackFillerOptions.CloudFlareApiTokenEnvironmentVariable, BackFillerTestOptions.SecretToken),
-            ("backfiller__BackFiller__LetsEncrypt__CloudFlareZoneId", "0123456789abcdef0123456789abcdef"),
-            (BackFillerOptions.PfxExportPasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
+            (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
+            (AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable, "0123456789abcdef0123456789abcdef"),
+            (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
             (BackFillerOptions.GrabberDbEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
 
-        var configuration = environment.BuildPrefixedConfiguration();
+        var configuration = environment.BuildHostConfiguration();
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        var rabbit = new BackFillerRabbitMqOptions();
+        configuration.GetSection("RabbitMQ").Bind(rabbit);
+        options.RabbitMQ = rabbit;
+        var acme = new AcmeCloudflareOptions();
+        configuration.Bind(acme);
         var connectionStrings = new BackFillerConnectionStringsOptions();
         configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
 
@@ -120,8 +167,8 @@ public sealed class BackFillerConfigurationBindingTests
         Assert.Equal(8, options.ServerId);
         Assert.Equal("env-user", options.RabbitMQ.Username);
         Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
-        Assert.Equal(BackFillerTestOptions.SecretToken, options.LetsEncrypt.CloudFlareApiToken);
-        Assert.Equal(BackFillerTestOptions.SecretPfx, options.LetsEncrypt.PfxExportPassword);
+        Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
+        Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
         Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", connectionStrings.GrabberDB);
     }
 
@@ -131,7 +178,7 @@ public sealed class BackFillerConfigurationBindingTests
         using var environment = new IsolatedEnvironment(
             (BackFillerOptions.NameEnvironmentVariable, "   "));
 
-        var configuration = environment.BuildPrefixedConfiguration();
+        var configuration = environment.BuildHostConfiguration();
         var options = BackFillerTestOptions.CreateValid();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
 
@@ -154,7 +201,7 @@ public sealed class BackFillerConfigurationBindingTests
         using var environment = new IsolatedEnvironment(
             (BackFillerOptions.ServerIdEnvironmentVariable, "not-an-integer"));
 
-        var configuration = environment.BuildPrefixedConfiguration();
+        var configuration = environment.BuildHostConfiguration();
         var options = BackFillerTestOptions.CreateValid();
         var ex = Assert.Throws<InvalidOperationException>(
             () => configuration.GetSection(BackFillerOptions.SectionName).Bind(options));
@@ -163,17 +210,31 @@ public sealed class BackFillerConfigurationBindingTests
     }
 
     [Fact]
-    public void Short_form_environment_names_do_not_bind_through_the_real_prefix_provider()
+    public void Obsolete_prefixes_do_not_bind_through_the_vector_provider()
     {
         using var environment = new IsolatedEnvironment(
-            ("backfiller__RabbitMQ__Username", "short-form-user"),
+            ("nntpd__RabbitMQ__Username", "obsolete-user"),
             ("backfiller__RabbitMQ__Password", BackFillerTestOptions.SecretPassword));
 
         var configuration = environment.BuildPrefixedConfiguration();
         var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        configuration.Bind(options);
         Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
         Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
+    }
+
+    [Fact]
+    public void Vector_prefix_does_not_bind_application_identity()
+    {
+        using var environment = new IsolatedEnvironment(
+            ("VECTOR__NAME", "vector-must-not-bind"),
+            ("VECTOR__SERVERID", "77"));
+
+        var configuration = environment.BuildHostConfiguration();
+        var options = new BackFillerOptions();
+        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        Assert.True(string.IsNullOrWhiteSpace(options.Name));
+        Assert.Null(options.ServerId);
     }
 
     private static IConfiguration ConfigurationFromEnvironmentVariables(params (string Name, string Value)[] variables)
@@ -181,7 +242,7 @@ public sealed class BackFillerConfigurationBindingTests
         var pairs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in variables)
         {
-            pairs[ToConfigurationPath(name)] = value;
+            pairs[ToAnyConfigurationPath(name)] = value;
         }
 
         return new ConfigurationBuilder()
@@ -191,13 +252,30 @@ public sealed class BackFillerConfigurationBindingTests
 
     private static string ToConfigurationPath(string environmentVariable)
     {
-        Assert.StartsWith(
-            BackFillerOptions.EnvironmentVariablePrefix,
-            environmentVariable,
-            StringComparison.OrdinalIgnoreCase);
-        return environmentVariable[BackFillerOptions.EnvironmentVariablePrefix.Length..]
+        Assert.True(VectorEnvironment.IsCanonicalName(environmentVariable));
+        return environmentVariable[VectorEnvironment.Prefix.Length..]
             .Replace("__", ":", StringComparison.Ordinal);
     }
+
+    private static string ToApplicationConfigurationPath(string environmentVariable)
+    {
+        Assert.StartsWith("BACKFILLER__", environmentVariable, StringComparison.Ordinal);
+        var remainder = environmentVariable["BACKFILLER__".Length..];
+        return remainder switch
+        {
+            "NAME" => "BackFiller:Name",
+            "SERVERID" => "BackFiller:ServerId",
+            _ => "BackFiller:" + remainder,
+        };
+    }
+
+    private static string ToAnyConfigurationPath(string environmentVariable) =>
+        VectorEnvironment.IsCanonicalName(environmentVariable)
+            ? ToConfigurationPath(environmentVariable)
+            : ToApplicationConfigurationPath(environmentVariable);
+
+    private static string StripVectorPrefix(string environmentVariable) =>
+        ToConfigurationPath(environmentVariable);
 
     private sealed class IsolatedEnvironment : IDisposable
     {
@@ -216,7 +294,13 @@ public sealed class BackFillerConfigurationBindingTests
 
         public IConfiguration BuildPrefixedConfiguration() =>
             new ConfigurationBuilder()
-                .AddEnvironmentVariables(prefix: BackFillerOptions.EnvironmentVariablePrefix)
+                .AddVectorEnvironmentVariables()
+                .Build();
+
+        public IConfiguration BuildHostConfiguration() =>
+            new ConfigurationBuilder()
+                .AddEnvironmentVariables()
+                .AddVectorEnvironmentVariables()
                 .Build();
 
         public void Dispose()

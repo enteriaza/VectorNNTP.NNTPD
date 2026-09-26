@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Fixtures;
 
@@ -28,12 +29,6 @@ internal static class BackFillerTestOptions
                 Password = SecretPassword,
                 EnableSsl = false,
             },
-            LetsEncrypt =
-            {
-                CloudFlareApiToken = SecretToken,
-                CloudFlareZoneId = "0123456789abcdef0123456789abcdef",
-                PfxExportPassword = SecretPfx,
-            },
         };
     }
 
@@ -44,17 +39,20 @@ internal static class BackFillerTestOptions
             ["BackFiller:Name"] = "backfiller",
             ["BackFiller:ServerId"] = "1",
             ["BackFiller:DnsSuffix"] = "usenet.ninja",
-            ["BackFiller:BindAddress:0"] = "127.0.0.1",
-            ["BackFiller:BindPort"] = "1190",
             ["BackFiller:LogDirectory"] = "logs",
-            ["BackFiller:CertificateDirectory"] = "certs",
-            ["BackFiller:RabbitMQ:Hosts:0"] = "127.0.0.1",
-            ["BackFiller:RabbitMQ:Username"] = "nntparticles",
-            ["BackFiller:RabbitMQ:Password"] = SecretPassword,
-            ["BackFiller:RabbitMQ:EnableSsl"] = "false",
-            ["BackFiller:LetsEncrypt:CloudFlareApiToken"] = SecretToken,
-            ["BackFiller:LetsEncrypt:CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
-            ["BackFiller:LetsEncrypt:PfxExportPassword"] = SecretPfx,
+            ["RabbitMQ:Hosts:0"] = "127.0.0.1",
+            ["RabbitMQ:Username"] = "nntparticles",
+            ["RabbitMQ:Password"] = SecretPassword,
+            ["RabbitMQ:EnableSsl"] = "false",
+            ["BindAddress:0"] = "127.0.0.1",
+            ["BindPort"] = "1190",
+            ["BindPortTls"] = "1190",
+            ["AcmeEmail"] = "security@usenet.ninja",
+            ["AcmeCertificatePassword"] = SecretPfx,
+            ["AcmeStateDir"] = "certs/",
+            ["CloudFlareApiKey"] = SecretToken,
+            ["CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
+            ["DnsSuffix"] = "usenet.ninja",
             ["BackFiller:Shutdown:GracePeriodSeconds"] = "45",
             ["ConnectionStrings:GrabberDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
         };
@@ -84,12 +82,31 @@ internal static class BackFillerTestOptions
         };
     }
 
+    internal static AcmeCloudflareOptions CreateValidAcme(BackFillerOptions? options = null)
+    {
+        var identity = options ?? CreateValid();
+        return new AcmeCloudflareOptions
+        {
+            BindAddress = identity.BindAddress is { Length: > 0 } ? identity.BindAddress : ["127.0.0.1"],
+            BindPort = identity.BindPort ?? 1190,
+            BindPortTls = identity.BindPort ?? 1190,
+            Fqdn = identity.Fqdn,
+            IncludeNewsHostnameInCertificate = false,
+            AcmeEmail = "security@usenet.ninja",
+            AcmeCertificatePassword = SecretPfx,
+            AcmeStateDir = string.IsNullOrWhiteSpace(identity.CertificateDirectory) ? "certs/" : identity.CertificateDirectory,
+            CloudFlareApiKey = SecretToken,
+            CloudFlareZoneId = "0123456789abcdef0123456789abcdef",
+            DnsSuffix = identity.DnsSuffix,
+        };
+    }
+
     internal static BackFillerOptionsValidator CreateValidator(
         ILocalIpAddressAssignee? assignee = null,
         IPhysicalMemoryProvider? memory = null)
     {
+        _ = assignee;
         return new BackFillerOptionsValidator(
-            assignee ?? new FakeLocalIpAddressAssignee(assignAll: true),
             memory ?? new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
     }
 }
@@ -101,6 +118,9 @@ internal sealed class FakeLocalIpAddressAssignee(bool assignAll) : ILocalIpAddre
         ArgumentNullException.ThrowIfNull(address);
         return assignAll;
     }
+
+    public IReadOnlyList<IPAddress> GetAssignedUnicastAddresses() =>
+        assignAll ? [IPAddress.Parse("198.18.0.10"), IPAddress.Parse("2001:db8::10")] : [];
 }
 
 internal sealed class FakePhysicalMemoryProvider(long totalBytes) : IPhysicalMemoryProvider

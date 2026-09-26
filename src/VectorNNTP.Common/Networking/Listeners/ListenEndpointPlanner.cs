@@ -18,7 +18,7 @@ public readonly record struct ListenBinding(IPAddress Address, int Port, bool Du
 }
 
 /// <summary>
-/// Plans listen bindings from configured <see cref="NntpdOptions.BindAddress"/> entries without
+/// Plans listen bindings from configured <see cref="AcmeCloudflareOptions.BindAddress"/> entries without
 /// duplicating DNS eligibility filtering.
 /// </summary>
 /// <remarks>
