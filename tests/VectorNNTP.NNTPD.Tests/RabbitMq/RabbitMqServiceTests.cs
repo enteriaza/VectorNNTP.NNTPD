@@ -11,6 +11,13 @@ namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 public sealed class RabbitMqServiceTests
 {
     [Fact]
+    public void ConnectionHandle_DoesNotOwnTheConnection()
+    {
+        Assert.DoesNotContain(typeof(IDisposable), typeof(RabbitMqConnectionHandle).GetInterfaces());
+        Assert.DoesNotContain(typeof(IAsyncDisposable), typeof(RabbitMqConnectionHandle).GetInterfaces());
+    }
+
+    [Fact]
     public async Task StartAsync_ConnectsOnce_AndIsReady()
     {
         var factory = new FakeRabbitMqConnectionFactory();
@@ -25,7 +32,10 @@ public sealed class RabbitMqServiceTests
         Assert.Equal(1, service.ConnectionGeneration);
         Assert.True(service.IsReady);
         Assert.NotNull(service.Execution);
-        Assert.Same(factory.LastConnection, service.GetRequiredConnection());
+        Assert.True(service.TryGetCurrent(out var handle));
+        Assert.True(handle.IsCurrent);
+        Assert.Equal(1, handle.Generation);
+        Assert.Same(factory.LastConnection, handle.Connection);
         var generation = Assert.Single(replaced);
         Assert.Equal(1, generation.ConnectionGeneration);
         Assert.False(generation.IsReplacement);
@@ -49,7 +59,7 @@ public sealed class RabbitMqServiceTests
         Assert.Equal(0, service.ConnectionGeneration);
         Assert.False(service.IsReady);
         Assert.Null(service.Execution);
-        Assert.Throws<InvalidOperationException>(() => service.GetRequiredConnection());
+        Assert.False(service.TryGetCurrent(out _));
     }
 
     [Fact]
@@ -141,37 +151,45 @@ public sealed class RabbitMqServiceTests
         Assert.Equal(2, replaced.Count);
         Assert.True(replaced[1].IsReplacement);
         Assert.Equal(2, replaced[1].ConnectionGeneration);
-        Assert.Same(factory.LastConnection, service.GetRequiredConnection());
+        Assert.True(service.TryGetCurrent(out var current));
+        Assert.Same(factory.LastConnection, current.Connection);
 
         await service.DisposeAsync();
     }
 
     [Fact]
-    public async Task ConnectionLost_GetRequiredConnection_ThrowsUntilReplaced()
+    public async Task ConnectionLost_TryGetCurrent_FailsUntilReplaced()
     {
         var factory = new FakeRabbitMqConnectionFactory();
         var service = CreateService(factory);
         await service.StartAsync(CancellationToken.None);
+        Assert.True(service.TryGetCurrent(out var before));
         var first = factory.LastConnection!;
         var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         factory.Connected = secondConnected;
 
         first.SimulateLost();
         Assert.False(service.IsReady);
-        Assert.Throws<InvalidOperationException>(() => service.GetRequiredConnection());
+        Assert.False(service.TryGetCurrent(out _));
+        Assert.False(before.IsCurrent);
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await secondConnected.Task.WaitAsync(safety.Token);
         Assert.True(service.IsReady);
+        Assert.True(service.TryGetCurrent(out var after));
+        Assert.Equal(2, after.Generation);
+        Assert.True(after.IsCurrent);
+        Assert.False(before.IsCurrent);
 
         await service.DisposeAsync();
+        Assert.False(after.IsCurrent);
     }
 
     [Fact]
     public async Task Reconnect_FailsThenSucceeds()
     {
         var factory = new FakeRabbitMqConnectionFactory();
-        var service = CreateService(factory, maxConsecutiveRecoveryFailures: 5);
+        var service = CreateService(factory);
         await service.StartAsync(CancellationToken.None);
         var first = factory.LastConnection!;
         factory.RemainingConnectFailures = 2;
@@ -192,29 +210,121 @@ public sealed class RabbitMqServiceTests
     }
 
     [Fact]
-    public async Task Reconnect_Abandons_AfterConsecutiveFailures()
+    public async Task Reconnect_Continues_BeyondFormerAbandonThreshold()
     {
+        const int formerAbandonThreshold = 5;
         var factory = new FakeRabbitMqConnectionFactory();
-        var service = CreateService(factory, maxConsecutiveRecoveryFailures: 2);
+        var service = CreateService(factory);
         await service.StartAsync(CancellationToken.None);
-        factory.RemainingConnectFailures = 10;
+        var failures = formerAbandonThreshold + 3;
+        factory.RemainingConnectFailures = failures;
+        var recovered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Connected = recovered;
         factory.LastConnection!.SimulateLost();
 
-        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        await factory.WaitForAttemptsAsync(3, safety.Token);
-
-        using var noFourth = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => factory.WaitForAttemptsAsync(4, noFourth.Token));
-
-        Assert.Equal(3, factory.AttemptCount);
-        Assert.Equal(1, factory.ConnectCount);
-        Assert.Equal(1, service.ConnectionGeneration);
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await factory.WaitForAttemptsAsync(1 + formerAbandonThreshold + 1, safety.Token);
         Assert.False(service.IsReady);
-        Assert.NotNull(service.Execution);
+        Assert.Equal(1, service.ConnectionGeneration);
+        Assert.False(service.Execution!.IsCompleted);
+
+        await recovered.Task.WaitAsync(safety.Token);
+
+        Assert.Equal(2, service.ConnectionGeneration);
+        Assert.True(service.IsReady);
+        Assert.Equal(1 + failures + 1, factory.AttemptCount);
         Assert.False(service.Execution!.IsCompleted);
 
         await service.DisposeAsync();
+        Assert.True(service.Execution.IsCompleted);
+    }
+
+    [Fact]
+    public async Task Reconnect_KeepsTrying_UntilShutdown()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        var service = CreateService(factory);
+        await service.StartAsync(CancellationToken.None);
+        factory.RemainingConnectFailures = 100;
+        factory.LastConnection!.SimulateLost();
+
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await factory.WaitForAttemptsAsync(8, safety.Token);
+        Assert.False(service.IsReady);
+        Assert.False(service.Execution!.IsCompleted);
+
+        await service.StopAsync(CancellationToken.None);
+
+        var attempts = factory.AttemptCount;
+        Assert.True(service.Execution.IsCompleted);
+        Assert.False(service.TryGetCurrent(out _));
+
+        using var noMore = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => factory.WaitForAttemptsAsync(attempts + 1, noMore.Token));
+        Assert.Equal(attempts, factory.AttemptCount);
+    }
+
+    [Fact]
+    public async Task SuccessfulReconnect_ResetsBackoffOnNextLoss()
+    {
+        var clock = new RecordingTimeProvider();
+        var factory = new FakeRabbitMqConnectionFactory();
+        var options = RabbitMqOptionsTests.CreateValid();
+        options.PoolReconnectBaseDelayMs = 50;
+        options.PoolReconnectMaxDelayMs = 800;
+        var service = new RabbitMqService(
+            factory,
+            Options.Create(options),
+            Options.Create(TestHostFactory.CreateValidOptions()),
+            NullLogger<RabbitMqService>.Instance,
+            clock);
+
+        await service.StartAsync(CancellationToken.None);
+        factory.RemainingConnectFailures = 2;
+        var firstRecovery = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Connected = firstRecovery;
+        factory.LastConnection!.SimulateLost();
+
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await firstRecovery.Task.WaitAsync(safety.Token);
+        var afterFirstRecovery = clock.Delays.ToArray();
+        Assert.Equal(
+            [TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200)],
+            afterFirstRecovery);
+
+        var secondRecovery = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Connected = secondRecovery;
+        factory.LastConnection!.SimulateLost();
+        await secondRecovery.Task.WaitAsync(safety.Token);
+
+        Assert.Equal(3, service.ConnectionGeneration);
+        Assert.Equal(TimeSpan.FromMilliseconds(50), clock.Delays[^1]);
+
+        await service.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StopAsync_InterruptsRecoveryDelay()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        var options = RabbitMqOptionsTests.CreateValid();
+        options.PoolReconnectBaseDelayMs = 30000;
+        options.PoolReconnectMaxDelayMs = 30000;
+        var service = new RabbitMqService(
+            factory,
+            Options.Create(options),
+            Options.Create(TestHostFactory.CreateValidOptions()),
+            NullLogger<RabbitMqService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+        factory.LastConnection!.SimulateLost();
+
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, factory.AttemptCount);
+        Assert.True(service.Execution!.IsCompleted);
+        Assert.False(service.TryGetCurrent(out _));
     }
 
     [Fact]
@@ -374,18 +484,37 @@ public sealed class RabbitMqServiceTests
 
     private static RabbitMqService CreateService(
         FakeRabbitMqConnectionFactory factory,
-        int poolReconnectBaseDelayMs = 50,
-        int maxConsecutiveRecoveryFailures = 5)
+        int poolReconnectBaseDelayMs = 50)
     {
         var options = RabbitMqOptionsTests.CreateValid();
         options.PoolReconnectBaseDelayMs = poolReconnectBaseDelayMs;
         options.PoolReconnectMaxDelayMs = poolReconnectBaseDelayMs;
-        options.MaxConsecutiveRecoveryFailures = maxConsecutiveRecoveryFailures;
         return new RabbitMqService(
             factory,
             Options.Create(options),
             Options.Create(TestHostFactory.CreateValidOptions()),
             NullLogger<RabbitMqService>.Instance);
+    }
+
+    private sealed class RecordingTimeProvider : TimeProvider
+    {
+        private readonly TimeProvider _inner = TimeProvider.System;
+
+        public List<TimeSpan> Delays { get; } = [];
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            if (dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan)
+            {
+                Delays.Add(dueTime);
+            }
+
+            return _inner.CreateTimer(callback, state, dueTime, period);
+        }
     }
 
     private sealed class CollectingLogger<T> : ILogger<T>

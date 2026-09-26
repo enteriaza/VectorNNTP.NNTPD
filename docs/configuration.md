@@ -389,9 +389,9 @@ Do not commit credentials. Redis options have no password field; the unauthentic
 
 ## RabbitMQ
 
-Top-level `RabbitMQ` section (not nested under `Nntpd`). The property names, types, defaults, and validation semantics match BackFiller's `RabbitMQ` contract. RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`.
+Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`. After start, connectivity loss is recovered indefinitely; NNTPD does not expose a consecutive-failure abandon threshold.
 
-`RabbitMqService` is the dedicated application service that owns the broker connection lifecycle. It establishes one process-wide connection, verifies that the connection is open, and replaces it on connectivity loss while incrementing a monotonic connection generation. Client automatic recovery is disabled.
+`RabbitMqService` is the dedicated application service that owns the broker connection lifecycle. It establishes one process-wide connection, verifies that the connection is open, and replaces it on connectivity loss while incrementing a monotonic connection generation. Client automatic recovery is disabled. After a successful start, reconnect continues indefinitely until the connection is restored or NNTPD shuts down. Callers obtain the current connection with `TryGetCurrent`; they do not own or dispose it.
 
 This phase does **not** declare exchanges, queues, or bindings, and does not publish or consume messages.
 
@@ -411,7 +411,6 @@ This phase does **not** declare exchanges, queues, or bindings, and does not pub
 | `NetworkRecoveryIntervalSeconds` | int | `5` | **yes** | Client recovery-interval setting (`1–3600`; unused while automatic recovery is disabled) |
 | `PoolReconnectBaseDelayMs` | int | `250` | **yes** | Application reconnect base delay (`50–60000`) |
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
-| `MaxConsecutiveRecoveryFailures` | int | `5` | **yes** | Consecutive reconnect failures before application-level reconnect stops for that loss (`1–100`) |
 | `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
 | `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Validated; reserved for later message work (`1–4096`) |
 | `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |

@@ -129,6 +129,12 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>Gets how many times the connection was disposed.</summary>
     public int DisposeCount { get; private set; }
 
+    /// <summary>Signaled when <see cref="DisposeAsync"/> begins, before <see cref="BlockDispose"/>.</summary>
+    public TaskCompletionSource? DisposeStarted { get; set; }
+
+    /// <summary>When set, <see cref="DisposeAsync"/> waits on this source before completing.</summary>
+    public TaskCompletionSource? BlockDispose { get; set; }
+
     /// <inheritdoc />
     public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
@@ -140,10 +146,15 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         IsOpen = false;
+        DisposeStarted?.TrySetResult();
+        if (BlockDispose is not null)
+        {
+            await BlockDispose.Task.ConfigureAwait(false);
+        }
+
         DisposeCount++;
-        return ValueTask.CompletedTask;
     }
 }

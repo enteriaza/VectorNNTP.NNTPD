@@ -15,7 +15,6 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <param name="ChannelPoolSize">Configured RabbitMQ channel pool size.</param>
 /// <param name="MinConnections">Configured minimum pooled RabbitMQ connections.</param>
 /// <param name="MaxConnections">Configured maximum pooled RabbitMQ connections.</param>
-/// <param name="MaxConsecutiveRecoveryFailures">Maximum consecutive recovery failures before health degradation.</param>
 /// <param name="MaxPendingLeaseWaiters">Maximum pending channel lease waiters.</param>
 /// <param name="ConnectionScaleDownIdleSeconds">Connection scale-down idle threshold in seconds.</param>
 /// <param name="ScaleDownCooldownSeconds">Connection scale-down cooldown in seconds.</param>
@@ -46,7 +45,6 @@ internal sealed record RabbitMqRuntimeOptions(
     int ChannelPoolSize,
     int MinConnections,
     int MaxConnections,
-    int MaxConsecutiveRecoveryFailures,
     int MaxPendingLeaseWaiters,
     int ConnectionScaleDownIdleSeconds,
     int ScaleDownCooldownSeconds,

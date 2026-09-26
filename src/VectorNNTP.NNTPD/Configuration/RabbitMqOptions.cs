@@ -4,10 +4,11 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// Top-level RabbitMQ connection and lifecycle options.
 /// </summary>
 /// <remarks>
-/// The configuration shape matches BackFiller's <c>RabbitMQ</c> contract (property names,
-/// types, defaults, and validation semantics). This phase binds and validates the full
-/// contract even when a property is reserved for later topology, channel, or consumer work.
-/// Never log <see cref="Password"/> or complete option instances that contain credentials.
+/// Property names, types, and defaults follow the established <c>RabbitMQ</c> section.
+/// Recovery after a successful start is indefinite; there is no consecutive-failure
+/// abandon threshold. Reserved properties are still bound and validated for later
+/// topology, channel, or consumer work. Never log <see cref="Password"/> or complete
+/// option instances that contain credentials.
 /// </remarks>
 public sealed class RabbitMqOptions
 {
@@ -121,11 +122,6 @@ public sealed class RabbitMqOptions
     /// Validated and projected. The current service owns a single connection.
     /// </remarks>
     public int? MaxConnections { get; set; } = 16;
-
-    /// <summary>
-    /// Maximum consecutive failed recovery attempts permitted for one recovery context.
-    /// </summary>
-    public int? MaxConsecutiveRecoveryFailures { get; set; } = 5;
 
     /// <summary>
     /// Maximum pending channel-lease waiter target for future RabbitMQ channel-pool policy.
@@ -255,7 +251,6 @@ public sealed class RabbitMqOptions
             ChannelPoolSize: ChannelPoolSize ?? throw Missing(nameof(ChannelPoolSize)),
             MinConnections: MinConnections ?? throw Missing(nameof(MinConnections)),
             MaxConnections: MaxConnections ?? throw Missing(nameof(MaxConnections)),
-            MaxConsecutiveRecoveryFailures: MaxConsecutiveRecoveryFailures ?? throw Missing(nameof(MaxConsecutiveRecoveryFailures)),
             MaxPendingLeaseWaiters: MaxPendingLeaseWaiters ?? throw Missing(nameof(MaxPendingLeaseWaiters)),
             ConnectionScaleDownIdleSeconds: ConnectionScaleDownIdleSeconds ?? throw Missing(nameof(ConnectionScaleDownIdleSeconds)),
             ScaleDownCooldownSeconds: ScaleDownCooldownSeconds ?? throw Missing(nameof(ScaleDownCooldownSeconds)),

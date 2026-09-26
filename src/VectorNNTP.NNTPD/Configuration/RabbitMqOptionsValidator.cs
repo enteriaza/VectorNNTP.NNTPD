@@ -360,23 +360,6 @@ public sealed class RabbitMqOptionsValidator : IValidateOptions<RabbitMqOptions>
             failures.Add("RabbitMQ:PoolReconnectMaxDelayMs must be greater than or equal to PoolReconnectBaseDelayMs.");
         }
 
-        if (rabbitMq.MaxConsecutiveRecoveryFailures is null)
-        {
-            failures.Add("RabbitMQ:MaxConsecutiveRecoveryFailures is required.");
-            return;
-        }
-
-        if (rabbitMq.MaxConsecutiveRecoveryFailures <= 0)
-        {
-            failures.Add("RabbitMQ:MaxConsecutiveRecoveryFailures must be greater than zero.");
-            return;
-        }
-
-        if (rabbitMq.MaxConsecutiveRecoveryFailures > 100)
-        {
-            failures.Add("RabbitMQ:MaxConsecutiveRecoveryFailures must be between 1 and 100.");
-        }
-
         if (rabbitMq.MaxPendingLeaseWaiters is null)
         {
             failures.Add("RabbitMQ:MaxPendingLeaseWaiters is required.");

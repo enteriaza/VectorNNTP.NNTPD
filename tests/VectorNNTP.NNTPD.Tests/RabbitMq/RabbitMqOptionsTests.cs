@@ -30,7 +30,6 @@ public sealed class RabbitMqOptionsTests
         Assert.Equal(512, options.ChannelPoolSize);
         Assert.Equal(4, options.MinConnections);
         Assert.Equal(16, options.MaxConnections);
-        Assert.Equal(5, options.MaxConsecutiveRecoveryFailures);
         Assert.Equal(1024, options.MaxPendingLeaseWaiters);
         Assert.Equal(300, options.ConnectionScaleDownIdleSeconds);
         Assert.Equal(30, options.ScaleDownCooldownSeconds);
@@ -70,7 +69,6 @@ public sealed class RabbitMqOptionsTests
                     ["RabbitMQ:ChannelPoolSize"] = "256",
                     ["RabbitMQ:MinConnections"] = "2",
                     ["RabbitMQ:MaxConnections"] = "8",
-                    ["RabbitMQ:MaxConsecutiveRecoveryFailures"] = "3",
                     ["RabbitMQ:MaxPendingLeaseWaiters"] = "64",
                     ["RabbitMQ:ConnectionScaleDownIdleSeconds"] = "120",
                     ["RabbitMQ:ScaleDownCooldownSeconds"] = "15",
@@ -106,7 +104,6 @@ public sealed class RabbitMqOptionsTests
         Assert.Equal(256, options.ChannelPoolSize);
         Assert.Equal(2, options.MinConnections);
         Assert.Equal(8, options.MaxConnections);
-        Assert.Equal(3, options.MaxConsecutiveRecoveryFailures);
         Assert.Equal(64, options.MaxPendingLeaseWaiters);
         Assert.Equal(120, options.ConnectionScaleDownIdleSeconds);
         Assert.Equal(15, options.ScaleDownCooldownSeconds);

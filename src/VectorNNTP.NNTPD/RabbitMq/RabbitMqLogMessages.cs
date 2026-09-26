@@ -85,14 +85,14 @@ internal static partial class RabbitMqLogMessages
     [LoggerMessage(
         EventId = 2810,
         Level = LogLevel.Error,
-        Message = "RabbitMQ reconnect attempt {Attempt} failed ({ConsecutiveFailures} consecutive): {Reason}")]
-    public static partial void ReconnectFailed(ILogger logger, int Attempt, int ConsecutiveFailures, string Reason);
+        Message = "RabbitMQ reconnect attempt {Attempt} failed: {Reason}")]
+    public static partial void ReconnectFailed(ILogger logger, int Attempt, string Reason);
 
     [LoggerMessage(
         EventId = 2811,
-        Level = LogLevel.Error,
-        Message = "RabbitMQ reconnect abandoned after {ConsecutiveFailures} consecutive failures")]
-    public static partial void ReconnectAbandoned(ILogger logger, int ConsecutiveFailures);
+        Level = LogLevel.Warning,
+        Message = "RabbitMQ still reconnecting after {Attempt} attempt(s): {Reason}")]
+    public static partial void ReconnectStillFailing(ILogger logger, int Attempt, string Reason);
 
     [LoggerMessage(
         EventId = 2815,
