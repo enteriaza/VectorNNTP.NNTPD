@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 namespace VectorNNTP.NNTPD.SessionState;
 
@@ -24,6 +25,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
 {
     private readonly ISessionStateStore _membership;
     private readonly IAccountByteAccountant? _bytes;
+    private readonly IAccountRateAllocator _rates;
     private readonly ILogger<DistributedSessionStateTracker> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly string _nodeId;
@@ -40,7 +42,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         ISessionStateStore membership,
         ILogger<DistributedSessionStateTracker> logger,
         string nodeId)
-        : this(membership, logger, nodeId, TimeProvider.System, SessionStateDefaults.LeaseTtl, SessionStateDefaults.HotPathSkew, incarnation: null, bytes: null)
+        : this(membership, logger, nodeId, TimeProvider.System, SessionStateDefaults.LeaseTtl, SessionStateDefaults.HotPathSkew, incarnation: null, bytes: null, rates: null)
     {
     }
 
@@ -53,7 +55,8 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         TimeSpan? leaseTtl = null,
         TimeSpan? hotPathSkew = null,
         string? incarnation = null,
-        IAccountByteAccountant? bytes = null)
+        IAccountByteAccountant? bytes = null,
+        IAccountRateAllocator? rates = null)
     {
         ArgumentNullException.ThrowIfNull(membership);
         ArgumentNullException.ThrowIfNull(logger);
@@ -61,6 +64,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         ArgumentNullException.ThrowIfNull(timeProvider);
         _membership = membership;
         _bytes = bytes;
+        _rates = rates ?? NullAccountRateAllocator.Instance;
         _logger = logger;
         _nodeId = nodeId;
         _ownerId = string.Concat(nodeId, ":", string.IsNullOrWhiteSpace(incarnation) ? Guid.NewGuid().ToString("N") : incarnation);
@@ -99,12 +103,23 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
     internal int ReleaseCalls { get; private set; }
 
     /// <inheritdoc />
+    public ValueTask<SessionAdmissionResult> TryAdmitAsync(
+        string accountName,
+        string sessionId,
+        IPAddress sourceAddress,
+        int sessionLimit,
+        int srcIpLimit,
+        CancellationToken cancellationToken = default) =>
+        TryAdmitAsync(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit, rateLimitMbps: 0, cancellationToken);
+
+    /// <inheritdoc />
     public async ValueTask<SessionAdmissionResult> TryAdmitAsync(
         string accountName,
         string sessionId,
         IPAddress sourceAddress,
         int sessionLimit,
         int srcIpLimit,
+        int rateLimitMbps,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
@@ -116,22 +131,23 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         await accountGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (TryAdmitLocalHotPath(accountName, sessionId, ip, sessionLimit, srcIpLimit, out var local))
+            if (TryAdmitLocalHotPath(accountName, sessionId, ip, sessionLimit, srcIpLimit, rateLimitMbps, out var local))
             {
                 return local;
             }
 
-            if (sessionLimit <= 0 && srcIpLimit <= 0)
+            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitMbps <= 0)
             {
                 return SessionAdmissionResult.Success;
             }
 
+            var trackSessions = sessionLimit > 0 || rateLimitMbps > 0;
             long sessionGeneration;
             long sourceGeneration;
             lock (_gate)
             {
                 _accounts.TryGetValue(accountName, out var account);
-                sessionGeneration = sessionLimit > 0
+                sessionGeneration = trackSessions
                     ? (account is { SessionGeneration: not 0 } ? account.SessionGeneration : NextGeneration())
                     : 0;
                 sourceGeneration = srcIpLimit > 0
@@ -156,7 +172,8 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                     sourceGeneration,
                     now,
                     _leaseTtl,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    trackSessions).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -207,7 +224,8 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                     srcIpLimit,
                     sessionGeneration,
                     sourceGeneration,
-                    now);
+                    now,
+                    trackSessions);
             }
             catch (OperationCanceledException)
             {
@@ -223,6 +241,11 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
             }
 
             DistributedAdmits++;
+            if (rateLimitMbps > 0)
+            {
+                _rates.ObserveClusterSessionCount(accountName, membership.SessionTotal);
+            }
+
             SessionStateLogMessages.SessionAdmittedDistributed(
                 _logger,
                 accountName,
@@ -295,7 +318,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
 
             if (releaseMembership && ip is not null)
             {
-                await _membership.ReleaseAsync(
+                var remaining = await _membership.ReleaseAsync(
                         accountName,
                         ip,
                         _ownerId,
@@ -303,6 +326,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                         sourceGeneration,
                         cancellationToken)
                     .ConfigureAwait(false);
+                _rates.ObserveClusterSessionCount(accountName, remaining);
                 SessionStateLogMessages.SessionStateReleased(_logger, accountName, ip, _nodeId);
             }
         }
@@ -346,7 +370,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         foreach (var (accountName, sessionGeneration, sources) in owners)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            SessionStateRenewStatus status;
+            SessionStateRenewResult status;
             try
             {
                 status = await RenewAccountAsync(
@@ -371,8 +395,13 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 continue;
             }
 
-            if (status == SessionStateRenewStatus.Renewed)
+            if (status.Status == SessionStateRenewStatus.Renewed)
             {
+                if (status.SessionTotal > 0)
+                {
+                    _rates.ObserveClusterSessionCount(accountName, status.SessionTotal);
+                }
+
                 foreach (var (ip, _) in sources)
                 {
                     MarkLeaseRenewed(accountName, ip, now);
@@ -382,7 +411,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 continue;
             }
 
-            if (status == SessionStateRenewStatus.Unavailable)
+            if (status.Status == SessionStateRenewStatus.Unavailable)
             {
                 SessionStateLogMessages.SessionStateLeaseRenewUnavailable(
                     _logger,
@@ -400,7 +429,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         }
     }
 
-    private async ValueTask<SessionStateRenewStatus> RenewAccountAsync(
+    private async ValueTask<SessionStateRenewResult> RenewAccountAsync(
         string accountName,
         long sessionGeneration,
         IReadOnlyList<(string Ip, long Generation)> sources,
@@ -426,7 +455,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 _bytes.CompleteApply(accountName, remaining);
             }
 
-            return combined.Renew;
+            return new SessionStateRenewResult(combined.Renew);
         }
 
         return await _membership.RenewAsync(
@@ -503,6 +532,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         string ip,
         int sessionLimit,
         int srcIpLimit,
+        int rateLimitMbps,
         out SessionAdmissionResult result)
     {
         lock (_gate)
@@ -514,7 +544,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 return true;
             }
 
-            if (sessionLimit <= 0 && srcIpLimit <= 0)
+            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitMbps <= 0)
             {
                 account ??= GetOrCreateAccount(accountName);
                 account.Sessions[sessionId] = new SessionAdmission(ip);
@@ -529,9 +559,9 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 return true;
             }
 
-            // A finite session limit consumes a cluster-wide slot; the source-IP
-            // hot path must not skip Redis.
-            if (sessionLimit > 0)
+            // A finite session limit or R-account rate share consumes a cluster-wide
+            // slot; the source-IP hot path must not skip Redis.
+            if (sessionLimit > 0 || rateLimitMbps > 0)
             {
                 result = SessionAdmissionResult.Success;
                 return false;
@@ -571,7 +601,8 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         int srcIpLimit,
         long sessionGeneration,
         long sourceGeneration,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        bool trackSessions)
     {
         lock (_gate)
         {
@@ -581,7 +612,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 return;
             }
 
-            if (sessionLimit > 0)
+            if (sessionLimit > 0 || trackSessions)
             {
                 account.DistributedSession = true;
                 account.SessionGeneration = sessionGeneration;

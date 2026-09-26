@@ -27,6 +27,20 @@ public interface ISessionStateTracker
         int srcIpLimit,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Admits a session and, when <paramref name="rateLimitMbps"/> is greater than
+    /// zero, tracks the cluster session count for R-account rate allocation.
+    /// </summary>
+    ValueTask<SessionAdmissionResult> TryAdmitAsync(
+        string accountName,
+        string sessionId,
+        IPAddress sourceAddress,
+        int sessionLimit,
+        int srcIpLimit,
+        int rateLimitMbps,
+        CancellationToken cancellationToken = default) =>
+        TryAdmitAsync(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit, cancellationToken);
+
     /// <summary>Releases a previously admitted session. Idempotent when the session is unknown.</summary>
     ValueTask ReleaseAsync(string accountName, string sessionId, CancellationToken cancellationToken = default);
 }

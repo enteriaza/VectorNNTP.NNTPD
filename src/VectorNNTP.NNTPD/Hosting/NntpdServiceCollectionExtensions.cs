@@ -17,6 +17,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
@@ -74,7 +75,8 @@ public static class NntpdServiceCollectionExtensions
                 sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DistributedSessionStateTracker>>(),
                 nodeId,
                 TimeProvider.System,
-                bytes: sp.GetRequiredService<IAccountByteAccountant>());
+                bytes: sp.GetRequiredService<IAccountByteAccountant>(),
+                rates: sp.GetRequiredService<IAccountRateAllocator>());
         });
         services.TryAddSingleton<ISessionStateTracker>(static sp =>
             sp.GetRequiredService<DistributedSessionStateTracker>());
@@ -113,6 +115,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<AccountByteTracker>();
         services.TryAddSingleton<IAccountByteAccountant>(static sp =>
             sp.GetRequiredService<AccountByteTracker>());
+        services.TryAddSingleton<AccountRateAllocator>();
+        services.TryAddSingleton<IAccountRateAllocator>(static sp =>
+            sp.GetRequiredService<AccountRateAllocator>());
         services.TryAddSingleton<ITransitInboundConnectionLimiter, TransitInboundConnectionLimiter>();
         services.TryAddSingleton<IFeedDiagnostics>(static sp =>
         {

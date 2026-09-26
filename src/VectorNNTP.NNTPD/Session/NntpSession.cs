@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session.Authentication;
@@ -97,7 +98,8 @@ public sealed class NntpSession
         ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
         ITransitPeerAuthenticator? transitAuthenticator = null,
-        IAccountByteAccountant? accountBytes = null)
+        IAccountByteAccountant? accountBytes = null,
+        IAccountRateAllocator? accountRates = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -162,6 +164,7 @@ public sealed class NntpSession
         SessionAdmission = sessionAdmission;
         SaslService = saslService;
         AccountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
+        AccountRates = accountRates ?? NullAccountRateAllocator.Instance;
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -297,6 +300,9 @@ public sealed class NntpSession
 
     /// <summary>Gets the B-account byte-quota accountant. No-op when the identity is not a B account.</summary>
     public IAccountByteAccountant AccountBytes { get; }
+
+    /// <summary>Gets the R-account rate allocator. No-op when the identity is not an R account.</summary>
+    public IAccountRateAllocator AccountRates { get; }
 
     /// <summary>Gets the unique id used for admission tracking.</summary>
     public string SessionId { get; }
@@ -520,11 +526,17 @@ public sealed class NntpSession
             ClientAddress,
             policy.SessionLimit,
             policy.SrcIpLimit,
+            policy.RequiresRateTracking ? policy.RateLimitMbps : 0,
             cancellationToken).ConfigureAwait(false);
         switch (outcome)
         {
             case SessionAdmissionResult.Success:
                 _admittedAccountName = policy.Username;
+                if (policy.RequiresRateTracking && Connection.OutboundRate is { } cap)
+                {
+                    AccountRates.Register(policy.Username, SessionId, cap, policy.RateLimitMbps);
+                }
+
                 return NntpAuthenticationResult.Success(policy.Username, Authorization, policy);
             case SessionAdmissionResult.SessionLimitExceeded:
                 return NntpAuthenticationResult.TooManySessions;
@@ -610,9 +622,13 @@ public sealed class NntpSession
     internal async ValueTask ReleaseAdmissionAsync()
     {
         var account = Interlocked.Exchange(ref _admittedAccountName, null);
-        if (account is not null && SessionAdmission is not null)
+        if (account is not null)
         {
-            await SessionAdmission.ReleaseAsync(account, SessionId).ConfigureAwait(false);
+            AccountRates.Unregister(account, SessionId);
+            if (SessionAdmission is not null)
+            {
+                await SessionAdmission.ReleaseAsync(account, SessionId).ConfigureAwait(false);
+            }
         }
     }
 

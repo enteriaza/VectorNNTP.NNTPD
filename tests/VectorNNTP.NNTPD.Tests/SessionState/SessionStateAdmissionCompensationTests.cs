@@ -143,17 +143,17 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         _ = engine.Release(Src, Sess, IpA, O1, 1, 1);
         Assert.Equal(0, engine.OwnerSessionCount(Sess, O1, 0));
         Assert.False(engine.HasSourceOwner(Src, IpA, O1, 0));
 
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(2, engine.OwnerSessionCount(Sess, O1, 0));
         _ = engine.Release(Src, Sess, IpA, O1, 1, 1);
         Assert.Equal(1, engine.OwnerSessionCount(Sess, O1, 0));
@@ -168,7 +168,7 @@ public sealed class SessionStateAdmissionCompensationTests
         engine.WriteOwnership(Src, SessionStateKeys.SourceField(IpA, O1), 30_000, 1, 1);
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 2, 2));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 2, 2));
         Assert.True(engine.TryGetOwnership(Sess, O1, out _, out var sessionGeneration, out var sessionCount));
         Assert.Equal(2, sessionGeneration);
         Assert.Equal(1, sessionCount);
@@ -185,13 +185,13 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, IpA, O2, 10, 4, 0, 30_000, 9, 9));
+            engine.TryAdmitStatus(Src, Sess, IpA, O2, 10, 4, 0, 30_000, 9, 9));
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpB, O1, 10, 4, 0, 30_000, 1, 3));
+            engine.TryAdmitStatus(Src, Sess, IpB, O1, 10, 4, 0, 30_000, 1, 3));
         _ = engine.Release(Src, Sess, IpA, O1, 1, 1);
         Assert.False(engine.HasSourceOwner(Src, IpA, O1, 0));
         Assert.True(engine.HasSourceOwner(Src, IpA, O2, 0));
@@ -206,7 +206,7 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         _ = engine.Release(Src, Sess, IpA, O1, 1, 1);
         Assert.Equal(0, engine.ActiveSessionCount(Sess, 0));
         Assert.False(engine.HasSourceOwner(Src, IpA, O1, 0));
@@ -218,10 +218,10 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(2, engine.OwnerSessionCount(Sess, O1, 0));
         Assert.True(engine.TryGetOwnership(Src, SessionStateKeys.SourceField(IpA, O1), out _, out _, out var sourceCount));
         Assert.Equal(2, sourceCount);
@@ -239,10 +239,10 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, O1, 10, 4, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpB, O1, 10, 4, 0, 30_000, 1, 3));
+            engine.TryAdmitStatus(Src, Sess, IpB, O1, 10, 4, 0, 30_000, 1, 3));
         Assert.Equal(2, engine.OwnerSessionCount(Sess, O1, 0));
         Assert.True(engine.TryGetOwnership(Src, SessionStateKeys.SourceField(IpA, O1), out _, out _, out var ipACount));
         Assert.Equal(1, ipACount);
@@ -258,11 +258,11 @@ public sealed class SessionStateAdmissionCompensationTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, "nntpd01:old", 10, 4, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(Src, Sess, IpA, "nntpd01:old", 10, 4, 0, 30_000, 1, 1));
         _ = engine.ReleaseOwner(Src, Sess, "nntpd01:old");
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, IpA, "nntpd01:new", 10, 4, 0, 30_000, 2, 2));
+            engine.TryAdmitStatus(Src, Sess, IpA, "nntpd01:new", 10, 4, 0, 30_000, 2, 2));
         _ = engine.Release(Src, Sess, IpA, "nntpd01:old", 1, 1);
         Assert.Equal(1, engine.OwnerSessionCount(Sess, "nntpd01:new", 0));
         Assert.True(engine.HasSourceOwner(Src, IpA, "nntpd01:new", 0));
@@ -471,7 +471,8 @@ public sealed class SessionStateAdmissionCompensationTests
             long sourceGeneration,
             DateTimeOffset now,
             TimeSpan leaseTtl,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool trackSessions = false)
         {
             var result = await _inner.TryAdmitAsync(
                 accountName,
@@ -483,7 +484,8 @@ public sealed class SessionStateAdmissionCompensationTests
                 sourceGeneration,
                 now,
                 leaseTtl,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None,
+                trackSessions).ConfigureAwait(false);
             Admitted.TrySetResult();
             if (ThrowAfterAdmit is { } fault)
             {
@@ -494,7 +496,7 @@ public sealed class SessionStateAdmissionCompensationTests
             return result;
         }
 
-        public ValueTask ReleaseAsync(
+        public ValueTask<int> ReleaseAsync(
             string accountName,
             string normalizedSourceIp,
             string ownerId,
@@ -522,7 +524,7 @@ public sealed class SessionStateAdmissionCompensationTests
                 cancellationToken);
         }
 
-        public ValueTask<SessionStateRenewStatus> RenewAsync(
+        public ValueTask<SessionStateRenewResult> RenewAsync(
             string accountName,
             string ownerId,
             long sessionGeneration,

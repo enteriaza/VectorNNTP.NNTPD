@@ -225,7 +225,8 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
                 ParseLong(values[4]),
                 ParseLong(values[5]),
                 ParseLong(values[6]),
-                ParseLong(values[7]));
+                ParseLong(values[7]),
+                trackSessions: values.Length > 8 && ParseInt(values[8]) == 1);
         }
 
         if (script == SessionStateScripts.Release)

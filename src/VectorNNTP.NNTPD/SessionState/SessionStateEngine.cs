@@ -26,8 +26,48 @@ internal sealed class SessionStateEngine
     /// <summary>Rejected: cluster source-address limit would be exceeded.</summary>
     public const long RejectedSourceLimit = 0;
 
+    /// <summary>Packs an accepted admit status with the cluster session total.</summary>
+    public static long PackAdmit(long status, int sessionTotal) =>
+        status <= RejectedSessionLimit
+            ? status
+            : status | ((long)(sessionTotal < 0 ? 0 : sessionTotal) << 2);
+
+    /// <summary>Reads the raw admit status from a packed EVAL integer.</summary>
+    public static long UnpackAdmitStatus(long packed) => packed <= RejectedSessionLimit ? packed : packed & 3;
+
+    /// <summary>Reads the cluster session total from a packed accepted EVAL integer.</summary>
+    public static int UnpackAdmitSessionTotal(long packed) =>
+        packed <= RejectedSessionLimit ? 0 : (int)(packed >> 2);
+
     private readonly object _gate = new();
     private readonly Dictionary<string, Dictionary<string, string>> _hashes = new(StringComparer.Ordinal);
+
+    /// <summary>Returns the unpacked admit status (tests that ignore the packed total).</summary>
+    internal long TryAdmitStatus(
+        string sourceKey,
+        string sessionKey,
+        string normalizedSourceIp,
+        string ownerId,
+        int sessionLimit,
+        int srcIpLimit,
+        long nowUnixMs,
+        long leaseMs,
+        long sessionGeneration,
+        long sourceGeneration,
+        bool trackSessions = false) =>
+        UnpackAdmitStatus(
+            TryAdmit(
+                sourceKey,
+                sessionKey,
+                normalizedSourceIp,
+                ownerId,
+                sessionLimit,
+                srcIpLimit,
+                nowUnixMs,
+                leaseMs,
+                sessionGeneration,
+                sourceGeneration,
+                trackSessions));
 
     /// <summary>
     /// Atomically admits one session and this owner's source-IP membership.
@@ -42,7 +82,8 @@ internal sealed class SessionStateEngine
         long nowUnixMs,
         long leaseMs,
         long sessionGeneration,
-        long sourceGeneration)
+        long sourceGeneration,
+        bool trackSessions = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionKey);
@@ -73,7 +114,7 @@ internal sealed class SessionStateEngine
             }
 
             var expiry = nowUnixMs + leaseMs;
-            if (sessionLimit > 0)
+            if (sessionLimit > 0 || trackSessions)
             {
                 IncrementOwned(sessions, ownerId, expiry, sessionGeneration);
             }
@@ -87,7 +128,8 @@ internal sealed class SessionStateEngine
                     sourceGeneration);
             }
 
-            return activeIps.Contains(normalizedSourceIp) ? AcceptedExisting : AcceptedNew;
+            var status = activeIps.Contains(normalizedSourceIp) ? AcceptedExisting : AcceptedNew;
+            return PackAdmit(status, SumCounts(sessions));
         }
     }
 
@@ -121,7 +163,9 @@ internal sealed class SessionStateEngine
                 RemoveIfEmpty(sourceKey, sources);
             }
 
-            return 1;
+            return _hashes.TryGetValue(sessionKey, out var remaining)
+                ? SumCounts(remaining)
+                : 0;
         }
     }
 
@@ -220,6 +264,14 @@ internal sealed class SessionStateEngine
                     generation,
                     nowUnixMs,
                     leaseMs);
+            }
+
+            if (_hashes.TryGetValue(sessionKey, out var sessions))
+            {
+                PruneExpired(sessions, nowUnixMs);
+                RemoveIfEmpty(sessionKey, sessions);
+                var total = SumCounts(sessions);
+                return total < 1 ? 1 : total;
             }
 
             return 1;

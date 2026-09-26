@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session;
@@ -56,6 +57,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ISessionStateTracker? _sessionAdmission;
     private readonly NntpSaslService? _saslService;
     private readonly IAccountByteAccountant _accountBytes;
+    private readonly IAccountRateAllocator _accountRates;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -90,7 +92,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IModerationSubmissionService? moderationSubmission = null,
         ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
-        IAccountByteAccountant? accountBytes = null)
+        IAccountByteAccountant? accountBytes = null,
+        IAccountRateAllocator? accountRates = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -120,6 +123,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _sessionAdmission = sessionAdmission;
         _saslService = saslService;
         _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
+        _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -364,7 +368,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 moderationSubmission: _moderationSubmission,
                 sessionAdmission: _sessionAdmission,
                 saslService: _saslService,
-                accountBytes: _accountBytes);
+                accountBytes: _accountBytes,
+                accountRates: _accountRates);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

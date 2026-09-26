@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
 using VectorNNTP.NNTPD.Session;
@@ -54,6 +55,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly ISessionStateTracker? _sessionAdmission;
     private readonly NntpSaslService? _saslService;
     private readonly IAccountByteAccountant _accountBytes;
+    private readonly IAccountRateAllocator _accountRates;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
@@ -88,7 +90,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IModerationSubmissionService? moderationSubmission = null,
         ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
-        IAccountByteAccountant? accountBytes = null)
+        IAccountByteAccountant? accountBytes = null,
+        IAccountRateAllocator? accountRates = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -118,6 +121,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _sessionAdmission = sessionAdmission;
         _saslService = saslService;
         _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
+        _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -345,7 +349,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 moderationSubmission: _moderationSubmission,
                 sessionAdmission: _sessionAdmission,
                 saslService: _saslService,
-                accountBytes: _accountBytes);
+                accountBytes: _accountBytes,
+                accountRates: _accountRates);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             TransitInboundAdmitResult admission;

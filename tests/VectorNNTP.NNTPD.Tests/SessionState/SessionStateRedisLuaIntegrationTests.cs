@@ -38,7 +38,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit("src", "sess", IpA, O1, 10, 4, Now, Lease, 1, 1));
+            engine.TryAdmitStatus("src", "sess", IpA, O1, 10, 4, Now, Lease, 1, 1));
         var result = await _redis.TryAdmitAsync(account, IpA, O1, 10, 4, 1, 1, Now, Lease);
         Assert.Equal(SessionStateAdmitStatus.AcceptedNew, result.Status);
         var session = await _redis.ReadSessionAsync(account, O1);
@@ -130,7 +130,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         var engine = new SessionStateEngine();
         engine.WriteOwnership("sess", O1, 30_000, 1, 7);
         engine.WriteOwnership("src", SessionStateKeys.SourceField(IpA, O1), 30_000, 1, 7);
-        Assert.Equal(SessionStateEngine.AcceptedExisting, engine.TryAdmit("src", "sess", IpA, O1, 20, 4, 0, Lease, 2, 2));
+        Assert.Equal(SessionStateEngine.AcceptedExisting, engine.TryAdmitStatus("src", "sess", IpA, O1, 20, 4, 0, Lease, 2, 2));
 
         Assert.True((await _redis.TryAdmitAsync(account, IpA, O1, 20, 4, 2, 2, 0, Lease)).Accepted);
         AssertOwnership(await _redis.ReadSessionAsync(account, O1), Lease, 2, 1);
@@ -193,7 +193,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
     {
         var account = await _redis.CreateAccountAsync();
         Assert.True((await _redis.TryAdmitAsync(account, IpA, O1, 10, 4, 1, 1, Now, Lease)).Accepted);
-        Assert.Equal(SessionStateRenewStatus.Renewed, await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], 20_000, Lease));
+        Assert.Equal(SessionStateRenewStatus.Renewed, (await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], 20_000, Lease)).Status);
         AssertOwnership(await _redis.ReadSessionAsync(account, O1), 50_000, 1, 1);
         AssertOwnership(await _redis.ReadSourceAsync(account, IpA, O1), 50_000, 1, 1);
         await _redis.DeleteKeysAsync(account);
@@ -205,7 +205,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         var account = await _redis.CreateAccountAsync();
         await _redis.SeedSessionAsync(account, O1, 30_000, 2, 1);
         await _redis.SeedSourceAsync(account, IpA, O1, 30_000, 2, 1);
-        Assert.Equal(SessionStateRenewStatus.Lost, await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], Now, Lease));
+        Assert.Equal(SessionStateRenewStatus.Lost, (await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], Now, Lease)).Status);
         AssertOwnership(await _redis.ReadSessionAsync(account, O1), 30_000, 2, 1);
         AssertOwnership(await _redis.ReadSourceAsync(account, IpA, O1), 30_000, 2, 1);
         await _redis.DeleteKeysAsync(account);
@@ -215,7 +215,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
     public async Task Renew_Missing_IsLostAndDoesNotCreate()
     {
         var account = await _redis.CreateAccountAsync();
-        Assert.Equal(SessionStateRenewStatus.Lost, await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], Now, Lease));
+        Assert.Equal(SessionStateRenewStatus.Lost, (await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], Now, Lease)).Status);
         Assert.Null(await _redis.ReadSessionAsync(account, O1));
         Assert.Null(await _redis.ReadSourceAsync(account, IpA, O1));
         await _redis.DeleteKeysAsync(account);
@@ -227,7 +227,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         var account = await _redis.CreateAccountAsync();
         await _redis.SeedSessionAsync(account, O1, 1_000, 1, 1);
         await _redis.SeedSourceAsync(account, IpA, O1, 1_000, 1, 1);
-        Assert.Equal(SessionStateRenewStatus.Lost, await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], 2_000, Lease));
+        Assert.Equal(SessionStateRenewStatus.Lost, (await _redis.RenewAsync(account, O1, 1, [(IpA, 1)], 2_000, Lease)).Status);
         AssertOwnership(await _redis.ReadSessionAsync(account, O1), 1_000, 1, 1);
         AssertOwnership(await _redis.ReadSourceAsync(account, IpA, O1), 1_000, 1, 1);
         await _redis.DeleteKeysAsync(account);
@@ -242,7 +242,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         var before = await _redis.ReadSessionAsync(account, O1);
         Assert.Equal(
             SessionStateRenewStatus.Lost,
-            await _redis.RenewAsync(account, O1, 1, [(IpA, 1), (IpB, 99)], 20_000, Lease));
+            (await _redis.RenewAsync(account, O1, 1, [(IpA, 1), (IpB, 99)], 20_000, Lease)).Status);
         Assert.Equal(before, await _redis.ReadSessionAsync(account, O1));
         AssertOwnership(await _redis.ReadSourceAsync(account, IpA, O1), Now + Lease, 1, 1);
         AssertOwnership(await _redis.ReadSourceAsync(account, IpB, O1), Now + Lease, 3, 1);
@@ -326,7 +326,7 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
         engine.WriteOwnership("src", SessionStateKeys.SourceField(IpA, O1), 1_000, 1, 7);
         engine.WriteOwnership("sess", O2, 80_000, 9, 1);
         engine.WriteOwnership("src", SessionStateKeys.SourceField(IpB, O2), 80_000, 9, 1);
-        Assert.Equal(SessionStateEngine.AcceptedNew, engine.TryAdmit("src", "sess", IpA, "O3", 2, 4, 2_000, Lease, 1, 1));
+        Assert.Equal(SessionStateEngine.AcceptedNew, engine.TryAdmitStatus("src", "sess", IpA, "O3", 2, 4, 2_000, Lease, 1, 1));
 
         Assert.True((await _redis.TryAdmitAsync(account, IpA, "nntpd03:c", 2, 4, 1, 1, 2_000, Lease)).Accepted);
         Assert.Null(await _redis.ReadSessionAsync(account, O1));

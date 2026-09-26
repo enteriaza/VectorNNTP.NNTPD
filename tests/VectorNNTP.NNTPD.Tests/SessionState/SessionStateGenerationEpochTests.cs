@@ -81,7 +81,7 @@ public sealed class SessionStateGenerationEpochTests
 
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, Ip, O2, sessionLimit: 20, srcIpLimit: 4, 0, LeaseMs, 9, 9));
+            engine.TryAdmitStatus(Src, Sess, Ip, O2, sessionLimit: 20, srcIpLimit: 4, 0, LeaseMs, 9, 9));
 
         AssertOwnership(engine, Sess, O1, generation: 1, count: 7);
         AssertOwnership(engine, Sess, O2, generation: 9, count: 1);
@@ -140,7 +140,7 @@ public sealed class SessionStateGenerationEpochTests
         engine.WriteOwnership(Src, SessionStateKeys.SourceField(Ip, O1), 1_000, 1, 7);
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, Ip, O1, 20, 4, nowUnixMs: 2_000, LeaseMs, 2, 2));
+            engine.TryAdmitStatus(Src, Sess, Ip, O1, 20, 4, nowUnixMs: 2_000, LeaseMs, 2, 2));
         AssertOwnership(engine, Sess, O1, 2, 1, nowUnixMs: 2_000);
         AssertOwnership(engine, Src, SessionStateKeys.SourceField(Ip, O1), 2, 1, nowUnixMs: 2_000);
     }
@@ -153,7 +153,7 @@ public sealed class SessionStateGenerationEpochTests
         engine.WriteOwnership(Src, SessionStateKeys.SourceField(Ip, O1), 80_000, 1, 7);
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, Ip, O1, 20, 4, nowUnixMs: 1_000, LeaseMs, 2, 2));
+            engine.TryAdmitStatus(Src, Sess, Ip, O1, 20, 4, nowUnixMs: 1_000, LeaseMs, 2, 2));
         AssertOwnership(engine, Sess, O1, 2, 1, nowUnixMs: 1_000);
         AssertOwnership(engine, Src, SessionStateKeys.SourceField(Ip, O1), 2, 1, nowUnixMs: 1_000);
     }
@@ -166,7 +166,7 @@ public sealed class SessionStateGenerationEpochTests
         engine.WriteOwnership(Sess, O2, 30_000, 9, 3);
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(Src, Sess, Ip, O1, sessionLimit: 20, srcIpLimit: 0, 0, LeaseMs, 2, 0));
+            engine.TryAdmitStatus(Src, Sess, Ip, O1, sessionLimit: 20, srcIpLimit: 0, 0, LeaseMs, 2, 0));
         AssertOwnership(engine, Sess, O1, 2, 1);
         AssertOwnership(engine, Sess, O2, 9, 3);
         Assert.False(engine.TryGetOwnership(Src, SessionStateKeys.SourceField(Ip, O1), out _, out _, out _));
@@ -180,7 +180,7 @@ public sealed class SessionStateGenerationEpochTests
         engine.WriteOwnership(Src, SessionStateKeys.SourceField(Ip, O2), 30_000, 9, 3);
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, Ip, O1, sessionLimit: 0, srcIpLimit: 4, 0, LeaseMs, 0, 2));
+            engine.TryAdmitStatus(Src, Sess, Ip, O1, sessionLimit: 0, srcIpLimit: 4, 0, LeaseMs, 0, 2));
         AssertOwnership(engine, Src, SessionStateKeys.SourceField(Ip, O1), 2, 1);
         AssertOwnership(engine, Src, SessionStateKeys.SourceField(Ip, O2), 9, 3);
         Assert.False(engine.TryGetOwnership(Sess, O1, out _, out _, out _));
@@ -372,7 +372,7 @@ public sealed class SessionStateGenerationEpochTests
         var engine = new SessionStateEngine();
         engine.WriteOwnership(Sess, sessionField, 30_000, storedGeneration, storedCount);
         engine.WriteOwnership(Src, sourceField, 30_000, storedGeneration, storedCount);
-        _ = engine.TryAdmit(Src, Sess, Ip, owner, 20, 4, 0, LeaseMs, requestedGeneration, requestedGeneration);
+        _ = engine.TryAdmitStatus(Src, Sess, Ip, owner, 20, 4, 0, LeaseMs, requestedGeneration, requestedGeneration);
         AssertOwnership(engine, Sess, sessionField, expectedGeneration, expectedCount);
         AssertOwnership(engine, Src, sourceField, expectedGeneration, expectedCount);
     }
@@ -384,7 +384,7 @@ public sealed class SessionStateGenerationEpochTests
         engine.WriteOwnership(Src, SessionStateKeys.SourceField(Ip, O1), 30_000, 1, storedCount);
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(Src, Sess, Ip, O1, 20, 4, 0, LeaseMs, 2, 2));
+            engine.TryAdmitStatus(Src, Sess, Ip, O1, 20, 4, 0, LeaseMs, 2, 2));
         AssertOwnership(engine, Sess, O1, 2, 1);
         AssertOwnership(engine, Src, SessionStateKeys.SourceField(Ip, O1), 2, 1);
         return engine;

@@ -95,7 +95,8 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
         long sourceGeneration,
         DateTimeOffset now,
         TimeSpan leaseTtl,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool trackSessions = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         if (BlockAdmit is { } block)
@@ -119,13 +120,16 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
             now.ToUnixTimeMilliseconds(),
             (long)leaseTtl.TotalMilliseconds,
             sessionGeneration,
-            sourceGeneration);
-        return code switch
+            sourceGeneration,
+            trackSessions);
+        var status = SessionStateEngine.UnpackAdmitStatus(code);
+        var total = SessionStateEngine.UnpackAdmitSessionTotal(code);
+        return status switch
         {
             SessionStateEngine.AcceptedExisting =>
-                new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedExisting),
+                new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedExisting, total),
             SessionStateEngine.AcceptedNew =>
-                new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedNew),
+                new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedNew, total),
             SessionStateEngine.RejectedSessionLimit =>
                 new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSessionLimit),
             _ => new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSourceLimit),
@@ -133,7 +137,7 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
     }
 
     /// <inheritdoc />
-    public async ValueTask ReleaseAsync(
+    public async ValueTask<int> ReleaseAsync(
         string accountName,
         string normalizedSourceIp,
         string ownerId,
@@ -150,10 +154,10 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
         cancellationToken.ThrowIfCancellationRequested();
         if (Unavailable)
         {
-            return;
+            return 0;
         }
 
-        _ = _engine.Release(
+        return (int)_engine.Release(
             SourceKey(accountName),
             SessionKey(accountName),
             normalizedSourceIp,
@@ -163,7 +167,7 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
     }
 
     /// <inheritdoc />
-    public async ValueTask<SessionStateRenewStatus> RenewAsync(
+    public async ValueTask<SessionStateRenewResult> RenewAsync(
         string accountName,
         string ownerId,
         long sessionGeneration,
@@ -190,19 +194,20 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
         RenewCalls++;
         if (Unavailable)
         {
-            return SessionStateRenewStatus.Unavailable;
+            return new SessionStateRenewResult(SessionStateRenewStatus.Unavailable);
         }
 
-        return _engine.Renew(
+        var result = _engine.Renew(
             SourceKey(accountName),
             SessionKey(accountName),
             ownerId,
             sessionGeneration,
             now.ToUnixTimeMilliseconds(),
             (long)leaseTtl.TotalMilliseconds,
-            sources) == 1
-            ? SessionStateRenewStatus.Renewed
-            : SessionStateRenewStatus.Lost;
+            sources);
+        return result == 0
+            ? new SessionStateRenewResult(SessionStateRenewStatus.Lost)
+            : new SessionStateRenewResult(SessionStateRenewStatus.Renewed, (int)result);
     }
 
     /// <inheritdoc />
@@ -229,7 +234,7 @@ internal sealed class InMemorySessionStateStore : ISessionStateStore
             now,
             leaseTtl,
             cancellationToken).ConfigureAwait(false);
-        return new SessionStateRenewAndApplyResult(status, remaining: null);
+        return new SessionStateRenewAndApplyResult(status.Status, remaining: null);
     }
 
     /// <inheritdoc />

@@ -139,7 +139,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
             isTls: false);
 
         await transport.QuiesceAsync(CancellationToken.None);
-        Assert.Same(stream, transport.TakeQuiescedStreamForTlsWrap());
+        Assert.Same(transport.RateLimiter, transport.TakeQuiescedStreamForTlsWrap());
         Assert.Equal(0, stream.ConcurrentOps);
 
         stream.ArmPostQuiesceTracking();

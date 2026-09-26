@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Security;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
@@ -41,14 +42,36 @@ internal sealed class ConnectionByteTransport : IAsyncDisposable
     private bool _isTls;
     private bool _isCompressed;
     private byte[]? _pendingUpgradePrefix;
+    private readonly OutboundRateLimiter _rateLimiter;
 
-    public ConnectionByteTransport(Stream stream, bool isTls)
+    public ConnectionByteTransport(Stream stream, bool isTls, OutboundRateLimiter? rateLimiter = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        _stream = stream;
+        if (rateLimiter is not null)
+        {
+            _rateLimiter = rateLimiter;
+            _stream = stream;
+        }
+        else if (stream is OutboundRateLimiter existing)
+        {
+            _rateLimiter = existing;
+            _stream = existing;
+        }
+        else
+        {
+            _rateLimiter = new OutboundRateLimiter(stream, initialMaxSendBytesPerSecond: 0, leaveInnerOpen: false);
+            _stream = _rateLimiter;
+        }
+
         _isTls = isTls;
         _resumeTcs.SetResult();
     }
+
+    /// <summary>
+    /// Wire-level outbound cap. Sits under TLS/DEFLATE so throttled bytes are
+    /// the octets written toward the socket.
+    /// </summary>
+    internal OutboundRateLimiter RateLimiter => _rateLimiter;
 
     public bool IsTls
     {

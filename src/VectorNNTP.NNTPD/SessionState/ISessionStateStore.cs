@@ -20,12 +20,14 @@ public interface ISessionStateStore
         long sourceGeneration,
         DateTimeOffset now,
         TimeSpan leaseTtl,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool trackSessions = false);
 
     /// <summary>
     /// Atomically decrements this owner's session count and source-IP count.
+    /// Returns the remaining cluster session total.
     /// </summary>
-    ValueTask ReleaseAsync(
+    ValueTask<int> ReleaseAsync(
         string accountName,
         string normalizedSourceIp,
         string ownerId,
@@ -38,7 +40,7 @@ public interface ISessionStateStore
     /// All requested fields are extended or none are. Missing, expired, or
     /// generation-mismatched ownership is not recreated.
     /// </summary>
-    ValueTask<SessionStateRenewStatus> RenewAsync(
+    ValueTask<SessionStateRenewResult> RenewAsync(
         string accountName,
         string ownerId,
         long sessionGeneration,

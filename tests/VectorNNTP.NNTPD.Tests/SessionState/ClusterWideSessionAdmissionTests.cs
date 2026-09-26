@@ -355,20 +355,20 @@ public sealed class ClusterWideSessionAdmissionTests
         const string sess = "sess:alice";
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(src, sess, "192.0.2.10", "nntpd01:a", sessionLimit: 1, srcIpLimit: 2, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(src, sess, "192.0.2.10", "nntpd01:a", sessionLimit: 1, srcIpLimit: 2, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.RejectedSessionLimit,
-            engine.TryAdmit(src, sess, "2001:db8::10", "nntpd02:b", sessionLimit: 1, srcIpLimit: 2, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(src, sess, "2001:db8::10", "nntpd02:b", sessionLimit: 1, srcIpLimit: 2, 0, 30_000, 1, 1));
         Assert.Equal(1, engine.ActiveSessionCount(sess, 0));
         Assert.False(engine.HasSourceOwner(src, "2001:db8::10", "nntpd02:b", 0));
 
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(src, sess, "192.0.2.10", "nntpd03:c", sessionLimit: 10, srcIpLimit: 1, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(src, sess, "192.0.2.10", "nntpd03:c", sessionLimit: 10, srcIpLimit: 1, 0, 30_000, 1, 1));
         var sessions = engine.ActiveSessionCount(sess, 0);
         Assert.Equal(
             SessionStateEngine.RejectedSourceLimit,
-            engine.TryAdmit(src, sess, "198.51.100.20", "nntpd04:d", sessionLimit: 10, srcIpLimit: 1, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(src, sess, "198.51.100.20", "nntpd04:d", sessionLimit: 10, srcIpLimit: 1, 0, 30_000, 1, 1));
         Assert.Equal(sessions, engine.ActiveSessionCount(sess, 0));
         Assert.False(engine.HasSourceOwner(src, "198.51.100.20", "nntpd04:d", 0));
     }
@@ -381,8 +381,8 @@ public sealed class ClusterWideSessionAdmissionTests
         const string sess = "sess:alice";
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(src, sess, "192.0.2.10", "nntpd01:old", 1, 1, 0, 30_000, 1, 1));
-        _ = engine.TryAdmit(src, sess, "192.0.2.10", "nntpd01:new", 1, 1, 31_000, 30_000, 2, 2);
+            engine.TryAdmitStatus(src, sess, "192.0.2.10", "nntpd01:old", 1, 1, 0, 30_000, 1, 1));
+        _ = engine.TryAdmitStatus(src, sess, "192.0.2.10", "nntpd01:new", 1, 1, 31_000, 30_000, 2, 2);
         _ = engine.Release(src, sess, "192.0.2.10", "nntpd01:old", 1, 1);
         Assert.Equal(1, engine.OwnerSessionCount(sess, "nntpd01:new", 31_000));
         Assert.True(engine.HasSourceOwner(src, "192.0.2.10", "nntpd01:new", 31_000));
@@ -397,12 +397,12 @@ public sealed class ClusterWideSessionAdmissionTests
         const string owner = "nntpd01:a";
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit(src, sess, "192.0.2.10", owner, 2, 2, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus(src, sess, "192.0.2.10", owner, 2, 2, 0, 30_000, 1, 1));
         Assert.Equal(1, engine.OwnerSessionCount(sess, owner, 0));
 
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit(src, sess, "192.0.2.10", owner, 2, 2, 0, 30_000, 2, 2));
+            engine.TryAdmitStatus(src, sess, "192.0.2.10", owner, 2, 2, 0, 30_000, 2, 2));
         Assert.Equal(1, engine.OwnerSessionCount(sess, owner, 0));
         Assert.True(engine.TryGetOwnership(sess, owner, out _, out var sessionGeneration, out var sessionCount));
         Assert.Equal(2, sessionGeneration);

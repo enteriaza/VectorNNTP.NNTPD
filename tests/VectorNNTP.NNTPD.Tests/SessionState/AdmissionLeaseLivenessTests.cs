@@ -268,7 +268,7 @@ public sealed class AdmissionLeaseLivenessTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit("src", "sess", "192.0.2.10", "nntpd01:a", 1, 1, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus("src", "sess", "192.0.2.10", "nntpd01:a", 1, 1, 0, 30_000, 1, 1));
         _ = engine.ReleaseOwner("src", "sess", "nntpd01:a");
         Assert.Equal(0, engine.Renew("src", "sess", "nntpd01:a", 1, 10_000, 30_000, [("192.0.2.10", 1)]));
         Assert.False(engine.TryGetOwnership("sess", "nntpd01:a", out _, out _, out _));

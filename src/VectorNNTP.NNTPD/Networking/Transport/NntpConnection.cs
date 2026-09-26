@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
@@ -108,6 +109,9 @@ public sealed class NntpConnection : INntpConnection
 
     /// <inheritdoc />
     public PipeWriter Output => _outputPipe.Writer;
+
+    /// <inheritdoc />
+    public IOutboundRateCap? OutboundRate => _transport?.RateLimiter;
 
     /// <inheritdoc />
     public EndPoint? RemoteEndPoint { get; }
@@ -259,7 +263,8 @@ public sealed class NntpConnection : INntpConnection
         Stream sslInner = tlsPrefix.IsEmpty
             ? networkStream
             : new PrefixedStream(networkStream, tlsPrefix, leaveInnerOpen: false);
-        var sslStream = new SslStream(sslInner, leaveInnerStreamOpen: false);
+        var limiter = new OutboundRateLimiter(sslInner, initialMaxSendBytesPerSecond: 0, leaveInnerOpen: false);
+        var sslStream = new SslStream(limiter, leaveInnerStreamOpen: false);
 
         try
         {
@@ -276,7 +281,7 @@ public sealed class NntpConnection : INntpConnection
         }
 
         TlsNegotiationLogging.Capture(sslStream, out var tlsVersion, out var cipher);
-        var transport = new ConnectionByteTransport(sslStream, isTls: true)
+        var transport = new ConnectionByteTransport(sslStream, isTls: true, limiter)
         {
             Io = TransportIoProbe.CreateSession(),
         };

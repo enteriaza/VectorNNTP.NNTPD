@@ -384,7 +384,8 @@ public sealed class SessionStateConcurrencyBoundaryTests
             long sourceGeneration,
             DateTimeOffset now,
             TimeSpan leaseTtl,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool trackSessions = false)
         {
             var result = await _inner.TryAdmitAsync(
                 accountName,
@@ -396,13 +397,14 @@ public sealed class SessionStateConcurrencyBoundaryTests
                 sourceGeneration,
                 now,
                 leaseTtl,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                trackSessions).ConfigureAwait(false);
             Admitted.TrySetResult();
             await Continue.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             return result;
         }
 
-        public ValueTask ReleaseAsync(
+        public ValueTask<int> ReleaseAsync(
             string accountName,
             string normalizedSourceIp,
             string ownerId,
@@ -420,7 +422,7 @@ public sealed class SessionStateConcurrencyBoundaryTests
                 cancellationToken);
         }
 
-        public ValueTask<SessionStateRenewStatus> RenewAsync(
+        public ValueTask<SessionStateRenewResult> RenewAsync(
             string accountName,
             string ownerId,
             long sessionGeneration,

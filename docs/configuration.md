@@ -163,6 +163,22 @@ Live remaining is **not** the 10-second AUTHINFO user-record cache. `AccountByte
 
 Accounting is batched on the `SessionStateService` ~10-second cycle (lease renewal and byte APPLY share that scheduler; there is no second AccountBytes timer). It is not byte-exact at the instant of exhaustion. Expected overshoot is roughly the bytes those B sessions can send in one interval plus one in-flight NNTP response (for example about 1.25 GiB for one 1 Gbit/s session). MySQL stores durable remaining (`CASE`/`GREATEST`-style clamp at zero). Redis stores cluster-wide live remaining and may only initialize from durable remaining, decrease, or reconcile downward. When an account has both SessionState ownership and a committed byte batch, one Redis EVAL performs renewal and APPLY.
 
+### `nntpusers` rate limit (`account_type` R)
+
+`account_type = 'R'` (or `'r'`) is rate-oriented. `account_rate_limit` is the **account-wide aggregate outbound download rate** in decimal SI megabits per second, not a per-session cap:
+
+| `account_rate_limit` | Meaning |
+|----------------------|---------|
+| `> 0` | Aggregate cap; each active session receives `floor((Mbps × 125_000) / active_sessions)` bytes/sec |
+| `0` | Unlimited; no rate allocation and no extra session tracking for rate |
+| `< 0` | Treated as unlimited (same sentinel as `0`) |
+
+This is not the B-account remaining-byte rule. `account_rate_limit = 0` does **not** mean exhausted. R accounts do not consume `account_byte_limit`. The divisor is the live cluster-wide authenticated session count, never `account_session_limit`. Example: 10 Mbps and session limit 10 with only 2 sessions active is 5 Mbps each, not 1 Mbps each. When the third of 10 disconnects, remaining sessions move from 1 Mbps to `10/7` Mbps without reconnecting.
+
+Allocation is cluster-wide: five sessions on two nodes still split 10 Mbps five ways after every node has observed the new total. SessionState's existing session HASH is the only counter. Local sessions are updated on admit/release immediately when this node owns every session. A session that joins a node while other nodes still hold the previous share is blocked. Established local sessions may only drop, using the last applied split to bound what remotes may still be sending. Equal shares resume when this node owns every remaining session. Remote disconnect is safe under-use until the next renew. There is no `RateLimitService` and no Redis operation on the write path.
+
+The limiter sits under TLS/DEFLATE, so it throttles octets written toward the socket. Byte accounting (B) remains at uncompressed `PipeWriter.Advance`. The two policies do not mix.
+
 Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
 
 ```text

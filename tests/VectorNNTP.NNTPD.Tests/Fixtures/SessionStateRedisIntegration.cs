@@ -177,7 +177,8 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
         long sessionGeneration,
         long sourceGeneration,
         long nowUnixMs,
-        long leaseMs) =>
+        long leaseMs,
+        bool trackSessions = false) =>
         Store.TryAdmitAsync(
             accountName,
             ip,
@@ -187,9 +188,10 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
             sessionGeneration,
             sourceGeneration,
             DateTimeOffset.FromUnixTimeMilliseconds(nowUnixMs),
-            TimeSpan.FromMilliseconds(leaseMs));
+            TimeSpan.FromMilliseconds(leaseMs),
+            trackSessions: trackSessions);
 
-    public ValueTask ReleaseAsync(
+    public ValueTask<int> ReleaseAsync(
         string accountName,
         string ip,
         string ownerId,
@@ -197,7 +199,7 @@ public sealed class SessionStateRedisIntegrationFixture : IAsyncLifetime
         long sourceGeneration) =>
         Store.ReleaseAsync(accountName, ip, ownerId, sessionGeneration, sourceGeneration);
 
-    public ValueTask<SessionStateRenewStatus> RenewAsync(
+    public ValueTask<SessionStateRenewResult> RenewAsync(
         string accountName,
         string ownerId,
         long sessionGeneration,

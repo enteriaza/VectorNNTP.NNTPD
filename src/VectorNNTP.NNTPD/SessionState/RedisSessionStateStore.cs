@@ -31,7 +31,8 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
         long sourceGeneration,
         DateTimeOffset now,
         TimeSpan leaseTtl,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        bool trackSessions = false) =>
         ExecuteAsync(
             SessionStateScripts.TryAdmit,
             accountName,
@@ -45,30 +46,35 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
                 Utf8(((long)leaseTtl.TotalMilliseconds).ToString(CultureInfo.InvariantCulture)),
                 Utf8(sessionGeneration.ToString(CultureInfo.InvariantCulture)),
                 Utf8(sourceGeneration.ToString(CultureInfo.InvariantCulture)),
+                Utf8(trackSessions ? "1" : "0"),
             ],
-            result => result switch
+            result =>
             {
-                SessionStateEngine.AcceptedExisting =>
-                    new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedExisting),
-                SessionStateEngine.AcceptedNew =>
-                    new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedNew),
-                SessionStateEngine.RejectedSessionLimit =>
-                    new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSessionLimit),
-                _ => new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSourceLimit),
+                var status = SessionStateEngine.UnpackAdmitStatus(result);
+                var total = SessionStateEngine.UnpackAdmitSessionTotal(result);
+                return status switch
+                {
+                    SessionStateEngine.AcceptedExisting =>
+                        new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedExisting, total),
+                    SessionStateEngine.AcceptedNew =>
+                        new SessionStateAdmitResult(SessionStateAdmitStatus.AcceptedNew, total),
+                    SessionStateEngine.RejectedSessionLimit =>
+                        new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSessionLimit),
+                    _ => new SessionStateAdmitResult(SessionStateAdmitStatus.RejectedSourceLimit),
+                };
             },
             new SessionStateAdmitResult(SessionStateAdmitStatus.Unavailable),
             cancellationToken);
 
     /// <inheritdoc />
-    public async ValueTask ReleaseAsync(
+    public ValueTask<int> ReleaseAsync(
         string accountName,
         string normalizedSourceIp,
         string ownerId,
         long sessionGeneration,
         long sourceGeneration,
-        CancellationToken cancellationToken = default)
-    {
-        _ = await ExecuteAsync(
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(
             SessionStateScripts.Release,
             accountName,
             MembershipKeys(accountName),
@@ -78,13 +84,12 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
                 Utf8(sessionGeneration.ToString(CultureInfo.InvariantCulture)),
                 Utf8(sourceGeneration.ToString(CultureInfo.InvariantCulture)),
             ],
-            static _ => true,
-            fallback: true,
-            cancellationToken).ConfigureAwait(false);
-    }
+            static result => result < 0 ? 0 : (int)result,
+            fallback: 0,
+            cancellationToken);
 
     /// <inheritdoc />
-    public ValueTask<SessionStateRenewStatus> RenewAsync(
+    public ValueTask<SessionStateRenewResult> RenewAsync(
         string accountName,
         string ownerId,
         long sessionGeneration,
@@ -111,10 +116,10 @@ internal sealed class RedisSessionStateStore : ISessionStateStore
             accountName,
             MembershipKeys(accountName),
             values,
-            result => result == 1
-                ? SessionStateRenewStatus.Renewed
-                : SessionStateRenewStatus.Lost,
-            SessionStateRenewStatus.Unavailable,
+            result => result == 0
+                ? new SessionStateRenewResult(SessionStateRenewStatus.Lost)
+                : new SessionStateRenewResult(SessionStateRenewStatus.Renewed, (int)result),
+            new SessionStateRenewResult(SessionStateRenewStatus.Unavailable),
             cancellationToken);
     }
 

@@ -30,8 +30,11 @@ public sealed class SessionStateBytesAccountingTests
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(1, services.Count(static s => s is SessionStateService));
         Assert.DoesNotContain(services, static s => s.GetType().Name == "AccountByteService");
+        Assert.DoesNotContain(services, static s => s.GetType().Name is "RateLimitService" or "AccountRateService" or "RateScheduler");
         Assert.NotNull(host.Services.GetService<IAccountByteAccountant>());
+        Assert.NotNull(host.Services.GetService<VectorNNTP.NNTPD.SessionState.RateLimiting.IAccountRateAllocator>());
         Assert.Null(typeof(SessionStateService).Assembly.GetType("VectorNNTP.NNTPD.AccountBytes.AccountByteService"));
+        Assert.Null(typeof(SessionStateService).Assembly.GetType("VectorNNTP.NNTPD.SessionState.RateLimiting.RateLimitService"));
     }
 
     [Fact]

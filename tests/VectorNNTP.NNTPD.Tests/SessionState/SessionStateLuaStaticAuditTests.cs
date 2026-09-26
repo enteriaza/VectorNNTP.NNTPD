@@ -105,7 +105,7 @@ public sealed class SessionStateLuaStaticAuditTests
         engine.WriteOwnership("src", SessionStateKeys.SourceField("192.0.2.10", "O1"), 30_000, 1, 7);
         Assert.Equal(
             SessionStateEngine.AcceptedExisting,
-            engine.TryAdmit("src", "sess", "192.0.2.10", "O1", 20, 4, 0, 30_000, 2, 2));
+            engine.TryAdmitStatus("src", "sess", "192.0.2.10", "O1", 20, 4, 0, 30_000, 2, 2));
         Assert.True(engine.TryGetOwnership("sess", "O1", out _, out var generation, out var count));
         Assert.Equal(2, generation);
         Assert.Equal(1, count);
@@ -120,7 +120,7 @@ public sealed class SessionStateLuaStaticAuditTests
         Assert.Contains("decrement(srcKey, srcField, sourceGen)", script, StringComparison.Ordinal);
         Assert.Contains("ip .. '\\31' .. owner", script, StringComparison.Ordinal);
         Assert.DoesNotContain("HDEL', sessKey, owner", script, StringComparison.Ordinal);
-        Assert.Contains("return 1", script, StringComparison.Ordinal);
+        Assert.Contains("return sessionTotal", script, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -170,8 +170,8 @@ public sealed class SessionStateLuaStaticAuditTests
         Assert.Equal(2, SessionStateEngine.AcceptedNew);
         Assert.Equal(1, SessionStateEngine.RejectedSessionLimit);
         Assert.Equal(0, SessionStateEngine.RejectedSourceLimit);
-        Assert.Contains("return 3", SessionStateScripts.TryAdmit, StringComparison.Ordinal);
-        Assert.Contains("return 2", SessionStateScripts.TryAdmit, StringComparison.Ordinal);
+        Assert.Contains("return 3 + (sessionTotal * 4)", SessionStateScripts.TryAdmit, StringComparison.Ordinal);
+        Assert.Contains("return 2 + (sessionTotal * 4)", SessionStateScripts.TryAdmit, StringComparison.Ordinal);
         Assert.Equal("1000|7|4", SessionStateKeys.Value(1000, 7, 4));
         Assert.True(SessionStateKeys.TrySplitValue("1000|7|4", out var expiry, out var generation, out var count));
         Assert.Equal(1000, expiry);
@@ -188,7 +188,7 @@ public sealed class SessionStateLuaStaticAuditTests
         engine.WriteOwnership("sess", "O2", expiryUnixMs: 80_000, generation: 9, count: 1);
         Assert.Equal(
             SessionStateEngine.RejectedSessionLimit,
-            engine.TryAdmit("src", "sess", "198.51.100.20", "O3", sessionLimit: 1, srcIpLimit: 4, nowUnixMs: 2_000, 30_000, 1, 1));
+            engine.TryAdmitStatus("src", "sess", "198.51.100.20", "O3", sessionLimit: 1, srcIpLimit: 4, nowUnixMs: 2_000, 30_000, 1, 1));
         Assert.False(engine.TryGetOwnership("sess", "O1", out _, out _, out _));
         Assert.False(engine.HasSourceOwner("src", "192.0.2.10", "O1", 2_000));
         Assert.Equal(1, engine.OwnerSessionCount("sess", "O2", 2_000));
@@ -202,10 +202,10 @@ public sealed class SessionStateLuaStaticAuditTests
         var engine = new SessionStateEngine();
         Assert.Equal(
             SessionStateEngine.AcceptedNew,
-            engine.TryAdmit("src", "sess", "192.0.2.10", "O1", 10, 1, 0, 30_000, 1, 1));
+            engine.TryAdmitStatus("src", "sess", "192.0.2.10", "O1", 10, 1, 0, 30_000, 1, 1));
         Assert.Equal(
             SessionStateEngine.RejectedSourceLimit,
-            engine.TryAdmit("src", "sess", "198.51.100.20", "O2", 10, 1, 0, 30_000, 2, 2));
+            engine.TryAdmitStatus("src", "sess", "198.51.100.20", "O2", 10, 1, 0, 30_000, 2, 2));
         Assert.Equal(1, engine.OwnerSessionCount("sess", "O1", 0));
         Assert.Equal(0, engine.OwnerSessionCount("sess", "O2", 0));
         Assert.True(engine.HasSourceOwner("src", "192.0.2.10", "O1", 0));
@@ -249,7 +249,7 @@ public sealed class SessionStateLuaStaticAuditTests
             (await store.TryAdmitAsync("alice", "192.0.2.10", "O1", 1, 1, 1, 1, now, ttl)).Status);
         Assert.Equal(
             SessionStateRenewStatus.Unavailable,
-            await store.RenewAsync("alice", "O1", 1, [("192.0.2.10", 1)], now, ttl));
+            (await store.RenewAsync("alice", "O1", 1, [("192.0.2.10", 1)], now, ttl)).Status);
 
         var redisDown = new RecordingRedis { EvaluateException = new RedisUnavailableException("timeout") };
         store = new RedisSessionStateStore(redisDown);

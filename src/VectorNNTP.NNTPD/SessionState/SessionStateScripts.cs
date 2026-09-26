@@ -12,9 +12,10 @@ internal static class SessionStateScripts
     /// </summary>
     /// <remarks>
     /// KEYS[1] source hash, KEYS[2] session hash.
-    /// ARGV: ip, owner, sessionLimit, srcIpLimit, nowMs, leaseMs, sessionGen, sourceGen.
-    /// Returns 3 existing source, 2 new source, 1 session-limit reject, 0 source-limit reject.
-    /// Session limit is checked first.
+    /// ARGV: ip, owner, sessionLimit, srcIpLimit, nowMs, leaseMs, sessionGen, sourceGen,
+    /// trackSessions (1 to increment the session hash when sessionLimit is 0).
+    /// Accept returns <c>status + (sessionTotal * 4)</c> (3 existing source, 2 new source).
+    /// Reject remains 1 session-limit, 0 source-limit. Session limit is checked first.
     /// </remarks>
     public const string TryAdmit =
         """
@@ -108,16 +109,23 @@ internal static class SessionStateScripts
           end
         end
 
-        if sessionLimit ~= nil and sessionLimit > 0 then
+        local trackSessions = tonumber(ARGV[9]) == 1
+        if (sessionLimit ~= nil and sessionLimit > 0) or trackSessions then
           increment(sessKey, owner, sessionGen)
         end
         if srcLimit ~= nil and srcLimit > 0 then
           increment(srcKey, srcField, sourceGen)
         end
-        if active[ip] then
-          return 3
+        local sessionTotal = 0
+        local counted = redis.call('HGETALL', sessKey)
+        for i = 1, #counted, 2 do
+          local _, _, count = parse_value(counted[i + 1])
+          sessionTotal = sessionTotal + (count or 0)
         end
-        return 2
+        if active[ip] then
+          return 3 + (sessionTotal * 4)
+        end
+        return 2 + (sessionTotal * 4)
         """;
 
     /// <summary>
@@ -125,7 +133,7 @@ internal static class SessionStateScripts
     /// </summary>
     /// <remarks>
     /// KEYS[1] source hash, KEYS[2] session hash.
-    /// ARGV: ip, owner, sessionGen, sourceGen. Always returns 1.
+    /// ARGV: ip, owner, sessionGen, sourceGen. Returns the remaining cluster session total.
     /// </remarks>
     public const string Release =
         """
@@ -171,7 +179,13 @@ internal static class SessionStateScripts
 
         decrement(sessKey, owner, sessionGen)
         decrement(srcKey, srcField, sourceGen)
-        return 1
+        local sessionTotal = 0
+        local counted = redis.call('HGETALL', sessKey)
+        for i = 1, #counted, 2 do
+          local _, _, count = parse_value(counted[i + 1])
+          sessionTotal = sessionTotal + (count or 0)
+        end
+        return sessionTotal
         """;
 
     /// <summary>
@@ -180,7 +194,8 @@ internal static class SessionStateScripts
     /// <remarks>
     /// KEYS[1] source hash, KEYS[2] session hash.
     /// ARGV: owner, sessionGen, nowMs, leaseMs, ipCount, ip1, gen1, ...
-    /// Returns 1 when every requested field was renewed, 0 when any was lost.
+    /// Returns 0 when any requested field was lost. On success returns the
+    /// unexpired cluster session total (minimum 1 so a source-only renew is not Lost).
     /// A sessionGen of 0 skips the session field.
     /// </remarks>
     public const string Renew =
@@ -257,7 +272,18 @@ internal static class SessionStateScripts
           end
           i = i + 1
         end
-        return 1
+        local sessionTotal = 0
+        local counted = redis.call('HGETALL', sessKey)
+        for i = 1, #counted, 2 do
+          local exp, _, count = parse_value(counted[i + 1])
+          if exp ~= nil and exp > now then
+            sessionTotal = sessionTotal + (count or 0)
+          end
+        end
+        if sessionTotal < 1 then
+          sessionTotal = 1
+        end
+        return sessionTotal
         """;
 
     /// <summary>

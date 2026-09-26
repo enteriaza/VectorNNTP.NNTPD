@@ -5,7 +5,7 @@ namespace VectorNNTP.NNTPD.SessionState;
 
 /// <summary>
 /// Sole periodic scheduler for SessionState: lease renewal, source-address
-/// ownership, and B-account byte-quota reconciliation.
+/// ownership, B-account byte-quota reconciliation, and R-account rate observation.
 /// </summary>
 /// <remarks>
 /// This service is a scheduler. It does not accept connections, authenticate clients,

@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 namespace VectorNNTP.NNTPD.Networking.Transport;
 
@@ -26,6 +27,12 @@ namespace VectorNNTP.NNTPD.Networking.Transport;
 /// </remarks>
 public interface INntpConnection : IAsyncDisposable
 {
+    /// <summary>
+    /// Wire-level outbound rate cap, or <see langword="null"/> when the connection
+    /// does not expose a limiter (test doubles).
+    /// </summary>
+    IOutboundRateCap? OutboundRate => null;
+
     /// <summary>Gets octets received from the peer (after TLS decryption / DEFLATE inflate when applicable).</summary>
     PipeReader Input { get; }
 

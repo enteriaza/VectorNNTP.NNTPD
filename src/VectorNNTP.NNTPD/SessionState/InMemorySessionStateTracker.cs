@@ -1,4 +1,5 @@
 using System.Net;
+using VectorNNTP.NNTPD.SessionState.RateLimiting;
 
 namespace VectorNNTP.NNTPD.SessionState;
 
@@ -10,6 +11,13 @@ public sealed class InMemorySessionStateTracker : ISessionStateTracker
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, AccountAdmission> _accounts = new(StringComparer.Ordinal);
+    private readonly IAccountRateAllocator _rates;
+
+    /// <summary>Initializes a process-local tracker.</summary>
+    public InMemorySessionStateTracker(IAccountRateAllocator? rates = null)
+    {
+        _rates = rates ?? NullAccountRateAllocator.Instance;
+    }
 
     /// <summary>Gets how many admitted sessions this tracker actually released.</summary>
     internal int ReleaseCalls { get; private set; }
@@ -26,6 +34,26 @@ public sealed class InMemorySessionStateTracker : ISessionStateTracker
         cancellationToken.ThrowIfCancellationRequested();
         return new ValueTask<SessionAdmissionResult>(
             TryAdmit(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit));
+    }
+
+    /// <inheritdoc />
+    public ValueTask<SessionAdmissionResult> TryAdmitAsync(
+        string accountName,
+        string sessionId,
+        IPAddress sourceAddress,
+        int sessionLimit,
+        int srcIpLimit,
+        int rateLimitMbps,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = TryAdmit(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit);
+        if (result == SessionAdmissionResult.Success && rateLimitMbps > 0)
+        {
+            _rates.ObserveClusterSessionCount(accountName, GetLocalSessionCount(accountName));
+        }
+
+        return new ValueTask<SessionAdmissionResult>(result);
     }
 
     /// <inheritdoc />
@@ -118,7 +146,20 @@ public sealed class InMemorySessionStateTracker : ISessionStateTracker
             if (account.Sessions.Count == 0)
             {
                 _accounts.Remove(accountName);
+                _rates.ObserveClusterSessionCount(accountName, 0);
             }
+            else
+            {
+                _rates.ObserveClusterSessionCount(accountName, account.Sessions.Count);
+            }
+        }
+    }
+
+    private int GetLocalSessionCount(string accountName)
+    {
+        lock (_gate)
+        {
+            return _accounts.TryGetValue(accountName, out var account) ? account.Sessions.Count : 0;
         }
     }
 

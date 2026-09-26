@@ -10,7 +10,8 @@ namespace VectorNNTP.NNTPD.SessionState;
 /// The background <see cref="SessionStateService"/> is the sole scheduler; this
 /// abstraction owns the actual ownership snapshot and Redis operations. When a
 /// MySQL-committed byte batch exists for an owned account, renewal and APPLY
-/// share one Redis EVAL.
+/// share one Redis EVAL. A successful renew also returns the cluster session
+/// total so local R-account rate caps can be updated without a second scheduler.
 /// </remarks>
 public interface ISessionStateLeaseManager
 {
