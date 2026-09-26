@@ -12,6 +12,8 @@ public sealed class SessionStateRateLimitingRedisTests : IClassFixture<SessionSt
     private const string IpB = "198.51.100.20";
     private const long Now = 10_000;
     private const long Lease = 30_000;
+    /// <summary>Database <c>account_rate_limit</c> for 10 Mbps: 10,000,000 bits/sec.</summary>
+    private const int TenMbpsBps = 10_000_000;
     private static readonly IPAddress V4A = IPAddress.Parse(IpA);
     private static readonly IPAddress V4B = IPAddress.Parse(IpB);
     private readonly SessionStateRedisIntegrationFixture _redis;
@@ -111,8 +113,8 @@ public sealed class SessionStateRateLimitingRedisTests : IClassFixture<SessionSt
             aCaps[i] = new FakeCap();
             Assert.Equal(
                 SessionAdmissionResult.Success,
-                await nodeA.TryAdmitAsync(account, "a" + i, V4A, 10, 0, 10));
-            ratesA.Register(account, "a" + i, aCaps[i], 10);
+                await nodeA.TryAdmitAsync(account, "a" + i, V4A, 10, 0, TenMbpsBps));
+            ratesA.Register(account, "a" + i, aCaps[i], TenMbpsBps);
         }
 
         var bCaps = new FakeCap[2];
@@ -121,40 +123,40 @@ public sealed class SessionStateRateLimitingRedisTests : IClassFixture<SessionSt
             bCaps[i] = new FakeCap();
             Assert.Equal(
                 SessionAdmissionResult.Success,
-                await nodeB.TryAdmitAsync(account, "b" + i, V4B, 10, 0, 10));
-            ratesB.Register(account, "b" + i, bCaps[i], 10);
+                await nodeB.TryAdmitAsync(account, "b" + i, V4B, 10, 0, TenMbpsBps));
+            ratesB.Register(account, "b" + i, bCaps[i], TenMbpsBps);
         }
 
-        var three = AccountRateFormula.PerSessionBytesPerSecond(10, 3);
-        var five = AccountRateFormula.PerSessionBytesPerSecond(10, 5);
+        var three = AccountRateFormula.PerSessionBytesPerSecond(TenMbpsBps, 3);
+        var five = AccountRateFormula.PerSessionBytesPerSecond(TenMbpsBps, 5);
         Assert.All(aCaps, cap => Assert.Equal(three, cap.MaxSendBytesPerSecond));
         Assert.True(
             aCaps.Sum(static cap => AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond))
             + bCaps.Sum(static cap => AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond))
-            <= AccountRateFormula.AccountBytesPerSecond(10));
+            <= AccountRateFormula.AccountBytesPerSecond(TenMbpsBps));
         Assert.All(bCaps, cap => Assert.True(cap.MaxSendBytesPerSecond < five));
 
         await nodeA.RenewLeasesAsync();
         Assert.All(aCaps, cap => Assert.Equal(five, cap.MaxSendBytesPerSecond));
         Assert.True(
             aCaps.Concat(bCaps).Sum(static cap => AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond))
-            <= AccountRateFormula.AccountBytesPerSecond(10));
+            <= AccountRateFormula.AccountBytesPerSecond(TenMbpsBps));
 
         ratesB.Unregister(account, "b1");
         await nodeB.ReleaseAsync(account, "b1");
-        var four = AccountRateFormula.PerSessionBytesPerSecond(10, 4);
+        var four = AccountRateFormula.PerSessionBytesPerSecond(TenMbpsBps, 4);
         Assert.All(aCaps, cap => Assert.Equal(five, cap.MaxSendBytesPerSecond));
         Assert.True(
             aCaps.Sum(static cap => AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond))
             + AccountRateFormula.AllocatedBytesPerSecond(bCaps[0].MaxSendBytesPerSecond)
-            <= AccountRateFormula.AccountBytesPerSecond(10));
+            <= AccountRateFormula.AccountBytesPerSecond(TenMbpsBps));
 
         await nodeA.RenewLeasesAsync();
         Assert.All(aCaps, cap => Assert.True(cap.MaxSendBytesPerSecond <= five));
         Assert.True(
             aCaps.Append(bCaps[0]).Sum(static cap => AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond))
-            <= AccountRateFormula.AccountBytesPerSecond(10));
-        Assert.True(four * 4 <= AccountRateFormula.AccountBytesPerSecond(10));
+            <= AccountRateFormula.AccountBytesPerSecond(TenMbpsBps));
+        Assert.True(four * 4 <= AccountRateFormula.AccountBytesPerSecond(TenMbpsBps));
         await _redis.DeleteKeysAsync(account);
     }
 

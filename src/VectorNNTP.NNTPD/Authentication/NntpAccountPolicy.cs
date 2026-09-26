@@ -6,7 +6,7 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// <remarks>
 /// Session and source-IP limits are enforced by
 /// <see cref="VectorNNTP.NNTPD.SessionState.ISessionStateTracker"/>.
-/// <see cref="RateLimitMbps"/> is enforced by
+/// <see cref="RateLimitBps"/> is enforced by
 /// <see cref="VectorNNTP.NNTPD.SessionState.RateLimiting.IAccountRateAllocator"/>
 /// after SessionState admission. <see cref="ByteLimit"/> is the AUTHINFO-time
 /// remaining-byte snapshot for B accounts and is not enforced here.
@@ -17,7 +17,7 @@ public sealed class NntpAccountPolicy
     public NntpAccountPolicy(
         string username,
         NntpAccountType accountType,
-        int rateLimitMbps,
+        int rateLimitBps,
         long byteLimit,
         int sessionLimit,
         int srcIpLimit,
@@ -26,7 +26,7 @@ public sealed class NntpAccountPolicy
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         Username = username;
         AccountType = accountType;
-        RateLimitMbps = rateLimitMbps;
+        RateLimitBps = rateLimitBps;
         ByteLimit = byteLimit;
         SessionLimit = sessionLimit;
         SrcIpLimit = srcIpLimit;
@@ -39,8 +39,12 @@ public sealed class NntpAccountPolicy
     /// <summary>Gets the billing/enforcement model.</summary>
     public NntpAccountType AccountType { get; }
 
-    /// <summary>Gets <c>account_rate_limit</c> in decimal SI megabits per second. <c>0</c> is unlimited.</summary>
-    public int RateLimitMbps { get; }
+    /// <summary>
+    /// Gets <c>account_rate_limit</c> in bits per second.
+    /// Examples: <c>240</c> = 240 bps, <c>1_000_000</c> = 1 Mbps, <c>10_000_000</c> = 10 Mbps.
+    /// <c>0</c> is unlimited. Negative values are treated as unlimited.
+    /// </summary>
+    public int RateLimitBps { get; }
 
     /// <summary>
     /// Gets the AUTHINFO-time snapshot of <c>account_byte_limit</c>.
@@ -71,7 +75,7 @@ public sealed class NntpAccountPolicy
     /// <c>0</c> remains unlimited and does not participate in rate allocation.
     /// </summary>
     public bool RequiresRateTracking =>
-        AccountType == NntpAccountType.RateLimited && RateLimitMbps > 0;
+        AccountType == NntpAccountType.RateLimited && RateLimitBps > 0;
 
     /// <summary>Maps a database <c>account_type</c> octet. Only <c>R</c>/<c>r</c> are rate-limited.</summary>
     public static NntpAccountType MapAccountType(char accountType) =>
@@ -84,7 +88,7 @@ public sealed class NntpAccountPolicy
         return new(
             record.AccountName,
             MapAccountType(record.AccountType),
-            record.RateLimit,
+            record.RateLimitBps,
             record.ByteLimit,
             record.SessionLimit,
             record.SrcIpLimit,

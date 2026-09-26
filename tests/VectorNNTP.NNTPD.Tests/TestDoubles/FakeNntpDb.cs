@@ -314,7 +314,7 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
             record.ScramStoredKey,
             record.ScramServerKey,
             record.AccountType,
-            record.RateLimit,
+            record.RateLimitBps,
             byteLimit,
             record.SessionLimit,
             record.SrcIpLimit,

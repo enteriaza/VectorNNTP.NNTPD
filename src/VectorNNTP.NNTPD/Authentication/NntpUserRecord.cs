@@ -21,7 +21,7 @@ public sealed class NntpUserRecord
         ReadOnlyMemory<byte> scramStoredKey,
         ReadOnlyMemory<byte> scramServerKey,
         char accountType,
-        int rateLimit,
+        int rateLimitBps,
         long byteLimit,
         int sessionLimit,
         int srcIpLimit,
@@ -39,7 +39,7 @@ public sealed class NntpUserRecord
         ScramStoredKey = scramStoredKey;
         ScramServerKey = scramServerKey;
         AccountType = accountType;
-        RateLimit = rateLimit;
+        RateLimitBps = rateLimitBps;
         ByteLimit = byteLimit;
         SessionLimit = sessionLimit;
         SrcIpLimit = srcIpLimit;
@@ -74,8 +74,12 @@ public sealed class NntpUserRecord
     /// <summary>Gets <c>account_type</c>. NULL at map time becomes <c>R</c>.</summary>
     public char AccountType { get; }
 
-    /// <summary>Gets <c>account_rate_limit</c>.</summary>
-    public int RateLimit { get; }
+    /// <summary>
+    /// Gets <c>account_rate_limit</c> in bits per second.
+    /// Examples: <c>240</c> = 240 bps, <c>1_000_000</c> = 1 Mbps, <c>10_000_000</c> = 10 Mbps.
+    /// <c>0</c> is unlimited. This is not megabits.
+    /// </summary>
+    public int RateLimitBps { get; }
 
     /// <summary>
     /// Gets <c>account_byte_limit</c>. For B accounts this is remaining bytes

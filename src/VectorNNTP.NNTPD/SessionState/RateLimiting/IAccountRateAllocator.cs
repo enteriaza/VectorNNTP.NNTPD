@@ -7,10 +7,11 @@ namespace VectorNNTP.NNTPD.SessionState.RateLimiting;
 public interface IAccountRateAllocator
 {
     /// <summary>
-    /// Registers a connected R-account session. Applies the last observed cluster
-    /// count, or one session when none has been observed yet.
+    /// Registers a connected R-account session. <paramref name="rateBps"/> is
+    /// <c>account_rate_limit</c> in bits per second, not Mbps. Applies the last
+    /// observed cluster count, or one session when none has been observed yet.
     /// </summary>
-    void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateMbps);
+    void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateBps);
 
     /// <summary>Drops a session. Remaining local sessions keep the last observed count.</summary>
     void Unregister(string accountName, string sessionId);
@@ -39,7 +40,7 @@ public sealed class NullAccountRateAllocator : IAccountRateAllocator
     }
 
     /// <inheritdoc />
-    public void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateMbps)
+    public void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateBps)
     {
     }
 

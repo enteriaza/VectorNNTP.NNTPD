@@ -11,6 +11,8 @@ public sealed class AccountRateAllocatorInvariantTests
     private static readonly IPAddress V4A = IPAddress.Parse("192.0.2.10");
     private static readonly IPAddress V4B = IPAddress.Parse("198.51.100.20");
     private static readonly IPAddress V4C = IPAddress.Parse("203.0.113.30");
+    private const int OneMbpsBps = 1_000_000;
+    private const int TenMbpsBps = 10_000_000;
 
     [Fact]
     public async Task ThreeNode_LeftoverWouldOvershoot_JoinersAreBlocked()
@@ -21,16 +23,16 @@ public sealed class AccountRateAllocatorInvariantTests
         var b = CreateNode(membership, "nntpd02", clock);
         var c = CreateNode(membership, "nntpd03", clock);
 
-        var aCaps = await AdmitMany(a, "alice", "a", V4A, 6, 10);
-        AssertAggregate(10, aCaps);
+        var aCaps = await AdmitMany(a, "alice", "a", V4A, 6, TenMbpsBps);
+        AssertAggregate(TenMbpsBps, aCaps);
 
-        var b1 = await AdmitOne(b, "alice", "b1", V4B, 10);
+        var b1 = await AdmitOne(b, "alice", "b1", V4B, TenMbpsBps);
         Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, b1.MaxSendBytesPerSecond);
-        AssertAggregate(10, aCaps, [b1]);
+        AssertAggregate(TenMbpsBps, aCaps, [b1]);
 
-        var c1 = await AdmitOne(c, "alice", "c1", V4C, 10);
+        var c1 = await AdmitOne(c, "alice", "c1", V4C, TenMbpsBps);
         Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, c1.MaxSendBytesPerSecond);
-        AssertAggregate(10, aCaps, [b1], [c1]);
+        AssertAggregate(TenMbpsBps, aCaps, [b1], [c1]);
     }
 
     [Fact]
@@ -42,42 +44,42 @@ public sealed class AccountRateAllocatorInvariantTests
         var b = CreateNode(membership, "nntpd02", clock);
         var c = CreateNode(membership, "nntpd03", clock);
 
-        var aCaps = await AdmitMany(a, "alice", "a", V4A, 5, 10);
-        AssertAggregate(10, aCaps);
+        var aCaps = await AdmitMany(a, "alice", "a", V4A, 5, TenMbpsBps);
+        AssertAggregate(TenMbpsBps, aCaps);
 
         var bCaps = new List<FakeCap>();
         for (var i = 0; i < 3; i++)
         {
-            bCaps.Add(await AdmitOne(b, "alice", "b" + i, V4B, 10));
-            AssertAggregate(10, aCaps, bCaps);
+            bCaps.Add(await AdmitOne(b, "alice", "b" + i, V4B, TenMbpsBps));
+            AssertAggregate(TenMbpsBps, aCaps, bCaps);
         }
 
-        var c1 = await AdmitOne(c, "alice", "c1", V4C, 10);
-        AssertAggregate(10, aCaps, bCaps, [c1]);
+        var c1 = await AdmitOne(c, "alice", "c1", V4C, TenMbpsBps);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1]);
 
-        var c2 = await AdmitOne(c, "alice", "c2", V4C, 10);
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
+        var c2 = await AdmitOne(c, "alice", "c2", V4C, TenMbpsBps);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
 
         b.Rates.Unregister("alice", "b2");
         await b.Tracker.ReleaseAsync("alice", "b2");
         bCaps.RemoveAt(2);
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
 
         await a.Tracker.RenewLeasesAsync();
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
-        AssertCaps(aCaps, AccountRateFormula.EqualShareCap(10, 9));
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
+        AssertCaps(aCaps, AccountRateFormula.EqualShareCap(TenMbpsBps, 9));
 
         await c.Tracker.RenewLeasesAsync();
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
 
         await b.Tracker.RenewLeasesAsync();
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
 
         clock.Advance(SessionStateDefaults.LeaseTtl);
         a.Rates.ObserveClusterSessionCount("alice", 9);
         b.Rates.ObserveClusterSessionCount("alice", 9);
         c.Rates.ObserveClusterSessionCount("alice", 9);
-        AssertAggregate(10, aCaps, bCaps, [c1, c2]);
+        AssertAggregate(TenMbpsBps, aCaps, bCaps, [c1, c2]);
         Assert.True(c1.MaxSendBytesPerSecond <= 0);
         Assert.True(c2.MaxSendBytesPerSecond <= 0);
     }
@@ -89,20 +91,20 @@ public sealed class AccountRateAllocatorInvariantTests
         var rates = new AccountRateAllocator(clock);
         var cap = new FakeCap();
         rates.ObserveClusterSessionCount("alice", 1);
-        rates.Register("alice", "a1", cap, 1);
+        rates.Register("alice", "a1", cap, OneMbpsBps);
         Assert.Equal(125_000, cap.MaxSendBytesPerSecond);
 
         rates.ObserveClusterSessionCount("alice", 400);
-        Assert.True(cap.MaxSendBytesPerSecond <= AccountRateFormula.EqualShareCap(1, 400));
+        Assert.True(cap.MaxSendBytesPerSecond <= AccountRateFormula.EqualShareCap(OneMbpsBps, 400));
         Assert.True(AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond) <= 125_000);
     }
 
     [Theory]
-    [InlineData(10, 64)]
-    [InlineData(1, 32)]
-    [InlineData(3, 16)]
-    [InlineData(1, 200)]
-    public async Task StateMachine_ArbitraryJoinLeaveRenew_NeverExceedsAggregate(int rateMbps, int sessionLimit)
+    [InlineData(10_000_000, 64)]
+    [InlineData(1_000_000, 32)]
+    [InlineData(3_000_000, 16)]
+    [InlineData(1_000_000, 200)]
+    public async Task StateMachine_ArbitraryJoinLeaveRenew_NeverExceedsAggregate(int rateBps, int sessionLimit)
     {
         var clock = new ManualClock();
         var membership = new InMemorySessionStateStore();
@@ -113,7 +115,7 @@ public sealed class AccountRateAllocatorInvariantTests
             CreateNode(membership, "nntpd03", clock),
         };
         var ips = new[] { V4A, V4B, V4C };
-        var rng = new Random(rateMbps * 1000 + sessionLimit);
+        var rng = new Random(rateBps + sessionLimit);
         var nextId = 0;
 
         for (var step = 0; step < 80; step++)
@@ -129,11 +131,11 @@ public sealed class AccountRateAllocatorInvariantTests
                     ips[Array.IndexOf(nodes, node)],
                     sessionLimit,
                     0,
-                    rateMbps);
+                    rateBps);
                 if (result == SessionAdmissionResult.Success)
                 {
                     var cap = new FakeCap();
-                    node.Rates.Register("alice", id, cap, rateMbps);
+                    node.Rates.Register("alice", id, cap, rateBps);
                     node.Sessions[id] = cap;
                 }
             }
@@ -162,7 +164,7 @@ public sealed class AccountRateAllocatorInvariantTests
                 }
             }
 
-            AssertAggregate(rateMbps, nodes.Select(static n => n.Sessions.Values));
+            AssertAggregate(rateBps, nodes.Select(static n => n.Sessions.Values));
         }
     }
 
@@ -173,7 +175,7 @@ public sealed class AccountRateAllocatorInvariantTests
         var rates = new AccountRateAllocator(clock);
         rates.ObserveClusterSessionCount("alice", 200_000);
         var cap = new FakeCap();
-        rates.Register("alice", "s1", cap, 1);
+        rates.Register("alice", "s1", cap, OneMbpsBps);
         Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, cap.MaxSendBytesPerSecond);
 
         clock.Advance(SessionStateDefaults.LeaseTtl);
@@ -182,38 +184,38 @@ public sealed class AccountRateAllocatorInvariantTests
         Assert.Equal(0, AccountRateFormula.AllocatedBytesPerSecond(cap.MaxSendBytesPerSecond));
     }
 
-    private static async Task<FakeCap[]> AdmitMany(Node node, string account, string prefix, IPAddress ip, int count, int rateMbps)
+    private static async Task<FakeCap[]> AdmitMany(Node node, string account, string prefix, IPAddress ip, int count, int rateBps)
     {
         var caps = new FakeCap[count];
         for (var i = 0; i < count; i++)
         {
-            caps[i] = await AdmitOne(node, account, prefix + i, ip, rateMbps);
+            caps[i] = await AdmitOne(node, account, prefix + i, ip, rateBps);
         }
 
         return caps;
     }
 
-    private static async Task<FakeCap> AdmitOne(Node node, string account, string id, IPAddress ip, int rateMbps)
+    private static async Task<FakeCap> AdmitOne(Node node, string account, string id, IPAddress ip, int rateBps)
     {
         Assert.Equal(
             SessionAdmissionResult.Success,
-            await node.Tracker.TryAdmitAsync(account, id, ip, 64, 0, rateMbps));
+            await node.Tracker.TryAdmitAsync(account, id, ip, 64, 0, rateBps));
         var cap = new FakeCap();
-        node.Rates.Register(account, id, cap, rateMbps);
+        node.Rates.Register(account, id, cap, rateBps);
         node.Sessions[id] = cap;
         return cap;
     }
 
-    private static void AssertAggregate(int rateMbps, params IEnumerable<FakeCap>[] groups) =>
-        AssertAggregate(rateMbps, groups.AsEnumerable());
+    private static void AssertAggregate(int rateBps, params IEnumerable<FakeCap>[] groups) =>
+        AssertAggregate(rateBps, groups.AsEnumerable());
 
-    private static void AssertAggregate(int rateMbps, IEnumerable<IEnumerable<FakeCap>> groups)
+    private static void AssertAggregate(int rateBps, IEnumerable<IEnumerable<FakeCap>> groups)
     {
         var caps = groups.SelectMany(static group => group)
             .Select(static cap => cap.MaxSendBytesPerSecond)
             .ToArray();
         var allocated = caps.Sum(AccountRateFormula.AllocatedBytesPerSecond);
-        var limit = AccountRateFormula.AccountBytesPerSecond(rateMbps);
+        var limit = AccountRateFormula.AccountBytesPerSecond(rateBps);
         Assert.True(
             allocated <= limit,
             $"allocated {allocated} > {limit}; caps=[{string.Join(",", caps)}]");

@@ -32,12 +32,12 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
     }
 
     /// <inheritdoc />
-    public void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateMbps)
+    public void Register(string accountName, string sessionId, IOutboundRateCap cap, int rateBps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(cap);
-        if (rateMbps <= 0)
+        if (rateBps <= 0)
         {
             cap.UpdateMaxSendBytesPerSecond(0);
             return;
@@ -46,7 +46,7 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
         var account = _accounts.GetOrAdd(accountName, static _ => new AccountRates());
         lock (account.Gate)
         {
-            account.RateMbps = rateMbps;
+            account.RateBps = rateBps;
             account.Sessions[sessionId] = cap;
             if (_clusterCounts.TryGetValue(accountName, out var observed) && observed > 0)
             {
@@ -130,7 +130,7 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
 
     private void Apply(AccountRates account)
     {
-        var rate = account.RateMbps;
+        var rate = account.RateBps;
         if (rate <= 0)
         {
             return;
@@ -167,7 +167,7 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
         if (account.LastCount <= 0)
         {
             var remoteShare = AccountRateFormula.PerSessionBytesPerSecond(rate, remotes);
-            remoteHold = remoteShare * remotes;
+            remoteHold = checked(remoteShare * remotes);
         }
         else
         {
@@ -192,7 +192,7 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
                 oldShare = AccountRateFormula.PerSessionBytesPerSecond(rate, account.LastCount);
             }
 
-            remoteHold = oldShare * oldRemotes;
+            remoteHold = checked(oldShare * oldRemotes);
         }
 
         var localBudget = accountBytes - remoteHold;
@@ -228,7 +228,7 @@ internal sealed class AccountRateAllocator : IAccountRateAllocator
     private sealed class AccountRates
     {
         public object Gate { get; } = new();
-        public int RateMbps;
+        public int RateBps;
         public int ClusterCount;
         public int LastCount;
         public int LastLocal;

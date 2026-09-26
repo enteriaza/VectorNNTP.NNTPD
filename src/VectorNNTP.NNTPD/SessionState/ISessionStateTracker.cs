@@ -28,8 +28,8 @@ public interface ISessionStateTracker
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Admits a session and, when <paramref name="rateLimitMbps"/> is greater than
-    /// zero, tracks the cluster session count for R-account rate allocation.
+    /// Admits a session and, when <paramref name="rateLimitBps"/> (bits per second)
+    /// is greater than zero, tracks the cluster session count for R-account rate allocation.
     /// </summary>
     ValueTask<SessionAdmissionResult> TryAdmitAsync(
         string accountName,
@@ -37,7 +37,7 @@ public interface ISessionStateTracker
         IPAddress sourceAddress,
         int sessionLimit,
         int srcIpLimit,
-        int rateLimitMbps,
+        int rateLimitBps,
         CancellationToken cancellationToken = default) =>
         TryAdmitAsync(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit, cancellationToken);
 

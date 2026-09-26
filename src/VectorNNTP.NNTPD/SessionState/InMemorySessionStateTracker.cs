@@ -43,12 +43,12 @@ public sealed class InMemorySessionStateTracker : ISessionStateTracker
         IPAddress sourceAddress,
         int sessionLimit,
         int srcIpLimit,
-        int rateLimitMbps,
+        int rateLimitBps,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var result = TryAdmit(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit);
-        if (result == SessionAdmissionResult.Success && rateLimitMbps > 0)
+        if (result == SessionAdmissionResult.Success && rateLimitBps > 0)
         {
             _rates.ObserveClusterSessionCount(accountName, GetLocalSessionCount(accountName));
         }

@@ -526,7 +526,7 @@ public sealed class NntpSession
             ClientAddress,
             policy.SessionLimit,
             policy.SrcIpLimit,
-            policy.RequiresRateTracking ? policy.RateLimitMbps : 0,
+            policy.RequiresRateTracking ? policy.RateLimitBps : 0,
             cancellationToken).ConfigureAwait(false);
         switch (outcome)
         {
@@ -534,7 +534,7 @@ public sealed class NntpSession
                 _admittedAccountName = policy.Username;
                 if (policy.RequiresRateTracking && Connection.OutboundRate is { } cap)
                 {
-                    AccountRates.Register(policy.Username, SessionId, cap, policy.RateLimitMbps);
+                    AccountRates.Register(policy.Username, SessionId, cap, policy.RateLimitBps);
                 }
 
                 return NntpAuthenticationResult.Success(policy.Username, Authorization, policy);

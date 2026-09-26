@@ -110,7 +110,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         int sessionLimit,
         int srcIpLimit,
         CancellationToken cancellationToken = default) =>
-        TryAdmitAsync(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit, rateLimitMbps: 0, cancellationToken);
+        TryAdmitAsync(accountName, sessionId, sourceAddress, sessionLimit, srcIpLimit, rateLimitBps: 0, cancellationToken);
 
     /// <inheritdoc />
     public async ValueTask<SessionAdmissionResult> TryAdmitAsync(
@@ -119,7 +119,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         IPAddress sourceAddress,
         int sessionLimit,
         int srcIpLimit,
-        int rateLimitMbps,
+        int rateLimitBps,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
@@ -131,17 +131,17 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         await accountGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (TryAdmitLocalHotPath(accountName, sessionId, ip, sessionLimit, srcIpLimit, rateLimitMbps, out var local))
+            if (TryAdmitLocalHotPath(accountName, sessionId, ip, sessionLimit, srcIpLimit, rateLimitBps, out var local))
             {
                 return local;
             }
 
-            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitMbps <= 0)
+            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitBps <= 0)
             {
                 return SessionAdmissionResult.Success;
             }
 
-            var trackSessions = sessionLimit > 0 || rateLimitMbps > 0;
+            var trackSessions = sessionLimit > 0 || rateLimitBps > 0;
             long sessionGeneration;
             long sourceGeneration;
             lock (_gate)
@@ -241,7 +241,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
             }
 
             DistributedAdmits++;
-            if (rateLimitMbps > 0)
+            if (rateLimitBps > 0)
             {
                 _rates.ObserveClusterSessionCount(accountName, membership.SessionTotal);
             }
@@ -539,7 +539,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
         string ip,
         int sessionLimit,
         int srcIpLimit,
-        int rateLimitMbps,
+        int rateLimitBps,
         out SessionAdmissionResult result)
     {
         lock (_gate)
@@ -551,7 +551,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                 return true;
             }
 
-            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitMbps <= 0)
+            if (sessionLimit <= 0 && srcIpLimit <= 0 && rateLimitBps <= 0)
             {
                 account ??= GetOrCreateAccount(accountName);
                 account.Sessions[sessionId] = new SessionAdmission(ip);
@@ -568,7 +568,7 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
 
             // A finite session limit or R-account rate share consumes a cluster-wide
             // slot; the source-IP hot path must not skip Redis.
-            if (sessionLimit > 0 || rateLimitMbps > 0)
+            if (sessionLimit > 0 || rateLimitBps > 0)
             {
                 result = SessionAdmissionResult.Success;
                 return false;

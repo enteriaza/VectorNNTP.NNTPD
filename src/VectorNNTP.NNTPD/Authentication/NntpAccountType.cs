@@ -11,7 +11,7 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// </remarks>
 public enum NntpAccountType
 {
-    /// <summary><c>R</c>: aggregate outbound rate (SI Mbps) across concurrent authenticated sessions.</summary>
+    /// <summary><c>R</c>: aggregate outbound rate (<c>account_rate_limit</c> bits/sec) across concurrent authenticated sessions.</summary>
     RateLimited,
 
     /// <summary><c>B</c> (and any value other than <c>R</c>/<c>r</c>): cluster-wide byte budget.</summary>

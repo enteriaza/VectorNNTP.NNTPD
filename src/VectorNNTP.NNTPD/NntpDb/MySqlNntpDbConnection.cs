@@ -223,7 +223,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         return new NntpModeratorRow(id, pattern, address, account);
     }
 
-    /// <summary>Maps one <c>nntpusers</c> row. Flag columns are true only for <c>Y</c>.</summary>
+    /// <summary>Maps one <c>nntpusers</c> row. Flag columns are true only for <c>Y</c>. <c>account_rate_limit</c> is bits/sec.</summary>
     internal static NntpUserRecord MapUserRecord(MySqlDataReader reader, string accountName)
     {
         ArgumentNullException.ThrowIfNull(reader);
@@ -235,7 +235,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         var allowAuthPlain = IsYesFlag(reader, 5);
         var allowAuthScram256 = IsYesFlag(reader, 6);
         var accountType = ReadAccountType(reader, 7);
-        var rateLimit = reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8));
+        var rateLimitBps = reader.IsDBNull(8) ? 0 : Convert.ToInt32(reader.GetValue(8));
         var byteLimit = reader.IsDBNull(9) ? 0L : ConvertByteLimit(reader.GetValue(9));
         var sessionLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
         var srcIpLimit = reader.IsDBNull(11) ? 0 : Convert.ToInt32(reader.GetValue(11));
@@ -251,7 +251,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             scramStoredKey,
             scramServerKey,
             accountType,
-            rateLimit,
+            rateLimitBps,
             byteLimit,
             sessionLimit,
             srcIpLimit,
