@@ -39,7 +39,7 @@ public sealed class MySqlProviderAccountSource : IProviderAccountSource
             throw new InvalidOperationException("BackFiller:ServerId must fit in an unsigned byte for nntpbackfilleraccounts.");
         }
 
-        _connectionString = runtime.GrabberDb.ConnectionString;
+        _connectionString = runtime.NntpDb.ConnectionString;
         _serverId = (byte)runtime.ServerId;
     }
 
@@ -71,7 +71,7 @@ public sealed class MySqlProviderAccountSource : IProviderAccountSource
         }
         catch (MySqlException ex)
         {
-            throw new InvalidOperationException("Provider account query failed against GrabberDB.", ex);
+            throw new InvalidOperationException("Provider account query failed against NntpDB.", ex);
         }
     }
 

@@ -4,7 +4,7 @@ using VectorNNTP.BackFiller.Nntp;
 namespace VectorNNTP.BackFiller.Accounts;
 
 /// <summary>
-/// MySQL provider-account control plane. Polls GrabberDB, publishes immutable snapshots,
+/// MySQL provider-account control plane. Polls NntpDB, publishes immutable snapshots,
 /// and reconciles Phase 4 session pools. Does not own RabbitMQ, retention, or the Cache Listener.
 /// </summary>
 public sealed class ProviderAccountConfigurationService : IHostedService, IAsyncDisposable

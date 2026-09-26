@@ -8,7 +8,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <remarks>
 /// Produced once after successful validation. Services must not re-read
 /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> for these values.
-/// Never log a complete instance: it contains RabbitMQ, ACME, and GrabberDB secrets.
+/// Never log a complete instance: it contains RabbitMQ, ACME, and NntpDB secrets.
 /// </remarks>
 public sealed record BackFillerRuntimeOptions(
     int ServerId,
@@ -26,7 +26,7 @@ public sealed record BackFillerRuntimeOptions(
     BackFillerRabbitMqRuntimeOptions RabbitMq,
     IReadOnlyList<string> CertificateDomainNames,
     string CertificatePassword,
-    GrabberDbRuntimeOptions GrabberDb,
+    NntpDbRuntimeOptions NntpDb,
     TimeSpan AccountRefreshInterval);
 
 /// <summary>Validated shutdown policy captured in the runtime snapshot.</summary>
@@ -67,12 +67,12 @@ public sealed record BackFillerTransitServerRuntimeOptions(
     int Port,
     bool UseSsl);
 
-/// <summary>Validated GrabberDB projection without exposing the raw password in property names used for logs.</summary>
+/// <summary>Validated NntpDB projection without exposing the raw password in property names used for logs.</summary>
 /// <param name="ConnectionString">Full connection string. Secret.</param>
 /// <param name="Server">Server host.</param>
 /// <param name="Database">Database name.</param>
 /// <param name="UserId">User id.</param>
-public sealed record GrabberDbRuntimeOptions(
+public sealed record NntpDbRuntimeOptions(
     string ConnectionString,
     string Server,
     string Database,

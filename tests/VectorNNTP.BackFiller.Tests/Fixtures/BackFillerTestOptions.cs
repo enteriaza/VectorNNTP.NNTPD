@@ -56,7 +56,7 @@ internal static class BackFillerTestOptions
             ["AcmeCertificatePassword"] = SecretPfx,
             ["CloudFlareApiKey"] = SecretToken,
             ["BackFiller:Shutdown:GracePeriodSeconds"] = "45",
-            ["ConnectionStrings:GrabberDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
+            ["ConnectionStrings:NntpDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
         };
     }
 
@@ -76,11 +76,11 @@ internal static class BackFillerTestOptions
             .Build();
     }
 
-    internal static BackFillerConnectionStringsOptions CreateValidConnectionStrings()
+    internal static NntpDbOptions CreateValidNntpDb()
     {
-        return new BackFillerConnectionStringsOptions
+        return new NntpDbOptions
         {
-            GrabberDB = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
+            ConnectionString = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
         };
     }
 

@@ -2,7 +2,7 @@
 
 Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
-Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`) overlay from the configuration root. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, ACME directory, DNS-suffix, and ServerId values under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; it does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses root `VECTOR__*` secrets for the Cloudflare API key, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and `VECTOR__CONNECTIONSTRINGS__GRABBERDB`. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
+Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`) overlay from the configuration root. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, ACME directory, DNS-suffix, and ServerId values under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; it does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses root `VECTOR__*` secrets for the Cloudflare API key, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and the shared `ConnectionStrings__NntpDB` Generic Host mapping. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
 NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller application settings stay under section `BackFiller`. `ServerId` binds from `BackFiller:ServerId` only (required integer `1–99`, same bounds as NNTPD; no default; no ServerId environment-variable overlay). There is no `BackFiller:Name` and no `BACKFILLER__NAME`. The canonical BackFiller FQDN is `backfiller{ServerId:00}.{DnsSuffix}`; the `backfiller` prefix is fixed application identity, not configuration. `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default 60, range 5–3600) is how often BackFiller polls MySQL for provider/account rows. It is not the per-account NNTP DATE keepalive; that value is the MySQL `nntpbackfilleraccounts.keepalive` column. There is no `BackFiller:Accounts` section and no dedicated environment-variable mapping for the refresh interval.
 
@@ -59,7 +59,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `Moderation:Source` | object | _(none)_ | no | Provenance for the imported INN `samples/moderators` URL. Not a runtime authorization source. |
 | `Moderation:Moderators` | array | `[]` | no | Leftover static list. Must be empty. Runtime authorization is `nntpmoderators`. |
 | `Email:*` | object | disabled | no | Generic outbound email subsystem (SMTP + durable filesystem spool). See below. |
-| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Dedicated NNTPD MySQL connection string (secret; never log) |
+| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | Shared NNTPD/BackFiller MySQL connection string (secret; env `ConnectionStrings__NntpDB`; never log) |
 | `NntpDb:*` | object | see below | no | Application-level NntpDB options (startup verification only) |
 
 Setting names are PascalCase and match the `NntpdOptions` property names. Obsolete snake_case keys (`bind_address`, `server_id`, …) are not aliased.
@@ -454,7 +454,7 @@ Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via 
 
 The NNTPD MySQL database is a **hard application dependency**. `NntpDbService` participates in application startup/shutdown and performs a mandatory `SELECT 1` check. There is no in-memory, mock, or degraded production fallback.
 
-`ConnectionStrings:NntpDB` is the dedicated NNTPD connection string. Do not reuse or modify any other connection string (including GrabberDB, if present). Supply credentials through environment variables or secrets (`ConnectionStrings__NntpDB`). Never log the connection string, passwords, or tokens.
+`ConnectionStrings:NntpDB` is the shared NNTPD and BackFiller connection string. Both applications bind the Common `NntpDbOptions` type and therefore use the same database, schema, and tables. Supply credentials through environment variables or secrets (`ConnectionStrings__NntpDB`). Do not put `ConnectionStrings` in production appsettings. Never log the connection string, passwords, or tokens.
 
 MySQL Connector settings (server, user, SSL, and provider pooling) belong in that connection string. NNTPD does not set `Pooling=false` and does not idle-reap or cache `MySqlConnection` instances. Callers open a logical connection, use it, and dispose it (`await using`); dispose returns the physical connection to MySqlConnector's native pool.
 
@@ -469,21 +469,18 @@ MySqlConnector 2.6.2 pooling options used by the committed connection string:
 
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
-| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | MySQL connection string for NNTPD (includes provider pool settings) |
+| `ConnectionStrings:NntpDB` | string | _(none)_ | **yes** | MySQL connection string for NNTPD and BackFiller (includes provider pool settings) |
 | `NntpDb:StartupTimeout` | `TimeSpan` | `00:00:15` | no | Wall-clock budget for application-level startup connect / retry (`> 0`) |
 
 Startup opens a logical `MySqlConnection` from `ConnectionStrings:NntpDB`, executes `SELECT 1`, and disposes that logical connection. DNS, TCP, authentication, timeout, or `SELECT 1` failures fail host startup. Transient connectivity errors may retry until `StartupTimeout` elapses. A connection string rejected by `MySqlConnectionStringBuilder`, authentication failures, and a failed `SELECT 1` result fail immediately without retry. A successful check does not keep that physical connection open; MySqlConnector owns reuse.
 
-Example:
+Example environment variable (never commit credentials):
 
-```json
-"ConnectionStrings": {
-  "NntpDB": "Server=mysql.example.net;Port=3306;Database=nntpdb;User ID=nntpd;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;"
-},
-"NntpDb": {
-  "StartupTimeout": "00:00:15"
-}
+```text
+ConnectionStrings__NntpDB=Server=mysql.example.net;Port=3306;Database=nntpdb;User ID=nntpd;Password=...;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;
 ```
+
+`NntpDb:StartupTimeout` remains a non-secret application option (default `00:00:15`) and may stay in NNTPD appsettings. Production appsettings must not contain a `ConnectionStrings` section.
 
 ### Live MySQL moderator integration tests
 

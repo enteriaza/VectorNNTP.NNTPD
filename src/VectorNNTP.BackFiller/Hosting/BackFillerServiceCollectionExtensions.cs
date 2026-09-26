@@ -89,21 +89,16 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, AcmeCloudflareOptionsValidator>();
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
         builder.Services.AddAcmeCloudflareInfrastructure();
-
-        builder.Services
-            .AddOptions<BackFillerConnectionStringsOptions>()
-            .BindConfiguration(BackFillerConnectionStringsOptions.SectionName)
-            .ValidateOnStart();
-        builder.Services.AddSingleton<IValidateOptions<BackFillerConnectionStringsOptions>, BackFillerConnectionStringsOptionsValidator>();
+        builder.Services.AddNntpDbOptions();
 
         builder.Services.AddSingleton(static provider =>
         {
             var options = provider.GetRequiredService<IOptions<BackFillerOptions>>().Value;
-            var connectionStrings = provider.GetRequiredService<IOptions<BackFillerConnectionStringsOptions>>().Value;
+            var nntpDb = provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
             var acme = provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
             return BackFillerRuntimeOptionsFactory.Create(
                 options,
-                connectionStrings,
+                nntpDb,
                 acme,
                 AppContext.BaseDirectory);
         });

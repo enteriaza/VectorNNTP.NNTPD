@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting;
 
@@ -31,7 +32,7 @@ public sealed class BackFillerProcessStartupTests
             }
 
             process.StartInfo.ArgumentList.Add("--BackFiller:BindPortTls=0");
-            process.StartInfo.Environment[BackFillerOptions.GrabberDbEnvironmentVariable] =
+            process.StartInfo.Environment[NntpDbOptions.ConnectionStringEnvironmentVariable] =
                 "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "unit-test-cloudflare-key-not-secret";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREZONEID"] = "0123456789abcdef0123456789abcdef";
@@ -106,7 +107,7 @@ public sealed class BackFillerProcessStartupTests
             var output = string.Concat(await stdout, await stderr);
             Assert.Equal(1, process.ExitCode);
             Assert.True(
-                output.Contains("GrabberDB", StringComparison.Ordinal)
+                output.Contains("ConnectionStrings:NntpDB", StringComparison.Ordinal)
                 || output.Contains("CloudFlareApiKey", StringComparison.Ordinal),
                 output);
             Assert.DoesNotContain("Name is required", output, StringComparison.Ordinal);

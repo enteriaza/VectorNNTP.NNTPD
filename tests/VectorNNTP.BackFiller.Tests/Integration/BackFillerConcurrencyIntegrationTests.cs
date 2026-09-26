@@ -147,7 +147,7 @@ public sealed class BackFillerConcurrencyIntegrationTests
         var processing = harness.ProcessCanonicalAsync(channel);
         await server.ArticleStarted!.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        harness.Accounts.QueryException = new InvalidOperationException("Provider account query failed against GrabberDB.");
+        harness.Accounts.QueryException = new InvalidOperationException("Provider account query failed against NntpDB.");
         Assert.False(await harness.AccountService.RefreshOnceAsync(CancellationToken.None));
         Assert.True(harness.Catalog.TryGetProvider("Giganews", out var retained));
         Assert.Equal("news.example.test", retained.Host);

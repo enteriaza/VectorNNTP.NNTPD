@@ -16,7 +16,7 @@ public sealed class ApplicationServiceManagerTests
         var second = new TrackingService("listener", order);
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         var manager = new ApplicationServiceManager(
             [first, second],
             runtime,
@@ -39,7 +39,7 @@ public sealed class ApplicationServiceManagerTests
         var second = new TrackingService("listener", order, startException: new InvalidOperationException("listener blocked"));
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         var manager = new ApplicationServiceManager(
             [first, second],
             runtime,

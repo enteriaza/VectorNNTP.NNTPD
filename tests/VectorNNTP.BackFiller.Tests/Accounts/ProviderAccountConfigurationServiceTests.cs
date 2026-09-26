@@ -45,13 +45,13 @@ public sealed class ProviderAccountConfigurationServiceTests
     {
         var source = new FakeProviderAccountSource
         {
-            QueryException = new InvalidOperationException("Provider account query failed against GrabberDB."),
+            QueryException = new InvalidOperationException("Provider account query failed against NntpDB."),
         };
         await using var harness = CreateHarness(source);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => harness.Service.StartAsync(CancellationToken.None));
-        Assert.Equal("Provider account query failed against GrabberDB.", ex.Message);
+        Assert.Equal("Provider account query failed against NntpDB.", ex.Message);
         Assert.DoesNotContain("Password", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(harness.Service.PublishedProviders);
     }
@@ -180,7 +180,7 @@ public sealed class ProviderAccountConfigurationServiceTests
         await harness.Service.StartAsync(CancellationToken.None);
         var knownGood = Assert.Single(harness.Service.PublishedProviders);
 
-        source.QueryException = new InvalidOperationException("Provider account query failed against GrabberDB.");
+        source.QueryException = new InvalidOperationException("Provider account query failed against NntpDB.");
         Assert.False(await harness.Service.RefreshOnceAsync(CancellationToken.None));
         Assert.Same(knownGood, Assert.Single(harness.Service.PublishedProviders));
         Assert.True(harness.Catalog.TryGetProvider("Giganews", out var retained));
@@ -370,7 +370,7 @@ public sealed class ProviderAccountConfigurationServiceTests
         options.BackFillerAccountRefreshIntervalSeconds = 3600;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         if (refreshInterval is { } interval)
         {
             runtime = runtime with { AccountRefreshInterval = interval };

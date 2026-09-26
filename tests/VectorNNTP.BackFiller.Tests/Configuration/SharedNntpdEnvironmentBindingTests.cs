@@ -27,7 +27,11 @@ public sealed class SharedNntpdEnvironmentBindingTests
             "ServerIdEnvironmentVariable",
             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
         Assert.Equal("VECTOR__RABBITMQ__USERNAME", BackFillerOptions.RabbitMqUsernameEnvironmentVariable);
-        Assert.Equal("VECTOR__CONNECTIONSTRINGS__GRABBERDB", BackFillerOptions.GrabberDbEnvironmentVariable);
+        Assert.Equal("ConnectionStrings__NntpDB", NntpDbOptions.ConnectionStringEnvironmentVariable);
+        Assert.Equal("NntpDB", NntpDbOptions.ConnectionStringName);
+        Assert.Null(typeof(BackFillerOptions).GetField(
+            "GrabberDbEnvironmentVariable",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
         Assert.Equal(VectorEnvironment.Prefix, BackFillerOptions.EnvironmentVariablePrefix);
         Assert.True(VectorEnvironment.IsCanonicalName(AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable));
         Assert.DoesNotContain("nntpd__", AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, StringComparison.OrdinalIgnoreCase);

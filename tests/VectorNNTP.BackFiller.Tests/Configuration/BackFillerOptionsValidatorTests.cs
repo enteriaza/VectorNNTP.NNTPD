@@ -1,6 +1,9 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
+using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration;
@@ -185,12 +188,12 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_fails_when_grabber_db_is_missing()
+    public void Validate_fails_when_nntp_db_is_missing()
     {
-        var result = new BackFillerConnectionStringsOptionsValidator()
-            .Validate(null, new BackFillerConnectionStringsOptions());
+        var result = new NntpDbOptionsValidator()
+            .Validate(null, new NntpDbOptions());
         Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("GrabberDB", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static f => f.Contains("ConnectionStrings:NntpDB", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -247,18 +250,21 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
-    public void Bind_uses_canonical_connection_strings_path()
+    public void Bind_uses_canonical_nntp_db_connection_string_path()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:GrabberDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
+                ["ConnectionStrings:NntpDB"] = "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz",
             })
             .Build();
-        var options = new BackFillerConnectionStringsOptions();
-        configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(options);
-        Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", options.GrabberDB);
-        Assert.True(new BackFillerConnectionStringsOptionsValidator().Validate(null, options).Succeeded);
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddNntpDbOptions();
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
+        Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", options.ConnectionString);
+        Assert.True(new NntpDbOptionsValidator().Validate(null, options).Succeeded);
     }
 
     [Fact]

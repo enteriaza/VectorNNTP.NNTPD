@@ -148,11 +148,11 @@ public sealed class OsPhysicalMemoryProviderTests
 
         var runtimeFrom16 = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         options.ArticleRetention.MaximumRetainedPayloadGigabytes = 4;
         var runtimeFrom128 = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
 
         Assert.Equal(4L * 1024 * 1024 * 1024, runtimeFrom16.ArticleRetention.MaximumRetainedPayloadBytes);
         Assert.Equal(4L * 1024 * 1024 * 1024, runtimeFrom128.ArticleRetention.MaximumRetainedPayloadBytes);

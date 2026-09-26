@@ -92,7 +92,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
         options.BackFillerAccountRefreshIntervalSeconds = 3600;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings()) with
+            BackFillerTestOptions.CreateValidNntpDb()) with
         {
             RabbitMq = BackFillerRabbitMqServiceTests.CreateFastRuntime().RabbitMq,
         };

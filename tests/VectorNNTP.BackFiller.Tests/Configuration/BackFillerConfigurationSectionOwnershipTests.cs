@@ -301,16 +301,16 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         BackFillerAcmeCloudflareOptionsAdapter.Apply(acme, identity, configuration);
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             identity,
-            BindConnectionStrings(configuration),
+            BindNntpDb(configuration),
             acme);
         return (identity, acme, runtime);
     }
 
-    private static BackFillerConnectionStringsOptions BindConnectionStrings(IConfiguration configuration)
+    private static NntpDbOptions BindNntpDb(IConfiguration configuration)
     {
-        var connectionStrings = new BackFillerConnectionStringsOptions();
-        configuration.GetSection(BackFillerConnectionStringsOptions.SectionName).Bind(connectionStrings);
-        return connectionStrings;
+        var nntpDb = new NntpDbOptions();
+        nntpDb.ConnectionString = configuration.GetConnectionString(NntpDbOptions.ConnectionStringName) ?? string.Empty;
+        return nntpDb;
     }
 
     private static IHost CreateHost(Dictionary<string, string?> pairs)

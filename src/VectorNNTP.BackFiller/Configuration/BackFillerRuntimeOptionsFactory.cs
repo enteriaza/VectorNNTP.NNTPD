@@ -1,4 +1,5 @@
 using System.Net;
+using MySqlConnector;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -13,7 +14,7 @@ public static class BackFillerRuntimeOptionsFactory
     /// Projects validated options into the immutable runtime snapshot.
     /// </summary>
     /// <param name="options">Validated bindable options.</param>
-    /// <param name="connectionStrings">Validated connection-string options.</param>
+    /// <param name="nntpDb">Validated shared NntpDB options.</param>
     /// <param name="contentRootPath">
     /// Application binary directory used to resolve relative
     /// <see cref="BackFillerOptions.LogDirectory"/> and certificate paths.
@@ -29,7 +30,7 @@ public static class BackFillerRuntimeOptionsFactory
     /// </remarks>
     public static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
-        BackFillerConnectionStringsOptions connectionStrings,
+        NntpDbOptions nntpDb,
         string? contentRootPath = null)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -49,18 +50,18 @@ public static class BackFillerRuntimeOptionsFactory
             CloudFlareZoneId = string.Empty,
             DnsSuffix = options.DnsSuffix,
         };
-        return Create(options, connectionStrings, acme, contentRootPath);
+        return Create(options, nntpDb, acme, contentRootPath);
     }
 
-    /// <inheritdoc cref="Create(BackFillerOptions,BackFillerConnectionStringsOptions,string?)"/>
+    /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
     public static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
-        BackFillerConnectionStringsOptions connectionStrings,
+        NntpDbOptions nntpDb,
         AcmeCloudflareOptions acme,
         string? contentRootPath = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(connectionStrings);
+        ArgumentNullException.ThrowIfNull(nntpDb);
         ArgumentNullException.ThrowIfNull(acme);
 
         if (options.ServerId is not { } serverId || string.IsNullOrWhiteSpace(options.Fqdn))
@@ -97,11 +98,13 @@ public static class BackFillerRuntimeOptionsFactory
             }
         }
 
-        var grabberDbValue = connectionStrings.GrabberDB;
-        if (!GrabberDbConnectionString.TryParse(grabberDbValue, out var server, out var database, out var userId, out var reason))
+        if (string.IsNullOrWhiteSpace(nntpDb.ConnectionString))
         {
-            throw new InvalidOperationException(reason);
+            throw new InvalidOperationException(
+                $"ConnectionStrings:{NntpDbOptions.ConnectionStringName} must be configured.");
         }
+
+        var nntpDbBuilder = new MySqlConnectionStringBuilder(nntpDb.ConnectionString);
 
         var rabbit = options.RabbitMQ ?? throw new InvalidOperationException("BackFiller:RabbitMQ is required.");
         var hosts = (rabbit.Hosts ?? [])
@@ -176,11 +179,11 @@ public static class BackFillerRuntimeOptionsFactory
                 DiagnosticPayloadCorrelationId: NullIfWhiteSpace(rabbit.DiagnosticPayloadCorrelationId)),
             CertificateDomainNames: CertificateIdentities.ForFqdn(fqdn, acme.IncludeNewsHostnameInCertificate),
             CertificatePassword: acme.AcmeCertificatePassword,
-            GrabberDb: new GrabberDbRuntimeOptions(
-                grabberDbValue!.Trim(),
-                server!,
-                database!,
-                userId!),
+            NntpDb: new NntpDbRuntimeOptions(
+                nntpDb.ConnectionString.Trim(),
+                nntpDbBuilder.Server ?? string.Empty,
+                nntpDbBuilder.Database ?? string.Empty,
+                nntpDbBuilder.UserID ?? string.Empty),
             AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
     }
 

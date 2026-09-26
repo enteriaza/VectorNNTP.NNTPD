@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.Fixtures;
@@ -16,6 +17,7 @@ public sealed class NntpDbOptionsTests
         Assert.Equal(TimeSpan.FromSeconds(15), options.StartupTimeout);
         Assert.Equal("NntpDb", NntpDbOptions.SectionName);
         Assert.Equal("NntpDB", NntpDbOptions.ConnectionStringName);
+        Assert.Equal("ConnectionStrings__NntpDB", NntpDbOptions.ConnectionStringEnvironmentVariable);
     }
 
     [Fact]
@@ -103,13 +105,7 @@ public sealed class NntpDbOptionsTests
 
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(configuration);
-        services
-            .AddOptions<NntpDbOptions>()
-            .Bind(configuration.GetSection(NntpDbOptions.SectionName))
-            .Configure<IConfiguration>((options, config) =>
-            {
-                options.ConnectionString = config.GetConnectionString(NntpDbOptions.ConnectionStringName) ?? string.Empty;
-            });
+        services.AddNntpDbOptions();
         using var provider = services.BuildServiceProvider();
         var options = provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
         Assert.Equal(TestHostFactory.TestNntpDbConnectionString, options.ConnectionString);
@@ -117,28 +113,44 @@ public sealed class NntpDbOptionsTests
     }
 
     [Fact]
-    public void ProductionAppsettings_DeclaresPooledNntpDbWithoutGrabberDbChange()
+    public void ProductionAppsettings_DoesNotContainConnectionStrings()
     {
         var path = FindProductionAppsettings();
         using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-        var connectionStrings = document.RootElement.GetProperty("ConnectionStrings");
-        Assert.True(connectionStrings.TryGetProperty("NntpDB", out var nntp));
-        var connectionString = nntp.GetString();
-        Assert.False(string.IsNullOrWhiteSpace(connectionString));
-        Assert.Contains("Pooling=true", connectionString, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("MinimumPoolSize=2", connectionString, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("MaximumPoolSize=32", connectionString, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("ConnectionIdleTimeout=300", connectionString, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Pooling=false", connectionString, StringComparison.OrdinalIgnoreCase);
-        Assert.False(connectionStrings.TryGetProperty("GrabberDB", out _));
+        Assert.False(document.RootElement.TryGetProperty("ConnectionStrings", out _));
+        Assert.False(File.ReadAllText(path).Contains("GrabberDB", StringComparison.Ordinal));
 
         var nntpDb = document.RootElement.GetProperty("NntpDb");
         Assert.Equal("00:00:15", nntpDb.GetProperty("StartupTimeout").GetString());
+        Assert.False(nntpDb.TryGetProperty("ConnectionString", out _));
         Assert.False(nntpDb.TryGetProperty("MinimumPoolSize", out _));
         Assert.False(nntpDb.TryGetProperty("MaximumPoolSize", out _));
         Assert.False(nntpDb.TryGetProperty("MaximumIdleTime", out _));
         Assert.False(nntpDb.TryGetProperty("MaintenanceInterval", out _));
         Assert.False(nntpDb.TryGetProperty("AcquisitionTimeout", out _));
+    }
+
+    [Fact]
+    public void Same_connection_strings_nntpdb_value_targets_nntpdb_catalog()
+    {
+        const string connectionString =
+            "Server=198.18.0.70;Port=3306;Database=nntpdb;User ID=nntpd;Pooling=true;MinimumPoolSize=2;MaximumPoolSize=32;ConnectionIdleTimeout=300;";
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] = connectionString,
+                })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddNntpDbOptions();
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
+        Assert.Equal(connectionString, options.ConnectionString);
+        Assert.Equal("nntpdb", new MySqlConnector.MySqlConnectionStringBuilder(options.ConnectionString).Database);
+        Assert.Equal("ConnectionStrings__NntpDB", NntpDbOptions.ConnectionStringEnvironmentVariable);
     }
 
     [Fact]

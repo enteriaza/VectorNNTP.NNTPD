@@ -1,13 +1,19 @@
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Application-level NntpDB options. Physical connection pooling is owned by MySqlConnector.
+/// Shared NntpDB options. Physical connection pooling is owned by MySqlConnector.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The configuration section name is <see cref="SectionName"/> (<c>NntpDb</c>).
+/// The application-options section name is <see cref="SectionName"/> (<c>NntpDb</c>).
 /// The connection string is <c>ConnectionStrings:NntpDB</c> (<see cref="ConnectionStringName"/>).
+/// Credentials are supplied through the Generic Host environment mapping
+/// <see cref="ConnectionStringEnvironmentVariable"/>, not production appsettings.
 /// Provider pooling, pool size, and idle reaping belong in that connection string.
+/// </para>
+/// <para>
+/// NNTPD and BackFiller bind this type through the same Common registration and
+/// therefore resolve the same configuration key and the same database.
 /// </para>
 /// <para>
 /// Do not log <see cref="ConnectionString"/>.
@@ -21,7 +27,13 @@ public sealed class NntpDbOptions
     /// <summary>Connection-string name under <c>ConnectionStrings</c>.</summary>
     public const string ConnectionStringName = "NntpDB";
 
-    /// <summary>Default wall-clock budget for the startup connectivity check.</summary>
+    /// <summary>
+    /// Existing Generic Host environment variable that supplies
+    /// <c>ConnectionStrings:NntpDB</c>.
+    /// </summary>
+    public const string ConnectionStringEnvironmentVariable = "ConnectionStrings__NntpDB";
+
+    /// <summary>Default wall-clock budget for the NNTPD startup connectivity check.</summary>
     public static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
@@ -32,12 +44,13 @@ public sealed class NntpDbOptions
     public string ConnectionString { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the wall-clock budget for startup connect and <c>SELECT 1</c>.
+    /// Gets or sets the wall-clock budget for NNTPD startup connect and <c>SELECT 1</c>.
     /// </summary>
     /// <remarks>
     /// Connectivity failures may retry until this budget elapses. A malformed
     /// connection string, authentication failures, and a failed <c>SELECT 1</c>
-    /// result fail immediately.
+    /// result fail immediately. BackFiller binds the property but does not run
+    /// that startup probe.
     /// </remarks>
     public TimeSpan StartupTimeout { get; set; } = DefaultStartupTimeout;
 }

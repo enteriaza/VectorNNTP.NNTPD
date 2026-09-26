@@ -63,9 +63,9 @@ public sealed class MySqlProviderAccountSourceTests
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         _ = new MySqlProviderAccountSource(runtime);
-        Assert.Contains("Password=db-secret-xyz", runtime.GrabberDb.ConnectionString, StringComparison.Ordinal);
+        Assert.Contains("Password=db-secret-xyz", runtime.NntpDb.ConnectionString, StringComparison.Ordinal);
     }
 
     private static string FindSource()

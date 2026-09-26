@@ -405,7 +405,7 @@ public sealed class BackFillerRabbitMqServiceTests
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         return runtime with
         {
             RabbitMq = runtime.RabbitMq with

@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <remarks>
 /// <para>
 /// Property names are PascalCase. Generated <see cref="Fqdn"/> cannot be bound.
-/// Never log a complete instance: RabbitMQ and GrabberDB secrets live here.
+/// Never log a complete instance: RabbitMQ secrets live here.
 /// Cloudflare and ACME PKCS#12 secrets stay on root <c>VECTOR__*</c> keys and
 /// are copied onto <see cref="AcmeCloudflareOptions"/> by
 /// <see cref="BackFillerAcmeCloudflareOptionsAdapter"/>.
@@ -24,8 +24,9 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <c>BackFiller:ServerId</c> only. The FQDN is
 /// <c>backfiller{ServerId:00}.{DnsSuffix}</c>; there is no configurable Name.
 /// RabbitMQ uses
-/// <c>VECTOR__RABBITMQ__*</c>. GrabberDB uses
-/// <c>VECTOR__CONNECTIONSTRINGS__GRABBERDB</c>. Cloudflare secrets use
+/// <c>VECTOR__RABBITMQ__*</c>. NntpDB uses the existing
+/// <c>ConnectionStrings__NntpDB</c> Generic Host mapping (same key as NNTPD).
+/// Cloudflare secrets use
 /// <c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
 /// <c>VECTOR__ACMECERTIFICATEPASSWORD</c>, and
 /// <c>VECTOR__ACMEACCOUNT</c>.
@@ -53,9 +54,6 @@ public sealed class BackFillerOptions
 
     /// <summary>Canonical environment variable that supplies RabbitMQ password.</summary>
     public const string RabbitMqPasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
-
-    /// <summary>Canonical environment variable that supplies GrabberDB.</summary>
-    public const string GrabberDbEnvironmentVariable = "VECTOR__CONNECTIONSTRINGS__GRABBERDB";
 
     /// <summary>Default DNS suffix when the key is omitted.</summary>
     public const string DefaultDnsSuffix = "usenet.ninja";
@@ -205,7 +203,7 @@ public sealed class BackFillerOptions
     public BackFillerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets how often BackFiller polls GrabberDB for
+    /// Gets or sets how often BackFiller polls NntpDB for
     /// <c>nntpbackfilleraccounts</c> changes.
     /// </summary>
     /// <remarks>

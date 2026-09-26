@@ -75,7 +75,7 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 └─────────────────────────────────────────────────────────────┘
 ```
 
-NNTPD owns the database service and lifecycle (`NntpDbService` + mandatory startup `SELECT 1`). MySqlConnector owns physical connection pooling. There is no application-owned MySQL pool.
+NNTPD owns the database service and lifecycle (`NntpDbService` + mandatory startup `SELECT 1`). BackFiller binds the same Common `NntpDbOptions` (`ConnectionStrings:NntpDB` / `ConnectionStrings__NntpDB`) and uses the same database, schema, and tables (`nntpbackfilleraccounts` included). MySqlConnector owns physical connection pooling. There is no application-owned MySQL pool.
 
 `ModeratorCatalogueService` starts immediately after `NewsgroupCatalogueService` and uses the same load/refresh contract against `nntpmoderators`. Initial load is required. Refresh builds a new snapshot off-side and publishes it with `Interlocked.Exchange`. POST captures `Current` once.
 

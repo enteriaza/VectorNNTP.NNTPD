@@ -15,7 +15,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
 
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
 
         Assert.Equal("usenet.ninja", runtime.DnsSuffix);
         Assert.Equal("backfiller01.usenet.ninja", runtime.Fqdn);
@@ -24,8 +24,8 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.Equal(["127.0.0.1"], runtime.RabbitMq.Hosts);
         Assert.True(Path.IsPathRooted(runtime.LogDirectory));
         Assert.True(Path.IsPathRooted(runtime.CertificateDirectory));
-        Assert.Equal("127.0.0.1", runtime.GrabberDb.Server);
-        Assert.Equal("nntp", runtime.GrabberDb.Database);
+        Assert.Equal("127.0.0.1", runtime.NntpDb.Server);
+        Assert.Equal("nntp", runtime.NntpDb.Database);
         Assert.Equal(TimeSpan.FromSeconds(30), runtime.Shutdown.GracePeriod);
         Assert.True(runtime.Shutdown.DrainQueuedWork);
         Assert.True(runtime.Shutdown.FinishActiveArticles);
@@ -43,7 +43,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings(),
+            BackFillerTestOptions.CreateValidNntpDb(),
             BackFillerTestOptions.CreateValidAcme());
 
         Assert.Equal(["backfiller01.usenet.ninja"], runtime.CertificateDomainNames);
@@ -55,7 +55,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
 
         Assert.True(runtime.GetType().IsSealed);
         var withFqdn = runtime with { Fqdn = "other.example" };
@@ -74,7 +74,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         options.Shutdown.GracePeriodSeconds = 45;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
 
         options.Shutdown.DrainQueuedWork = true;
         options.Shutdown.FinishActiveArticles = true;
@@ -100,7 +100,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
             options.AcmeStateDir = "certs";
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
-                BackFillerTestOptions.CreateValidConnectionStrings(),
+                BackFillerTestOptions.CreateValidNntpDb(),
                 contentRoot);
 
             Assert.Equal(Path.GetFullPath(Path.Combine(contentRoot, "logs")), runtime.LogDirectory);
@@ -129,7 +129,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
             options.AcmeStateDir = absoluteCerts;
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
-                BackFillerTestOptions.CreateValidConnectionStrings(),
+                BackFillerTestOptions.CreateValidNntpDb(),
                 contentRoot);
 
             Assert.Equal(Path.GetFullPath(absoluteLogs), runtime.LogDirectory);

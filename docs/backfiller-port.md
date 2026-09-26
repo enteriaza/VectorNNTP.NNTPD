@@ -65,7 +65,7 @@ Supporting runtime: NNTP acquisition sessions, article parser, yEnc validator, i
 
 ## 4. Existing configuration contract
 
-Bound under `BackFiller` plus `ConnectionStrings:GrabberDB`.
+Bound under `BackFiller`. The MySQL connection is the shared Common `NntpDbOptions` key `ConnectionStrings:NntpDB`, supplied as `ConnectionStrings__NntpDB`.
 
 Required sections observed in old options:
 
@@ -83,7 +83,7 @@ Invariant: `RabbitMQ:MaximumShutdownDrainTimeoutSeconds` ≤ `Shutdown:GracePeri
 
 Secrets belong in environment / secrets stores, not committed samples. The old tracked `appsettings.json` contains live credentials and **must not be copied**.
 
-Environment / systemd: `DOTNET_ENVIRONMENT`, optional `EnvironmentFile` at `/etc/vectornntp-backfiller/vectornntp-backfiller.env`. Old worker: no custom prefix (`BackFiller__*`, `ConnectionStrings__GrabberDB`). New canonical prefix: `backfiller__` (see Phase 1).
+Environment / systemd: `DOTNET_ENVIRONMENT`, optional `EnvironmentFile` at `/etc/vectornntp-backfiller/vectornntp-backfiller.env`. Application settings use the `BackFiller` section. The shared database secret is `ConnectionStrings__NntpDB` (same Generic Host mapping as NNTPD). Obsolete `backfiller__` and old-worker unprefixed names are not the current contract.
 
 ## 5. Existing RabbitMQ topology
 
@@ -177,11 +177,11 @@ NNTPD treats a Success `uri` as “found elsewhere”; the current locked NNTPD 
 
 ## 10. Existing account / configuration lookup
 
-`ConnectionStrings:GrabberDB` + table `nntpbackfilleraccounts`, filtered by `serverid = BackFiller:Id`.
+Shared `ConnectionStrings:NntpDB` + table `nntpbackfilleraccounts`, filtered by `serverid = BackFiller:ServerId`.
 
 Columns: `entryid`, `backbone` (enum of the twelve providers), `hostname`, `keepalive`, `maxconnections`, `username`, `password`, `port`, `serverid`, `usessl`.
 
-Startup can `CREATE TABLE IF NOT EXISTS`. Periodic refresh publishes an immutable snapshot. RabbitMQ topology and NNTP session pools are derived from the snapshot’s backbone set and per-account connection limits.
+The old worker could `CREATE TABLE IF NOT EXISTS`. Current BackFiller does not create or migrate the table; it only `SELECT`s. Periodic refresh publishes an immutable snapshot. RabbitMQ topology and NNTP session pools are derived from the snapshot’s backbone set and per-account connection limits.
 
 This is a different MySQL surface from NNTPD `nntpusers`. Do not merge them.
 
@@ -324,24 +324,24 @@ Phase 0 implemented host + logging. Phase 1 removed the no-op hosted service; th
 6. **Transit coupling.** Whether recovered articles must still TAKETHIS to TransitServer in every Success path, and the drop-on-transit-reject settlement, needs confirmation before that path is rewritten.
 7. **MySQL account schema.** Keep `nntpbackfilleraccounts` as-is vs any later shared auth store. Default: keep the table contract.
 8. **Certificate stack.** Reuse NNTPD ACME/Cloudflare code via a future shared library vs a BackFiller-local rewrite. Do not reference NNTPD to borrow it.
-9. **Environment-variable prefix.** **Decided in Phase 1 review:** one canonical contract. Prefix `backfiller__` is stripped, then `__` maps to `:`. RabbitMQ and Let's Encrypt are nested under `BackFiller`, so secrets use `backfiller__BackFiller__RabbitMQ__*` and `backfiller__BackFiller__LetsEncrypt__*`. GrabberDB stays on the framework `ConnectionStrings` section: `backfiller__ConnectionStrings__GrabberDB`. Short-form `backfiller__RabbitMQ__Username` is **not** supported. The old worker had no custom prefix and does not require that alias.
+9. **Environment-variable prefix.** **Current contract:** BackFiller application settings stay under `BackFiller`. Shared secrets use the existing Generic Host / `VECTOR__` mappings. The database connection is `ConnectionStrings__NntpDB` (Common `NntpDbOptions`), the same key NNTPD uses. Short-form `backfiller__RabbitMQ__Username` is **not** supported.
 10. **Unsafe / R2R / single-file / 4 MB socket buffers.** Old defaults are deployment optimizations, not protocol. Revisit with evidence.
 
 ## Phase 1 — configuration and hosting foundation
 
-Implemented in `src/VectorNNTP.BackFiller/Configuration` and `Hosting`. Bindable `BackFillerOptions` + `BackFillerConnectionStringsOptions` → `ValidateOnStart` → immutable `BackFillerRuntimeOptions` produced once from those option objects. Application services consume the snapshot. The factory does not re-read `IConfiguration`. `HostOptions.ShutdownTimeout` is post-configured from the snapshot grace period.
+Implemented in `src/VectorNNTP.BackFiller/Configuration` and `Hosting`. Bindable `BackFillerOptions` + shared Common `NntpDbOptions` (`ConnectionStrings:NntpDB` / `ConnectionStrings__NntpDB`) → `ValidateOnStart` → immutable `BackFillerRuntimeOptions` produced once from those option objects. Application services consume the snapshot. The factory does not re-read `IConfiguration`. `HostOptions.ShutdownTimeout` is post-configured from the snapshot grace period.
 
 ### Canonical configuration contract
 
 | Item | Canonical value |
 |---|---|
 | BackFiller section | `BackFiller` |
-| Connection-strings section | `ConnectionStrings` (framework section; only `GrabberDB` is consumed) |
-| Environment-variable prefix | `backfiller__` (stripped, then `__` → `:`) |
-| Identity | `backfiller__BackFiller__Name`, `backfiller__BackFiller__ServerId` |
-| RabbitMQ secrets | `backfiller__BackFiller__RabbitMQ__Username`, `backfiller__BackFiller__RabbitMQ__Password` |
-| ACME / Cloudflare secrets | **Phase 13:** `nntpd__cloudflareapikey`, `nntpd__AcmeCertificatePassword`, `nntpd__CloudFlareZoneId`. The leftover `backfiller__BackFiller__LetsEncrypt__*` names are not the runtime contract. |
-| GrabberDB | `backfiller__ConnectionStrings__GrabberDB` |
+| Connection-strings section | Framework `ConnectionStrings`; only `NntpDB` is consumed |
+| Environment-variable prefix | Shared `VECTOR__` for Common secrets; `ConnectionStrings__NntpDB` for the database |
+| Identity | `BackFiller:ServerId` (no `BackFiller:Name`) |
+| RabbitMQ secrets | `VECTOR__RABBITMQ__USERNAME`, `VECTOR__RABBITMQ__PASSWORD` |
+| ACME / Cloudflare secrets | `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__CLOUDFLAREZONEID`, `VECTOR__ACMEACCOUNT` |
+| NntpDB | `ConnectionStrings__NntpDB` (same key as NNTPD) |
 
 Other `BackFiller:*` keys follow the same rule: `backfiller__` + section path with `__` separators (for example `backfiller__BackFiller__BindPort`).
 
@@ -352,7 +352,7 @@ Non-canonical names that are **not** a supported contract:
 | `backfiller__RabbitMQ__Username` / `Password` | NNTPD-style short form. NNTPD’s RabbitMQ section is top-level; BackFiller’s is nested. Not an alias. |
 | `backfiller__LetsEncrypt__*` | Same: Let's Encrypt is nested under `BackFiller`. |
 | `backfiller__BackFiller__Id` / `BackFiller:Id` | Intentional rename to `ServerId`. Not an alias. |
-| Unprefixed `BackFiller__*` / `ConnectionStrings__GrabberDB` | Old worker used Generic Host’s default environment source (no custom prefix). The default host still loads unprefixed environment variables, but that is framework behavior, not a second first-class BackFiller contract. Operators should set the prefixed names. |
+| Unprefixed `BackFiller__*` / old database keys | Old worker used Generic Host’s default environment source. The current database key is `ConnectionStrings__NntpDB` only. |
 
 ### Why the short-form alias was removed
 
@@ -362,7 +362,7 @@ The old worker does **not** require that:
 
 - It called `Host.CreateApplicationBuilder` and used the default (unprefixed) environment source.
 - RabbitMQ was already nested: the observable env path was `BackFiller__RabbitMQ__Username`, not a root `RabbitMQ__Username` alias.
-- GrabberDB was `ConnectionStrings__GrabberDB` (framework section), never a BackFiller-nested alias.
+- The old worker’s database string was a framework `ConnectionStrings` key, never a BackFiller-nested alias. The current shared key is `ConnectionStrings:NntpDB` / `ConnectionStrings__NntpDB`.
 
 The alias was convenience, not compatibility. It is not retained.
 
@@ -374,10 +374,10 @@ The alias was convenience, not compatibility. It is not retained.
 | Log / cert directories | `DirLogs`, `DirCerts` | `LogDirectory`, `CertificateDirectory` |
 | Directory startup probe | Create directory and write/read/delete probe files | Path required and resolved to absolute; no filesystem mutation during validation |
 | Bind port-in-use check | Attempted live bind | Syntax + local-NIC check only (NNTPD convention; no sockets) |
-| GrabberDB | Shape + live connectivity probe | Shape only (`MySqlConnectionStringBuilder`); no connection |
+| MySQL connection | Separate old-worker database string + live probe | Shared `ConnectionStrings__NntpDB`; shape validated by Common `NntpDbOptions` |
 | Secret defaults | Tracked placeholders / live values | No committed secrets; required via env / secrets |
 | Cloudflare zone default | Hard-coded zone id | Required, no default |
-| Env prefix | None (default host env: `BackFiller__*`, `ConnectionStrings__GrabberDB`) | Canonical `backfiller__` + nested path. No short-form alias. |
+| Env prefix | None (default host env) | Shared `VECTOR__` secrets plus `ConnectionStrings__NntpDB`. No `backfiller__` database alias. |
 | Lifecycle | `ServiceLifecycle` + pre-host validation pipeline + many hosted services | Generic Host + `ValidateOnStart` + platform lifetime. No placeholder `BackgroundService`. `ApplicationLifecycle` deferred. |
 
 ### Lifecycle decision (Phase 1)
@@ -910,7 +910,7 @@ Not implemented: Transit `TAKETHIS`, ACME issuance/renewal, Cloudflare DNS, MySQ
 
 ## Phase 8 — MySQL provider/account control plane
 
-Implemented in `src/VectorNNTP.BackFiller/Accounts` plus registry snapshot apply in `Nntp/NntpProviderRegistry`. MySQL is control-plane state only. Article Work still resolves providers through `NntpProviderRegistry` / `IBackFillerProviderCatalog` and never queries GrabberDB.
+Implemented in `src/VectorNNTP.BackFiller/Accounts` plus registry snapshot apply in `Nntp/NntpProviderRegistry`. MySQL is control-plane state only. Article Work still resolves providers through `NntpProviderRegistry` / `IBackFillerProviderCatalog` and never queries NntpDB.
 
 Hosted-service order is now: RabbitMQ → **provider-account control plane** → NNTP registry → sweep → cache Listener → response publisher → Article Work consumers.
 
@@ -934,9 +934,9 @@ FROM nntpbackfilleraccounts
 WHERE serverid = @ServerId;
 ```
 
-`serverid` is the validated `BackFiller:ServerId` (0–99), sent as an unsigned byte. Connections open only for the duration of a query. The accounts `SELECT` uses MySqlConnector command-timeout defaults; there is no application-specific command timeout. `MySqlException` is wrapped as `InvalidOperationException("Provider account query failed against GrabberDB.")` so the connection string is not copied into the exception message.
+`serverid` is the validated `BackFiller:ServerId` (0–99), sent as an unsigned byte. Connections open only for the duration of a query. The accounts `SELECT` uses MySqlConnector command-timeout defaults; there is no application-specific command timeout. `MySqlException` is wrapped as `InvalidOperationException("Provider account query failed against NntpDB.")` so the connection string is not copied into the exception message.
 
-`keepalive` is parsed from each row as `byte KeepAliveSeconds` and published on `BackFillerProviderDefinition`. Zero disables DATE keepalive. A positive value is the idle interval, in seconds, at which an idle pooled NNTP session issues RFC 3977 `DATE` (expect `111`). DATE and ARTICLE share the session busy lock. Failure, timeout, or EOF retires the session through existing pool health rules. This is not `BackFiller:BackFillerAccountRefreshIntervalSeconds`, which only controls how often GrabberDB is polled.
+`keepalive` is parsed from each row as `byte KeepAliveSeconds` and published on `BackFillerProviderDefinition`. Zero disables DATE keepalive. A positive value is the idle interval, in seconds, at which an idle pooled NNTP session issues RFC 3977 `DATE` (expect `111`). DATE and ARTICLE share the session busy lock. Failure, timeout, or EOF retires the session through existing pool health rules. This is not `BackFiller:BackFillerAccountRefreshIntervalSeconds`, which only controls how often NntpDB is polled.
 
 ### Mapping onto Phase 4 providers
 
@@ -996,8 +996,8 @@ Not implemented: table/database provisioning, Transit `TAKETHIS`, ACME, Cloudfla
 1. **No `BackgroundService`.** Same local `IHostedService` pattern as RabbitMQ / registry / Listener. Not NNTPD `ApplicationLifecycle`. Not a copy of the old `ControlPlaneService` / `NntpAccountSnapshotStartupInitializer` types.
 2. **MinSessions.** The table has no min-session column. Phase 8 always publishes `MinSessions = 0`. A later definition that differs only in `MinSessions` (tests / future source) still replaces the pool.
 3. **Rejected rows do not fail the snapshot.** The old worker also skipped unusable account rows rather than refusing the whole process after a successful query. Startup still fails when the **query itself** fails.
-4. **Last-known-good after startup.** A temporary GrabberDB outage keeps the last successful providers. That is the Phase 8 policy; it is not “fail-open to an invented catalog”.
-5. **No live MySQL in the test suite.** Tests use `IProviderAccountSource` fakes. There is no Testcontainers convention in this repository for GrabberDB.
+4. **Last-known-good after startup.** A temporary NntpDB outage keeps the last successful providers. That is the Phase 8 policy; it is not “fail-open to an invented catalog”.
+5. **No live MySQL in the test suite.** Tests use `IProviderAccountSource` fakes. There is no Testcontainers convention in this repository for NntpDB.
 
 ## Phase 9 — end-to-end integration and concurrency hardening
 
@@ -1203,7 +1203,7 @@ Validation classes used below:
 | Native / RID assets | Published `runtimes/win/lib/net10.0/` contains `System.Diagnostics.EventLog` and `System.ServiceProcess.ServiceController` |
 | NuGet data-plane deps | `RabbitMQ.Client` 7.2.2, `MySqlConnector` 2.6.2 (managed assemblies; no extra native MySQL client) |
 | Required files next to the exe | `appsettings.json` (non-secret defaults). Listener PFX is **not** published; operators place `certs/backfiller-listener.pfx` |
-| Required external services | RabbitMQ (startup invariant), MySQL GrabberDB (startup snapshot), upstream NNTP accounts from MySQL (runtime). ACME/Cloudflare are **not** called |
+| Required external services | RabbitMQ (startup invariant), shared MySQL NntpDB (startup snapshot), upstream NNTP accounts from MySQL (runtime). ACME/Cloudflare are **not** called |
 | Logs | Serilog Console → stdout only. `LogDirectory` is validated and resolved but is not a file sink |
 | Working directory | Must not be required. Content root is `AppContext.BaseDirectory` |
 
@@ -1267,19 +1267,19 @@ The suite does not require a machine-wide IPv6 configuration.
 
 ### MySQL — automated vs manual
 
-Automated: `MySqlProviderAccountSource` query/mapping/timeout/error wrapping tests use fakes. There is no GrabberDB Testcontainers convention and `VECTORNNTP_NNTPDB_INTEGRATION` is an NNTPD fixture, not a BackFiller one. No live MySQL was available.
+Automated: `MySqlProviderAccountSource` query/mapping/timeout/error wrapping tests use fakes. There is no NntpDB Testcontainers convention and `VECTORNNTP_NNTPDB_INTEGRATION` is an NNTPD fixture, not a BackFiller one. No live MySQL was available.
 
 Production behavior to use in a manual check (do not commit the connection string):
 
 ```text
-backfiller__ConnectionStrings__GrabberDB=Server=...;Port=3306;Database=...;User ID=...;Password=...;
+ConnectionStrings__NntpDB=Server=...;Port=3306;Database=nntpdb;User ID=...;Password=...;
 ```
 
-1. Confirm startup fails with `Provider account query failed against GrabberDB.` when the host is unreachable (first refresh is required). The raw connection string is not copied into that message.
+1. Confirm startup fails with `Provider account query failed against NntpDB.` when the host is unreachable (first refresh is required). The raw connection string is not copied into that message.
 2. Confirm `serverid = @ServerId` (`UByte`) filters `nntpbackfilleraccounts`.
 3. Confirm a later poll exception keeps last-known-good and does not recreate pools after registry stop (Phase 8/11).
 4. Confirm the accounts query uses MySqlConnector command-timeout defaults (no application `CommandTimeout`).
-5. Confirm cancellation during `OpenAsync` / `ExecuteReaderAsync` is `OperationCanceledException`, not the GrabberDB wrapper.
+5. Confirm cancellation during `OpenAsync` / `ExecuteReaderAsync` is `OperationCanceledException`, not the NntpDB wrapper.
 
 TLS for MySQL is whatever the connection string requests (`SslMode=...`). The worker does not add a second TLS policy.
 
@@ -1326,7 +1326,7 @@ Framework-dependent publish to `.artifacts/phase12-publish`:
 - `appsettings.json` is copied; `certs/` and `logs/` are not
 - Starting from a **different** working directory now still binds `appsettings.json` from the exe directory (content-root fix). Before the fix, that start reported `Name`, `BindPort`, and `RabbitMQ:Hosts` as missing even though they are in the published JSON
 
-Minimal valid **process** start still requires env secrets (`ServerId`, PFX password, Cloudflare token/zone, GrabberDB, RabbitMQ username/password). With only the published JSON, exit code is `1` and the fatal log lists those missing keys. That is useful. A fully running process was not obtained without live RabbitMQ.
+Minimal valid **process** start still requires env secrets (`ServerId`, PFX password, Cloudflare token/zone, `ConnectionStrings__NntpDB`, RabbitMQ username/password). With only the published JSON, exit code is `1` and the fatal log lists those missing keys. That is useful. A fully running process was not obtained without live RabbitMQ.
 
 ### Environment-variable contract
 
@@ -1341,7 +1341,7 @@ Unchanged from Phase 1. Prefix `backfiller__` is stripped, then `__` → `:`.
 | BindPort | `backfiller__BackFiller__BindPort` | yes | `1190` in appsettings | no |
 | LogDirectory | `backfiller__BackFiller__LogDirectory` | yes (non-empty) | `logs` | no |
 | CertificateDirectory | `backfiller__BackFiller__CertificateDirectory` | yes (non-empty) | `certs` | no |
-| GrabberDB | `backfiller__ConnectionStrings__GrabberDB` | yes | none | yes |
+| NntpDB | `ConnectionStrings__NntpDB` | yes | none | yes |
 | RabbitMQ username | `backfiller__BackFiller__RabbitMQ__Username` | with password | none | no |
 | RabbitMQ password | `backfiller__BackFiller__RabbitMQ__Password` | with username | none | yes |
 | PFX password | `backfiller__BackFiller__LetsEncrypt__PfxExportPassword` | yes | none | yes |
@@ -1417,7 +1417,7 @@ VECTOR__ACMEACCOUNT
 VECTOR__CLOUDFLAREZONEID
 VECTOR__RABBITMQ__USERNAME
 VECTOR__RABBITMQ__PASSWORD
-VECTOR__CONNECTIONSTRINGS__GRABBERDB
+ConnectionStrings__NntpDB
 ```
 
 BackFiller identity is the generated FQDN `backfiller{ServerId:00}.{DnsSuffix}` from `BackFiller:ServerId` and `BackFiller:DnsSuffix`. There is no `BackFiller:Name` and no `BACKFILLER__NAME`. There are no `BACKFILLER__*` or `VECTOR__*` mappings for the nested bind/ACME/DNS-suffix settings. NNTPD identity is `nntpd{ServerId:00}.{DnsSuffix}`; POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`.

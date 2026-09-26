@@ -83,7 +83,11 @@ public sealed class BackFillerHostCompositionTests
         var second = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
         Assert.Same(first, second);
         Assert.Equal("backfiller01.usenet.ninja", first.Fqdn);
-        Assert.Equal("127.0.0.1", first.GrabberDb.Server);
+        Assert.Equal("127.0.0.1", first.NntpDb.Server);
+        Assert.Equal("nntp", first.NntpDb.Database);
+        var nntpDb = host.Services.GetRequiredService<IOptions<NntpDbOptions>>().Value;
+        Assert.Equal(first.NntpDb.ConnectionString, nntpDb.ConnectionString);
+        Assert.Contains("Database=nntp", nntpDb.ConnectionString, StringComparison.Ordinal);
         Assert.Equal(TimeSpan.FromSeconds(60), first.AccountRefreshInterval);
         Assert.Equal(TimeSpan.FromSeconds(45), first.Shutdown.GracePeriod);
         Assert.Equal(

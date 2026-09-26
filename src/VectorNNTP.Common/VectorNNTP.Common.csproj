@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>VectorNNTP.Common</RootNamespace>
     <AssemblyName>VectorNNTP.Common</AssemblyName>
-    <Description>Shared ACME, Cloudflare DNS, and bind-address infrastructure for VectorNNTP.NNTPD and VectorNNTP.BackFiller.</Description>
+    <Description>Shared ACME, Cloudflare DNS, bind-address, and NntpDB configuration infrastructure for VectorNNTP.NNTPD and VectorNNTP.BackFiller.</Description>
     <IsPackable>false</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>
@@ -27,7 +27,9 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
   </ItemGroup>
 
 </Project>

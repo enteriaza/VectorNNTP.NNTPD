@@ -53,7 +53,7 @@ public sealed class BackFillerTlsStartupTests
         acme.BindPortTls = 5630;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             identity,
-            BackFillerTestOptions.CreateValidConnectionStrings(),
+            BackFillerTestOptions.CreateValidNntpDb(),
             acme);
 
         Assert.Equal(5630, runtime.BindPortTls);
@@ -71,7 +71,7 @@ public sealed class BackFillerTlsStartupTests
         var ex = Assert.Throws<InvalidOperationException>(() =>
             BackFillerRuntimeOptionsFactory.Create(
                 identity,
-                BackFillerTestOptions.CreateValidConnectionStrings(),
+                BackFillerTestOptions.CreateValidNntpDb(),
                 acme));
         Assert.Contains("TLS-only", ex.Message, StringComparison.Ordinal);
         Assert.Contains("BindPortTls", ex.Message, StringComparison.Ordinal);
@@ -228,7 +228,7 @@ public sealed class BackFillerTlsStartupTests
         acme.BindPortTls = tlsPort;
         return BackFillerRuntimeOptionsFactory.Create(
             identity,
-            BackFillerTestOptions.CreateValidConnectionStrings(),
+            BackFillerTestOptions.CreateValidNntpDb(),
             acme);
     }
 

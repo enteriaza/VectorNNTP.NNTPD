@@ -130,7 +130,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         options.Listener.TlsHandshakeTimeoutSeconds = 1;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         runtime = runtime with
         {
             Listener = runtime.Listener with { TlsHandshakeTimeout = TimeSpan.FromMilliseconds(80) },
@@ -153,7 +153,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         options.BindAddress = ["127.0.0.1"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         runtime = runtime with
         {
             Listener = runtime.Listener with { IoProgressTimeout = TimeSpan.FromMilliseconds(80) },
@@ -174,7 +174,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         options.BindAddress = ["*"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
 
         await using var service = new CacheListenerService(
             runtime,
@@ -345,7 +345,7 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
         options.BindAddress = ["127.0.0.1"];
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         return runtime with
         {
             Listener = runtime.Listener with { MaxActiveConnections = maxConnections },

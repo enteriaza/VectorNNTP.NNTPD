@@ -544,7 +544,7 @@ public sealed class ArticleWorkShutdownPolicyTests
         options.Shutdown.FinishActiveArticles = false;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         var handler = new ControllableArticleWorkHandler
         {
             Outcome = ArticleWorkOutcome.Success,

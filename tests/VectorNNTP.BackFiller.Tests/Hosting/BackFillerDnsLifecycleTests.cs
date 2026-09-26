@@ -200,7 +200,7 @@ public sealed class BackFillerDnsLifecycleTests
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidConnectionStrings());
+            BackFillerTestOptions.CreateValidNntpDb());
         return new ApplicationServiceManager(
             services,
             runtime,

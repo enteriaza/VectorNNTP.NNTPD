@@ -86,7 +86,7 @@ public sealed class BackFillerServerIdTests
 
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidConnectionStrings(),
+            BackFillerTestOptions.CreateValidNntpDb(),
             BackFillerTestOptions.CreateValidAcme(options));
         Assert.Equal(serverId, runtime.ServerId);
         Assert.Equal(expected, runtime.Fqdn);
@@ -147,7 +147,7 @@ public sealed class BackFillerServerIdTests
                        "EnableSsl": false
                      },
                      "ConnectionStrings": {
-                       "GrabberDB": "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"
+                       "NntpDB": "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"
                      }
                    }
                    """;

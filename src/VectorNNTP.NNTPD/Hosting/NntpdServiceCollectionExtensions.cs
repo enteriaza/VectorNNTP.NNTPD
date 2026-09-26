@@ -247,19 +247,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<ModerationEmailComposer>();
         services.TryAddSingleton<IModerationSubmissionService, EmailModerationSubmissionService>();
 
-        services
-            .AddOptions<NntpDbOptions>()
-            .BindConfiguration(NntpDbOptions.SectionName)
-            .Configure<IConfiguration>(static (options, configuration) =>
-            {
-                if (string.IsNullOrWhiteSpace(options.ConnectionString))
-                {
-                    options.ConnectionString =
-                        configuration.GetConnectionString(NntpDbOptions.ConnectionStringName) ?? string.Empty;
-                }
-            })
-            .ValidateOnStart();
-        services.AddSingleton<IValidateOptions<NntpDbOptions>, NntpDbOptionsValidator>();
+        services.AddNntpDbOptions();
 
         if (configure is not null)
         {
