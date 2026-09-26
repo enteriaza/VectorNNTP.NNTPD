@@ -28,7 +28,11 @@ public sealed class ArticleIngestionOptions
     /// <summary>
     /// Gets or sets the filesystem directory for accepted incoming articles.
     /// </summary>
-    /// <remarks>Default is <c>spool/incoming</c>. Created on demand by the spool writer.</remarks>
+    /// <remarks>
+    /// Default is <c>spool/incoming</c>. Created on demand by the spool writer when persist
+    /// writes are enabled. Persist writes are currently commented out; this path is not
+    /// resolved against <see cref="AppContext.BaseDirectory"/> in this implementation.
+    /// </remarks>
     [Required(AllowEmptyStrings = false)]
     [MaxLength(512)]
     public string IncomingDirectory { get; set; } = DefaultIncomingDirectory;

@@ -12,6 +12,7 @@ public static class ProviderAccountMapper
     /// <summary>
     /// Maps a query result. First valid row for a canonical backbone wins.
     /// <c>maxconnections</c> becomes <see cref="BackFillerProviderDefinition.MaxSessions"/>.
+    /// <c>keepalive</c> becomes <see cref="BackFillerProviderDefinition.KeepAliveSeconds"/>.
     /// <c>MinSessions</c> is 0 (lazy) because the table has no min-session column.
     /// </summary>
     public static ProviderAccountMapResult Map(IReadOnlyList<ProviderAccountRow> rows)
@@ -134,7 +135,8 @@ public static class ProviderAccountMapper
             row.Username.Trim(),
             row.Password,
             MinSessions: 0,
-            MaxSessions: row.MaxConnections);
+            MaxSessions: row.MaxConnections,
+            KeepAliveSeconds: row.KeepAliveSeconds);
         reason = string.Empty;
         return true;
     }

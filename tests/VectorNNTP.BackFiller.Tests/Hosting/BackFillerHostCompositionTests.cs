@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Accounts;
+using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
@@ -14,6 +15,7 @@ using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Core;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
@@ -30,16 +32,22 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(9, hosted.Length);
+        Assert.Equal(8, hosted.Length);
         Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
         Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[1]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[2]);
         Assert.IsType<CloudflareDnsReconciliationHostedService>(hosted[3]);
-        Assert.IsType<AcmeCertificateHostedService>(hosted[4]);
+        Assert.IsType<BackFillerApplicationHostedService>(hosted[4]);
         Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[5]);
-        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), hosted[6]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[7]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[8]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[6]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[7]);
+        Assert.DoesNotContain(
+            hosted,
+            static service => service.GetType().Name == "AcmeCertificateHostedService");
+        var application = host.Services.GetServices<IApplicationService>().ToArray();
+        Assert.Equal(2, application.Length);
+        Assert.IsType<AcmeCertificateApplicationService>(application[0]);
+        Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), application[1]);
         Assert.Same(
             host.Services.GetRequiredService<ArticleRetentionAuthority>(),
             host.Services.GetRequiredService<IArticleRetentionAuthority>());
@@ -63,8 +71,7 @@ public sealed class BackFillerHostCompositionTests
         Assert.Same(first, second);
         Assert.Equal("backfiller01.usenet.ninja", first.Fqdn);
         Assert.Equal("127.0.0.1", first.GrabberDb.Server);
-        Assert.Equal(TimeSpan.FromSeconds(60), first.Accounts.RefreshInterval);
-        Assert.Equal(TimeSpan.FromSeconds(15), first.Accounts.CommandTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(60), first.AccountRefreshInterval);
         Assert.Equal(TimeSpan.FromSeconds(45), first.Shutdown.GracePeriod);
         Assert.Equal(
             first.Shutdown.GracePeriod,
@@ -133,9 +140,9 @@ public sealed class BackFillerHostCompositionTests
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
         var tlsPort = GetFreePort();
-        pairs["BindPort"] = tlsPort.ToString();
-        pairs["BindPortTls"] = tlsPort.ToString();
-        pairs["BindAddress:0"] = "*";
+        pairs["BackFiller:BindPort"] = tlsPort.ToString();
+        pairs["BackFiller:BindPortTls"] = tlsPort.ToString();
+        pairs["BackFiller:BindAddress:0"] = "*";
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
@@ -153,19 +160,20 @@ public sealed class BackFillerHostCompositionTests
         builder.AddBackFillerHosting();
         if (replaceAcme)
         {
-            ReplaceAcmeHostedServiceWithImmediateReady(builder.Services);
+            ReplaceAcmeApplicationServiceWithImmediateReady(builder.Services);
         }
 
         return builder.Build();
     }
 
-    private static void ReplaceAcmeHostedServiceWithImmediateReady(IServiceCollection services)
+    private static void ReplaceAcmeApplicationServiceWithImmediateReady(IServiceCollection services)
     {
         for (var i = 0; i < services.Count; i++)
         {
-            if (services[i].ImplementationType == typeof(AcmeCertificateHostedService))
+            if (services[i].ServiceType == typeof(IApplicationService)
+                && services[i].ImplementationType == typeof(AcmeCertificateApplicationService))
             {
-                services[i] = ServiceDescriptor.Singleton<IHostedService, ImmediateAcmeReadyHostedService>();
+                services[i] = ServiceDescriptor.Singleton<IApplicationService, ImmediateAcmeReadyApplicationService>();
             }
         }
     }

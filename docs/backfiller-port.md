@@ -934,9 +934,9 @@ FROM nntpbackfilleraccounts
 WHERE serverid = @ServerId;
 ```
 
-`serverid` is the validated `BackFiller:ServerId` (0–99), sent as an unsigned byte. Connections open only for the duration of a query. Command timeout is `BackFiller:Accounts:CommandTimeoutSeconds` (default 15, range 1–120). `MySqlException` is wrapped as `InvalidOperationException("Provider account query failed against GrabberDB.")` so the connection string is not copied into the exception message.
+`serverid` is the validated `BackFiller:ServerId` (0–99), sent as an unsigned byte. Connections open only for the duration of a query. The accounts `SELECT` uses MySqlConnector command-timeout defaults; there is no application-specific command timeout. `MySqlException` is wrapped as `InvalidOperationException("Provider account query failed against GrabberDB.")` so the connection string is not copied into the exception message.
 
-`keepalive` is parsed and stored on the row and is otherwise unused (DATE remains deferred).
+`keepalive` is parsed from each row as `byte KeepAliveSeconds` and published on `BackFillerProviderDefinition`. Zero disables DATE keepalive. A positive value is the idle interval, in seconds, at which an idle pooled NNTP session issues RFC 3977 `DATE` (expect `111`). DATE and ARTICLE share the session busy lock. Failure, timeout, or EOF retires the session through existing pool health rules. This is not `BackFiller:BackFillerAccountRefreshIntervalSeconds`, which only controls how often GrabberDB is polled.
 
 ### Mapping onto Phase 4 providers
 
@@ -952,6 +952,7 @@ Each accepted row becomes one `BackFillerProviderDefinition`:
 | `password` (required, may be empty) | `Password` |
 | no min-session column | `MinSessions = 0` (lazy) |
 | `maxconnections` ≥ 1 | `MaxSessions` |
+| `keepalive` (tinyint, 0–255) | `KeepAliveSeconds` (0 disables DATE) |
 
 Unknown backbones, duplicates (first valid row wins), and invalid rows are rejected and logged. They do not fail the snapshot and do not create runtime providers. An empty accepted set is a valid snapshot.
 
@@ -962,9 +963,9 @@ Unknown backbones, duplicates (first valid row wins), and invalid rows are rejec
 `ProviderAccountConfigurationService` owns one polling loop:
 
 1. `StartAsync` performs a **required** initial refresh. Query failure fails startup. Empty providers succeed.
-2. After startup, the loop `Delay`s `BackFiller:Accounts:RefreshIntervalSeconds` (default **60**, the old `ControlPlaneService` cadence; range 5–3600), then refreshes. The delay happens first, so the initial load is not immediately repeated.
+2. After startup, the loop `Delay`s `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default **60**, the old `ControlPlaneService` cadence; range 5–3600), then refreshes. The delay happens first, so the initial load is not immediately repeated. There is no dedicated environment-variable mapping for this key.
 3. `Interlocked` prevents overlapping refreshes. A refresh that overruns the interval is not started again until it finishes.
-4. Change detection uses record equality on the published `BackFillerProviderDefinition` set (host, port, TLS, credentials, min/max, presence). Unchanged polls keep the existing snapshot and pools.
+4. Change detection uses record equality on the published `BackFillerProviderDefinition` set (host, port, TLS, credentials, min/max, keepalive, presence). Unchanged polls keep the existing snapshot and pools. A keepalive change replaces that provider's pool; already-leased sessions keep their current lifecycle on the retiring pool.
 5. A later query/refresh failure logs a warning and **retains the last known-good snapshot**. Database unavailable is not treated as “all providers removed”. The next successful refresh publishes atomically and logs recovery.
 
 ### Ownership
@@ -988,7 +989,7 @@ Structured events 5600–5609: snapshot loaded, provider added/removed/changed, 
 
 ### Explicit deferral
 
-Not implemented: table/database provisioning, DATE keepalive from `keepalive`, Transit `TAKETHIS`, ACME, Cloudflare, control-plane capacity.
+Not implemented: table/database provisioning, Transit `TAKETHIS`, ACME, Cloudflare, control-plane capacity.
 
 ### Phase 8 discrepancies
 
@@ -1166,7 +1167,7 @@ Phase 11 did not add a feature. It audited the Phase 0–10 implementation for l
 
 ### Documented as intentional (not changed)
 
-- Empty successful MySQL snapshots are valid and publish; query/refresh **exceptions** keep last-known-good. `keepalive` is parsed and unused (DATE deferred).
+- Empty successful MySQL snapshots are valid and publish; query/refresh **exceptions** keep last-known-good. `keepalive` is published onto the provider definition and drives idle DATE keepalive (`0` disables it).
 - Listener TLS: TLS 1.2/1.3, no client certificate, `X509RevocationMode.NoCheck` (already documented).
 - Provider TLS uses platform certificate validation (no accept-all callback).
 - Fire-and-forget Listener ReceiptAck timers are tracked in `_receiptTimeouts` and cancelled on session completion.
@@ -1277,7 +1278,7 @@ backfiller__ConnectionStrings__GrabberDB=Server=...;Port=3306;Database=...;User 
 1. Confirm startup fails with `Provider account query failed against GrabberDB.` when the host is unreachable (first refresh is required). The raw connection string is not copied into that message.
 2. Confirm `serverid = @ServerId` (`UByte`) filters `nntpbackfilleraccounts`.
 3. Confirm a later poll exception keeps last-known-good and does not recreate pools after registry stop (Phase 8/11).
-4. Confirm command timeout is `BackFiller:Accounts:CommandTimeoutSeconds` (default 15).
+4. Confirm the accounts query uses MySqlConnector command-timeout defaults (no application `CommandTimeout`).
 5. Confirm cancellation during `OpenAsync` / `ExecuteReaderAsync` is `OperationCanceledException`, not the GrabberDB wrapper.
 
 TLS for MySQL is whatever the connection string requests (`SslMode=...`). The worker does not add a second TLS policy.
@@ -1346,8 +1347,6 @@ Unchanged from Phase 1. Prefix `backfiller__` is stripped, then `__` → `:`.
 | PFX password | `backfiller__BackFiller__LetsEncrypt__PfxExportPassword` | yes | none | yes |
 | Cloudflare token | `backfiller__BackFiller__LetsEncrypt__CloudFlareApiToken` | yes (validated only) | none | yes |
 | Cloudflare zone | `backfiller__BackFiller__LetsEncrypt__CloudFlareZoneId` | yes (validated only) | none | no |
-| Accounts poll | `backfiller__BackFiller__Accounts__RefreshIntervalSeconds` | no | 60 | no |
-| Accounts timeout | `backfiller__BackFiller__Accounts__CommandTimeoutSeconds` | no | 15 | no |
 | Grace period | `backfiller__BackFiller__Shutdown__GracePeriodSeconds` | no | 30 | no |
 | Drain queued | `backfiller__BackFiller__Shutdown__DrainQueuedWork` | no | true | no |
 | Finish active | `backfiller__BackFiller__Shutdown__FinishActiveArticles` | no | true | no |
@@ -1407,29 +1406,27 @@ Phase 13 extracts NNTPD's ACME, Cloudflare DNS, and bind-address implementation 
 
 ### Shared configuration
 
-The shared contract is Common-owned `AcmeCloudflareOptions` at the **configuration root** (application-neutral). Option names are `BindAddress`, `BindPort`, `BindPortTls`, `AcmeEmail`, `AcmeCertificatePassword`, `AcmeStateDir`, `CloudFlareApiKey`, `CloudFlareZoneId`, `DnsSuffix`, and the other ACME/Cloudflare operational keys. They are not nested under `Nntpd` or `BackFiller`.
+Shared implementation does not imply shared/global configuration. Common owns the ACME, Cloudflare, and bind-address **implementations**. BackFiller owns the configuration values it supplies to that infrastructure. Bind, ACME directory, and DNS-suffix settings bind from the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPort`, `BackFiller:BindPortTls`, `BackFiller:AcmeDirectoryUrl`, `BackFiller:AcmeRenewalThresholdDays`, `BackFiller:AcmeStateDir`, `BackFiller:DnsSuffix`). Root-level copies of those keys are not used. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT`), not `BackFiller:AcmeEmail`.
 
-Shared environment variables are uppercase `VECTOR__` with no application-specific identifier. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for shared settings:
+Cloudflare, ACME PKCS#12, and ACME account-email secrets remain root-level `VECTOR__*` values (not application-prefixed):
 
 ```text
 VECTOR__CLOUDFLAREAPIKEY
 VECTOR__ACMECERTIFICATEPASSWORD
+VECTOR__ACMEACCOUNT
 VECTOR__CLOUDFLAREZONEID
-VECTOR__BINDADDRESS
-VECTOR__BINDPORT
-VECTOR__BINDPORTTLS
 VECTOR__RABBITMQ__USERNAME
 VECTOR__RABBITMQ__PASSWORD
 VECTOR__CONNECTIONSTRINGS__GRABBERDB
 ```
 
-BackFiller identity is application-specific and stays on the `BackFiller` section (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`). NNTPD identity and POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`. The shared `VECTOR__` variables can be supplied to either process.
+BackFiller identity stays on the `BackFiller` section (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`). There are no `BACKFILLER__*` or `VECTOR__*` mappings for the nested bind/ACME/DNS-suffix settings. NNTPD identity and POST/AUTHINFO secrets use `NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, and `NNTPD__NEWSMASTERPASSWORD`.
 
 ### Behaviour
 
 - BindAddress / BindPort use NNTPD resolution (`IBindAddressResolver`, `ListenEndpointPlanner`) and the same static-vs-runtime validation split.
 - Cloudflare A/AAAA reconciliation uses resolved listener addresses, then ACME DNS-01.
-- ACME account, key persistence, issuance, renewal, and challenge cleanup are the Common implementation.
+- ACME account, key persistence, issuance, renewal, and challenge cleanup are the Common implementation. The account key is shared (`account/private_key.der`). Each certificate identity has one persistent journal file (`journal/{fqdn}.json`) and isolated live state under `live/{fqdn}/` (`current`, `.issuance.lock`, `dns01/`, `gens/`).
 - BackFiller is **TLS-only**. It binds `BindPortTls` only. `BindPortTls <= 0` fails startup. There is no cleartext fallback.
 - The BackFiller listener does not start until a usable ACME certificate has been loaded or issued. Certificate failure fails the process.
 - BackFiller certificates contain only `{BackFillerFqdn}`. They do not request `news.usenet.ninja` or `*.usenet.ninja`.

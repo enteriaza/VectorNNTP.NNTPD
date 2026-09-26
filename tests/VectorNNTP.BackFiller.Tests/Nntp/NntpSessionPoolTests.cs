@@ -163,17 +163,70 @@ public sealed class NntpSessionPoolTests
         }
     }
 
-    internal static NntpSessionPool CreatePool(ScriptedNntpTransportFactory factory, int max, int min = 0)
+    internal static NntpSessionPool CreatePool(
+        ScriptedNntpTransportFactory factory,
+        int max,
+        int min = 0,
+        byte keepAliveSeconds = 0,
+        TimeProvider? time = null,
+        TimeSpan? commandTimeout = null)
     {
         return new NntpSessionPool(
-            new BackFillerProviderDefinition("Giganews", "127.0.0.1", 119, false, null, null, min, max),
+            new BackFillerProviderDefinition(
+                "Giganews",
+                "127.0.0.1",
+                119,
+                false,
+                null,
+                null,
+                min,
+                max,
+                keepAliveSeconds),
             NntpSessionOptions.Default with
             {
                 ConnectTimeout = TimeSpan.FromSeconds(2),
-                CommandTimeout = TimeSpan.FromSeconds(2),
+                CommandTimeout = commandTimeout ?? TimeSpan.FromSeconds(2),
                 ReceiveTimeout = TimeSpan.FromSeconds(2),
             },
             factory,
-            NullLogger.Instance);
+            NullLogger.Instance,
+            shutdownGrace: TimeSpan.FromSeconds(2),
+            timeProvider: time);
+    }
+
+    internal static ScriptedNntpServer CreateDateAwareServer(
+        string dateResponse = "111 20260926120000\r\n",
+        TaskCompletionSource? dateStarted = null,
+        TaskCompletionSource? blockDate = null,
+        TaskCompletionSource? articleStarted = null,
+        TaskCompletionSource? blockArticle = null)
+    {
+        var server = new ScriptedNntpServer
+        {
+            DateStarted = dateStarted,
+            BlockDate = blockDate,
+            ArticleStarted = articleStarted,
+            BlockArticle = blockArticle,
+        };
+        server.Respond(command =>
+        {
+            if (command.Equals("DATE", StringComparison.OrdinalIgnoreCase))
+            {
+                return dateResponse;
+            }
+
+            if (command.StartsWith("AUTHINFO", StringComparison.OrdinalIgnoreCase))
+            {
+                return "281 authentication accepted\r\n";
+            }
+
+            if (command.StartsWith("ARTICLE", StringComparison.OrdinalIgnoreCase))
+            {
+                return "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n";
+            }
+
+            return "430 missing\r\n";
+        });
+        return server;
     }
 }

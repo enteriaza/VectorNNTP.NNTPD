@@ -8,6 +8,7 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener;
@@ -16,7 +17,7 @@ namespace VectorNNTP.BackFiller.Listener;
 /// Process-wide cache Listener: binds configured endpoints, authenticates TLS, and serves retained articles.
 /// Does not own retention, RabbitMQ, or Article Work settlement.
 /// </summary>
-public sealed class CacheListenerService : IHostedService, IAsyncDisposable
+public sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
 {
     private readonly BackFillerRuntimeOptions _runtime;
     private readonly ICacheListenerCertificateSource _certificates;
@@ -75,6 +76,12 @@ public sealed class CacheListenerService : IHostedService, IAsyncDisposable
         readiness.MarkReady();
         return readiness;
     }
+
+    /// <inheritdoc />
+    public string Name => "CacheListener";
+
+    /// <inheritdoc />
+    public Task? Execution => _acceptTask;
 
     /// <summary>Gets the local lifecycle state.</summary>
     public CacheListenerState State

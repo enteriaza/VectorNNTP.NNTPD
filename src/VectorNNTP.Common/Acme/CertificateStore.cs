@@ -3,7 +3,8 @@ using System.Text.RegularExpressions;
 namespace VectorNNTP.NNTPD.Acme;
 
 /// <summary>
-/// Crash-safe live server certificate store using generation directories and a <c>current</c> pointer.
+/// Crash-safe FQDN-scoped live server certificate store using generation directories
+/// and a <c>current</c> pointer.
 /// Persists the TLS credential as PKCS#12/PFX (<c>certificate.pfx</c>).
 /// </summary>
 public sealed class CertificateStore
@@ -11,17 +12,20 @@ public sealed class CertificateStore
     private static readonly Regex GenerationIdRegex = new("^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly string _stateDir;
+    private readonly string _fqdn;
     private readonly string _pfxPassword;
     private readonly IReadOnlyList<string> _requiredDomains;
     private readonly TimeSpan _renewalThreshold;
 
     /// <summary>Initializes a new instance of the <see cref="CertificateStore"/> class.</summary>
-    /// <param name="stateDir">ACME state directory.</param>
+    /// <param name="stateDir">Shared ACME state directory.</param>
+    /// <param name="fqdn">Certificate FQDN that owns this live partition.</param>
     /// <param name="pfxPassword">PKCS#12 password (never logged).</param>
     /// <param name="requiredDomains">Required DNS SANs for round-trip validation.</param>
     /// <param name="renewalThreshold">Renewal threshold used when assessing reloaded material.</param>
     public CertificateStore(
         string stateDir,
+        string fqdn,
         string pfxPassword,
         IReadOnlyList<string> requiredDomains,
         TimeSpan renewalThreshold)
@@ -35,12 +39,16 @@ public sealed class CertificateStore
         }
 
         _stateDir = stateDir;
+        _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
         _pfxPassword = pfxPassword;
         _requiredDomains = requiredDomains;
         _renewalThreshold = renewalThreshold;
-        AcmePaths.EnsureStateLayout(stateDir);
+        AcmePaths.EnsureCertificateIdentityLayout(stateDir, _fqdn);
         Recover();
     }
+
+    /// <summary>Gets the FQDN this store is scoped to.</summary>
+    public string Fqdn => _fqdn;
 
     /// <summary>Returns paths for the active generation (after recovery).</summary>
     public CertificatePaths Paths()
@@ -49,10 +57,18 @@ public sealed class CertificateStore
         var active = ReadCurrentId();
         if (active is not null && GenerationIsComplete(active))
         {
-            return AcmePaths.GenerationCertificatePaths(_stateDir, active);
+            return AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, active);
         }
 
         throw new AcmeStorageException("no_certificate", "no complete certificate generation");
+    }
+
+    /// <summary>Returns the active generation id, or <see langword="null"/> when none is current.</summary>
+    public string? CurrentGenerationId()
+    {
+        Recover();
+        var active = ReadCurrentId();
+        return active is not null && GenerationIsComplete(active) ? active : null;
     }
 
     /// <summary>
@@ -67,7 +83,7 @@ public sealed class CertificateStore
             return null;
         }
 
-        var paths = AcmePaths.GenerationCertificatePaths(_stateDir, active);
+        var paths = AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, active);
         byte[] pfxBytes;
         try
         {
@@ -102,10 +118,9 @@ public sealed class CertificateStore
     public CertificatePaths Save(CertificateMaterial material)
     {
         ArgumentNullException.ThrowIfNull(material);
-        AcmePaths.EnsureStateLayout(_stateDir);
+        AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
         Recover();
 
-        // Pre-validate in-memory bytes before touching disk.
         var preStatus = CertificateValidator.ValidatePfx(
             material.PfxBytes,
             _pfxPassword,
@@ -117,14 +132,13 @@ public sealed class CertificateStore
         }
 
         var generationId = Guid.NewGuid().ToString("N");
-        var genRoot = AcmePaths.GenerationDir(_stateDir, generationId);
+        var genRoot = AcmePaths.GenerationDir(_stateDir, _fqdn, generationId);
         try
         {
             Directory.CreateDirectory(genRoot);
-            var paths = AcmePaths.GenerationCertificatePaths(_stateDir, generationId);
+            var paths = AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, generationId);
             AtomicFile.WriteBytes(paths.PfxPath, material.PfxBytes);
 
-            // Round-trip: reload from disk and validate before complete/current.
             byte[] reloaded;
             try
             {
@@ -145,8 +159,8 @@ public sealed class CertificateStore
                 throw new AcmeCertificateException("pfx_roundtrip_failed", roundTrip.Reason);
             }
 
-            AtomicFile.WriteBytes(AcmePaths.GenerationCompleteMarker(_stateDir, generationId), "ok\n"u8);
-            AtomicFile.WriteText(AcmePaths.CurrentGenerationPointerPath(_stateDir), generationId + "\n");
+            AtomicFile.WriteBytes(AcmePaths.GenerationCompleteMarker(_stateDir, _fqdn, generationId), "ok\n"u8);
+            AtomicFile.WriteText(AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn), generationId + "\n");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AcmeCertificateException)
         {
@@ -160,14 +174,14 @@ public sealed class CertificateStore
         }
 
         CleanupNonCurrentGenerations(keep: generationId);
-        return AcmePaths.GenerationCertificatePaths(_stateDir, generationId);
+        return AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, generationId);
     }
 
-    /// <summary>Idempotent recovery for interrupted promotions.</summary>
+    /// <summary>Idempotent recovery for interrupted promotions inside this FQDN only.</summary>
     public void Recover()
     {
-        AcmePaths.EnsureStateLayout(_stateDir);
-        var pointer = AcmePaths.CurrentGenerationPointerPath(_stateDir);
+        AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
+        var pointer = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
         var currentId = ReadCurrentId();
         if (File.Exists(pointer) && currentId is null)
         {
@@ -190,7 +204,7 @@ public sealed class CertificateStore
 
     private string? ReadCurrentId()
     {
-        var path = AcmePaths.CurrentGenerationPointerPath(_stateDir);
+        var path = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
         if (!File.Exists(path))
         {
             return null;
@@ -214,8 +228,8 @@ public sealed class CertificateStore
             return false;
         }
 
-        var marker = AcmePaths.GenerationCompleteMarker(_stateDir, generationId);
-        var paths = AcmePaths.GenerationCertificatePaths(_stateDir, generationId);
+        var marker = AcmePaths.GenerationCompleteMarker(_stateDir, _fqdn, generationId);
+        var paths = AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, generationId);
         if (!File.Exists(marker) || !File.Exists(paths.PfxPath))
         {
             return false;
@@ -233,7 +247,7 @@ public sealed class CertificateStore
 
     private void CleanupNonCurrentGenerations(string? keep)
     {
-        var root = AcmePaths.GenerationsDir(_stateDir);
+        var root = AcmePaths.GenerationsDir(_stateDir, _fqdn);
         if (!Directory.Exists(root))
         {
             return;

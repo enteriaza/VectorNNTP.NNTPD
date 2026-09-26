@@ -12,9 +12,9 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// consume the same contract. Environment variables use
 /// <see cref="VectorEnvironment.Prefix"/> only
 /// (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
-/// <c>VECTOR__CLOUDFLAREZONEID</c>, <c>VECTOR__BINDADDRESS</c>,
-/// <c>VECTOR__BINDPORT</c>, <c>VECTOR__BINDPORTTLS</c>). There is no
-/// application-specific prefix and no alias.
+/// <c>VECTOR__ACMEACCOUNT</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
+/// <c>VECTOR__BINDADDRESS</c>, <c>VECTOR__BINDPORT</c>,
+/// <c>VECTOR__BINDPORTTLS</c>). There is no application-specific prefix and no alias.
 /// Never log a complete instance: it contains API keys and PFX passwords.
 /// </remarks>
 public class AcmeCloudflareOptions
@@ -29,6 +29,9 @@ public class AcmeCloudflareOptions
 
     /// <summary>Configuration key for the ACME PKCS#12 password secret.</summary>
     public const string AcmeCertificatePasswordConfigurationKey = "AcmeCertificatePassword";
+
+    /// <summary>Configuration key for the shared ACME account contact email.</summary>
+    public const string AcmeAccountConfigurationKey = "ACMEACCOUNT";
 
     /// <summary>Configuration key for the Cloudflare zone id.</summary>
     public const string CloudFlareZoneIdConfigurationKey = "CloudFlareZoneId";
@@ -50,6 +53,12 @@ public class AcmeCloudflareOptions
     /// (<c>VECTOR__CLOUDFLAREZONEID</c>).
     /// </summary>
     public const string CloudFlareZoneIdEnvironmentVariable = "VECTOR__CLOUDFLAREZONEID";
+
+    /// <summary>
+    /// Environment variable that supplies <see cref="AcmeEmail"/>
+    /// (<c>VECTOR__ACMEACCOUNT</c>). Shared by every application using Common ACME.
+    /// </summary>
+    public const string AcmeAccountEnvironmentVariable = "VECTOR__ACMEACCOUNT";
 
     /// <summary>
     /// Environment variable that supplies <see cref="BindAddress"/>
@@ -106,7 +115,13 @@ public class AcmeCloudflareOptions
     /// <summary>Gets or sets the ACME directory URL.</summary>
     public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
 
-    /// <summary>Gets or sets the ACME account contact email.</summary>
+    /// <summary>
+    /// Gets or sets the ACME account contact email.
+    /// </summary>
+    /// <remarks>
+    /// Populated from shared <see cref="AcmeAccountEnvironmentVariable"/> /
+    /// <see cref="AcmeAccountConfigurationKey"/>. Not application-section configuration.
+    /// </remarks>
     public string AcmeEmail { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the ACME account and certificate state directory.</summary>
@@ -181,7 +196,7 @@ public class AcmeCloudflareOptions
         options.BindPort = configuration.GetValue(nameof(BindPort), 119);
         options.BindPortTls = configuration.GetValue(nameof(BindPortTls), 0);
         options.AcmeDirectoryUrl = configuration[nameof(AcmeDirectoryUrl)] ?? DefaultAcmeDirectoryUrl;
-        options.AcmeEmail = configuration[nameof(AcmeEmail)] ?? string.Empty;
+        OverlayAcmeAccountEmail(options, configuration);
         options.AcmeStateDir = configuration[nameof(AcmeStateDir)] ?? DefaultAcmeStateDir;
         options.AcmeRenewalThresholdDays = configuration.GetValue(
             nameof(AcmeRenewalThresholdDays),
@@ -196,5 +211,18 @@ public class AcmeCloudflareOptions
         {
             options.CloudFlareOperationTimeout = parsed;
         }
+    }
+
+    /// <summary>
+    /// Copies the shared ACME account email from <see cref="AcmeAccountConfigurationKey"/>.
+    /// Application-section <c>AcmeEmail</c> keys are ignored.
+    /// </summary>
+    /// <param name="options">The options instance to update.</param>
+    /// <param name="configuration">The full configuration root.</param>
+    public static void OverlayAcmeAccountEmail(AcmeCloudflareOptions options, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(configuration);
+        options.AcmeEmail = configuration[AcmeAccountConfigurationKey] ?? string.Empty;
     }
 }

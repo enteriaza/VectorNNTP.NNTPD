@@ -178,7 +178,7 @@ internal static class TestHostFactory
             NntpdOptions.CloudFlareZoneIdConfigurationKey,
             nameof(NntpdOptions.BindPort),
             nameof(NntpdOptions.BindPortTls),
-            nameof(NntpdOptions.AcmeEmail),
+            AcmeCloudflareOptions.AcmeAccountConfigurationKey,
             nameof(NntpdOptions.AcmeCertificatePassword),
             nameof(NntpdOptions.AcmeStateDir),
             nameof(NntpdOptions.AcmeDirectoryUrl),

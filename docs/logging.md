@@ -51,7 +51,7 @@ There is one source of truth per operational setting. `Serilog:WriteTo` in `apps
 | Gzip + `CompressionLevel.Fastest` | File `hooks` string → `NntpdSerilogHooks.DailyGzipFastest` |
 | Log directory | `Nntpd:LogDir` |
 
-`ConfigureNntpdLogging` creates `Nntpd:LogDir` and overwrites the File `path` so the JSON placeholder (`logs/VectorNNTP.NNTPD-.log`) is never the runtime path. Serilog.Settings.Configuration 10.0.1 cannot expand `Nntpd:LogDir` into `path`. Relative `LogDir` values resolve with `Path.GetFullPath` of the trimmed value, matching `Nntpd:AcmeStateDir`.
+`ConfigureNntpdLogging` creates `Nntpd:LogDir` and overwrites the File `path` so the JSON placeholder (`logs/VectorNNTP.NNTPD-.log`) is never the runtime path. Serilog.Settings.Configuration 10.0.1 cannot expand `Nntpd:LogDir` into `path`. Relative `LogDir` values resolve through Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Relative `Nntpd:AcmeStateDir` values resolve through the ACME wrapper `ResolveAcmeStateDir`, which delegates to the same helper.
 
 `ArchiveHooks` cannot be constructed from JSON scalars. The File `hooks` argument is the Settings.Configuration type/member string `VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD` (`CompressionLevel.Fastest`, no archive count limit). That factory is the only File/Archive construction left in code.
 

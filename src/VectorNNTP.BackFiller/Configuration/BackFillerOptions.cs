@@ -9,23 +9,27 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <para>
 /// Property names are PascalCase. Generated <see cref="Fqdn"/> cannot be bound.
 /// Never log a complete instance: RabbitMQ and GrabberDB secrets live here.
-/// Shared ACME/Cloudflare/bind secrets live on <see cref="AcmeCloudflareOptions"/>.
+/// Cloudflare and ACME PKCS#12 secrets stay on root <c>VECTOR__*</c> keys and
+/// are copied onto <see cref="AcmeCloudflareOptions"/> by
+/// <see cref="BackFillerAcmeCloudflareOptionsAdapter"/>.
 /// </para>
 /// <para>
-/// Shared ACME, Cloudflare, BindAddress, and BindPort settings bind from the
-/// configuration root and <c>VECTOR__*</c> environment variables
-/// (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
-/// <c>VECTOR__CLOUDFLAREZONEID</c>, <c>VECTOR__BINDADDRESS</c>,
-/// <c>VECTOR__BINDPORT</c>, <c>VECTOR__BINDPORTTLS</c>). Identity binds from
-/// section <see cref="SectionName"/> (<c>BACKFILLER__NAME</c>,
-/// <c>BACKFILLER__SERVERID</c>). RabbitMQ uses <c>VECTOR__RABBITMQ__*</c>.
-/// GrabberDB uses <c>VECTOR__CONNECTIONSTRINGS__GRABBERDB</c>. Shared
-/// components do not use an application-specific prefix or alias.
+/// Bind, ACME directory, and DNS-suffix values are BackFiller-owned and bind
+/// only from section <see cref="SectionName"/>. Root-level
+/// <c>BindAddress</c>, <c>BindPort</c>, <c>BindPortTls</c>, <c>DnsSuffix</c>,
+/// and ACME directory keys are not used. Identity may still be supplied by
+/// <c>BACKFILLER__NAME</c> and <c>BACKFILLER__SERVERID</c>. RabbitMQ uses
+/// <c>VECTOR__RABBITMQ__*</c>. GrabberDB uses
+/// <c>VECTOR__CONNECTIONSTRINGS__GRABBERDB</c>. Cloudflare secrets use
+/// <c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
+/// <c>VECTOR__ACMECERTIFICATEPASSWORD</c>, and
+/// <c>VECTOR__ACMEACCOUNT</c>.
 /// </para>
 /// <para>
 /// Intentional key rename from the old worker: <c>BackFiller:Id</c> is now
 /// <c>BackFiller:ServerId</c>. <c>DirLogs</c> is <see cref="LogDirectory"/>;
-/// <c>DirCerts</c> is <see cref="CertificateDirectory"/>.
+/// <c>DirCerts</c> is <see cref="CertificateDirectory"/> /
+/// <see cref="AcmeStateDir"/>.
 /// </para>
 /// </remarks>
 public sealed class BackFillerOptions
@@ -59,6 +63,24 @@ public sealed class BackFillerOptions
 
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
+
+    /// <summary>Default Let's Encrypt staging ACME directory URL.</summary>
+    public const string DefaultAcmeDirectoryUrl = AcmeCloudflareOptions.DefaultAcmeDirectoryUrl;
+
+    /// <summary>Default relative ACME state directory.</summary>
+    public const string DefaultAcmeStateDir = AcmeCloudflareOptions.DefaultAcmeStateDir;
+
+    /// <summary>Default certificate renewal lead time in days.</summary>
+    public const int DefaultAcmeRenewalThresholdDays = AcmeCloudflareOptions.DefaultAcmeRenewalThresholdDays;
+
+    /// <summary>Default MySQL account-refresh poll interval in seconds.</summary>
+    public const int DefaultAccountRefreshIntervalSeconds = 60;
+
+    /// <summary>Minimum MySQL account-refresh poll interval in seconds.</summary>
+    public const int MinimumAccountRefreshIntervalSeconds = 5;
+
+    /// <summary>Maximum MySQL account-refresh poll interval in seconds.</summary>
+    public const int MaximumAccountRefreshIntervalSeconds = 3600;
 
     /// <summary>
     /// Gets or sets the instance name used as the FQDN host-label prefix.
@@ -102,8 +124,40 @@ public sealed class BackFillerOptions
     /// <summary>
     /// Gets or sets the TCP port used by all listener bind addresses.
     /// </summary>
-    /// <remarks>Required. Range 1–65535. No silent default.</remarks>
+    /// <remarks>
+    /// BackFiller does not listen on this cleartext port. Range 1–65535 when set.
+    /// <see cref="BindPortTls"/> is the listen port.
+    /// </remarks>
     public int? BindPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets the TLS TCP port used by the Cache Listener.
+    /// </summary>
+    /// <remarks>
+    /// Required. Range 1–65535. BackFiller is TLS-only; there is no cleartext fallback.
+    /// Nullable so missing is distinct from 0.
+    /// </remarks>
+    public int? BindPortTls { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ACME directory URL.
+    /// </summary>
+    /// <remarks>Absolute HTTPS URL. Default is Let's Encrypt staging.</remarks>
+    public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
+
+    /// <summary>
+    /// Gets or sets how many days before expiry a certificate is due for renewal.
+    /// </summary>
+    public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
+
+    /// <summary>
+    /// Gets or sets the ACME account and certificate state directory.
+    /// </summary>
+    /// <remarks>
+    /// Relative paths resolve against the host content root.
+    /// When empty, <see cref="CertificateDirectory"/> is used.
+    /// </remarks>
+    public string AcmeStateDir { get; set; } = DefaultAcmeStateDir;
 
     /// <summary>
     /// Gets or sets the directory used for application log files.
@@ -151,9 +205,15 @@ public sealed class BackFillerOptions
     public BackFillerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets MySQL provider-account control-plane settings.
+    /// Gets or sets how often BackFiller polls GrabberDB for
+    /// <c>nntpbackfilleraccounts</c> changes.
     /// </summary>
-    public BackFillerAccountsOptions Accounts { get; set; } = new();
+    /// <remarks>
+    /// Default 60. Range 5–3600. This is not the per-account NNTP DATE
+    /// keepalive; that value comes from each MySQL <c>keepalive</c> column.
+    /// There is no dedicated environment-variable mapping for this key.
+    /// </remarks>
+    public int BackFillerAccountRefreshIntervalSeconds { get; set; } = DefaultAccountRefreshIntervalSeconds;
 
     /// <summary>
     /// Returns whether a bind-address token is a wildcard.
@@ -237,22 +297,6 @@ public sealed class BackFillerListenerOptions
 
     /// <summary>Maximum concurrently active accepted connections.</summary>
     public int MaxActiveConnections { get; set; } = 1024;
-}
-
-/// <summary>MySQL provider-account control-plane bounds.</summary>
-public sealed class BackFillerAccountsOptions
-{
-    /// <summary>Old ControlPlaneService refresh cadence.</summary>
-    public const int DefaultRefreshIntervalSeconds = 60;
-
-    /// <summary>Per-command MySQL timeout.</summary>
-    public const int DefaultCommandTimeoutSeconds = 15;
-
-    /// <summary>Seconds between successful-or-failed refresh attempts after the initial load.</summary>
-    public int RefreshIntervalSeconds { get; set; } = DefaultRefreshIntervalSeconds;
-
-    /// <summary>MySQL command timeout in seconds for the accounts query.</summary>
-    public int CommandTimeoutSeconds { get; set; } = DefaultCommandTimeoutSeconds;
 }
 
 /// <summary>In-memory article retention policy.</summary>

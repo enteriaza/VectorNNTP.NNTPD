@@ -69,17 +69,17 @@ public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudf
         }
     }
 
-    /// <summary>Resolves a relative ACME state directory against <paramref name="contentRootPath"/>.</summary>
-    public static string ResolveAcmeStateDir(string acmeStateDir, string? contentRootPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(acmeStateDir);
-        var trimmed = acmeStateDir.Trim();
-        var root = string.IsNullOrWhiteSpace(contentRootPath)
-            ? AppContext.BaseDirectory
-            : contentRootPath;
-        return Path.GetFullPath(trimmed, Path.GetFullPath(root))
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
+    /// <summary>
+    /// Resolves an ACME state directory through
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/>.
+    /// </summary>
+    /// <param name="acmeStateDir">Configured ACME state directory (relative or absolute).</param>
+    /// <param name="applicationBaseDirectory">
+    /// Application binary directory. Production callers must pass
+    /// <see cref="AppContext.BaseDirectory"/>.
+    /// </param>
+    public static string ResolveAcmeStateDir(string acmeStateDir, string? applicationBaseDirectory) =>
+        ApplicationLocalPath.ResolveApplicationLocalPath(acmeStateDir, applicationBaseDirectory);
 
     private static void ValidateCloudFlareTimeout(AcmeCloudflareOptions options, List<string> failures)
     {
@@ -184,7 +184,7 @@ public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudf
         {
             failures.Add(
                 $"{nameof(AcmeCloudflareOptions.AcmeEmail)} is required when {nameof(AcmeCloudflareOptions.BindPortTls)} > 0 " +
-                "and must be a valid contact email address.");
+                $"and must be a valid contact email address (use environment variable {AcmeCloudflareOptions.AcmeAccountEnvironmentVariable}).");
         }
 
         if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))

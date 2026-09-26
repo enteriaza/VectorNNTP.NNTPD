@@ -27,14 +27,19 @@ internal static class NntpdFileLogging
     public const Serilog.Events.LogEventLevel ConsoleMinimumLevel = Serilog.Events.LogEventLevel.Information;
 
     /// <summary>
-    /// Resolves <paramref name="logDir"/> the same way ACME resolves <see cref="AcmeCloudflareOptions.AcmeStateDir"/>.
+    /// Resolves <paramref name="logDir"/> through Common
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
+    /// <paramref name="applicationBaseDirectory"/> (default
+    /// <see cref="AppContext.BaseDirectory"/>). Absolute paths stay absolute.
     /// </summary>
-    public static string ResolveDirectory(string? logDir)
+    public static string ResolveDirectory(string? logDir, string? applicationBaseDirectory = null)
     {
         var configured = string.IsNullOrWhiteSpace(logDir)
             ? NntpdOptions.DefaultLogDir
             : logDir.Trim();
-        return Path.GetFullPath(configured);
+        return ApplicationLocalPath.ResolveApplicationLocalPath(
+            configured,
+            applicationBaseDirectory ?? AppContext.BaseDirectory);
     }
 
     /// <summary>
@@ -56,11 +61,15 @@ internal static class NntpdFileLogging
     /// <summary>
     /// Creates <see cref="NntpdOptions.LogDir"/> and binds the resolved File path over the JSON placeholder.
     /// </summary>
-    public static void BindResolvedFilePath(ConfigurationManager configuration)
+    public static void BindResolvedFilePath(
+        ConfigurationManager configuration,
+        string? applicationBaseDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var logDir = ResolveDirectory(configuration[$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.LogDir)}"]);
+        var logDir = ResolveDirectory(
+            configuration[$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.LogDir)}"],
+            applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
 
         var applicationName = configuration[$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.ApplicationName)}"];

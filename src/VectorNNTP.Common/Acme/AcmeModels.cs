@@ -16,7 +16,8 @@ public sealed record AcmeAccountState(
 
 /// <summary>Filesystem location for the active server certificate PKCS#12/PFX.</summary>
 /// <param name="PfxPath">Path to <c>certificate.pfx</c>.</param>
-public sealed record CertificatePaths(string PfxPath);
+/// <param name="GenerationId">GUID-based generation directory name (32 hex characters).</param>
+public sealed record CertificatePaths(string PfxPath, string GenerationId);
 
 /// <summary>Validated PKCS#12/PFX server certificate material (leaf + key + chain).</summary>
 /// <param name="PfxBytes">Binary PKCS#12/PFX bytes (password-protected).</param>

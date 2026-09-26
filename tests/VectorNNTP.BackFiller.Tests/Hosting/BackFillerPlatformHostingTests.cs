@@ -16,12 +16,21 @@ namespace VectorNNTP.BackFiller.Tests.Hosting;
 public sealed class BackFillerPlatformHostingTests
 {
     [Fact]
-    public void CreateApplicationBuilder_uses_the_application_base_as_content_root()
+    public void Program_pins_content_root_to_the_application_base()
     {
-        var builder = Host.CreateApplicationBuilder([]);
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = [],
+            ContentRootPath = AppContext.BaseDirectory,
+        });
+        builder.Environment.ContentRootPath = AppContext.BaseDirectory;
         Assert.Equal(
             Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
             Path.GetFullPath(builder.Environment.ContentRootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        Assert.Contains(
+            "ContentRootPath = AppContext.BaseDirectory",
+            File.ReadAllText(FindSource("Program.cs")),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -42,17 +51,15 @@ public sealed class BackFillerPlatformHostingTests
             BackFillerServiceCollectionExtensions.IsMicrosoftConsoleLoggerOptionsConfiguration);
     }
 
-    private static string FindPlatformHostingSource()
+    private static string FindPlatformHostingSource() =>
+        FindSource(Path.Combine("Hosting", "BackFillerServiceCollectionExtensions.cs"));
+
+    private static string FindSource(string relativePath)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine(
-                directory.FullName,
-                "src",
-                "VectorNNTP.BackFiller",
-                "Hosting",
-                "BackFillerServiceCollectionExtensions.cs");
+            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", relativePath);
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -61,19 +68,29 @@ public sealed class BackFillerPlatformHostingTests
             directory = directory.Parent;
         }
 
-        throw new FileNotFoundException("Could not locate BackFillerServiceCollectionExtensions.cs.");
+        throw new FileNotFoundException($"Could not locate {relativePath}.");
     }
 
     [Fact]
-    public void Runtime_options_resolve_relative_paths_from_the_host_content_root()
+    public void Runtime_options_resolve_relative_paths_from_the_application_base_not_content_root()
     {
-        var contentRoot = Directory.CreateTempSubdirectory("bf-host-root-").FullName;
+        var decoyContentRoot = Directory.CreateTempSubdirectory("bf-host-decoy-").FullName;
         try
         {
-            using var host = CreateHost(contentRoot);
+            using var host = CreateHost(decoyContentRoot);
             var runtime = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
-            Assert.Equal(Path.GetFullPath(Path.Combine(contentRoot, "logs")), runtime.LogDirectory);
-            Assert.Equal(Path.GetFullPath(Path.Combine(contentRoot, "certs")), runtime.CertificateDirectory);
+            var expectedLogs = ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory);
+            var expectedCerts = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir("certs/", AppContext.BaseDirectory);
+            Assert.Equal(expectedLogs, runtime.LogDirectory);
+            Assert.Equal(expectedCerts, runtime.CertificateDirectory);
+            Assert.DoesNotContain(
+                Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                runtime.LogDirectory,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(
+                Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                runtime.CertificateDirectory,
+                StringComparison.OrdinalIgnoreCase);
             Assert.Equal(
                 runtime.Shutdown.GracePeriod,
                 host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
@@ -82,7 +99,7 @@ public sealed class BackFillerPlatformHostingTests
         {
             try
             {
-                Directory.Delete(contentRoot, recursive: true);
+                Directory.Delete(decoyContentRoot, recursive: true);
             }
             catch (IOException)
             {

@@ -89,7 +89,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
         var catalog = new ProviderConfigurationCatalog();
         var nntp = new ScriptedNntpTransportFactory();
         var options = BackFillerTestOptions.CreateValid();
-        options.Accounts.RefreshIntervalSeconds = 3600;
+        options.BackFillerAccountRefreshIntervalSeconds = 3600;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
             BackFillerTestOptions.CreateValidConnectionStrings()) with

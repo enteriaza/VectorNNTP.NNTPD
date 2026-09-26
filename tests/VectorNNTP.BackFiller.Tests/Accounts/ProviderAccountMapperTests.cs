@@ -20,6 +20,17 @@ public sealed class ProviderAccountMapperTests
         Assert.Equal(ProviderAccountTestRows.SecretPassword, provider.Password);
         Assert.Equal(0, provider.MinSessions);
         Assert.Equal(4, provider.MaxSessions);
+        Assert.Equal(0, provider.KeepAliveSeconds);
+    }
+
+    [Fact]
+    public void Map_preserves_mysql_keepalive_on_the_provider_definition()
+    {
+        var mapped = ProviderAccountMapper.Map([ProviderAccountTestRows.Create(keepAlive: 42)]);
+
+        var provider = Assert.Single(mapped.Providers);
+        Assert.Equal((byte)42, provider.KeepAliveSeconds);
+        Assert.True(provider.DateKeepAliveEnabled);
     }
 
     [Theory]

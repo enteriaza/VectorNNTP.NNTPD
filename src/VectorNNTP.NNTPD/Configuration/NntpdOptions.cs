@@ -8,9 +8,16 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <remarks>
 /// <para>
 /// NNTPD-specific settings bind from section <see cref="SectionName"/> and
-/// <c>NNTPD__*</c> environment variables. Shared bind, ACME, Cloudflare, and
-/// RabbitMQ settings bind from the configuration root
-/// (<see cref="AcmeCloudflareOptions"/>) and <c>VECTOR__*</c>.
+/// <c>NNTPD__*</c> environment variables. ACME directory URL, renewal
+/// threshold, and state directory are NNTPD-owned and bind from
+/// <c>Nntpd</c> only. The ACME account email is shared Common configuration
+/// (<see cref="AcmeCloudflareOptions.AcmeAccountEnvironmentVariable"/>).
+/// Shared bind/DNS settings and <c>VECTOR__</c> secrets
+/// (<see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>,
+/// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>,
+/// <see cref="AcmeCloudflareOptions.CloudFlareZoneId"/>) overlay from the
+/// configuration root. RabbitMQ settings bind from the top-level
+/// <c>RabbitMQ</c> section.
 /// </para>
 /// <para>
 /// <see cref="Fqdn"/> is generated from <see cref="ServerId"/> and <see cref="AcmeCloudflareOptions.DnsSuffix"/> and cannot

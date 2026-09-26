@@ -11,6 +11,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
     {
         Assert.Equal("VECTOR__CLOUDFLAREAPIKEY", AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable);
         Assert.Equal("VECTOR__ACMECERTIFICATEPASSWORD", AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable);
+        Assert.Equal("VECTOR__ACMEACCOUNT", AcmeCloudflareOptions.AcmeAccountEnvironmentVariable);
         Assert.Equal("VECTOR__CLOUDFLAREZONEID", AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable);
         Assert.Equal("VECTOR__BINDADDRESS", AcmeCloudflareOptions.BindAddressEnvironmentVariable);
         Assert.Equal("VECTOR__BINDPORT", AcmeCloudflareOptions.BindPortEnvironmentVariable);
@@ -18,6 +19,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal(AcmeCloudflareOptions.SectionName, string.Empty);
         Assert.Equal("CloudFlareApiKey", AcmeCloudflareOptions.CloudFlareApiKeyConfigurationKey);
         Assert.Equal("AcmeCertificatePassword", AcmeCloudflareOptions.AcmeCertificatePasswordConfigurationKey);
+        Assert.Equal("ACMEACCOUNT", AcmeCloudflareOptions.AcmeAccountConfigurationKey);
         Assert.Equal("CloudFlareZoneId", AcmeCloudflareOptions.CloudFlareZoneIdConfigurationKey);
 
         Assert.True(VectorEnvironment.IsCanonicalName(AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable));
@@ -29,6 +31,9 @@ public sealed class SharedNntpdEnvironmentBindingTests
         Assert.Equal(
             AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable,
             VectorEnvironment.Variable(AcmeCloudflareOptions.AcmeCertificatePasswordConfigurationKey));
+        Assert.Equal(
+            AcmeCloudflareOptions.AcmeAccountEnvironmentVariable,
+            VectorEnvironment.Variable(AcmeCloudflareOptions.AcmeAccountConfigurationKey));
         Assert.Equal(
             AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable,
             VectorEnvironment.Variable(AcmeCloudflareOptions.CloudFlareZoneIdConfigurationKey));
@@ -52,7 +57,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
                 ["CloudFlareZoneId"] = "5811a29d39a0732afb5f160c9b137c3d",
                 ["BindPort"] = "1190",
                 ["BindPortTls"] = "1190",
-                ["AcmeEmail"] = "ops@example.org",
+                [AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "ops@example.org",
                 ["BindAddress:0"] = "*",
             })
             .Build();
@@ -95,6 +100,28 @@ public sealed class SharedNntpdEnvironmentBindingTests
     }
 
     [Fact]
+    public void OverlaySharedFromRoot_UsesSharedAcmeAccountNotApplicationEmail()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "shared@usenet.ninja",
+                ["AcmeEmail"] = "ignored-legacy@example.test",
+            })
+            .Build();
+
+        var options = new AcmeCloudflareOptions { AcmeEmail = "section-must-not-win@example.test" };
+        AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
+
+        Assert.Equal("shared@usenet.ninja", options.AcmeEmail);
+        Assert.Equal(
+            "VECTOR__ACMEACCOUNT",
+            AcmeCloudflareOptions.AcmeAccountEnvironmentVariable);
+        Assert.DoesNotContain("NNTPD", AcmeCloudflareOptions.AcmeAccountEnvironmentVariable, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("BACKFILLER", AcmeCloudflareOptions.AcmeAccountEnvironmentVariable, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ObsoleteApplicationPrefixes_DoNotBindSharedOptions()
     {
         var configuration = new ConfigurationBuilder()
@@ -122,6 +149,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
     {
         Assert.Equal("CLOUDFLAREAPIKEY", StripVectorPrefix("VECTOR__CLOUDFLAREAPIKEY"));
         Assert.Equal("ACMECERTIFICATEPASSWORD", StripVectorPrefix("VECTOR__ACMECERTIFICATEPASSWORD"));
+        Assert.Equal("ACMEACCOUNT", StripVectorPrefix("VECTOR__ACMEACCOUNT"));
         Assert.Equal("CLOUDFLAREZONEID", StripVectorPrefix("VECTOR__CLOUDFLAREZONEID"));
         Assert.Equal("RABBITMQ:USERNAME", StripVectorPrefix("VECTOR__RABBITMQ__USERNAME").Replace("__", ":", StringComparison.Ordinal));
         Assert.Equal(
@@ -137,6 +165,7 @@ public sealed class SharedNntpdEnvironmentBindingTests
         var text = File.ReadAllText(docs);
         Assert.Contains("VECTOR__CLOUDFLAREAPIKEY", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__ACMECERTIFICATEPASSWORD", text, StringComparison.Ordinal);
+        Assert.Contains("VECTOR__ACMEACCOUNT", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__CLOUDFLAREZONEID", text, StringComparison.Ordinal);
         Assert.Contains("VECTOR__RABBITMQ__USERNAME", text, StringComparison.Ordinal);
         Assert.DoesNotContain("nntpd__cloudflareapikey", text, StringComparison.Ordinal);

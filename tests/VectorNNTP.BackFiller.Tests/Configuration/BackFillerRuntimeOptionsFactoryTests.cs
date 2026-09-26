@@ -3,6 +3,7 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
+[Collection("WorkingDirectory")]
 public sealed class BackFillerRuntimeOptionsFactoryTests
 {
     [Fact]
@@ -35,8 +36,9 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.Equal("backfiller", runtime.Name);
         Assert.Equal(["127.0.0.1"], runtime.RabbitMq.Hosts);
         Assert.Equal(4L * 1024 * 1024 * 1024, runtime.ArticleRetention.MaximumRetainedPayloadBytes);
-        Assert.Equal(TimeSpan.FromSeconds(60), runtime.Accounts.RefreshInterval);
-        Assert.Equal(TimeSpan.FromSeconds(15), runtime.Accounts.CommandTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(60), runtime.AccountRefreshInterval);
+        options.BackFillerAccountRefreshIntervalSeconds = 90;
+        Assert.Equal(TimeSpan.FromSeconds(60), runtime.AccountRefreshInterval);
     }
 
     [Fact]
@@ -97,6 +99,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
             var options = BackFillerTestOptions.CreateValid();
             options.LogDirectory = "logs";
             options.CertificateDirectory = "certs";
+            options.AcmeStateDir = "certs";
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
                 BackFillerTestOptions.CreateValidConnectionStrings(),
@@ -125,6 +128,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
             var options = BackFillerTestOptions.CreateValid();
             options.LogDirectory = absoluteLogs;
             options.CertificateDirectory = absoluteCerts;
+            options.AcmeStateDir = absoluteCerts;
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
                 BackFillerTestOptions.CreateValidConnectionStrings(),

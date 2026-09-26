@@ -43,10 +43,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="logs\" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\VectorNNTP.Common\VectorNNTP.Common.csproj" />
   </ItemGroup>
 

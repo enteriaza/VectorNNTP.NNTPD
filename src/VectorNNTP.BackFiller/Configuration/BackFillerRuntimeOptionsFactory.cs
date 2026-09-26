@@ -15,10 +15,11 @@ public static class BackFillerRuntimeOptionsFactory
     /// <param name="options">Validated bindable options.</param>
     /// <param name="connectionStrings">Validated connection-string options.</param>
     /// <param name="contentRootPath">
-    /// Host content root used to resolve relative <see cref="BackFillerOptions.LogDirectory"/>
-    /// and <see cref="BackFillerOptions.CertificateDirectory"/> values. When omitted, relative
-    /// paths resolve against <see cref="AppContext.BaseDirectory"/> rather than the process
-    /// working directory.
+    /// Application binary directory used to resolve relative
+    /// <see cref="BackFillerOptions.LogDirectory"/> and certificate paths.
+    /// Production hosting passes <see cref="AppContext.BaseDirectory"/>. When omitted,
+    /// relative paths resolve against <see cref="AppContext.BaseDirectory"/> rather than
+    /// the process working directory or an IDE project content root.
     /// </param>
     /// <returns>Immutable snapshot.</returns>
     /// <exception cref="InvalidOperationException">Thrown when a required value is missing after validation.</exception>
@@ -35,13 +36,16 @@ public static class BackFillerRuntimeOptionsFactory
         var acme = new AcmeCloudflareOptions
         {
             BindAddress = options.BindAddress is { Length: > 0 } ? options.BindAddress : ["*"],
-            BindPort = options.BindPort ?? 1190,
-            BindPortTls = options.BindPort ?? 1190,
+            BindPort = options.BindPort ?? options.BindPortTls ?? 1190,
+            BindPortTls = options.BindPortTls ?? 0,
             Fqdn = options.Fqdn,
             IncludeNewsHostnameInCertificate = false,
-            AcmeEmail = "security@usenet.ninja",
+            AcmeDirectoryUrl = options.AcmeDirectoryUrl,
+            AcmeRenewalThresholdDays = options.AcmeRenewalThresholdDays,
             AcmeCertificatePassword = string.Empty,
-            AcmeStateDir = options.CertificateDirectory,
+            AcmeStateDir = string.IsNullOrWhiteSpace(options.AcmeStateDir)
+                ? options.CertificateDirectory
+                : options.AcmeStateDir,
             CloudFlareApiKey = string.Empty,
             CloudFlareZoneId = string.Empty,
             DnsSuffix = options.DnsSuffix,
@@ -112,7 +116,6 @@ public static class BackFillerRuntimeOptionsFactory
         var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
         var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
         var transit = options.TransitServer ?? throw new InvalidOperationException("BackFiller:TransitServer is required.");
-        var accounts = options.Accounts ?? throw new InvalidOperationException("BackFiller:Accounts is required.");
 
         return new BackFillerRuntimeOptions(
             Name: name,
@@ -122,8 +125,8 @@ public static class BackFillerRuntimeOptionsFactory
             BindAddressTokens: tokens,
             CanonicalBindAddresses: addresses,
             BindPort: bindPort,
-            LogDirectory: ResolveConfiguredDirectory(options.LogDirectory, contentRootPath),
-            CertificateDirectory: ResolveConfiguredDirectory(acme.AcmeStateDir, contentRootPath),
+            LogDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(options.LogDirectory, contentRootPath),
+            CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             Shutdown: new BackFillerShutdownRuntimeOptions(
                 TimeSpan.FromSeconds(shutdown.GracePeriodSeconds),
                 shutdown.DrainQueuedWork,
@@ -181,9 +184,7 @@ public static class BackFillerRuntimeOptionsFactory
                 server!,
                 database!,
                 userId!),
-            Accounts: new BackFillerAccountsRuntimeOptions(
-                TimeSpan.FromSeconds(accounts.RefreshIntervalSeconds),
-                TimeSpan.FromSeconds(accounts.CommandTimeoutSeconds)));
+            AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
     }
 
     private static IReadOnlyList<string> CertificateIdentitiesForRuntime(AcmeCloudflareOptions acme)
@@ -198,21 +199,4 @@ public static class BackFillerRuntimeOptionsFactory
 
     private static string? NullIfWhiteSpace(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    /// <summary>
-    /// Resolves a configured directory against the host content root.
-    /// Absolute paths stay absolute. Relative paths do not follow
-    /// <see cref="Environment.CurrentDirectory"/>.
-    /// </summary>
-    /// <param name="path">Configured directory.</param>
-    /// <param name="contentRootPath">Host content root, or <see langword="null"/> for the application base directory.</param>
-    /// <returns>A fully qualified directory path.</returns>
-    internal static string ResolveConfiguredDirectory(string path, string? contentRootPath)
-    {
-        var trimmed = path.Trim();
-        var root = string.IsNullOrWhiteSpace(contentRootPath)
-            ? AppContext.BaseDirectory
-            : contentRootPath;
-        return Path.GetFullPath(trimmed, Path.GetFullPath(root));
-    }
 }

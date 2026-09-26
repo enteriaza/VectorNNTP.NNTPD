@@ -3,8 +3,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Accounts;
+using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.Core;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
@@ -12,6 +14,7 @@ using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Core;
 
 namespace VectorNNTP.BackFiller.Hosting;
 
@@ -31,9 +34,11 @@ public static class BackFillerServiceCollectionExtensions
     /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
     /// after the connection owner, then <see cref="NntpProviderRegistry"/>,
     /// then <see cref="CloudflareDnsReconciliationHostedService"/>, then
-    /// <see cref="AcmeCertificateHostedService"/>, then
+    /// <see cref="BackFillerApplicationHostedService"/> (starts
+    /// <see cref="AcmeCertificateApplicationService"/> then
+    /// <see cref="CacheListenerService"/>), then
     /// <see cref="ArticleRetentionSweepService"/>, then
-    /// <see cref="CacheListenerService"/>, then <see cref="ArticleWorkResponsePublisher"/>,
+    /// <see cref="ArticleWorkResponsePublisher"/>,
     /// then <see cref="ArticleWorkConsumerService"/>. Transit and
     /// control-plane capacity remain deferred.
     /// </remarks>
@@ -63,28 +68,20 @@ public static class BackFillerServiceCollectionExtensions
 
         builder.Services
             .AddOptions<AcmeCloudflareOptions>()
-            .Bind(builder.Configuration)
+            .Configure<IOptions<BackFillerOptions>, IConfiguration>(
+                static (acme, backfiller, configuration) =>
+                {
+                    BackFillerAcmeCloudflareOptionsAdapter.Apply(acme, backfiller.Value, configuration);
+                })
             .ValidateDataAnnotations()
             .ValidateOnStart()
-            .PostConfigure<IOptions<BackFillerOptions>, IHostEnvironment, IBackFillerStartupJournal>(
-                static (acme, backfiller, environment, journal) =>
+            .PostConfigure<IBackFillerStartupJournal>(
+                static (acme, journal) =>
             {
-                var identity = backfiller.Value;
-                acme.IncludeNewsHostnameInCertificate = false;
-                if (string.IsNullOrWhiteSpace(acme.Fqdn) && !string.IsNullOrWhiteSpace(identity.Fqdn))
-                {
-                    acme.Fqdn = identity.Fqdn;
-                }
-
-                if (string.IsNullOrWhiteSpace(acme.DnsSuffix) && !string.IsNullOrWhiteSpace(identity.DnsSuffix))
-                {
-                    acme.DnsSuffix = identity.DnsSuffix;
-                }
-
                 AcmeCloudflareOptionsValidator.NormalizeBindAddresses(acme);
-                acme.AcmeStateDir = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir(
+                acme.AcmeStateDir = ApplicationLocalPath.ResolveApplicationLocalPath(
                     acme.AcmeStateDir,
-                    environment.ContentRootPath);
+                    AppContext.BaseDirectory);
                 journal.Record(BackFillerStartupStages.Configuration);
             });
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, AcmeCloudflareOptionsValidator>();
@@ -102,9 +99,12 @@ public static class BackFillerServiceCollectionExtensions
         {
             var options = provider.GetRequiredService<IOptions<BackFillerOptions>>().Value;
             var connectionStrings = provider.GetRequiredService<IOptions<BackFillerConnectionStringsOptions>>().Value;
-            var contentRoot = provider.GetRequiredService<IHostEnvironment>().ContentRootPath;
             var acme = provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
-            return BackFillerRuntimeOptionsFactory.Create(options, connectionStrings, acme, contentRoot);
+            return BackFillerRuntimeOptionsFactory.Create(
+                options,
+                connectionStrings,
+                acme,
+                AppContext.BaseDirectory);
         });
 
         builder.Services.AddOptions<HostOptions>()
@@ -144,7 +144,8 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<NntpProviderRegistry>());
         builder.Services.AddSingleton<IHostedService, CloudflareDnsReconciliationHostedService>();
-        builder.Services.AddSingleton<IHostedService, AcmeCertificateHostedService>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
         builder.Services.TryAddSingleton<INntpArticleRetriever, NntpArticleRetriever>();
         builder.Services.AddSingleton(static provider => new ArticleRetentionAuthority(
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
@@ -155,8 +156,6 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton(static provider => new ArticleRetentionSweepService(
             provider.GetRequiredService<IArticleRetentionAuthority>(),
             provider.GetRequiredService<ILogger<ArticleRetentionSweepService>>()));
-        builder.Services.AddSingleton<IHostedService>(static provider =>
-            provider.GetRequiredService<ArticleRetentionSweepService>());
         builder.Services.TryAddSingleton<ICacheListenerCertificateSource, AcmeCacheListenerCertificateSource>();
         builder.Services.AddSingleton(static provider => new CacheListenerService(
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
@@ -165,8 +164,13 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<IAcmeCertificateReadiness>(),
             provider.GetRequiredService<IBackFillerStartupJournal>(),
             provider.GetRequiredService<ILogger<CacheListenerService>>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, CacheListenerService>(static provider =>
+                provider.GetRequiredService<CacheListenerService>()));
+        builder.Services.AddSingleton<ApplicationServiceManager>();
+        builder.Services.AddSingleton<IHostedService, BackFillerApplicationHostedService>();
         builder.Services.AddSingleton<IHostedService>(static provider =>
-            provider.GetRequiredService<CacheListenerService>());
+            provider.GetRequiredService<ArticleRetentionSweepService>());
         builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
         builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
             provider.GetRequiredService<IBackFillerRabbitMqService>(),

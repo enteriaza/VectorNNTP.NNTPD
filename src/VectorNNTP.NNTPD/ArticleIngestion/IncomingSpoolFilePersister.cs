@@ -17,6 +17,12 @@ public interface IIncomingArticlePersister
 /// <summary>
 /// Writes complete article payloads to <c>spool/incoming</c> using asynchronous file I/O.
 /// </summary>
+/// <remarks>
+/// Persist writes are currently commented out. <c>Directory.CreateDirectory</c> still
+/// runs if <see cref="PersistAsync"/> is invoked. Relative
+/// <see cref="ArticleIngestionOptions.IncomingDirectory"/> values are therefore unused
+/// for production writes today and are left unresolved (not redesigned here).
+/// </remarks>
 public sealed class IncomingSpoolFilePersister : IIncomingArticlePersister
 {
     private readonly IOptions<NntpdOptions> _options;

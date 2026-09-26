@@ -7,6 +7,36 @@ public static class CertificateIdentities
     public const string NewsHostname = "news.usenet.ninja";
 
     /// <summary>
+    /// Normalizes the certificate FQDN used as the ACME filesystem partition key.
+    /// </summary>
+    /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
+    /// <returns>Trimmed, trailing-dot-stripped, lowercased FQDN.</returns>
+    /// <exception cref="ArgumentException">Thrown when the value is empty, a wildcard, or not a safe path segment.</exception>
+    public static string NormalizeFqdn(string fqdn)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+
+        var cleaned = fqdn.Trim().TrimEnd('.').ToLowerInvariant();
+        if (cleaned.Length == 0)
+        {
+            throw new ArgumentException("fqdn must be a non-empty DNS name.", nameof(fqdn));
+        }
+
+        if (cleaned.Contains('*', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("wildcard identities are not permitted.", nameof(fqdn));
+        }
+
+        if (cleaned.Contains("..", StringComparison.Ordinal)
+            || cleaned.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException("fqdn is not a valid filesystem partition key.", nameof(fqdn));
+        }
+
+        return cleaned;
+    }
+
+    /// <summary>
     /// Returns the exact DNS SAN set for issuance.
     /// </summary>
     /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
@@ -17,18 +47,7 @@ public static class CertificateIdentities
     /// <returns>Lowercased, deduplicated identities.</returns>
     public static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
-
-        var cleanedFqdn = fqdn.Trim().TrimEnd('.').ToLowerInvariant();
-        if (cleanedFqdn.Length == 0)
-        {
-            throw new ArgumentException("fqdn must be a non-empty DNS name.", nameof(fqdn));
-        }
-
-        if (cleanedFqdn.Contains('*', StringComparison.Ordinal))
-        {
-            throw new ArgumentException("wildcard identities are not permitted.", nameof(fqdn));
-        }
+        var cleanedFqdn = NormalizeFqdn(fqdn);
 
         var ordered = new List<string>(2);
         var seen = new HashSet<string>(StringComparer.Ordinal);

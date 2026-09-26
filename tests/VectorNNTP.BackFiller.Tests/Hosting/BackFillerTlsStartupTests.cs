@@ -5,9 +5,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Listener;
+using VectorNNTP.NNTPD.Core;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
@@ -155,9 +157,9 @@ public sealed class BackFillerTlsStartupTests
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
         var port = GetFreePort();
-        pairs["BindPortTls"] = port.ToString();
-        pairs["BindPort"] = "119";
-        pairs["BindAddress:0"] = "*";
+        pairs["BackFiller:BindPortTls"] = port.ToString();
+        pairs["BackFiller:BindPort"] = "119";
+        pairs["BackFiller:BindAddress:0"] = "*";
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(
@@ -188,7 +190,10 @@ public sealed class BackFillerTlsStartupTests
             var listenerIndex = stages.IndexOf(BackFillerStartupStages.ListenerStarted);
             Assert.InRange(acmeIndex, 0, listenerIndex - 1);
 
+            var application = host.Services.GetServices<IApplicationService>().ToArray();
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[0]);
             var listener = host.Services.GetRequiredService<CacheListenerService>();
+            Assert.Same(listener, application[1]);
             Assert.Equal(CacheListenerState.Running, listener.State);
             Assert.All(listener.LocalEndPoints, endpoint =>
             {
@@ -230,9 +235,10 @@ public sealed class BackFillerTlsStartupTests
     {
         for (var i = 0; i < services.Count; i++)
         {
-            if (services[i].ImplementationType == typeof(AcmeCertificateHostedService))
+            if (services[i].ServiceType == typeof(IApplicationService)
+                && services[i].ImplementationType == typeof(AcmeCertificateApplicationService))
             {
-                services[i] = ServiceDescriptor.Singleton<IHostedService, ImmediateAcmeReadyHostedService>();
+                services[i] = ServiceDescriptor.Singleton<IApplicationService, ImmediateAcmeReadyApplicationService>();
             }
         }
     }

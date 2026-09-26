@@ -1,22 +1,25 @@
+using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Core;
 
-namespace VectorNNTP.BackFiller.Hosting;
+namespace VectorNNTP.BackFiller.Acme;
 
 /// <summary>
-/// Generic Host wrapper around the shared ACME certificate implementation.
+/// BackFiller lifecycle wrapper around the shared ACME certificate implementation.
 /// </summary>
 /// <remarks>
-/// <see cref="StartAsync"/> does not return until a usable certificate is loaded
-/// or issued. Failure fails host startup. The TLS listener must not start first.
+/// Delegates issuance, renewal, and persistence to Common
+/// <see cref="AcmeCertificateService"/>. BackFiller-specific fail-fast readiness
+/// and startup-journal recording stay on this adapter.
 /// </remarks>
-public sealed class AcmeCertificateHostedService : IHostedService, IAsyncDisposable
+public sealed class AcmeCertificateApplicationService : IApplicationService, IAsyncDisposable
 {
     private readonly AcmeCertificateService _inner;
     private readonly IAcmeCertificateReadiness _readiness;
     private readonly IBackFillerStartupJournal _journal;
 
     /// <summary>Initializes a new wrapper.</summary>
-    public AcmeCertificateHostedService(
+    public AcmeCertificateApplicationService(
         AcmeCertificateService inner,
         IAcmeCertificateReadiness readiness,
         IBackFillerStartupJournal journal)
@@ -28,6 +31,12 @@ public sealed class AcmeCertificateHostedService : IHostedService, IAsyncDisposa
         _readiness = readiness;
         _journal = journal;
     }
+
+    /// <inheritdoc />
+    public string Name => _inner.Name;
+
+    /// <inheritdoc />
+    public Task? Execution => _inner.Execution;
 
     /// <inheritdoc />
     public async Task StartAsync(CancellationToken cancellationToken)

@@ -217,10 +217,10 @@ public sealed class BackFillerConfigurationBindingTests
             ("backfiller__RabbitMQ__Password", BackFillerTestOptions.SecretPassword));
 
         var configuration = environment.BuildPrefixedConfiguration();
-        var options = new BackFillerOptions();
-        configuration.Bind(options);
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
+        Assert.NotEqual("obsolete-user", configuration["RabbitMQ:Username"]);
+        Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["RabbitMQ:Password"]);
+        Assert.NotEqual("obsolete-user", configuration["BackFiller:RabbitMQ:Username"]);
+        Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["BackFiller:RabbitMQ:Password"]);
     }
 
     [Fact]

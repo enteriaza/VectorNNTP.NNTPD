@@ -18,7 +18,7 @@ public interface IAuthoritativeTxtResolver
 }
 
 /// <summary>
-/// Creates, awaits, and cleans up ACME DNS-01 TXT records via Cloudflare with a durable journal.
+/// Creates, awaits, and cleans up ACME DNS-01 TXT records via Cloudflare with FQDN-scoped recovery state.
 /// </summary>
 public sealed class Dns01Solver
 {
@@ -27,21 +27,36 @@ public sealed class Dns01Solver
 
     private readonly Cloudflare.ICloudflareDnsClient _client;
     private readonly string _zoneId;
+    private readonly string _fqdn;
     private readonly IAuthoritativeTxtResolver _resolver;
-    private readonly string? _journalDir;
+    private readonly string? _recoveryDir;
+    private readonly AcmeTransactionJournal? _historyJournal;
     private readonly TimeSpan _propagationTimeout;
     private readonly TimeSpan _propagationInterval;
     private readonly List<PlacedChallenge> _placed = [];
     private bool _recovered;
 
     /// <summary>Initializes a new instance of the <see cref="Dns01Solver"/> class.</summary>
+    /// <param name="client">Cloudflare DNS client.</param>
+    /// <param name="zoneId">Cloudflare zone id.</param>
+    /// <param name="resolver">Authoritative TXT resolver.</param>
+    /// <param name="fqdn">Certificate FQDN that owns this DNS-01 recovery partition.</param>
+    /// <param name="stateDir">Shared ACME state root. When omitted, recovery files are disabled.</param>
+    /// <param name="propagationTimeout">Visibility wait timeout.</param>
+    /// <param name="propagationInterval">Visibility poll interval.</param>
+    /// <param name="historyJournal">
+    /// Optional persistent ACME journal. DNS create/remove events are recorded here
+    /// only when a transaction is already active for this FQDN.
+    /// </param>
     public Dns01Solver(
         Cloudflare.ICloudflareDnsClient client,
         string zoneId,
         IAuthoritativeTxtResolver resolver,
+        string fqdn,
         string? stateDir = null,
         TimeSpan? propagationTimeout = null,
-        TimeSpan? propagationInterval = null)
+        TimeSpan? propagationInterval = null,
+        AcmeTransactionJournal? historyJournal = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
@@ -49,28 +64,33 @@ public sealed class Dns01Solver
 
         _client = client;
         _zoneId = zoneId;
+        _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
         _resolver = resolver;
+        _historyJournal = historyJournal;
         _propagationTimeout = propagationTimeout ?? TimeSpan.FromSeconds(120);
         _propagationInterval = propagationInterval ?? TimeSpan.FromSeconds(2);
 
         if (stateDir is not null)
         {
-            AcmePaths.EnsureStateLayout(stateDir);
-            _journalDir = AcmePaths.Dns01JournalDir(stateDir);
-            Directory.CreateDirectory(_journalDir);
+            AcmePaths.EnsureCertificateIdentityLayout(stateDir, _fqdn);
+            _recoveryDir = AcmePaths.Dns01RecoveryDir(stateDir, _fqdn);
+            Directory.CreateDirectory(_recoveryDir);
         }
     }
+
+    /// <summary>Gets the FQDN this solver is scoped to.</summary>
+    public string Fqdn => _fqdn;
 
     /// <summary>Idempotent startup recovery of journalled TXT records.</summary>
     public async Task RecoverAsync(CancellationToken cancellationToken)
     {
-        if (_journalDir is null)
+        if (_recoveryDir is null)
         {
             _recovered = true;
             return;
         }
 
-        var entries = LoadJournalEntries(_journalDir);
+        var entries = LoadJournalEntries(_recoveryDir, _fqdn);
         var failures = 0;
         foreach (var entry in entries)
         {
@@ -196,6 +216,11 @@ public sealed class Dns01Solver
                 await Task.Delay(_propagationInterval, cancellationToken).ConfigureAwait(false);
             }
         }
+
+        foreach (var spec in challenges)
+        {
+            _historyJournal?.RecordDnsChallengePropagated(spec.RecordName);
+        }
     }
 
     /// <summary>Deletes only TXT records created by this solver (by record id).</summary>
@@ -209,10 +234,16 @@ public sealed class Dns01Solver
             {
                 await DeleteOwnedRecordAsync(item.ZoneId, item.RecordId, cancellationToken)
                     .ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(item.EntryId) && _journalDir is not null)
+                if (!string.IsNullOrEmpty(item.EntryId) && _recoveryDir is not null)
                 {
-                    RemoveJournalFile(_journalDir, item.EntryId);
+                    RemoveJournalFile(_recoveryDir, item.EntryId);
                 }
+
+                _historyJournal?.RecordDnsChallengeRemoved(
+                    item.Spec.RecordName,
+                    item.ZoneId,
+                    item.RecordId,
+                    item.Spec.Validation);
             }
             catch (OperationCanceledException)
             {
@@ -240,11 +271,19 @@ public sealed class Dns01Solver
         var name = spec.RecordName;
         var content = spec.Validation;
 
-        if (_journalDir is not null)
+        if (_recoveryDir is not null)
         {
             WriteJournalEntry(
-                _journalDir,
-                new JournalEntry(entryId, "creating", _zoneId, name, content, RecordId: null));
+                _recoveryDir,
+                new JournalEntry(
+                    entryId,
+                    "creating",
+                    _zoneId,
+                    name,
+                    content,
+                    RecordId: null,
+                    _fqdn,
+                    _historyJournal?.ActiveTransactionId));
         }
 
         var record = await _client.CreateRecordAsync(
@@ -260,19 +299,28 @@ public sealed class Dns01Solver
                 cancellationToken)
             .ConfigureAwait(false);
 
-        if (_journalDir is not null)
+        if (_recoveryDir is not null)
         {
             WriteJournalEntry(
-                _journalDir,
-                new JournalEntry(entryId, "placed", _zoneId, name, content, record.Id));
+                _recoveryDir,
+                new JournalEntry(
+                    entryId,
+                    "placed",
+                    _zoneId,
+                    name,
+                    content,
+                    record.Id,
+                    _fqdn,
+                    _historyJournal?.ActiveTransactionId));
         }
 
+        _historyJournal?.RecordDnsChallengeCreated(name, _zoneId, record.Id, content);
         return new PlacedChallenge(spec, record.Id, _zoneId, entryId);
     }
 
     private async Task RecoverEntryAsync(JournalEntry entry, CancellationToken cancellationToken)
     {
-        if (_journalDir is null)
+        if (_recoveryDir is null)
         {
             return;
         }
@@ -288,7 +336,8 @@ public sealed class Dns01Solver
 
             await DeleteOwnedRecordAsync(entry.ZoneId, entry.RecordId, cancellationToken)
                 .ConfigureAwait(false);
-            RemoveJournalFile(_journalDir, entry.EntryId);
+            RemoveJournalFile(_recoveryDir, entry.EntryId);
+            RecordRecoveredRemoval(entry, entry.RecordId);
             return;
         }
 
@@ -301,9 +350,21 @@ public sealed class Dns01Solver
         foreach (var recordId in matches)
         {
             await DeleteOwnedRecordAsync(entry.ZoneId, recordId, cancellationToken).ConfigureAwait(false);
+            RecordRecoveredRemoval(entry, recordId);
         }
 
-        RemoveJournalFile(_journalDir, entry.EntryId);
+        RemoveJournalFile(_recoveryDir, entry.EntryId);
+    }
+
+    private void RecordRecoveredRemoval(JournalEntry entry, string? recordId)
+    {
+        _historyJournal?.RecordDnsChallengeRecoveredAndRemoved(
+            entry.EntryId,
+            entry.Name,
+            entry.ZoneId,
+            recordId,
+            entry.Content,
+            entry.TransactionId);
     }
 
     private async Task<IReadOnlyList<string>> FindRecordsByContentAsync(
@@ -380,7 +441,9 @@ public sealed class Dns01Solver
         string ZoneId,
         string Name,
         string Content,
-        string? RecordId);
+        string? RecordId,
+        string Fqdn,
+        string? TransactionId);
 
     private static void WriteJournalEntry(string journalDir, JournalEntry entry)
     {
@@ -393,6 +456,8 @@ public sealed class Dns01Solver
             ["name"] = entry.Name,
             ["content"] = entry.Content,
             ["record_id"] = entry.RecordId,
+            ["fqdn"] = entry.Fqdn,
+            ["transaction_id"] = entry.TransactionId,
         };
         var path = Path.Combine(journalDir, entry.EntryId + ".json");
         AtomicFile.WriteText(
@@ -406,7 +471,7 @@ public sealed class Dns01Solver
     private static void RemoveJournalFile(string journalDir, string entryId) =>
         AtomicFile.TryDelete(Path.Combine(journalDir, entryId + ".json"));
 
-    private static List<JournalEntry> LoadJournalEntries(string journalDir)
+    private static List<JournalEntry> LoadJournalEntries(string journalDir, string expectedFqdn)
     {
         if (!Directory.Exists(journalDir))
         {
@@ -416,13 +481,13 @@ public sealed class Dns01Solver
         var entries = new List<JournalEntry>();
         foreach (var path in Directory.EnumerateFiles(journalDir, "*.json").OrderBy(static p => p, StringComparer.Ordinal))
         {
-            entries.Add(ParseJournalFile(path));
+            entries.Add(ParseJournalFile(path, expectedFqdn));
         }
 
         return entries;
     }
 
-    private static JournalEntry ParseJournalFile(string path)
+    private static JournalEntry ParseJournalFile(string path, string expectedFqdn)
     {
         try
         {
@@ -461,7 +526,20 @@ public sealed class Dns01Solver
                 throw new AcmeChallengeException("malformed_journal", "placed without record_id");
             }
 
-            return new JournalEntry(entryId, phase, zoneId, name, content, recordId);
+            var fqdn = root.GetProperty("fqdn").GetString() ?? string.Empty;
+            if (!string.Equals(fqdn, expectedFqdn, StringComparison.Ordinal))
+            {
+                throw new AcmeChallengeException("malformed_journal", "fqdn mismatch");
+            }
+
+            string? transactionId = null;
+            if (root.TryGetProperty("transaction_id", out var transactionIdElement)
+                && transactionIdElement.ValueKind != System.Text.Json.JsonValueKind.Null)
+            {
+                transactionId = transactionIdElement.GetString();
+            }
+
+            return new JournalEntry(entryId, phase, zoneId, name, content, recordId, fqdn, transactionId);
         }
         catch (AcmeChallengeException)
         {

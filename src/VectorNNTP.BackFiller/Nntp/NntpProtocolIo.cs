@@ -7,6 +7,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 internal static class NntpProtocolIo
 {
     internal static readonly byte[] Crlf = [(byte)'\r', (byte)'\n'];
+    internal static readonly byte[] DateCommand = "DATE\r\n"u8.ToArray();
     internal static readonly byte[] ArticlePrefix = "ARTICLE "u8.ToArray();
     internal static readonly byte[] AuthInfoUserPrefix = "AUTHINFO USER "u8.ToArray();
     internal static readonly byte[] AuthInfoPassPrefix = "AUTHINFO PASS "u8.ToArray();

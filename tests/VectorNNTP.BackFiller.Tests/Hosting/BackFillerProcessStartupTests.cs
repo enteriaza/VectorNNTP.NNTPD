@@ -30,13 +30,12 @@ public sealed class BackFillerProcessStartupTests
                 process.StartInfo.ArgumentList.Add(argument);
             }
 
+            process.StartInfo.ArgumentList.Add("--BackFiller:BindPortTls=0");
             process.StartInfo.Environment[BackFillerOptions.NameEnvironmentVariable] =
                 "process-smoke";
             process.StartInfo.Environment[BackFillerOptions.ServerIdEnvironmentVariable] = "1";
             process.StartInfo.Environment[BackFillerOptions.GrabberDbEnvironmentVariable] =
                 "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz";
-            process.StartInfo.Environment["VECTOR__BINDPORT"] = "1190";
-            process.StartInfo.Environment["VECTOR__BINDPORTTLS"] = "0";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "unit-test-cloudflare-key-not-secret";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREZONEID"] = "0123456789abcdef0123456789abcdef";
 

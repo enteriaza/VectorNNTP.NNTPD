@@ -29,7 +29,6 @@ public sealed class MySqlProviderAccountSource : IProviderAccountSource
 
     private readonly string _connectionString;
     private readonly byte _serverId;
-    private readonly int _commandTimeoutSeconds;
 
     /// <summary>Initializes a MySQL-backed source from validated runtime options.</summary>
     public MySqlProviderAccountSource(BackFillerRuntimeOptions runtime)
@@ -42,7 +41,6 @@ public sealed class MySqlProviderAccountSource : IProviderAccountSource
 
         _connectionString = runtime.GrabberDb.ConnectionString;
         _serverId = (byte)runtime.ServerId;
-        _commandTimeoutSeconds = (int)runtime.Accounts.CommandTimeout.TotalSeconds;
     }
 
     /// <inheritdoc />
@@ -58,7 +56,6 @@ public sealed class MySqlProviderAccountSource : IProviderAccountSource
                 await using (command.ConfigureAwait(false))
                 {
                     command.CommandText = AccountsQuery;
-                    command.CommandTimeout = _commandTimeoutSeconds;
                     _ = command.Parameters.Add(new MySqlParameter("@ServerId", MySqlDbType.UByte) { Value = _serverId });
                     var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                     await using (reader.ConfigureAwait(false))

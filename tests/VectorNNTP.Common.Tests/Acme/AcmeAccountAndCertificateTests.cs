@@ -73,11 +73,11 @@ public sealed class AcmeAccountAndCertificateTests
     {
         using var dir = new TempStateDir();
         var names = CertificateIdentities.ForFqdn("backfiller01.usenet.ninja", includeNewsHostname: false);
-        var store = new CertificateStore(dir.Path, TestCertificateFactory.Password, names, TimeSpan.FromDays(30));
+        var store = new CertificateStore(dir.Path, "backfiller01.usenet.ninja", TestCertificateFactory.Password, names, TimeSpan.FromDays(30));
         var material = TestCertificateFactory.CreateMaterial(names, DateTimeOffset.UtcNow.AddDays(60));
 
         store.Save(material);
-        var reloaded = new CertificateStore(dir.Path, TestCertificateFactory.Password, names, TimeSpan.FromDays(30))
+        var reloaded = new CertificateStore(dir.Path, "backfiller01.usenet.ninja", TestCertificateFactory.Password, names, TimeSpan.FromDays(30))
             .Load();
         Assert.NotNull(reloaded);
         Assert.Equal(names, reloaded.Domains);
@@ -89,7 +89,7 @@ public sealed class AcmeAccountAndCertificateTests
     {
         using var dir = new TempStateDir();
         var names = CertificateIdentities.ForFqdn("backfiller01.usenet.ninja", includeNewsHostname: false);
-        var store = new CertificateStore(dir.Path, TestCertificateFactory.Password, names, TimeSpan.FromDays(30));
+        var store = new CertificateStore(dir.Path, "backfiller01.usenet.ninja", TestCertificateFactory.Password, names, TimeSpan.FromDays(30));
         var current = TestCertificateFactory.CreateMaterial(names, DateTimeOffset.UtcNow.AddDays(60));
         store.Save(current);
         var before = File.ReadAllBytes(store.Paths().PfxPath);
@@ -97,7 +97,7 @@ public sealed class AcmeAccountAndCertificateTests
         var invalid = current with { PfxBytes = [0x00, 0x01] };
         Assert.ThrowsAny<Exception>(() => store.Save(invalid));
 
-        var after = new CertificateStore(dir.Path, TestCertificateFactory.Password, names, TimeSpan.FromDays(30))
+        var after = new CertificateStore(dir.Path, "backfiller01.usenet.ninja", TestCertificateFactory.Password, names, TimeSpan.FromDays(30))
             .Load();
         Assert.NotNull(after);
         Assert.True(before.AsSpan().SequenceEqual(File.ReadAllBytes(store.Paths().PfxPath)));

@@ -70,6 +70,28 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_fails_when_nested_bind_port_tls_is_missing()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.BindPortTls = null;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains("BindPortTls", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static f => f.Contains("TLS-only", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_does_not_require_application_section_acme_email()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+        Assert.DoesNotContain(
+            result.Failures ?? [],
+            static f => f.Contains("AcmeEmail", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_fails_when_drain_timeout_exceeds_grace_period()
     {
         var options = BackFillerTestOptions.CreateValid();
@@ -131,29 +153,15 @@ public sealed class BackFillerOptionsValidatorTests
     [Theory]
     [InlineData(4)]
     [InlineData(3601)]
-    public void Validate_fails_when_accounts_refresh_interval_is_out_of_range(int seconds)
+    public void Validate_fails_when_account_refresh_interval_is_out_of_range(int seconds)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.Accounts.RefreshIntervalSeconds = seconds;
+        options.BackFillerAccountRefreshIntervalSeconds = seconds;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
-            static f => f.Contains("Accounts:RefreshIntervalSeconds", StringComparison.Ordinal));
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(121)]
-    public void Validate_fails_when_accounts_command_timeout_is_out_of_range(int seconds)
-    {
-        var options = BackFillerTestOptions.CreateValid();
-        options.Accounts.CommandTimeoutSeconds = seconds;
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(
-            result.Failures!,
-            static f => f.Contains("Accounts:CommandTimeoutSeconds", StringComparison.Ordinal));
+            static f => f.Contains("BackFillerAccountRefreshIntervalSeconds", StringComparison.Ordinal));
     }
 
     [Fact]

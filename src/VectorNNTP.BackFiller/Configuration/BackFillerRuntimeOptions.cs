@@ -28,7 +28,7 @@ public sealed record BackFillerRuntimeOptions(
     IReadOnlyList<string> CertificateDomainNames,
     string CertificatePassword,
     GrabberDbRuntimeOptions GrabberDb,
-    BackFillerAccountsRuntimeOptions Accounts);
+    TimeSpan AccountRefreshInterval);
 
 /// <summary>Validated shutdown policy captured in the runtime snapshot.</summary>
 /// <param name="GracePeriod">Complete application shutdown budget. Also drives host <c>ShutdownTimeout</c>.</param>
@@ -112,7 +112,3 @@ public sealed record BackFillerRabbitMqRuntimeOptions(
     ushort? ConsumerPrefetchCount,
     string? DiagnosticPayloadCorrelationId);
 
-/// <summary>Validated MySQL provider-account control-plane policy.</summary>
-public sealed record BackFillerAccountsRuntimeOptions(
-    TimeSpan RefreshInterval,
-    TimeSpan CommandTimeout);

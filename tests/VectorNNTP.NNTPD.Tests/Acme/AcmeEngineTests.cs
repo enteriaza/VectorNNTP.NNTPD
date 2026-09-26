@@ -284,9 +284,9 @@ public sealed class PfxStoreAndValidationTests
         using var dir = new TempAcmeDir();
         var store = CreateStore(dir.Path);
         var genId = Guid.NewGuid().ToString("N");
-        var genDir = AcmePaths.GenerationDir(dir.Path, genId);
+        var genDir = AcmePaths.GenerationDir(dir.Path, "nntpd01.usenet.ninja", genId);
         Directory.CreateDirectory(genDir);
-        var paths = AcmePaths.GenerationCertificatePaths(dir.Path, genId);
+        var paths = AcmePaths.GenerationCertificatePaths(dir.Path, "nntpd01.usenet.ninja", genId);
         var material = TestCertificateFactory.CreateMaterial(
             RequiredDomains,
             AcmeConfigurationTests.TestPfxPassword,
@@ -308,7 +308,7 @@ public sealed class PfxStoreAndValidationTests
         var firstPaths = store.Paths();
 
         var orphan = Guid.NewGuid().ToString("N");
-        Directory.CreateDirectory(AcmePaths.GenerationDir(dir.Path, orphan));
+        Directory.CreateDirectory(AcmePaths.GenerationDir(dir.Path, "nntpd01.usenet.ninja", orphan));
         store.Recover();
         Assert.Equal(firstPaths.PfxPath, store.Paths().PfxPath);
         Assert.NotNull(store.Load());
@@ -403,7 +403,7 @@ public sealed class PfxStoreAndValidationTests
     }
 
     private static CertificateStore CreateStore(string path) =>
-        new(path, AcmeConfigurationTests.TestPfxPassword, RequiredDomains, TimeSpan.FromDays(30));
+        new(path, "nntpd01.usenet.ninja", AcmeConfigurationTests.TestPfxPassword, RequiredDomains, TimeSpan.FromDays(30));
 }
 
 public sealed class CertificateManagerTests
@@ -416,6 +416,7 @@ public sealed class CertificateManagerTests
         using var dir = new TempAcmeDir();
         var store = new CertificateStore(
             dir.Path,
+            "nntpd01.usenet.ninja",
             AcmeConfigurationTests.TestPfxPassword,
             RequiredDomains,
             TimeSpan.FromDays(30));
@@ -426,7 +427,7 @@ public sealed class CertificateManagerTests
         store.Save(material);
 
         var issuer = new FakeCertificateIssuer();
-        var manager = CreateManager(store, issuer);
+        var manager = CreateManager(dir.Path, store, issuer);
 
         var ensured = await manager.EnsureCertificateAsync(CancellationToken.None);
         Assert.Equal(0, issuer.IssueCallCount);
@@ -440,11 +441,12 @@ public sealed class CertificateManagerTests
         using var dir = new TempAcmeDir();
         var store = new CertificateStore(
             dir.Path,
+            "nntpd01.usenet.ninja",
             AcmeConfigurationTests.TestPfxPassword,
             RequiredDomains,
             TimeSpan.FromDays(30));
         var issuer = new FakeCertificateIssuer();
-        var manager = CreateManager(store, issuer);
+        var manager = CreateManager(dir.Path, store, issuer);
 
         var ensured = await manager.EnsureCertificateAsync(CancellationToken.None);
         Assert.Equal(1, issuer.IssueCallCount);
@@ -464,6 +466,7 @@ public sealed class CertificateManagerTests
         using var dir = new TempAcmeDir();
         var store = new CertificateStore(
             dir.Path,
+            "nntpd01.usenet.ninja",
             AcmeConfigurationTests.TestPfxPassword,
             RequiredDomains,
             TimeSpan.FromDays(30));
@@ -472,7 +475,7 @@ public sealed class CertificateManagerTests
             AcmeConfigurationTests.TestPfxPassword,
             notAfter: DateTimeOffset.UtcNow.AddDays(90)));
         var issuer = new FakeCertificateIssuer();
-        var manager = CreateManager(store, issuer);
+        var manager = CreateManager(dir.Path, store, issuer);
 
         Assert.False(await manager.RenewIfDueAsync(CancellationToken.None));
         Assert.Equal(0, issuer.IssueCallCount);
@@ -484,6 +487,7 @@ public sealed class CertificateManagerTests
         using var dir = new TempAcmeDir();
         var store = new CertificateStore(
             dir.Path,
+            "nntpd01.usenet.ninja",
             AcmeConfigurationTests.TestPfxPassword,
             RequiredDomains,
             TimeSpan.FromDays(30));
@@ -492,7 +496,7 @@ public sealed class CertificateManagerTests
             AcmeConfigurationTests.TestPfxPassword,
             notAfter: DateTimeOffset.UtcNow.AddDays(10)));
         var issuer = new FakeCertificateIssuer();
-        var manager = CreateManager(store, issuer);
+        var manager = CreateManager(dir.Path, store, issuer);
 
         Assert.True(await manager.RenewIfDueAsync(CancellationToken.None));
         Assert.Equal(1, issuer.IssueCallCount);
@@ -504,6 +508,7 @@ public sealed class CertificateManagerTests
         using var dir = new TempAcmeDir();
         var store = new CertificateStore(
             dir.Path,
+            "nntpd01.usenet.ninja",
             AcmeConfigurationTests.TestPfxPassword,
             RequiredDomains,
             TimeSpan.FromDays(30));
@@ -514,16 +519,21 @@ public sealed class CertificateManagerTests
         store.Save(prior);
         var priorPath = store.Paths().PfxPath;
         var issuer = new FakeCertificateIssuer { ThrowOnIssue = new AcmeOrderException("boom", "fail") };
-        var manager = CreateManager(store, issuer);
+        var manager = CreateManager(dir.Path, store, issuer);
 
         Assert.False(await manager.RenewIfDueAsync(CancellationToken.None));
         Assert.Equal(priorPath, store.Paths().PfxPath);
         Assert.NotNull(store.Load());
     }
 
-    private static CertificateManager CreateManager(CertificateStore store, ICertificateIssuer issuer) =>
+    private static CertificateManager CreateManager(
+        string stateDir,
+        CertificateStore store,
+        ICertificateIssuer issuer) =>
         new(
             "nntpd01.usenet.ninja",
+            stateDir,
+            NntpdOptions.DefaultAcmeDirectoryUrl,
             store,
             issuer,
             AcmeConfigurationTests.TestPfxPassword,
@@ -543,6 +553,7 @@ public sealed class Dns01SolverTests
             cf,
             "zone-1",
             resolver,
+            "nntpd01.usenet.ninja",
             dir.Path,
             propagationTimeout: TimeSpan.FromSeconds(2),
             propagationInterval: TimeSpan.FromMilliseconds(10));
@@ -571,7 +582,7 @@ public sealed class Dns01SolverTests
         {
             await Task.Delay(Timeout.Infinite, ct);
         };
-        var solver = new Dns01Solver(cf, "zone-1", new FakeTxtResolver(), dir.Path);
+        var solver = new Dns01Solver(cf, "zone-1", new FakeTxtResolver(), "nntpd01.usenet.ninja", dir.Path);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             solver.PlaceAsync([new Dns01ChallengeSpec("nntpd01.usenet.ninja", "tok")], cts.Token));
@@ -623,6 +634,7 @@ public sealed class AcmeLifecycleServiceTests
         var domains = CertificateIdentities.ForFqdn(options.Fqdn);
         var store = new CertificateStore(
             dir.Path,
+            options.Fqdn,
             options.AcmeCertificatePassword,
             domains,
             TimeSpan.FromDays(30));
@@ -633,6 +645,8 @@ public sealed class AcmeLifecycleServiceTests
 
         var manager = new CertificateManager(
             options.Fqdn,
+            dir.Path,
+            options.AcmeDirectoryUrl,
             store,
             new FakeCertificateIssuer(),
             options.AcmeCertificatePassword,
@@ -666,8 +680,11 @@ public sealed class AcmeLifecycleServiceTests
         var domains = CertificateIdentities.ForFqdn(options.Fqdn);
         var manager = new CertificateManager(
             options.Fqdn,
+            dir.Path,
+            options.AcmeDirectoryUrl,
             new CertificateStore(
                 dir.Path,
+                options.Fqdn,
                 options.AcmeCertificatePassword,
                 domains,
                 TimeSpan.FromDays(30)),

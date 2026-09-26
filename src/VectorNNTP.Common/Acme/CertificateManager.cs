@@ -7,9 +7,13 @@ namespace VectorNNTP.NNTPD.Acme;
 /// </summary>
 public sealed class CertificateManager
 {
+    private readonly string _fqdn;
+    private readonly string _stateDir;
+    private readonly string _acmeDirectoryUrl;
     private readonly IReadOnlyList<string> _domains;
     private readonly CertificateStore _store;
     private readonly ICertificateIssuer _issuer;
+    private readonly AcmeTransactionJournal _journal;
     private readonly string _pfxPassword;
     private readonly TimeSpan _renewalThreshold;
     private readonly ILogger<CertificateManager> _logger;
@@ -18,16 +22,34 @@ public sealed class CertificateManager
     private int _generation;
 
     /// <summary>Initializes a new instance of the <see cref="CertificateManager"/> class.</summary>
+    /// <param name="fqdn">Certificate FQDN that owns this manager.</param>
+    /// <param name="stateDir">Shared ACME state root.</param>
+    /// <param name="acmeDirectoryUrl">ACME directory URL recorded in the journal.</param>
+    /// <param name="store">FQDN-scoped live certificate store.</param>
+    /// <param name="issuer">Certificate issuer.</param>
+    /// <param name="pfxPassword">PKCS#12 password.</param>
+    /// <param name="renewalThreshold">Renewal threshold.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="includeNewsHostname">Whether to include <see cref="CertificateIdentities.NewsHostname"/>.</param>
+    /// <param name="journal">
+    /// Optional shared transaction journal. When omitted, this manager creates one
+    /// for <paramref name="fqdn"/>. Production wiring shares the instance with
+    /// <see cref="Dns01Solver"/> and <see cref="CertesAcmeIssuer"/>.
+    /// </param>
     public CertificateManager(
         string fqdn,
+        string stateDir,
+        string acmeDirectoryUrl,
         CertificateStore store,
         ICertificateIssuer issuer,
         string pfxPassword,
         TimeSpan renewalThreshold,
         ILogger<CertificateManager> logger,
-        bool includeNewsHostname = true)
+        bool includeNewsHostname = true,
+        AcmeTransactionJournal? journal = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
+        ArgumentException.ThrowIfNullOrWhiteSpace(acmeDirectoryUrl);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(issuer);
         ArgumentNullException.ThrowIfNull(pfxPassword);
@@ -37,9 +59,13 @@ public sealed class CertificateManager
             throw new ArgumentOutOfRangeException(nameof(renewalThreshold));
         }
 
-        _domains = CertificateIdentities.ForFqdn(fqdn, includeNewsHostname);
+        _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
+        _stateDir = stateDir;
+        _acmeDirectoryUrl = acmeDirectoryUrl.Trim();
+        _domains = CertificateIdentities.ForFqdn(_fqdn, includeNewsHostname);
         _store = store;
         _issuer = issuer;
+        _journal = journal ?? new AcmeTransactionJournal(_stateDir, _fqdn);
         _pfxPassword = pfxPassword;
         _renewalThreshold = renewalThreshold;
         _logger = logger;
@@ -88,6 +114,9 @@ public sealed class CertificateManager
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await using var issuanceLock = await AcmeIssuanceLock
+                .AcquireAsync(_stateDir, _fqdn, cancellationToken)
+                .ConfigureAwait(false);
             var status = EvaluateExisting();
             if (status is { Usable: true, Material: not null, DueForRenewal: false })
             {
@@ -122,6 +151,9 @@ public sealed class CertificateManager
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await using var issuanceLock = await AcmeIssuanceLock
+                .AcquireAsync(_stateDir, _fqdn, cancellationToken)
+                .ConfigureAwait(false);
             var status = EvaluateExisting();
             if (status is { Usable: true, Material: not null, DueForRenewal: false })
             {
@@ -161,21 +193,44 @@ public sealed class CertificateManager
 
     private async Task<CertificateMaterial> IssueAndPersistAsync(CancellationToken cancellationToken)
     {
-        var material = await _issuer.IssueAsync(_domains, cancellationToken).ConfigureAwait(false);
-        var status = CertificateValidator.ValidatePfx(
-            material.PfxBytes,
-            _pfxPassword,
-            _domains,
-            _renewalThreshold);
-        if (!status.Usable || status.Material is null)
+        var transactionId = _journal.BeginTransaction(_domains, _acmeDirectoryUrl, DateTimeOffset.UtcNow);
+        try
         {
-            throw new AcmeCertificateException("invalid_certificate", status.Reason);
-        }
+            var material = await _issuer.IssueAsync(_domains, cancellationToken).ConfigureAwait(false);
+            var status = CertificateValidator.ValidatePfx(
+                material.PfxBytes,
+                _pfxPassword,
+                _domains,
+                _renewalThreshold);
+            if (!status.Usable || status.Material is null)
+            {
+                throw new AcmeCertificateException("invalid_certificate", status.Reason);
+            }
 
-        _store.Save(status.Material);
-        _current = status.Material;
-        _generation++;
-        AcmeLogMessages.ServerCertificateReady(_logger, _generation, status.Material.NotAfter);
-        return status.Material;
+            _journal.RecordCertificateIssued(status.Material);
+            var persisted = _store.Save(status.Material);
+            _journal.RecordCertificatePersisted(persisted.GenerationId, status.Material);
+            _journal.RecordCertificatePromoted(persisted.GenerationId);
+            _journal.CompleteSuccess(
+                transactionId,
+                status.Material,
+                persisted.GenerationId,
+                _pfxPassword,
+                DateTimeOffset.UtcNow);
+            _current = status.Material;
+            _generation++;
+            AcmeLogMessages.ServerCertificateReady(_logger, _generation, status.Material.NotAfter);
+            return status.Material;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var category = ex is AcmeException acme ? acme.Category : ex.GetType().Name;
+            _journal.CompleteFailure(
+                transactionId,
+                category,
+                AcmeFailureSanitizer.Sanitize(ex),
+                DateTimeOffset.UtcNow);
+            throw;
+        }
     }
 }

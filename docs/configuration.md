@@ -1,10 +1,10 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the application-neutral root (shared bind/ACME/Cloudflare), the `Nntpd` section (NNTPD-specific settings), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the application-neutral root (shared bind/Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
 
-Shared ACME, Cloudflare, bind-address, and RabbitMQ settings are owned by `VectorNNTP.Common` (`AcmeCloudflareOptions` at the configuration root) or other shared sections. VectorNNTP.NNTPD and VectorNNTP.BackFiller bind that shared tree with the same environment-variable names. Shared environment variables are uppercase, use prefix `VECTOR__`, and contain no application-specific identifier. Values are case-sensitive and are not transformed. Examples: `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__CLOUDFLAREZONEID`, `VECTOR__BINDADDRESS`, `VECTOR__BINDPORT`, `VECTOR__BINDPORTTLS`, `VECTOR__RABBITMQ__USERNAME`. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for shared settings.
+Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. Bind ports/DNS and `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`, `VECTOR__CLOUDFLAREZONEID`, `VECTOR__BINDADDRESS`, `VECTOR__BINDPORT`, `VECTOR__BINDPORTTLS`) overlay from the configuration root. VectorNNTP.BackFiller owns bind, ACME directory, and DNS-suffix values under the `BackFiller` section and adapts them into Common; it does not read those keys from the root. BackFiller still uses root `VECTOR__*` secrets for Cloudflare, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and `VECTOR__CONNECTIONSTRINGS__GRABBERDB`. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
-NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller identity stays under section `BackFiller` (`BACKFILLER__NAME`, `BACKFILLER__SERVERID`).
+NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller application settings stay under section `BackFiller`. Identity may still be supplied by `BACKFILLER__NAME` and `BACKFILLER__SERVERID`. `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default 60, range 5–3600) is how often BackFiller polls MySQL for provider/account rows. It is not the per-account NNTP DATE keepalive; that value is the MySQL `nntpbackfilleraccounts.keepalive` column. There is no `BackFiller:Accounts` section and no dedicated environment-variable mapping for the refresh interval.
 
 Validation runs at startup through `IValidateOptions<NntpdOptions>` and data annotations (`ValidateOnStart`). **Validation does not bind sockets and does not call Cloudflare APIs.** The `Control` catalogue is optional: an omitted or empty section does not prevent startup and is not a runtime dependency. `Moderation` is also optional when empty; malformed mappings fail startup. Missing moderator routes reject moderated POST — they do not bypass moderation.
 
@@ -22,9 +22,9 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. |
 | `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` and AUTHINFO SASL when the connection is not TLS-protected (see below) |
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
-| `AcmeEmail` | string | _(none)_ | **yes when TLS enabled** | ACME account contact email; ignored when `BindPortTls` is `0` |
-| `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state |
-| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs. Relative paths resolve with `Path.GetFullPath` of the trimmed value, matching `AcmeStateDir`. The Serilog File `path` in `appsettings.json` is a placeholder; startup overwrites it from this setting and `ApplicationName`. |
+| `ACMEACCOUNT` / `VECTOR__ACMEACCOUNT` | string | _(none)_ | **yes when TLS enabled** | Shared ACME account contact email used by every Common ACME client. Not `Nntpd:AcmeEmail` or `BackFiller:AcmeEmail`. Ignored when `BindPortTls` is `0`. |
+| `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state. Relative paths resolve with Common `ResolveAcmeStateDir` (delegates to `ApplicationLocalPath.ResolveApplicationLocalPath`) against `AppContext.BaseDirectory` (the binary directory), not the process working directory, source tree, or IDE content root. |
+| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. The Serilog File `path` in `appsettings.json` is a placeholder; startup overwrites it from this setting and `ApplicationName`. |
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
 | `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
@@ -942,11 +942,13 @@ TLS is controlled exclusively by `BindPortTls`:
 
 ### ACME settings
 
+NNTPD-owned ACME directory URL, renewal threshold, and state directory bind from the `Nntpd` section. Root-level copies of those keys are not applied. The ACME account email is the shared `VECTOR__ACMEACCOUNT` environment variable; the PKCS#12 password remains the shared `VECTOR__ACMECERTIFICATEPASSWORD` environment variable. There is no NNTPD-specific email or password variable.
+
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `AcmeDirectoryUrl` | `https://acme-staging-v02.api.letsencrypt.org/directory` | **Staging** by default. Production requires an explicit override such as `https://acme-v02.api.letsencrypt.org/directory`. |
-| `AcmeEmail` | _(none)_ | Required only when TLS is enabled. Must be a plausible contact email. |
-| `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). |
+| `VECTOR__ACMEACCOUNT` | _(none)_ | Required only when TLS is enabled. Shared Common ACME account contact email. Must be a plausible contact email. |
+| `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). NNTPD binds this from `Nntpd:AcmeStateDir`. Relative paths resolve against `AppContext.BaseDirectory`. Both applications may point at the same physical directory. |
 | `LogDir` | `logs/` | Serilog daily file-log root (relative or absolute path). Created at logging startup if missing. |
 | `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
 | `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
@@ -958,7 +960,6 @@ Example (TLS enabled against staging — values are illustrative; supply secrets
 ```json
 "Nntpd": {
   "BindPortTls": 563,
-  "AcmeEmail": "ops@example.org",
   "AcmeDirectoryUrl": "https://acme-staging-v02.api.letsencrypt.org/directory",
   "AcmeStateDir": "certs/",
   "LogDir": "logs/",
@@ -967,13 +968,16 @@ Example (TLS enabled against staging — values are illustrative; supply secrets
 ```
 
 ```text
+VECTOR__ACMEACCOUNT=ops@example.org
 VECTOR__ACMECERTIFICATEPASSWORD=<secret>
 ```
 
-Production directory (explicit only):
+Production directory (explicit only, under `Nntpd`):
 
 ```json
-"AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
+"Nntpd": {
+  "AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
+}
 ```
 
 Staging certificates are **not** trusted by normal clients. Use staging for integration testing; switch the directory URL only when ready for a production CA.
@@ -991,7 +995,7 @@ Requested names must fall under `DnsSuffix` (label-boundary zone coverage) becau
 
 ### Challenge mechanism
 
-ACME uses **DNS-01** only (Cloudflare TXT records named `_acme-challenge.{domain}`). HTTP-01 and TLS-ALPN-01 are not used. Challenge TXT records use TTL `120` and `proxied=false`. A durable journal under `{AcmeStateDir}/dns01/journal/` supports crash recovery cleanup. Authoritative TXT visibility is checked before challenges are triggered. After triggers, the issuer polls ACME authorization/order state until the order is `ready` (or fails/times out) before finalization — DNS visibility is not treated as ACME validation success. ACME challenge TXT must not be confused with A/AAAA FQDN reconciliation — reconcile mutates only A/AAAA for `{Fqdn}`; challenge records use distinct `_acme-challenge.*` names.
+ACME uses **DNS-01** only (Cloudflare TXT records named `_acme-challenge.{domain}`). HTTP-01 and TLS-ALPN-01 are not used. Challenge TXT records use TTL `120` and `proxied=false`. Transient DNS-01 recovery state lives under `{AcmeStateDir}/live/{fqdn}/dns01/` and is inspected only for that certificate identity. The persistent historical record is `{AcmeStateDir}/journal/{fqdn}.json` (one file per FQDN). Authoritative TXT visibility is checked before challenges are triggered. After triggers, the issuer polls ACME authorization/order state until the order is `ready` (or fails/times out) before finalization — DNS visibility is not treated as ACME validation success. ACME challenge TXT must not be confused with A/AAAA FQDN reconciliation — reconcile mutates only A/AAAA for `{Fqdn}`; challenge records use distinct `_acme-challenge.*` names.
 
 ### Persistence
 
@@ -999,13 +1003,20 @@ The Windows Certificate Store is **not** used (`X509Store` is not employed).
 
 | Path | Format |
 |------|--------|
-| `{AcmeStateDir}/account/private_key.der` | PKCS#8 DER **ACME account private key** (separate from the TLS credential) |
+| `{AcmeStateDir}/account/private_key.der` | PKCS#8 DER **ACME account private key** (common to every certificate identity) |
 | `{AcmeStateDir}/account/registration.json` | Account URI + directory URL metadata |
-| `{AcmeStateDir}/live/current` | Active generation id |
-| `{AcmeStateDir}/live/gens/{id}/certificate.pfx` | PKCS#12/PFX: leaf certificate + private key + issuing chain |
-| `{AcmeStateDir}/live/gens/{id}/complete` | Marker written after PFX write → reload → validate succeeds |
+| `{AcmeStateDir}/journal/{fqdn}.json` | Persistent ACME transaction journal for one FQDN (complete historical lifecycle) |
+| `{AcmeStateDir}/live/{fqdn}/dns01/{entryId}.json` | Transient DNS-01 recovery state for one in-flight FQDN |
+| `{AcmeStateDir}/live/{fqdn}/current` | Active generation id for that FQDN |
+| `{AcmeStateDir}/live/{fqdn}/.issuance.lock` | Cross-process issuance/promotion lock for that FQDN |
+| `{AcmeStateDir}/live/{fqdn}/gens/{id}/certificate.pfx` | PKCS#12/PFX: leaf certificate + private key + issuing chain |
+| `{AcmeStateDir}/live/{fqdn}/gens/{id}/complete` | Marker written after PFX write → reload → validate succeeds |
 
 `certificate.pfx` is the canonical TLS server credential. It is loaded with `AcmeCertificatePassword` into an `SslStreamCertificateContext` (leaf + chain) for the implicit TLS listener. Incomplete generations (missing `complete` or invalid `current`) are never treated as active. A known-good generation remains current until a replacement PFX is validated and committed.
+
+The persistent journal is **not** the DNS-01 recovery directory. `{AcmeStateDir}/journal/{fqdn}.json` is one growing file per certificate identity. Each request is a transaction with lifecycle events (DNS create/remove, ACME validation, issuance, persist/promote, or failure). Historical transactions are retained. `{AcmeStateDir}/live/{fqdn}/dns01/` exists only to recover an in-flight TXT record and may be deleted after cleanup. Recovery for one FQDN never inspects another FQDN's recovery directory and never deletes another identity's Cloudflare TXT record. Orphan TXT cleanup records `dns_challenge_recovered_and_removed` in the historical journal. That event is attached to the original transaction only when the recovery file persisted that transaction id; otherwise it is stored as unattributed history and is not attached to a later request.
+
+Authoritative live state is only `{AcmeStateDir}/live/{fqdn}/` (`current`, `.issuance.lock`, `dns01/`, `gens/`). Production code does not create `{AcmeStateDir}/live/gens`, `{AcmeStateDir}/live/current`, `{AcmeStateDir}/journal/acme/`, `{AcmeStateDir}/journal/dns01/`, or `{AcmeStateDir}/dns01/journal/`. Generation GC, the current pointer, and the issuance lock are FQDN-scoped: NNTPD and BackFiller may share one physical `certs` root without touching each other's live state.
 
 ### Lifecycle
 
@@ -1113,6 +1124,7 @@ Use these exact names:
 VECTOR__CLOUDFLAREAPIKEY
 VECTOR__CLOUDFLAREZONEID
 VECTOR__ACMECERTIFICATEPASSWORD
+VECTOR__ACMEACCOUNT
 VECTOR__RABBITMQ__USERNAME
 VECTOR__RABBITMQ__PASSWORD
 NNTPD__SERVERID
@@ -1127,6 +1139,7 @@ Example (user scope, PowerShell — replace secret values locally; do not commit
 [Environment]::SetEnvironmentVariable("VECTOR__CLOUDFLAREZONEID", "5811a29d39a0732afb5f160c9b137c3d", "User")
 [Environment]::SetEnvironmentVariable("NNTPD__SERVERID", "1", "User")
 [Environment]::SetEnvironmentVariable("VECTOR__ACMECERTIFICATEPASSWORD", "<YOUR_PFX_PASSWORD>", "User")
+[Environment]::SetEnvironmentVariable("VECTOR__ACMEACCOUNT", "ops@example.org", "User")
 [Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__USERNAME", "<YOUR_RABBITMQ_USERNAME>", "User")
 [Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__PASSWORD", "<YOUR_RABBITMQ_PASSWORD>", "User")
 ```

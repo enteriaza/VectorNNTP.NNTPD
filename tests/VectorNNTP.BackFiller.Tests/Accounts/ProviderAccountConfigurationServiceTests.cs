@@ -367,16 +367,13 @@ public sealed class ProviderAccountConfigurationServiceTests
         TimeSpan? refreshInterval = null)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.Accounts.RefreshIntervalSeconds = 3600;
+        options.BackFillerAccountRefreshIntervalSeconds = 3600;
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
             BackFillerTestOptions.CreateValidConnectionStrings());
         if (refreshInterval is { } interval)
         {
-            runtime = runtime with
-            {
-                Accounts = new BackFillerAccountsRuntimeOptions(interval, runtime.Accounts.CommandTimeout),
-            };
+            runtime = runtime with { AccountRefreshInterval = interval };
         }
 
         var catalog = new ProviderConfigurationCatalog();

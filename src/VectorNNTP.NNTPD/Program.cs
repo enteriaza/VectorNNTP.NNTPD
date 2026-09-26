@@ -10,7 +10,12 @@ try
 {
     Log.Information("VectorNNTP.NNTPD host starting");
 
-    var builder = Host.CreateApplicationBuilder(args);
+    var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory,
+    });
+    builder.Environment.ContentRootPath = AppContext.BaseDirectory;
 
     builder.ConfigureNntpdLogging();
     builder.ConfigureNntpdPlatformHosting();

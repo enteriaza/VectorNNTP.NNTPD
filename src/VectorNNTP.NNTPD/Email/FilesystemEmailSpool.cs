@@ -37,10 +37,11 @@ public sealed class FilesystemEmailSpool : IEmailSpool
         ArgumentNullException.ThrowIfNull(logger);
         _options = options.Value.Spool ?? new EmailSpoolOptions();
         _logger = logger;
-        _directory = Path.GetFullPath(
+        _directory = ApplicationLocalPath.ResolveApplicationLocalPath(
             string.IsNullOrWhiteSpace(_options.Directory)
                 ? EmailSpoolOptions.DefaultDirectory
-                : _options.Directory.Trim());
+                : _options.Directory.Trim(),
+            AppContext.BaseDirectory);
         _failedDirectory = Path.Combine(_directory, "failed");
     }
 

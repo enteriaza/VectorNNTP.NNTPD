@@ -31,16 +31,24 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     private readonly Dns01Solver _dnsSolver;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<CertesAcmeIssuer> _logger;
+    private readonly AcmeTransactionJournal? _journal;
     private readonly TimeSpan _readinessTimeout;
     private readonly TimeSpan _readinessInterval;
 
     /// <summary>Initializes a new instance of the <see cref="CertesAcmeIssuer"/> class.</summary>
+    /// <param name="options">ACME and Cloudflare options.</param>
+    /// <param name="accountStore">Shared ACME account store.</param>
+    /// <param name="dnsSolver">DNS-01 solver for this FQDN.</param>
+    /// <param name="httpClientFactory">HTTP client factory for ACME.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="journal">Optional persistent ACME journal for validation events.</param>
     public CertesAcmeIssuer(
         IOptions<AcmeCloudflareOptions> options,
         AccountStore accountStore,
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
-        ILogger<CertesAcmeIssuer> logger)
+        ILogger<CertesAcmeIssuer> logger,
+        AcmeTransactionJournal? journal = null)
         : this(
             options,
             accountStore,
@@ -48,7 +56,8 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
             httpClientFactory,
             logger,
             readinessTimeout: null,
-            readinessInterval: null)
+            readinessInterval: null,
+            journal: journal)
     {
     }
 
@@ -60,7 +69,8 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         IHttpClientFactory httpClientFactory,
         ILogger<CertesAcmeIssuer> logger,
         TimeSpan? readinessTimeout,
-        TimeSpan? readinessInterval)
+        TimeSpan? readinessInterval,
+        AcmeTransactionJournal? journal = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(accountStore);
@@ -72,6 +82,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         _dnsSolver = dnsSolver;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _journal = journal;
         _readinessTimeout = readinessTimeout ?? AcmeOrderReadiness.DefaultTimeout;
         _readinessInterval = readinessInterval ?? AcmeOrderReadiness.DefaultInterval;
     }
@@ -141,9 +152,11 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
                 _ = await challenge.Validate().ConfigureAwait(false);
             }
 
+            _journal?.RecordAcmeValidationStarted();
             AcmeLogMessages.Dns01ChallengesTriggered(_logger, (int)_readinessTimeout.TotalSeconds);
 
             await WaitForOrderReadyAsync(order, authzs, cancellationToken).ConfigureAwait(false);
+            _journal?.RecordAcmeValidationSucceeded();
             AcmeLogMessages.OrderReady(_logger);
 
             cancellationToken.ThrowIfCancellationRequested();

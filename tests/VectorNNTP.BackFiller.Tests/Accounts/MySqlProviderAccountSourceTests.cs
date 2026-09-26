@@ -51,6 +51,14 @@ public sealed class MySqlProviderAccountSourceTests
     }
 
     [Fact]
+    public void Source_does_not_set_an_application_command_timeout()
+    {
+        var source = File.ReadAllText(FindSource());
+        Assert.DoesNotContain("CommandTimeout", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CommandTimeoutSeconds", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Source_stores_the_validated_connection_string_without_logging_it()
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
@@ -58,5 +66,27 @@ public sealed class MySqlProviderAccountSourceTests
             BackFillerTestOptions.CreateValidConnectionStrings());
         _ = new MySqlProviderAccountSource(runtime);
         Assert.Contains("Password=db-secret-xyz", runtime.GrabberDb.ConnectionString, StringComparison.Ordinal);
+    }
+
+    private static string FindSource()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "VectorNNTP.BackFiller",
+                "Accounts",
+                "MySqlProviderAccountSource.cs");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate MySqlProviderAccountSource.cs.");
     }
 }

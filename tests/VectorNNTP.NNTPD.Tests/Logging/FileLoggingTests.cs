@@ -130,10 +130,12 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
-    public void ResolveDirectory_MatchesAcmeGetFullPathConvention()
+    public void ResolveDirectory_UsesCommonHelperAgainstApplicationBase()
     {
         var relative = NntpdFileLogging.ResolveDirectory(NntpdOptions.DefaultLogDir);
-        Assert.Equal(Path.GetFullPath(NntpdOptions.DefaultLogDir), relative);
+        Assert.Equal(
+            ApplicationLocalPath.ResolveApplicationLocalPath(NntpdOptions.DefaultLogDir, AppContext.BaseDirectory),
+            relative);
 
         var absolute = Path.Combine(Path.GetTempPath(), "vectornntp-logdir-abs");
         Assert.Equal(Path.GetFullPath(absolute), NntpdFileLogging.ResolveDirectory(absolute));

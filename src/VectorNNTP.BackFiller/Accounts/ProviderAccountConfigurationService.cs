@@ -117,7 +117,7 @@ public sealed class ProviderAccountConfigurationService : IHostedService, IAsync
         {
             try
             {
-                await Task.Delay(_runtime.Accounts.RefreshInterval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(_runtime.AccountRefreshInterval, cancellationToken).ConfigureAwait(false);
                 _ = await RefreshAsync(required: false, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -2,12 +2,13 @@ namespace VectorNNTP.NNTPD.Core;
 
 /// <summary>
 /// Minimal abstraction for an application-managed service whose lifetime is
-/// coordinated by <see cref="ApplicationServiceManager"/>.
+/// coordinated by an application service manager.
 /// </summary>
 /// <remarks>
-/// Implementations must be independently testable and must not assume they run
-/// on the data-plane hot path. Long-running work after <see cref="StartAsync"/>
-/// may be exposed via <see cref="Execution"/> so unexpected termination can be observed.
+/// Shared by NNTPD and BackFiller. Implementations must be independently
+/// testable and must not assume they run on the data-plane hot path.
+/// Long-running work after <see cref="StartAsync"/> may be exposed via
+/// <see cref="Execution"/> so unexpected termination can be observed.
 /// </remarks>
 public interface IApplicationService
 {
@@ -19,7 +20,7 @@ public interface IApplicationService
     /// </summary>
     /// <remarks>
     /// When non-null, a faulted or unexpectedly completed task while the application is
-    /// <see cref="ApplicationState.Running"/> is treated as unexpected service termination.
+    /// running is treated as unexpected service termination.
     /// Return <see langword="null"/> for services that have no background execution after start.
     /// </remarks>
     Task? Execution { get; }

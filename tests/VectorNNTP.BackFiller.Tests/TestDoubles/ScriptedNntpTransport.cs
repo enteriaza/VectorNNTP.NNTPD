@@ -91,6 +91,15 @@ internal sealed class ScriptedNntpServer
     /// <summary>When set, ARTICLE waits here before the scripted response is written.</summary>
     public TaskCompletionSource? BlockArticle { get; set; }
 
+    /// <summary>Set when a DATE command is read, before any optional block.</summary>
+    public TaskCompletionSource? DateStarted { get; set; }
+
+    /// <summary>When set, DATE waits here before the scripted response is written.</summary>
+    public TaskCompletionSource? BlockDate { get; set; }
+
+    /// <summary>When set, the server closes after reading DATE without writing a status.</summary>
+    public bool CompleteAfterDateWithoutResponse { get; set; }
+
     public void Respond(Func<string, string> responder)
     {
         ArgumentNullException.ThrowIfNull(responder);
@@ -147,6 +156,19 @@ internal sealed class ScriptedNntpServer
                     if (BlockArticle is not null)
                     {
                         await BlockArticle.Task.ConfigureAwait(false);
+                    }
+                }
+                else if (text.Equals("DATE", StringComparison.OrdinalIgnoreCase))
+                {
+                    DateStarted?.TrySetResult();
+                    if (BlockDate is not null)
+                    {
+                        await BlockDate.Task.ConfigureAwait(false);
+                    }
+
+                    if (CompleteAfterDateWithoutResponse)
+                    {
+                        break;
                     }
                 }
 

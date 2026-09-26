@@ -31,10 +31,12 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
 
         var failures = new List<string>();
         ValidateIdentity(options, failures);
+        ValidateBindPorts(options, failures);
+        ValidateAcme(options, failures);
         ValidateDirectories(options, failures);
         ValidateShutdown(options, failures);
         ValidateListener(options, failures);
-        ValidateAccounts(options, failures);
+        ValidateAccountRefresh(options, failures);
         ValidateArticleRetention(options, failures);
         ValidateTransitServer(options, failures);
         ValidateRabbitMq(options, failures);
@@ -107,6 +109,44 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
+    private static void ValidateBindPorts(BackFillerOptions options, List<string> failures)
+    {
+        if (options.BindPort is { } bindPort && bindPort is < 1 or > 65535)
+        {
+            failures.Add("BackFiller:BindPort must be an integer in the range 1–65535.");
+        }
+
+        if (options.BindPortTls is null or < 1 or > 65535)
+        {
+            failures.Add(
+                "BackFiller:BindPortTls is required and must be an integer in the range 1–65535 because BackFiller is TLS-only. There is no cleartext listener fallback.");
+        }
+    }
+
+    private static void ValidateAcme(BackFillerOptions options, List<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
+        {
+            failures.Add("BackFiller:AcmeDirectoryUrl must be a non-empty HTTPS ACME directory URL.");
+        }
+        else if (!Uri.TryCreate(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute, out var directoryUri)
+                 || directoryUri.Scheme != Uri.UriSchemeHttps)
+        {
+            failures.Add(
+                "BackFiller:AcmeDirectoryUrl must be an absolute HTTPS URL (default is Let's Encrypt staging).");
+        }
+
+        if (options.AcmeRenewalThresholdDays is < 1 or > 90)
+        {
+            failures.Add("BackFiller:AcmeRenewalThresholdDays must be an integer in the range 1–90.");
+        }
+
+        if (string.IsNullOrWhiteSpace(options.AcmeStateDir) && string.IsNullOrWhiteSpace(options.CertificateDirectory))
+        {
+            failures.Add("BackFiller:AcmeStateDir must be a non-empty filesystem path.");
+        }
+    }
+
     private static void ValidateDirectories(BackFillerOptions options, List<string> failures)
     {
         if (string.IsNullOrWhiteSpace(options.LogDirectory))
@@ -160,17 +200,14 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private static void ValidateAccounts(BackFillerOptions options, List<string> failures)
+    private static void ValidateAccountRefresh(BackFillerOptions options, List<string> failures)
     {
-        var accounts = options.Accounts ?? new BackFillerAccountsOptions();
-        if (accounts.RefreshIntervalSeconds is < 5 or > 3600)
+        if (options.BackFillerAccountRefreshIntervalSeconds
+            is < BackFillerOptions.MinimumAccountRefreshIntervalSeconds
+            or > BackFillerOptions.MaximumAccountRefreshIntervalSeconds)
         {
-            failures.Add("BackFiller:Accounts:RefreshIntervalSeconds must be between 5 and 3600.");
-        }
-
-        if (accounts.CommandTimeoutSeconds is < 1 or > 120)
-        {
-            failures.Add("BackFiller:Accounts:CommandTimeoutSeconds must be between 1 and 120.");
+            failures.Add(
+                "BackFiller:BackFillerAccountRefreshIntervalSeconds must be between 5 and 3600.");
         }
     }
 

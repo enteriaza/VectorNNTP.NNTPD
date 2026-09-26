@@ -52,37 +52,48 @@ public class AcmeComponentFactory
                 return _manager;
             }
 
-            var stateDir = Path.GetFullPath(options.AcmeStateDir.Trim());
-            var domains = CertificateIdentities.ForFqdn(options.Fqdn, options.IncludeNewsHostnameInCertificate);
+            var stateDir = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir(
+                options.AcmeStateDir,
+                AppContext.BaseDirectory);
+            var fqdn = CertificateIdentities.NormalizeFqdn(options.Fqdn);
+            var domains = CertificateIdentities.ForFqdn(fqdn, options.IncludeNewsHostnameInCertificate);
             var renewalThreshold = TimeSpan.FromDays(options.AcmeRenewalThresholdDays);
             var accountStore = new AccountStore(stateDir);
             var certificateStore = new CertificateStore(
                 stateDir,
+                fqdn,
                 options.AcmeCertificatePassword,
                 domains,
                 renewalThreshold);
             var resolver = new AuthoritativeTxtResolver(
                 options.DnsSuffix,
                 _loggerFactory.CreateLogger<AuthoritativeTxtResolver>());
+            var journal = new AcmeTransactionJournal(stateDir, fqdn);
             var dnsSolver = new Dns01Solver(
                 _cloudflareDnsClient,
                 options.CloudFlareZoneId,
                 resolver,
-                stateDir);
+                fqdn,
+                stateDir,
+                historyJournal: journal);
             var issuer = new CertesAcmeIssuer(
                 _options,
                 accountStore,
                 dnsSolver,
                 _httpClientFactory,
-                _loggerFactory.CreateLogger<CertesAcmeIssuer>());
+                _loggerFactory.CreateLogger<CertesAcmeIssuer>(),
+                journal);
             _manager = new CertificateManager(
-                options.Fqdn,
+                fqdn,
+                stateDir,
+                options.AcmeDirectoryUrl,
                 certificateStore,
                 issuer,
                 options.AcmeCertificatePassword,
                 renewalThreshold,
                 _loggerFactory.CreateLogger<CertificateManager>(),
-                options.IncludeNewsHostnameInCertificate);
+                options.IncludeNewsHostnameInCertificate,
+                journal);
             _provider = new ServerCertificateProvider(_manager);
             return _manager;
         }

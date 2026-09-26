@@ -11,8 +11,10 @@ public sealed class NntpSessionPool : IAsyncDisposable
     private readonly NntpSessionOptions _options;
     private readonly INntpTransportFactory _transport;
     private readonly ILogger _logger;
+    private readonly TimeProvider _time;
     private readonly TimeSpan _shutdownGrace;
     private readonly SemaphoreSlim _leases;
+    private readonly ConcurrentDictionary<NntpProviderSession, KeepAliveRegistration> _keepAlives = new();
     private readonly ConcurrentQueue<NntpProviderSession> _idle = new();
     private readonly ConcurrentDictionary<NntpProviderSession, byte> _live = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -27,7 +29,8 @@ public sealed class NntpSessionPool : IAsyncDisposable
         NntpSessionOptions options,
         INntpTransportFactory transport,
         ILogger logger,
-        TimeSpan? shutdownGrace = null)
+        TimeSpan? shutdownGrace = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
@@ -47,6 +50,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         _options = options;
         _transport = transport;
         _logger = logger;
+        _time = timeProvider ?? TimeProvider.System;
         _shutdownGrace = shutdownGrace ?? TimeSpan.FromSeconds(2);
         _leases = new SemaphoreSlim(provider.MaxSessions, provider.MaxSessions);
         _drained.TrySetResult();
@@ -70,7 +74,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         for (var i = 0; i < _provider.MinSessions; i++)
         {
             var session = await CreateReadySessionAsync(cancellationToken).ConfigureAwait(false);
-            _idle.Enqueue(session);
+            EnqueueIdle(session);
         }
     }
 
@@ -85,6 +89,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
             while (_idle.TryDequeue(out var idle))
             {
+                StopKeepAlive(idle);
                 if (idle.IsReusable)
                 {
                     return Issue(idle);
@@ -114,7 +119,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
             }
             else if (session.IsReusable)
             {
-                _idle.Enqueue(session);
+                EnqueueIdle(session);
             }
             else
             {
@@ -157,6 +162,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         }
 
         await _shutdown.CancelAsync().ConfigureAwait(false);
+        await AwaitKeepAlivesAsync().ConfigureAwait(false);
         try
         {
             if (forceAfterGrace)
@@ -222,14 +228,127 @@ public sealed class NntpSessionPool : IAsyncDisposable
             failure?.Reason ?? "NNTP connect failed.");
     }
 
+    private void EnqueueIdle(NntpProviderSession session)
+    {
+        _idle.Enqueue(session);
+        StartKeepAlive(session);
+    }
+
+    private void StartKeepAlive(NntpProviderSession session)
+    {
+        if (!_provider.DateKeepAliveEnabled || Volatile.Read(ref _disposed) == 1 || _shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var registration = new KeepAliveRegistration(cts);
+        registration.Task = RunKeepAliveAsync(session, cts);
+        if (!_keepAlives.TryAdd(session, registration))
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    private void StopKeepAlive(NntpProviderSession session)
+    {
+        if (!_keepAlives.TryRemove(session, out var registration))
+        {
+            return;
+        }
+
+        try
+        {
+            registration.Cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task RunKeepAliveAsync(NntpProviderSession session, CancellationTokenSource cts)
+    {
+        var token = cts.Token;
+        var interval = TimeSpan.FromSeconds(_provider.KeepAliveSeconds);
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(interval, _time, token).ConfigureAwait(false);
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (!session.IsReusable)
+                {
+                    await RetireSessionAsync(session, "keepalive found a non-reusable session").ConfigureAwait(false);
+                    return;
+                }
+
+                if (!await session.SendDateKeepAliveAsync(_shutdown.Token).ConfigureAwait(false))
+                {
+                    await RetireSessionAsync(session, "DATE keepalive failed").ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            await RetireSessionAsync(session, "DATE keepalive failed").ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _keepAlives.TryRemove(session, out _);
+            cts.Dispose();
+        }
+    }
+
+    private async Task AwaitKeepAlivesAsync()
+    {
+        var tasks = _keepAlives.Values.Select(static registration => registration.Task).ToArray();
+        if (tasks.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(tasks).WaitAsync(_shutdownGrace).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private async Task RetireSessionAsync(NntpProviderSession session, string reason)
     {
+        StopKeepAlive(session);
         if (_live.TryRemove(session, out _))
         {
             Interlocked.Decrement(ref _created);
             NntpLogMessages.SessionRetired(_logger, _provider.Backbone, reason);
             await session.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private sealed class KeepAliveRegistration(CancellationTokenSource cts)
+    {
+        public CancellationTokenSource Cts { get; } = cts;
+
+        public Task Task { get; set; } = Task.CompletedTask;
     }
 }
 

@@ -144,7 +144,9 @@ public static class NntpdServiceCollectionExtensions
             .BindConfiguration(NntpdOptions.SectionName)
             .Configure<IConfiguration>(static (options, configuration) =>
             {
-                AcmeCloudflareOptions.OverlaySharedFromRoot(options, configuration);
+                NntpdAcmeCloudflareOptionsOverlay.OverlaySharedFromRootPreservingApplicationAcme(
+                    options,
+                    configuration);
             })
             .ValidateDataAnnotations()
             .ValidateOnStart()
@@ -158,6 +160,9 @@ public static class NntpdServiceCollectionExtensions
                 NormalizeBindAddresses(options);
                 NormalizeProxyHosts(options);
                 options.Transit ??= new TransitOptions();
+                options.AcmeStateDir = ApplicationLocalPath.ResolveApplicationLocalPath(
+                    options.AcmeStateDir,
+                    AppContext.BaseDirectory);
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();

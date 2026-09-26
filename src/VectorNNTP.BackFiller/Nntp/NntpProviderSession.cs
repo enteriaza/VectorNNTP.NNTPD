@@ -3,7 +3,7 @@ using System.Buffers;
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>
-/// One upstream NNTP session. Not safe for concurrent ARTICLE use.
+/// One upstream NNTP session. ARTICLE and DATE share one exclusive busy lock.
 /// </summary>
 public sealed class NntpProviderSession : IAsyncDisposable
 {
@@ -38,6 +38,9 @@ public sealed class NntpProviderSession : IAsyncDisposable
 
     /// <summary>Gets a value indicating whether the session may return to the idle pool.</summary>
     public bool IsReusable => !_unhealthy && State == NntpSessionState.Ready && _stream is not null;
+
+    /// <summary>Gets the MySQL <c>keepalive</c> interval this session was constructed with.</summary>
+    public byte KeepAliveSeconds => _provider.KeepAliveSeconds;
 
     /// <summary>
     /// Connects, validates the greeting, and authenticates when configured.
@@ -227,6 +230,98 @@ public sealed class NntpProviderSession : IAsyncDisposable
         catch (Exception ex)
         {
             return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, ex.GetType().Name);
+        }
+        finally
+        {
+            if (State == NntpSessionState.Busy)
+            {
+                State = previous;
+            }
+
+            _ = _busy.Release();
+        }
+    }
+
+    /// <summary>
+    /// Issues RFC 3977 DATE as an idle-session keepalive. Serialized with ARTICLE
+    /// through <see cref="_busy"/>. When <paramref name="waitForIdle"/> is
+    /// <see langword="false"/> and the session is already busy, DATE is skipped
+    /// so article acquisition is not blocked.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the session remains reusable (111, or DATE skipped).
+    /// <see langword="false"/> when the session was marked unhealthy.
+    /// </returns>
+    internal async Task<bool> SendDateKeepAliveAsync(
+        CancellationToken cancellationToken,
+        bool waitForIdle = false)
+    {
+        if (_reader is null || _stream is null || _unhealthy
+            || State is NntpSessionState.Closed or NntpSessionState.Retiring
+            || Volatile.Read(ref _disposed) == 1)
+        {
+            return false;
+        }
+
+        if (waitForIdle)
+        {
+            await _busy.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else if (!await _busy.WaitAsync(TimeSpan.Zero, cancellationToken).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        var previous = State;
+        State = NntpSessionState.Busy;
+        var wrote = false;
+        try
+        {
+            await WriteAsync(NntpProtocolIo.DateCommand, _options.CommandTimeout, cancellationToken)
+                .ConfigureAwait(false);
+            wrote = true;
+            var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (status is null)
+            {
+                _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP DATE status was empty.");
+                return false;
+            }
+
+            if (!NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+            {
+                _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP DATE status was malformed.");
+                return false;
+            }
+
+            if (code != NntpStatusCode.DateFollows)
+            {
+                _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, text);
+                return false;
+            }
+
+            State = NntpSessionState.Ready;
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (wrote)
+            {
+                _ = MarkUnhealthy(ArticleRetrievalKind.Cancelled, null, "DATE keepalive was cancelled.");
+                return false;
+            }
+
+            State = previous;
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "DATE keepalive timed out.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, ex.GetType().Name);
+            return false;
         }
         finally
         {

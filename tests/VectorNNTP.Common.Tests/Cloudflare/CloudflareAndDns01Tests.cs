@@ -98,6 +98,7 @@ public sealed class CloudflareAndDns01Tests
             client,
             ZoneId,
             resolver,
+            Fqdn,
             dir.Path,
             propagationTimeout: TimeSpan.FromSeconds(2),
             propagationInterval: TimeSpan.FromMilliseconds(10));
@@ -119,7 +120,7 @@ public sealed class CloudflareAndDns01Tests
         {
             CreateException = new CloudflareDnsException("create failed"),
         };
-        var solver = new Dns01Solver(client, ZoneId, new ImmediateTxtResolver(), dir.Path);
+        var solver = new Dns01Solver(client, ZoneId, new ImmediateTxtResolver(), Fqdn, dir.Path);
 
         await Assert.ThrowsAsync<AcmeChallengeException>(
             () => solver.PlaceAsync([new Dns01ChallengeSpec(Fqdn, "tok")], CancellationToken.None));
@@ -134,7 +135,7 @@ public sealed class CloudflareAndDns01Tests
         {
             OnMutate = static async ct => await Task.Delay(Timeout.Infinite, ct),
         };
-        var solver = new Dns01Solver(client, ZoneId, new ImmediateTxtResolver(), dir.Path);
+        var solver = new Dns01Solver(client, ZoneId, new ImmediateTxtResolver(), Fqdn, dir.Path);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(

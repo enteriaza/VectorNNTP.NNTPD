@@ -14,6 +14,7 @@ try
         Args = args,
         ContentRootPath = AppContext.BaseDirectory,
     });
+    builder.Environment.ContentRootPath = AppContext.BaseDirectory;
 
     builder.ConfigureBackFillerLogging();
     builder.ConfigureBackFillerPlatformHosting();

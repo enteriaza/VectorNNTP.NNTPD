@@ -431,7 +431,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add(
                 $"{nameof(NntpdOptions.AcmeEmail)} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
-                "and must be a valid contact email address.");
+                $"and must be a valid contact email address (use environment variable {AcmeCloudflareOptions.AcmeAccountEnvironmentVariable}).");
         }
 
         if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))

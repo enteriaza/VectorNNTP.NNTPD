@@ -53,6 +53,15 @@ internal static class TransportIoProbe
     public static TransportIoSession? CreateSession() =>
         IsEnabled ? new TransportIoSession() : null;
 
+    /// <summary>
+    /// Repo-local diagnostic dump directory.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately walks from the process working directory toward a folder that
+    /// contains <c>VectorNNTP.NNTPD.sln</c> or <c>.artifacts/</c>. This is
+    /// development-only output, off unless <see cref="EnvironmentVariableName"/> is set.
+    /// It is not application-local runtime state and must not be used for certs/logs.
+    /// </remarks>
     internal static string DefaultDirectory()
     {
         var dir = new DirectoryInfo(Directory.GetCurrentDirectory());

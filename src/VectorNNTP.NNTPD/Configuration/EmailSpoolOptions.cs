@@ -7,9 +7,10 @@ public sealed class EmailSpoolOptions
     public const string DefaultDirectory = "spool/smtp";
 
     /// <summary>
-    /// Gets or sets the spool directory. Relative paths resolve with
-    /// <see cref="Path.GetFullPath(string)"/> of the trimmed value.
-    /// Default <see cref="DefaultDirectory"/>. Created automatically when email is enabled.
+    /// Gets or sets the spool directory. Relative paths resolve through Common
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
+    /// <see cref="AppContext.BaseDirectory"/>. Default <see cref="DefaultDirectory"/>.
+    /// Created automatically when email is enabled.
     /// </summary>
     public string Directory { get; set; } = DefaultDirectory;
 
