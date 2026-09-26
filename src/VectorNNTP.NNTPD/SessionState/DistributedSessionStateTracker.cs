@@ -326,7 +326,14 @@ public sealed class DistributedSessionStateTracker : ISessionStateTracker, ISess
                         sourceGeneration,
                         cancellationToken)
                     .ConfigureAwait(false);
-                _rates.ObserveClusterSessionCount(accountName, remaining);
+                // Redis unavailable maps to 0, the same integer as "last cluster session
+                // released". Observing 0 while local R sessions remain treats remotes as
+                // gone and can raise joiners from blocked to the full account rate.
+                if (remaining > 0)
+                {
+                    _rates.ObserveClusterSessionCount(accountName, remaining);
+                }
+
                 SessionStateLogMessages.SessionStateReleased(_logger, accountName, ip, _nodeId);
             }
         }

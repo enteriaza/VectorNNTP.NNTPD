@@ -25,7 +25,8 @@ public interface ISessionStateStore
 
     /// <summary>
     /// Atomically decrements this owner's session count and source-IP count.
-    /// Returns the remaining cluster session total.
+    /// Returns the remaining cluster session total. Unavailable membership
+    /// returns <c>0</c>; callers must not treat that as a live total.
     /// </summary>
     ValueTask<int> ReleaseAsync(
         string accountName,

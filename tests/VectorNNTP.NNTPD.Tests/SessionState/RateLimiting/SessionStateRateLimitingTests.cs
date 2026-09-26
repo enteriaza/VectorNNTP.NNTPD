@@ -429,6 +429,97 @@ public sealed class SessionStateRateLimitingTests
     }
 
     [Fact]
+    public async Task SuccessfulReleaseToZero_DoesNotNeedObserveZero_NextAdmitGetsFullRate()
+    {
+        var membership = new InMemorySessionStateStore();
+        var rates = new AccountRateAllocator();
+        var node = CreateNode(membership, "nntpd01", rates);
+        var first = new FakeCap();
+        var second = new FakeCap();
+        Assert.Equal(SessionAdmissionResult.Success, await node.TryAdmitAsync("alice", "s1", V4A, 0, 0, RateMbps));
+        rates.Register("alice", "s1", first, RateMbps);
+        Assert.Equal(SessionAdmissionResult.Success, await node.TryAdmitAsync("alice", "s2", V4A, 0, 0, RateMbps));
+        rates.Register("alice", "s2", second, RateMbps);
+        Assert.Equal(625_000, first.MaxSendBytesPerSecond);
+
+        rates.Unregister("alice", "s1");
+        await node.ReleaseAsync("alice", "s1");
+        Assert.Equal(1_250_000, second.MaxSendBytesPerSecond);
+        Assert.Equal(1, membership.ActiveSessionCount("alice", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+
+        rates.Unregister("alice", "s2");
+        await node.ReleaseAsync("alice", "s2");
+        Assert.Equal(0, node.GetLocalSessionCount("alice"));
+        Assert.Equal(0, rates.LocalSessionCount("alice"));
+        Assert.Equal(0, membership.ActiveSessionCount("alice", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        var released = node.ReleaseCalls;
+        await node.ReleaseAsync("alice", "s2");
+        Assert.Equal(released, node.ReleaseCalls);
+
+        var again = new FakeCap();
+        Assert.Equal(SessionAdmissionResult.Success, await node.TryAdmitAsync("alice", "s3", V4A, 0, 0, RateMbps));
+        rates.Register("alice", "s3", again, RateMbps);
+        Assert.Equal(1_250_000, again.MaxSendBytesPerSecond);
+    }
+
+    [Fact]
+    public async Task ReleaseWhenMembershipUnavailable_DoesNotRaiseJoinerToFullRate()
+    {
+        var fixture = await AdmitEstablishedThenJoinersAsync();
+        fixture.Membership.Unavailable = true;
+        fixture.RatesB.Unregister("alice", "b2");
+        await fixture.NodeB.ReleaseAsync("alice", "b2");
+
+        Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, fixture.B1.MaxSendBytesPerSecond);
+        AssertCaps([fixture.A1, fixture.A2], fixture.Quarter);
+        Assert.Equal(1, fixture.NodeB.GetLocalSessionCount("alice"));
+        Assert.Equal(1, fixture.RatesB.LocalSessionCount("alice"));
+        Assert.Equal(4, fixture.Membership.ActiveSessionCount("alice", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        Assert.True(Allocated(fixture.A1, fixture.A2, fixture.B1) <= AccountRateFormula.AccountBytesPerSecond(RateMbps));
+    }
+
+    [Fact]
+    public async Task UnavailableRelease_ThenSuccessfulRenew_ObservesUnreleasedClusterTotal()
+    {
+        var fixture = await AdmitEstablishedThenJoinersAsync();
+        fixture.Membership.Unavailable = true;
+        fixture.RatesB.Unregister("alice", "b2");
+        await fixture.NodeB.ReleaseAsync("alice", "b2");
+        fixture.Membership.Unavailable = false;
+
+        await fixture.NodeA.RenewLeasesAsync();
+        await fixture.NodeB.RenewLeasesAsync();
+
+        AssertCaps([fixture.A1, fixture.A2], fixture.Quarter);
+        Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, fixture.B1.MaxSendBytesPerSecond);
+        Assert.Equal(4, fixture.Membership.ActiveSessionCount("alice", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        Assert.True(Allocated(fixture.A1, fixture.A2, fixture.B1) <= AccountRateFormula.AccountBytesPerSecond(RateMbps));
+    }
+
+    [Fact]
+    public async Task UnavailableRelease_ThenSuccessfulLaterRelease_DoesNotOvershoot()
+    {
+        var fixture = await AdmitEstablishedThenJoinersAsync();
+        fixture.Membership.Unavailable = true;
+        fixture.RatesB.Unregister("alice", "b2");
+        await fixture.NodeB.ReleaseAsync("alice", "b2");
+        var releasesAfterFail = fixture.NodeB.ReleaseCalls;
+        await fixture.NodeB.ReleaseAsync("alice", "b2");
+        Assert.Equal(releasesAfterFail, fixture.NodeB.ReleaseCalls);
+
+        fixture.Membership.Unavailable = false;
+        fixture.RatesB.Unregister("alice", "b1");
+        await fixture.NodeB.ReleaseAsync("alice", "b1");
+        Assert.Equal(0, fixture.NodeB.GetLocalSessionCount("alice"));
+        Assert.Equal(0, fixture.RatesB.LocalSessionCount("alice"));
+        Assert.Equal(3, fixture.Membership.ActiveSessionCount("alice", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+
+        await fixture.NodeA.RenewLeasesAsync();
+        AssertCaps([fixture.A1, fixture.A2], fixture.Quarter);
+        Assert.True(Allocated(fixture.A1, fixture.A2) <= AccountRateFormula.AccountBytesPerSecond(RateMbps));
+    }
+
+    [Fact]
     public async Task ReleaseDuringRenew_ExistingCapsFollowReleaseTotal()
     {
         var membership = new InMemorySessionStateStore();
@@ -471,6 +562,37 @@ public sealed class SessionStateRateLimitingTests
 
         await node.RenewLeasesAsync();
         Assert.Equal(evals + 1, redis.Database.ScriptEvaluateCount);
+    }
+
+    private static async Task<TwoNodeRateFixture> AdmitEstablishedThenJoinersAsync()
+    {
+        var membership = new InMemorySessionStateStore();
+        var ratesA = new AccountRateAllocator();
+        var ratesB = new AccountRateAllocator();
+        var nodeA = CreateNode(membership, "nntpd01", ratesA);
+        var nodeB = CreateNode(membership, "nntpd02", ratesB);
+        var a1 = new FakeCap();
+        var a2 = new FakeCap();
+        var b1 = new FakeCap();
+        var b2 = new FakeCap();
+
+        Assert.Equal(SessionAdmissionResult.Success, await nodeA.TryAdmitAsync("alice", "a1", V4A, 10, 0, RateMbps));
+        ratesA.Register("alice", "a1", a1, RateMbps);
+        Assert.Equal(SessionAdmissionResult.Success, await nodeA.TryAdmitAsync("alice", "a2", V4A, 10, 0, RateMbps));
+        ratesA.Register("alice", "a2", a2, RateMbps);
+        AssertCaps([a1, a2], 625_000);
+
+        Assert.Equal(SessionAdmissionResult.Success, await nodeB.TryAdmitAsync("alice", "b1", V4B, 10, 0, RateMbps));
+        ratesB.Register("alice", "b1", b1, RateMbps);
+        Assert.Equal(SessionAdmissionResult.Success, await nodeB.TryAdmitAsync("alice", "b2", V4B, 10, 0, RateMbps));
+        ratesB.Register("alice", "b2", b2, RateMbps);
+        Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, b1.MaxSendBytesPerSecond);
+        Assert.Equal(AccountRateFormula.BlockedBytesPerSecond, b2.MaxSendBytesPerSecond);
+
+        await nodeA.RenewLeasesAsync();
+        var quarter = AccountRateFormula.PerSessionBytesPerSecond(RateMbps, 4);
+        AssertCaps([a1, a2], quarter);
+        return new TwoNodeRateFixture(membership, ratesA, ratesB, nodeA, nodeB, a1, a2, b1, b2, quarter);
     }
 
     private static async Task<FakeCap[]> RegisterAdmitted(
@@ -549,6 +671,18 @@ public sealed class SessionStateRateLimitingTests
             nodeId,
             TimeProvider.System,
             rates: rates);
+
+    private sealed record TwoNodeRateFixture(
+        InMemorySessionStateStore Membership,
+        AccountRateAllocator RatesA,
+        AccountRateAllocator RatesB,
+        DistributedSessionStateTracker NodeA,
+        DistributedSessionStateTracker NodeB,
+        FakeCap A1,
+        FakeCap A2,
+        FakeCap B1,
+        FakeCap B2,
+        long Quarter);
 
     private sealed class FakeCap : IOutboundRateCap
     {
