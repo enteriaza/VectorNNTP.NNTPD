@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.RabbitMq;
 
 namespace VectorNNTP.BackFiller.Hosting;
 
@@ -12,15 +13,15 @@ namespace VectorNNTP.BackFiller.Hosting;
 public static class BackFillerServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Phase 1 BackFiller host services: configuration, validation, and system time.
+    /// Adds BackFiller host services: configuration, validation, system time, and RabbitMQ connection ownership.
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
     /// <remarks>
-    /// No placeholder <see cref="IHostedService"/> is registered. The Generic Host stays
-    /// alive via platform lifetime (console / systemd / Windows Service). Later phases add
-    /// real hosted services. Article-work, RabbitMQ consume, NNTP, transit, retention,
-    /// listener, accounts, and certificates are not registered in Phase 1.
+    /// Registers <see cref="BackFillerRabbitMqService"/> as the sole RabbitMQ connection
+    /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
+    /// connection cannot be established. Article-work consume, NNTP, transit, retention,
+    /// listener, accounts, and certificates are not registered in Phase 2.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -54,6 +55,16 @@ public static class BackFillerServiceCollectionExtensions
             {
                 host.ShutdownTimeout = runtime.Shutdown.GracePeriod;
             });
+
+        builder.Services.TryAddSingleton<IBackFillerRabbitMqConnectionFactory, BackFillerRabbitMqClientConnectionFactory>();
+        builder.Services.AddSingleton(static provider => new BackFillerRabbitMqService(
+            provider.GetRequiredService<IBackFillerRabbitMqConnectionFactory>(),
+            provider.GetRequiredService<BackFillerRuntimeOptions>(),
+            provider.GetRequiredService<ILogger<BackFillerRabbitMqService>>()));
+        builder.Services.AddSingleton<IBackFillerRabbitMqService>(static provider =>
+            provider.GetRequiredService<BackFillerRabbitMqService>());
+        builder.Services.AddSingleton<IHostedService>(static provider =>
+            provider.GetRequiredService<BackFillerRabbitMqService>());
 
         return builder;
     }

@@ -319,7 +319,7 @@ Phase 0 implemented host + logging. Phase 1 removed the no-op hosted service; th
 1. **Shared Article Work contract ownership.** NNTPD types live in `VectorNNTP.NNTPD.RabbitMq.ArticleWork` and are internal to NNTPD. Extracting a shared project requires a separate approved task. Until then, BackFiller owns consume-side types; do not add a ProjectReference to NNTPD; do not modify NNTPD to expose internals.
 2. **AMQP `RequestId` header.** NNTPD writes it and requires it to match JSON `requestId`. Old worker parsed JSON only. New worker should accept the header without putting it in JSON; mismatch policy (ignore vs InvalidRequest) must be decided when the parser is written.
 3. **`grabbers.*` vs `backfiller.*`.** Interop decision is already made by locked NNTPD: consume `backfiller.*`. Document leftover `grabbers.*` broker entities as out of scope (NNTPD does not delete them).
-4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. **Phase 1:** Generic Host + platform lifetime only (no placeholder `BackgroundService`, no `ApplicationLifecycle`). Later phases add real hosted services when consume/listener work exists.
+4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. **Phase 2:** Generic Host + one real `IHostedService` (`BackFillerRabbitMqService`) for fail-closed RabbitMQ startup. No placeholder `BackgroundService`. No NNTPD `ApplicationLifecycle`.
 5. **Listener vs NNTPD fetch.** Whether NNTPD will later pull `cache://` URIs, and whether Listener remains a separate protocol, is integration work — not this phase.
 6. **Transit coupling.** Whether recovered articles must still TAKETHIS to TransitServer in every Success path, and the drop-on-transit-reject settlement, needs confirmation before that path is rewritten.
 7. **MySQL account schema.** Keep `nntpbackfilleraccounts` as-is vs any later shared auth store. Default: keep the table contract.
@@ -392,4 +392,40 @@ Created in this repository:
 - `tests/VectorNNTP.BackFiller.Tests` — configuration binding, validation, snapshot, and host-composition tests (no old tests copied).
 - This document.
 
-Not created: RabbitMQ, NNTP, transit, retention, listener, accounts, certificates, or any NNTPD integration.
+Not created: Article Work processing, NNTP, transit, retention, listener, accounts, certificates, or any NNTPD integration.
+
+## Phase 2 — RabbitMQ connection foundation
+
+Implemented in `src/VectorNNTP.BackFiller/RabbitMq`. One process-wide connection owner (`BackFillerRabbitMqService`) registered as an `IHostedService`. Callers obtain a non-owning generation handle and may open caller-owned channels. Article Work processing is deferred.
+
+### Ownership
+
+| Resource | Owner | Notes |
+|---|---|---|
+| TCP/AMQP connection | `BackFillerRabbitMqService` | Sole long-lived connection. Consumers must not open competing connections. |
+| Connection handle | Caller (non-owning) | Snapshot of generation + `IsCurrent`. Not a pin. Not disposable. |
+| Channel | Caller that called `CreateChannelAsync` | Dedicated channel per future consumer. Disposing a channel must not dispose the connection. |
+
+RabbitMQ.Client automatic recovery and topology recovery are disabled. Application-owned recovery is the only recovery path.
+
+### Startup and recovery
+
+- **Startup is fail-closed.** `StartAsync` connects once. If the broker is unreachable or the connection is not usable, startup fails, any partial connection is disposed, and the host does not run.
+- **Post-startup recovery is indefinite.** After a successful start, connection loss is a degraded state. One watch task reconnects with exponential backoff (`PoolReconnectBaseDelayMs` / `PoolReconnectMaxDelayMs`) until a new generation is installed or shutdown cancels the loop. There is no consecutive-failure budget that permanently abandons recovery (intentional difference from old `MaxConsecutiveRecoveryFailures` escalation).
+- **Single connection.** Phase 2 does not implement the old min/max connection pool. `MinConnections` / `MaxConnections` remain on the snapshot for a later evidence-driven pool if Article Work needs it. Channels are created per caller on the current connection.
+
+### Generation fencing
+
+- Each successful install increments a monotonic generation.
+- `ConnectionLost` from a sender that is not the published current connection is ignored and cannot request recovery or retire a newer generation.
+- Replacing a generation disposes only the captured previous instance, not whatever later became current.
+- Direct dispose of a retired connection object cannot dispose the current generation.
+- `TryGetCurrent` / `IsCurrent` fail as soon as the published connection is closed, unpublished, or the service is stopping.
+
+### Topology
+
+**Not declared in this phase.** Locked NNTPD already declares durable fanout exchanges and quorum queues named `backfiller.<backbone>` (and `backfiller.storage`). Old BackFiller declared `grabbers.*` from the MySQL account snapshot at startup; that path is deferred with accounts. `BackFillerRabbitMqTopology` records the canonical `backfiller.*` provider names only. `grabbers.*` is out of scope. `backfiller.storage` is NNTPD-internal and is not a BackFiller consume target.
+
+### Article Work
+
+Deferred. This phase does not deserialize requests, publish responses, ACK/NACK, or consume queues.
