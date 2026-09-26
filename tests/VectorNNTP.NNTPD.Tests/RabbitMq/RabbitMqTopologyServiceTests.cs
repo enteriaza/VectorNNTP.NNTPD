@@ -159,6 +159,7 @@ public sealed class RabbitMqTopologyServiceTests
 
         Assert.Equal(typeof(RabbitMqService), services[2].GetType());
         Assert.Equal(typeof(RabbitMqTopologyService), services[3].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[4].GetType());
         Assert.Equal(1, services.Count(static s => s is RabbitMqTopologyService));
         Assert.Same(
             host.Services.GetRequiredService<RabbitMqTopologyService>(),

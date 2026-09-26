@@ -20,6 +20,11 @@ internal static class StorageArticleRetrievalTopology
     /// <summary>Exchange, queue, and routing-key name for storage retrieval requests.</summary>
     internal const string EntityName = "backfiller.storage";
 
+    /// <summary>
+    /// JSON <c>backbone</c> for storage publications. This is not a BackFiller provider identifier.
+    /// </summary>
+    internal const string Backbone = "Storage";
+
     /// <summary>Single storage request endpoint.</summary>
     internal static RabbitMqArticleRetrievalEndpoint Definition { get; } =
         RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(EntityName);

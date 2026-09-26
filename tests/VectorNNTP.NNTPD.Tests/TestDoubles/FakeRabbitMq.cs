@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
+using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -145,6 +146,12 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>Gets every topology channel created on this connection.</summary>
     public List<FakeRabbitMqTopologyChannel> TopologyChannels { get; } = [];
 
+    /// <summary>Gets every RPC channel created on this connection.</summary>
+    public List<FakeRabbitMqRpcChannel> RpcChannels { get; } = [];
+
+    /// <summary>When set, <see cref="CreateRpcChannelAsync"/> throws this exception.</summary>
+    public Exception? CreateRpcChannelException { get; set; }
+
     /// <summary>When set, <see cref="CreateTopologyChannelAsync"/> throws this exception.</summary>
     public Exception? CreateTopologyChannelException { get; set; }
 
@@ -179,6 +186,25 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
         };
         TopologyChannels.Add(channel);
         return Task.FromResult<IRabbitMqTopologyChannel>(channel);
+    }
+
+    /// <inheritdoc />
+    public Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CreateRpcChannelException is not null)
+        {
+            throw CreateRpcChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for article-work RPC.");
+        }
+
+        var channel = new FakeRabbitMqRpcChannel(generation);
+        RpcChannels.Add(channel);
+        return Task.FromResult<IRabbitMqRpcChannel>(channel);
     }
 
     /// <summary>Raises <see cref="ConnectionLost"/> as a peer-initiated disconnect.</summary>
@@ -326,6 +352,148 @@ internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
         return new Dictionary<string, object?>(arguments, StringComparer.Ordinal);
     }
 }
+
+/// <summary>In-memory RabbitMQ channel for article-work RPC tests.</summary>
+internal sealed class FakeRabbitMqRpcChannel : IRabbitMqRpcChannel
+{
+    /// <summary>Initializes a new fake RPC channel.</summary>
+    public FakeRabbitMqRpcChannel(long generation)
+    {
+        Generation = generation;
+    }
+
+    /// <inheritdoc />
+    public long Generation { get; }
+
+    /// <summary>Gets recorded queue declarations.</summary>
+    public List<FakeRabbitMqQueueDeclaration> Queues { get; } = [];
+
+    /// <summary>Gets recorded publications.</summary>
+    public List<FakeRabbitMqRpcPublication> Publications { get; } = [];
+
+    /// <summary>Gets how many times the channel was disposed.</summary>
+    public int DisposeCount { get; private set; }
+
+    /// <summary>When set, <see cref="PublishAsync"/> throws this exception.</summary>
+    public Exception? PublishException { get; set; }
+
+    /// <summary>Gets the consume handler when a consumer has started.</summary>
+    public Func<RabbitMqRpcDelivery, Task>? DeliveryHandler { get; private set; }
+
+    /// <summary>Gets the most recent delivery passed to the consumer, when any.</summary>
+    public RabbitMqRpcDelivery? LastDelivery { get; private set; }
+
+    /// <summary>Gets the consumed queue name.</summary>
+    public string? ConsumedQueue { get; private set; }
+
+    /// <inheritdoc />
+    public Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Queues.Add(new FakeRabbitMqQueueDeclaration(
+            queue,
+            durable,
+            exclusive,
+            autoDelete,
+            arguments is null ? null : new Dictionary<string, object?>(arguments, StringComparer.Ordinal)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task PublishAsync(
+        string exchange,
+        string routingKey,
+        string correlationId,
+        string requestId,
+        string replyTo,
+        string contentType,
+        string expiration,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (DisposeCount > 0)
+        {
+            throw new ObjectDisposedException(nameof(FakeRabbitMqRpcChannel));
+        }
+
+        if (PublishException is not null)
+        {
+            throw PublishException;
+        }
+
+        Publications.Add(new FakeRabbitMqRpcPublication(
+            exchange,
+            routingKey,
+            correlationId,
+            requestId,
+            replyTo,
+            contentType,
+            expiration,
+            body.ToArray()));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<string> ConsumeAsync(
+        string queue,
+        Func<RabbitMqRpcDelivery, Task> onDelivery,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ConsumedQueue = queue;
+        DeliveryHandler = onDelivery;
+        return Task.FromResult("fake-consumer");
+    }
+
+    /// <summary>Delivers one message to the registered consumer.</summary>
+    public Task DeliverAsync(
+        string? correlationId,
+        ReadOnlyMemory<byte> body,
+        string? contentType = "application/json",
+        string? requestId = null,
+        string? expiration = ArticleWorkRpcAmqp.ExpirationMilliseconds)
+    {
+        if (DeliveryHandler is null)
+        {
+            throw new InvalidOperationException("No RPC consumer is registered.");
+        }
+
+        var delivery = new RabbitMqRpcDelivery(
+            correlationId,
+            requestId,
+            contentType,
+            expiration,
+            body.ToArray(),
+            Generation);
+        LastDelivery = delivery;
+        return DeliveryHandler(delivery);
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>Recorded article-work RPC publication.</summary>
+internal sealed record FakeRabbitMqRpcPublication(
+    string Exchange,
+    string RoutingKey,
+    string CorrelationId,
+    string RequestId,
+    string ReplyTo,
+    string ContentType,
+    string Expiration,
+    byte[] Body);
 
 /// <summary>Recorded exchange declaration.</summary>
 internal sealed record FakeRabbitMqExchangeDeclaration(

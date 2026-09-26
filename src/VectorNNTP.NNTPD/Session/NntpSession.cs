@@ -18,6 +18,7 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Transit;
+using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -100,7 +101,8 @@ public sealed class NntpSession
         NntpSaslService? saslService = null,
         ITransitPeerAuthenticator? transitAuthenticator = null,
         IAccountByteAccountant? accountBytes = null,
-        IAccountRateAllocator? accountRates = null)
+        IAccountRateAllocator? accountRates = null,
+        IArticleWorkRpcClient? articleWorkRpc = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -166,6 +168,7 @@ public sealed class NntpSession
         SaslService = saslService;
         AccountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         AccountRates = accountRates ?? NullAccountRateAllocator.Instance;
+        ArticleWorkRpc = articleWorkRpc;
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -179,6 +182,12 @@ public sealed class NntpSession
     /// Gets the article ingestion queue used by transfer commands (<c>TAKETHIS</c>, <c>IHAVE</c>, <c>POST</c>).
     /// </summary>
     public IArticleIngestionQueue ArticleIngestion { get; }
+
+    /// <summary>
+    /// Gets the article-work RPC client used by ARTICLE message-id lookup, or
+    /// <see langword="null"/> when tests construct a session without RabbitMQ.
+    /// </summary>
+    internal IArticleWorkRpcClient? ArticleWorkRpc { get; }
 
     /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
     public int MaxArticleSize { get; }

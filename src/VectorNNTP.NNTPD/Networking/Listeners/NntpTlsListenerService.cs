@@ -21,6 +21,7 @@ using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -58,6 +59,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly NntpSaslService? _saslService;
     private readonly IAccountByteAccountant _accountBytes;
     private readonly IAccountRateAllocator _accountRates;
+    private readonly IArticleWorkRpcClient? _articleWorkRpc;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -93,7 +95,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         ISessionStateTracker? sessionAdmission = null,
         NntpSaslService? saslService = null,
         IAccountByteAccountant? accountBytes = null,
-        IAccountRateAllocator? accountRates = null)
+        IAccountRateAllocator? accountRates = null,
+        IArticleWorkRpcClient? articleWorkRpc = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -124,6 +127,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _saslService = saslService;
         _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
+        _articleWorkRpc = articleWorkRpc;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -369,7 +373,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 sessionAdmission: _sessionAdmission,
                 saslService: _saslService,
                 accountBytes: _accountBytes,
-                accountRates: _accountRates);
+                accountRates: _accountRates,
+                articleWorkRpc: _articleWorkRpc);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

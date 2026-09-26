@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
@@ -29,6 +30,35 @@ public sealed class ArticleRetrievalCommandTests
             "BODY",
             "STAT",
         };
+
+    [Fact]
+    public async Task ArticleMessageId_InvokesRpc_ThenStillReturns430()
+    {
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new RecordingArticleWorkRpcClient();
+        var session = duplex.CreateSession(articleWorkRpc: rpc);
+        await DispatchLineAsync(duplex, session, "ARTICLE <12345@example.invalid>");
+        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        var messageId = Assert.Single(rpc.Lookups);
+        Assert.Equal("<12345@example.invalid>"u8.ToArray(), messageId.ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(RetrievalVerbs))]
+    public async Task HeadBodyStat_MessageId_DoesNotInvokeRpc(string verb)
+    {
+        if (verb == "ARTICLE")
+        {
+            return;
+        }
+
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new RecordingArticleWorkRpcClient();
+        var session = duplex.CreateSession(articleWorkRpc: rpc);
+        await DispatchLineAsync(duplex, session, $"{verb} <12345@example.invalid>");
+        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        Assert.Empty(rpc.Lookups);
+    }
 
     [Theory]
     [MemberData(nameof(RetrievalVerbs))]
@@ -291,6 +321,26 @@ public sealed class ArticleRetrievalCommandTests
         Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
+    private sealed class RecordingArticleWorkRpcClient : IArticleWorkRpcClient
+    {
+        public List<ReadOnlyMemory<byte>> Lookups { get; } = [];
+
+        public Task<ArticleWorkRpcResult> LookupByMessageIdAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken)
+        {
+            Lookups.Add(messageId.ToArray());
+            return Task.FromResult(new ArticleWorkRpcResult(
+                ArticleWorkOutcome.Success,
+                Guid.NewGuid(),
+                "<12345@example.invalid>",
+                "Storage",
+                "cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160",
+                Error: null,
+                "backfiller.storage"));
+        }
+    }
+
     private sealed class ArticleDuplex : IAsyncDisposable
     {
         private readonly Pipe _clientToServer = new(NntpPipeOptions.Create());
@@ -300,7 +350,10 @@ public sealed class ArticleRetrievalCommandTests
 
         public static Task<ArticleDuplex> CreateAsync() => Task.FromResult(new ArticleDuplex());
 
-        public NntpSession CreateSession(NewsgroupSnapshot? snapshot = null, bool authorize = true)
+        public NntpSession CreateSession(
+            NewsgroupSnapshot? snapshot = null,
+            bool authorize = true,
+            IArticleWorkRpcClient? articleWorkRpc = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -309,7 +362,8 @@ public sealed class ArticleRetrievalCommandTests
             var session = new NntpSession(
                 connection,
                 NullLogger<NntpSession>.Instance,
-                newsgroupCatalogue: snapshot is null ? null : new StaticNewsgroupCatalogue(snapshot));
+                newsgroupCatalogue: snapshot is null ? null : new StaticNewsgroupCatalogue(snapshot),
+                articleWorkRpc: articleWorkRpc);
             if (authorize)
             {
                 session.SetAuthorization(Reader);

@@ -78,6 +78,24 @@ internal sealed class RabbitMqClientConnection : IRabbitMqConnection
     }
 
     /// <inheritdoc />
+    public async Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (!_connection.IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for article-work RPC.");
+        }
+
+        var options = new CreateChannelOptions(
+            publisherConfirmationsEnabled: true,
+            publisherConfirmationTrackingEnabled: true);
+        var channel = await _connection
+            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return new RabbitMqClientRpcChannel(channel, generation);
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)

@@ -6,6 +6,7 @@ using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.RabbitMq;
+using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
@@ -288,6 +289,7 @@ public static class NntpdServiceCollectionExtensions
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
         // RabbitMQ topology (hard dep; BackFiller + backfiller.storage declare) →
+        // RabbitMQ article-work RPC (hard dep; reply consumer + request orchestration) →
         // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
@@ -317,6 +319,13 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqTopologyService>(static sp =>
                 sp.GetRequiredService<RabbitMqTopologyService>()));
+
+        services.TryAddSingleton<ArticleWorkRpcService>();
+        services.TryAddSingleton<IArticleWorkRpcClient>(
+            static sp => sp.GetRequiredService<ArticleWorkRpcService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, ArticleWorkRpcService>(
+                static sp => sp.GetRequiredService<ArticleWorkRpcService>()));
 
         services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
         services.TryAddSingleton<NntpDbService>();
