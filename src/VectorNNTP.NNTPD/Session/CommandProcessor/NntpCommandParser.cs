@@ -158,6 +158,24 @@ public static class NntpCommandParser
             case NntpVerb.AuthInfo when qualifier is NntpVerb.Sasl:
                 return argument.IsEmpty ? NntpParseStatus.MissingArgument : NntpParseStatus.Ok;
 
+            case NntpVerb.Article:
+            case NntpVerb.Head:
+            case NntpVerb.Body:
+            case NntpVerb.Stat:
+                if (tokenCount == 0)
+                {
+                    return NntpParseStatus.Ok;
+                }
+
+                if (tokenCount != 1)
+                {
+                    return NntpParseStatus.ExtraArgument;
+                }
+
+                return NntpMessageId.IsBasicWellFormed(argument) || NntpArticleNumber.IsSyntax(argument)
+                    ? NntpParseStatus.Ok
+                    : NntpParseStatus.InvalidArgument;
+
             case NntpVerb.Group:
                 if (tokenCount == 0)
                 {

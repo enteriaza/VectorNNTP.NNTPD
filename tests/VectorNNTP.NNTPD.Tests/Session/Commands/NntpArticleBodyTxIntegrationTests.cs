@@ -9,8 +9,8 @@ using Xunit;
 namespace VectorNNTP.NNTPD.Tests.Session.Commands;
 
 /// <summary>
-/// ARTICLE/BODY wire shapes on the shared TX path from externally supplied destuffed bytes
-/// (handlers remain NotImplemented; storage/catalog is out of scope for NNTPD).
+/// ARTICLE/BODY wire shapes on the shared TX path from externally supplied destuffed bytes.
+/// Command handlers return RFC lookup-failure codes; storage/catalog is still out of scope.
 /// </summary>
 public sealed class NntpArticleBodyTxIntegrationTests
 {
@@ -221,9 +221,8 @@ public sealed class NntpArticleBodyTxIntegrationTests
     }
 
     [Fact]
-    public void ArticleHandlers_RemainNotImplemented_StorageOutOfScope()
+    public void ArticleHandlers_ReturnLookupFailures_WithoutInventingStorage()
     {
-        // Structural guard: do not invent catalog/lookup by wiring fake retrieval.
         var src = File.ReadAllText(
             Path.Combine(
                 FindRepoRoot(),
@@ -232,9 +231,14 @@ public sealed class NntpArticleBodyTxIntegrationTests
                 "Session",
                 "Commands",
                 "Article.cs"));
-        Assert.Contains("NntpCommandNotImplemented", src, StringComparison.Ordinal);
-        Assert.Contains("WriteCustomerArticleAsync", src, StringComparison.Ordinal);
-        Assert.Contains("WriteCustomerBodyAsync", src, StringComparison.Ordinal);
+        Assert.DoesNotContain("NntpCommandNotImplemented", src, StringComparison.Ordinal);
+        Assert.Contains("NoArticleWithMessageId", src, StringComparison.Ordinal);
+        Assert.Contains("NoArticleWithNumber", src, StringComparison.Ordinal);
+        Assert.Contains("NoNewsgroupSelected", src, StringComparison.Ordinal);
+        Assert.Contains("CurrentArticleNumberInvalid", src, StringComparison.Ordinal);
+        Assert.DoesNotContain("WriteCustomerArticleAsync", src, StringComparison.Ordinal);
+        Assert.DoesNotContain("WriteCustomerBodyAsync", src, StringComparison.Ordinal);
+        Assert.DoesNotContain("WriteArticleAsync", src, StringComparison.Ordinal);
     }
 
     [Fact]

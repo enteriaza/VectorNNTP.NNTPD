@@ -241,6 +241,18 @@ internal static class NntpResponses
     internal static readonly ReadOnlyMemory<byte> NoSuchNewsgroup =
         Line("411 No such newsgroup\r\n"u8);
 
+    internal static readonly ReadOnlyMemory<byte> NoNewsgroupSelected =
+        Line("412 No newsgroup selected\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> CurrentArticleNumberInvalid =
+        Line("420 Current article number is invalid\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> NoArticleWithNumber =
+        Line("423 No article with that number\r\n"u8);
+
+    internal static readonly ReadOnlyMemory<byte> NoArticleWithMessageId =
+        Line("430 No article with that message-id\r\n"u8);
+
     internal static readonly ReadOnlyMemory<byte> SpeedTestUnknownPeer =
         Line("502 UNKNOWN SPEEDTEST PEER\r\n"u8);
 

@@ -56,6 +56,10 @@ public sealed class NntpCommandTxStatusLoggingTests
     public void StaticStatus_IsNotDecodedFromWireBytes()
     {
         Assert.Equal("500 Command not implemented", NntpResponseStatus.CommandNotImplemented);
+        Assert.Equal("412 No newsgroup selected", NntpResponseStatus.NoNewsgroupSelected);
+        Assert.Equal("420 Current article number is invalid", NntpResponseStatus.CurrentArticleNumberInvalid);
+        Assert.Equal("423 No article with that number", NntpResponseStatus.NoArticleWithNumber);
+        Assert.Equal("430 No article with that message-id", NntpResponseStatus.NoArticleWithMessageId);
         Assert.Equal("503 Data item not stored", NntpResponseStatus.ListDataItemNotStored);
         Assert.Equal("215 Order of fields in overview database.", NntpResponseStatus.ListOverviewFmtFollows);
         Assert.Equal("215 headers and metadata items supported:", NntpResponseStatus.ListHeadersFollows);

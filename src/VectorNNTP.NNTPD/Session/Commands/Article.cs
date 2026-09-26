@@ -7,60 +7,100 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Deliberate <see cref="NntpCommandNotImplemented"/> placeholders. Article storage, catalogue,
-/// GROUP selection, and Message-ID / article-number lookup are <strong>out of scope</strong> for
-/// VectorNNTP.NNTPD (network / data plane only). Do not invent retrieval here.
+/// Article storage and retrieval are not implemented. Every syntactically valid lookup
+/// therefore returns the RFC 3977 failure code for that argument form:
+/// message-id → <c>430</c>, article number → <c>412</c>/<c>423</c>, omitted current
+/// article → <c>412</c>/<c>420</c>. Successful retrieval codes remain
+/// ARTICLE <c>220</c>, HEAD <c>221</c>, BODY <c>222</c>, STAT <c>223</c> and are not
+/// emitted. Error replies are single-line; no multiline terminator is sent.
 /// </para>
 /// <para>
-/// TAKETHIS → spool ingestion is an ingress / application boundary — not an article repository
-/// for ARTICLE/BODY. Callers that already hold destuffed article bytes transmit via the shared
-/// TX path (<see cref="NntpResponseWriter.WriteArticleAsync(ReadOnlyMemory{byte}, NntpArticleTxFraming, CancellationToken)"/> /
-/// <see cref="NntpResponseWriter.WriteCustomerArticleAsync"/> /
-/// <see cref="NntpResponseWriter.WriteCustomerBodyAsync"/>), not per-line
-/// <see cref="NntpResponseWriter.WriteMultilineDataAsync"/>.
+/// GROUP selection does not invent a current article number from catalogue water marks.
+/// An unsuccessful lookup MUST NOT change the selected group or current article
+/// (RFC 3977 §6.2.1.2). There is no current-article pointer yet, so the omitted form
+/// after a successful GROUP is <c>420</c> (invalid current article), not <c>423</c>
+/// (a previously valid number whose article is gone).
+/// </para>
+/// <para>
+/// TAKETHIS → spool ingestion is an ingress / application boundary — not an article
+/// repository for these commands.
 /// </para>
 /// </remarks>
 internal static class Article
 {
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Article));
 
-    /// <summary>Handles <c>ARTICLE</c> (RFC 3977, Section 6.2.1).</summary>
+    /// <summary>Handles <c>ARTICLE</c> (RFC 3977, Section 6.2.1). Future success code is <c>220</c>.</summary>
     public static ValueTask HandleArticleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
-            context,
-            "ARTICLE",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
-            cancellationToken,
-            successDetail: "not implemented");
+        NntpCommandExecution.RunAsync(Logger, context, "ARTICLE", ExecuteAsync, cancellationToken);
 
-    /// <summary>Handles <c>HEAD</c> (RFC 3977, Section 6.2.2).</summary>
+    /// <summary>Handles <c>HEAD</c> (RFC 3977, Section 6.2.2). Future success code is <c>221</c>.</summary>
     public static ValueTask HandleHeadAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
-            context,
-            "HEAD",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
-            cancellationToken,
-            successDetail: "not implemented");
+        NntpCommandExecution.RunAsync(Logger, context, "HEAD", ExecuteAsync, cancellationToken);
 
-    /// <summary>Handles <c>BODY</c> (RFC 3977, Section 6.2.3).</summary>
+    /// <summary>Handles <c>BODY</c> (RFC 3977, Section 6.2.3). Future success code is <c>222</c>.</summary>
     public static ValueTask HandleBodyAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
-            context,
-            "BODY",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
-            cancellationToken,
-            successDetail: "not implemented");
+        NntpCommandExecution.RunAsync(Logger, context, "BODY", ExecuteAsync, cancellationToken);
 
-    /// <summary>Handles <c>STAT</c> (RFC 3977, Section 6.2.4).</summary>
+    /// <summary>Handles <c>STAT</c> (RFC 3977, Section 6.2.4). Future success code is <c>223</c>.</summary>
     public static ValueTask HandleStatAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(
-            Logger,
+        NntpCommandExecution.RunAsync(Logger, context, "STAT", ExecuteAsync, cancellationToken);
+
+    private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    {
+        var argument = context.ArgumentSpan;
+        if (argument.IsEmpty)
+        {
+            return WriteCurrentArticleFailureAsync(context, cancellationToken);
+        }
+
+        if (argument[0] == (byte)'<')
+        {
+            return NntpCommandReply.WriteAsync(
+                context,
+                Logger,
+                NntpResponses.NoArticleWithMessageId,
+                NntpResponseStatus.NoArticleWithMessageId,
+                cancellationToken);
+        }
+
+        if (!context.Session.HasSelectedGroup)
+        {
+            return NntpCommandReply.WriteAsync(
+                context,
+                Logger,
+                NntpResponses.NoNewsgroupSelected,
+                NntpResponseStatus.NoNewsgroupSelected,
+                cancellationToken);
+        }
+
+        return NntpCommandReply.WriteAsync(
             context,
-            "STAT",
-            static (ctx, ct) => NntpCommandNotImplemented.HandleAsync(ctx, Logger, ct),
-            cancellationToken,
-            successDetail: "not implemented");
+            Logger,
+            NntpResponses.NoArticleWithNumber,
+            NntpResponseStatus.NoArticleWithNumber,
+            cancellationToken);
+    }
+
+    private static ValueTask WriteCurrentArticleFailureAsync(
+        NntpCommandContext context,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Session.HasSelectedGroup)
+        {
+            return NntpCommandReply.WriteAsync(
+                context,
+                Logger,
+                NntpResponses.NoNewsgroupSelected,
+                NntpResponseStatus.NoNewsgroupSelected,
+                cancellationToken);
+        }
+
+        return NntpCommandReply.WriteAsync(
+            context,
+            Logger,
+            NntpResponses.CurrentArticleNumberInvalid,
+            NntpResponseStatus.CurrentArticleNumberInvalid,
+            cancellationToken);
+    }
 }

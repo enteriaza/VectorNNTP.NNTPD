@@ -214,7 +214,7 @@ PGPVERIFY is a de-facto Netnews control-message authentication convention. It is
 
 The admin utility signs the FORMAT header set `Subject,Control,Message-ID,Date,From,Sender` plus the body (Unix LF). FORMAT constructs each signed header as `Name: ` (colon + space), including empty Sender as `Sender: ` + EOL. Deployed INN `pgpverify` 1.23–1.31 then strips trailing SP/HT immediately before LF (`$message =~ s/[ \t]+\n/\n/g`), so the hashed empty Sender is `Sender:\n`. VectorNNTP applies that same INN detached-verification rule so CANCEL controls interoperate with deployed INN. This does not rewrite or supersede FORMAT. `Newsgroups` is present on the wire but unsigned, because FORMAT adds it after signing. Path, Injection-Date, Injection-Info, and X-Trace are not signed; the server still generates them. `X-PGP-Sig` is a client header and is passed through POST.
 
-VectorNNTP.NNTPD `HEAD` is still a placeholder (no article catalogue). The utility targets a peer/upstream server that implements RFC 3977 HEAD.
+VectorNNTP.NNTPD `HEAD` returns RFC 3977 lookup-failure codes (`430` for a message-id). There is still no article store, so this utility must target a peer/upstream server that can return `221` headers.
 
 Client settings bind from `NntpCancelMessage` (`Host`, `Port`, `UseTls`, `From`, `Username`, `Password`, `Pgp`) plus `Nntpd:BindPort` / `BindPortTls` when `Port` is `0`, and the same `XTraceKey` / `XTracePreviousKey` / newsmaster secrets as the server. TLS never falls back to plaintext.
 

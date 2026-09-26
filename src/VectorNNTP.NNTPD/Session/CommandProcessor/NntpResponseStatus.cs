@@ -12,6 +12,10 @@ internal static class NntpResponseStatus
     internal const string ListOverviewFmtFollows = "215 Order of fields in overview database.";
     internal const string ListHeadersFollows = "215 headers and metadata items supported:";
     internal const string NoSuchNewsgroup = "411 No such newsgroup";
+    internal const string NoNewsgroupSelected = "412 No newsgroup selected";
+    internal const string CurrentArticleNumberInvalid = "420 Current article number is invalid";
+    internal const string NoArticleWithNumber = "423 No article with that number";
+    internal const string NoArticleWithMessageId = "430 No article with that message-id";
     internal const string GroupSelected = "211";
     internal const string ReaderModePostingPermitted = "200 Reader mode, posting permitted";
     internal const string ReaderModePostingProhibited = "201 Reader mode, posting prohibited";

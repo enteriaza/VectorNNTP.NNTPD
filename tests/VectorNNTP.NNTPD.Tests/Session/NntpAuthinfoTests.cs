@@ -224,7 +224,7 @@ public sealed class NntpAuthinfoTests
         Assert.False(session.Authorization.ControlCancelPermitted);
 
         await duplex.WriteClientLineAsync("ARTICLE");
-        Assert.StartsWith("500 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.StartsWith("412 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
 
         await duplex.WriteClientLineAsync("IHAVE <x@y>");
         Assert.StartsWith("502 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
