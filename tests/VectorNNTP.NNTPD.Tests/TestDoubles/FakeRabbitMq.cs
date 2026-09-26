@@ -43,6 +43,9 @@ internal sealed class FakeRabbitMqConnectionFactory : IRabbitMqConnectionFactory
     /// <summary>When <see langword="true"/>, created connections report <c>IsOpen == false</c>.</summary>
     public bool ReturnUnusableConnection { get; set; }
 
+    /// <summary>Copied onto each created connection as <see cref="FakeRabbitMqConnection.QueueDeclareException"/>.</summary>
+    public Exception? QueueDeclareException { get; set; }
+
     /// <summary>Waits until at least <paramref name="count"/> connect attempts have started.</summary>
     public async Task WaitForAttemptsAsync(int count, CancellationToken cancellationToken)
     {
@@ -90,6 +93,7 @@ internal sealed class FakeRabbitMqConnectionFactory : IRabbitMqConnectionFactory
             connectionName)
         {
             IsOpen = !ReturnUnusableConnection,
+            QueueDeclareException = QueueDeclareException,
         };
 
         LastConnection = connection;
@@ -138,6 +142,45 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <inheritdoc />
     public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
+    /// <summary>Gets every topology channel created on this connection.</summary>
+    public List<FakeRabbitMqTopologyChannel> TopologyChannels { get; } = [];
+
+    /// <summary>When set, <see cref="CreateTopologyChannelAsync"/> throws this exception.</summary>
+    public Exception? CreateTopologyChannelException { get; set; }
+
+    /// <summary>When set, the next created topology channel throws this exception from queue declare.</summary>
+    public Exception? QueueDeclareException { get; set; }
+
+    /// <summary>When set, the next created topology channel throws this exception from exchange declare.</summary>
+    public Exception? ExchangeDeclareException { get; set; }
+
+    /// <summary>When set, the next created topology channel throws this exception from queue bind.</summary>
+    public Exception? QueueBindException { get; set; }
+
+    /// <inheritdoc />
+    public Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CreateTopologyChannelException is not null)
+        {
+            throw CreateTopologyChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for topology declaration.");
+        }
+
+        var channel = new FakeRabbitMqTopologyChannel
+        {
+            ExchangeDeclareException = ExchangeDeclareException,
+            QueueDeclareException = QueueDeclareException,
+            QueueBindException = QueueBindException,
+        };
+        TopologyChannels.Add(channel);
+        return Task.FromResult<IRabbitMqTopologyChannel>(channel);
+    }
+
     /// <summary>Raises <see cref="ConnectionLost"/> as a peer-initiated disconnect.</summary>
     public void SimulateLost(ushort replyCode = 320, string replyText = "CONNECTION FORCED")
     {
@@ -157,4 +200,152 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
 
         DisposeCount++;
     }
+
+    /// <summary>Gets every exchange declared on any topology channel of this connection.</summary>
+    public IReadOnlyList<FakeRabbitMqExchangeDeclaration> ExchangeDeclarations =>
+        TopologyChannels.SelectMany(static channel => channel.Exchanges).ToList();
+
+    /// <summary>Gets every queue declared on any topology channel of this connection.</summary>
+    public IReadOnlyList<FakeRabbitMqQueueDeclaration> QueueDeclarations =>
+        TopologyChannels.SelectMany(static channel => channel.Queues).ToList();
+
+    /// <summary>Gets every binding declared on any topology channel of this connection.</summary>
+    public IReadOnlyList<FakeRabbitMqBindingDeclaration> BindingDeclarations =>
+        TopologyChannels.SelectMany(static channel => channel.Bindings).ToList();
 }
+
+/// <summary>In-memory declare-only RabbitMQ channel for topology tests.</summary>
+internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
+{
+    /// <summary>Gets recorded exchange declarations in call order.</summary>
+    public List<FakeRabbitMqExchangeDeclaration> Exchanges { get; } = [];
+
+    /// <summary>Gets recorded queue declarations in call order.</summary>
+    public List<FakeRabbitMqQueueDeclaration> Queues { get; } = [];
+
+    /// <summary>Gets recorded queue bindings in call order.</summary>
+    public List<FakeRabbitMqBindingDeclaration> Bindings { get; } = [];
+
+    /// <summary>Gets how many times the channel was disposed.</summary>
+    public int DisposeCount { get; private set; }
+
+    /// <summary>When set, <see cref="ExchangeDeclareAsync"/> throws this exception.</summary>
+    public Exception? ExchangeDeclareException { get; set; }
+
+    /// <summary>When set, <see cref="QueueDeclareAsync"/> throws this exception.</summary>
+    public Exception? QueueDeclareException { get; set; }
+
+    /// <summary>When set, <see cref="QueueBindAsync"/> throws this exception.</summary>
+    public Exception? QueueBindException { get; set; }
+
+    /// <inheritdoc />
+    public Task ExchangeDeclareAsync(
+        string exchange,
+        string type,
+        bool durable,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ExchangeDeclareException is not null)
+        {
+            throw ExchangeDeclareException;
+        }
+
+        Exchanges.Add(new FakeRabbitMqExchangeDeclaration(
+            exchange,
+            type,
+            durable,
+            autoDelete,
+            CopyArguments(arguments)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueueDeclareException is not null)
+        {
+            throw QueueDeclareException;
+        }
+
+        Queues.Add(new FakeRabbitMqQueueDeclaration(
+            queue,
+            durable,
+            exclusive,
+            autoDelete,
+            CopyArguments(arguments)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task QueueBindAsync(
+        string queue,
+        string exchange,
+        string routingKey,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueueBindException is not null)
+        {
+            throw QueueBindException;
+        }
+
+        Bindings.Add(new FakeRabbitMqBindingDeclaration(
+            queue,
+            exchange,
+            routingKey,
+            CopyArguments(arguments)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+
+    private static IReadOnlyDictionary<string, object?>? CopyArguments(
+        IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, object?>(arguments, StringComparer.Ordinal);
+    }
+}
+
+/// <summary>Recorded exchange declaration.</summary>
+internal sealed record FakeRabbitMqExchangeDeclaration(
+    string Name,
+    string Type,
+    bool Durable,
+    bool AutoDelete,
+    IReadOnlyDictionary<string, object?>? Arguments);
+
+/// <summary>Recorded queue declaration.</summary>
+internal sealed record FakeRabbitMqQueueDeclaration(
+    string Name,
+    bool Durable,
+    bool Exclusive,
+    bool AutoDelete,
+    IReadOnlyDictionary<string, object?>? Arguments);
+
+/// <summary>Recorded queue binding.</summary>
+internal sealed record FakeRabbitMqBindingDeclaration(
+    string Queue,
+    string Exchange,
+    string RoutingKey,
+    IReadOnlyDictionary<string, object?>? Arguments);

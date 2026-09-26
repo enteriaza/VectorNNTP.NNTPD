@@ -287,6 +287,7 @@ public static class NntpdServiceCollectionExtensions
 
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
+        // RabbitMQ topology (hard dep; BackFiller article-retrieval declare) →
         // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
@@ -311,6 +312,11 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
                 sp.GetRequiredService<RabbitMqService>()));
+
+        services.TryAddSingleton<RabbitMqTopologyService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, RabbitMqTopologyService>(static sp =>
+                sp.GetRequiredService<RabbitMqTopologyService>()));
 
         services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
         services.TryAddSingleton<NntpDbService>();

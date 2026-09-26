@@ -4,7 +4,8 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// One AMQP connection owned by <see cref="RabbitMqService"/>.
 /// </summary>
 /// <remarks>
-/// This surface is connection lifecycle only. Channel creation, topology, and messaging
+/// This surface is connection lifecycle plus the minimum channel factory required
+/// for fail-closed topology declaration. Publishers, consumers, and channel pools
 /// are intentionally absent.
 /// </remarks>
 public interface IRabbitMqConnection : IAsyncDisposable
@@ -32,4 +33,11 @@ public interface IRabbitMqConnection : IAsyncDisposable
     /// does not dispose itself; the service decides when the instance is retired.
     /// </remarks>
     event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
+
+    /// <summary>
+    /// Opens a short-lived channel that can declare exchanges, queues, and bindings.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel channel creation.</param>
+    /// <returns>A declare-only channel owned by the caller.</returns>
+    Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken);
 }
