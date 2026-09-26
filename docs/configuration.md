@@ -728,7 +728,7 @@ Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 | Field | Type | Default | Required? | Description |
 |-------|------|---------|-----------|-------------|
 | `PeerName` | string | _(none)_ | **yes** | Human-readable administrative display name. Preserved exactly. Not a protocol identifier. |
-| `MaxIncomingConnections` | int | _(none)_ | **yes** | Cluster-wide max simultaneous inbound connections for this peer's `Identifier` (`0–4096`). Redis is authoritative. Source IP is ACL identity only; it is not the limit key. Counted only after peer identification. `0` means closed (reject all new inbound connections), not unlimited. Lowering the limit does not disconnect existing sessions; new admits are rejected until cluster usage falls below the new limit. |
+| `MaxIncomingConnections` | int | _(none)_ | **yes** | Cluster-wide max simultaneous inbound connections for this peer's `Identifier` (`0–4096`). Redis is authoritative. Source IP is ACL identity only; it is not the limit key. Counted only after peer identification. A later READER AUTHINFO releases that slot. `0` means closed (reject all new inbound connections), not unlimited. Lowering the limit does not disconnect existing sessions; new admits are rejected until cluster usage falls below the new limit. |
 | `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
 | `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
 | `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |

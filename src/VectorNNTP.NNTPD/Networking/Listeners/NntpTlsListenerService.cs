@@ -406,6 +406,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 return;
             }
 
+            session.AttachTransitAdmission(admission.Lease);
             session.RecordPeerAccepted();
             session.FeedProbe = _feedDiagnostics.OnAccepted(session);
             try

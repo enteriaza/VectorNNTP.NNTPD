@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
@@ -530,6 +531,63 @@ public sealed class ApplicationTelemetryTests
     }
 
     [Fact]
+    public async Task ReaderAuthFromAllowFromRange_DoesNotIncrementTransitPeerTelemetry()
+    {
+        var store = CreatePeerStore(("usenet-ninja", 10));
+        var metrics = new TransitPeerMetrics();
+        var census = new NntpSessionCensus(metrics);
+        var session = CreatePeerSession("usenet-ninja", census, metrics, maxIncoming: 10);
+        Assert.Equal("usenet-ninja", session.Authorization.TransitPeerName);
+
+        session.RecordPeerAccepted();
+        census.Register(session);
+        Assert.Equal(1, metrics.Capture("usenet-ninja").Active);
+        Assert.Equal(1, metrics.Capture("usenet-ninja").Accepted);
+
+        session.ApplySuccessfulAuthentication("a", MySqlNntpCredentialValidator.ReaderPrivileges);
+        Assert.Null(session.Authorization.TransitPeerName);
+        Assert.True(session.Authorization.AuthorizedReader);
+
+        var logger = new RecordingLogger<ApplicationTelemetryService>();
+        await using var service = CreateService(logger, census: census, peerMetrics: metrics, transit: store);
+        service.Emit();
+
+        var row = Assert.Single(logger.Entries, static e => e.EventId.Id == 2403);
+        Assert.Equal("usenet-ninja", row.Properties["PeerName"]);
+        Assert.Equal(0, GetInt32(row, "Active"));
+        Assert.Equal(10, GetInt32(row, "MaxIncomingConnections"));
+        Assert.Equal(0L, GetInt64(row, "Accepted"));
+        Assert.Equal(0, metrics.Capture("usenet-ninja").Active);
+        Assert.Equal(0, metrics.Capture("usenet-ninja").Accepted);
+        Assert.Equal(1, census.Capture().Active);
+    }
+
+    [Fact]
+    public async Task TransitConnection_IncrementsTransitPeerTelemetry()
+    {
+        var store = CreatePeerStore(("usenet-ninja", 10));
+        var metrics = new TransitPeerMetrics();
+        var census = new NntpSessionCensus(metrics);
+        var session = CreatePeerSession("usenet-ninja", census, metrics, maxIncoming: 10);
+
+        session.RecordPeerAccepted();
+        census.Register(session);
+
+        var logger = new RecordingLogger<ApplicationTelemetryService>();
+        await using var service = CreateService(logger, census: census, peerMetrics: metrics, transit: store);
+        service.Emit();
+
+        var row = Assert.Single(logger.Entries, static e => e.EventId.Id == 2403);
+        Assert.Equal("usenet-ninja", row.Properties["PeerName"]);
+        Assert.Equal(1, GetInt32(row, "Active"));
+        Assert.Equal(10, GetInt32(row, "MaxIncomingConnections"));
+        Assert.Equal(1, GetInt32(row, "Peak"));
+        Assert.Equal(1L, GetInt64(row, "Accepted"));
+        Assert.Equal("usenet-ninja", session.Authorization.TransitPeerName);
+        Assert.False(session.Authorization.AuthorizedReader);
+    }
+
+    [Fact]
     public async Task PeerSessionCounts_AreIndependent()
     {
         var store = CreatePeerStore(("blueworld-hosting", 10), ("giganews", 100));
@@ -791,6 +849,10 @@ public sealed class ApplicationTelemetryTests
         }
 
         public void Unregister(NntpSession session)
+        {
+        }
+
+        public void ReleasePeerAttribution(NntpSession session)
         {
         }
 

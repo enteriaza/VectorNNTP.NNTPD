@@ -9,7 +9,7 @@ namespace VectorNNTP.NNTPD.Session;
 /// </summary>
 public sealed class NntpSessionCensus : INntpSessionCensus
 {
-    private readonly ConcurrentDictionary<NntpSession, byte> _sessions = new();
+    private readonly ConcurrentDictionary<NntpSession, string?> _sessions = new();
     private readonly ITransitPeerMetrics? _peerMetrics;
 
     /// <summary>Initializes a census that optionally updates <paramref name="peerMetrics"/> on register/unregister.</summary>
@@ -22,8 +22,9 @@ public sealed class NntpSessionCensus : INntpSessionCensus
     public void Register(NntpSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
-        _sessions[session] = 0;
-        if (session.Authorization.TransitPeerName is { } peerId)
+        var peerId = session.Authorization.TransitPeerName;
+        _sessions[session] = peerId;
+        if (peerId is not null)
         {
             _peerMetrics?.RecordSessionRegistered(peerId);
         }
@@ -37,8 +38,22 @@ public sealed class NntpSessionCensus : INntpSessionCensus
             return;
         }
 
-        if (_sessions.TryRemove(session, out _)
-            && session.Authorization.TransitPeerName is { } peerId)
+        if (_sessions.TryRemove(session, out var peerId) && peerId is not null)
+        {
+            _peerMetrics?.RecordSessionUnregistered(peerId);
+        }
+    }
+
+    /// <inheritdoc />
+    public void ReleasePeerAttribution(NntpSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (!_sessions.TryGetValue(session, out var peerId) || peerId is null)
+        {
+            return;
+        }
+
+        if (_sessions.TryUpdate(session, null, peerId))
         {
             _peerMetrics?.RecordSessionUnregistered(peerId);
         }

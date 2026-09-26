@@ -62,6 +62,12 @@ public interface INntpSessionCensus
     /// <summary>Unregisters a session that is leaving <see cref="NntpSession.RunAsync"/>.</summary>
     void Unregister(NntpSession session);
 
+    /// <summary>
+    /// Stops attributing <paramref name="session"/> to Transit peer telemetry after
+    /// it authenticates as a reader. Does not remove it from the process census.
+    /// </summary>
+    void ReleasePeerAttribution(NntpSession session);
+
     /// <summary>Captures the current complete session population.</summary>
     NntpSessionCensusSnapshot Capture();
 }

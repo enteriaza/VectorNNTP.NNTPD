@@ -65,6 +65,12 @@ public interface ITransitPeerMetrics
     /// <summary>Records a successful inbound admission for a named peer.</summary>
     void RecordAccepted(string peerId);
 
+    /// <summary>
+    /// Retracts a prior <see cref="RecordAccepted"/> when the session is reclassified
+    /// as a non-transit reader after AUTHINFO.
+    /// </summary>
+    void RetractAccepted(string peerId);
+
     /// <summary>Records an inbound admission rejection for a named peer.</summary>
     void RecordRejected(string peerId);
 

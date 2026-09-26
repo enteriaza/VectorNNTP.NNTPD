@@ -13,6 +13,9 @@ public sealed class TransitPeerMetrics : ITransitPeerMetrics
     public void RecordAccepted(string peerId) => Get(peerId).IncrementAccepted();
 
     /// <inheritdoc />
+    public void RetractAccepted(string peerId) => Get(peerId).DecrementAccepted();
+
+    /// <inheritdoc />
     public void RecordRejected(string peerId) => Get(peerId).IncrementRejected();
 
     /// <inheritdoc />
@@ -57,6 +60,23 @@ public sealed class TransitPeerMetrics : ITransitPeerMetrics
         private long _transmitted;
 
         public void IncrementAccepted() => Interlocked.Increment(ref _accepted);
+
+        public void DecrementAccepted()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _accepted);
+                if (current <= 0)
+                {
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref _accepted, current - 1, current) == current)
+                {
+                    return;
+                }
+            }
+        }
 
         public void IncrementRejected() => Interlocked.Increment(ref _rejected);
 

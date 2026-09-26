@@ -48,6 +48,7 @@ public sealed class NntpSession
     private string? _pendingAuthUsername;
     private NntpAccountPolicy? _accountPolicy;
     private string? _admittedAccountName;
+    private TransitInboundConnectionLease? _transitAdmission;
     private NntpSaslExchange? _saslExchange;
     private NntpSessionMode _mode;
     private NntpAuthenticationAuthority _authenticationAuthority;
@@ -415,11 +416,42 @@ public sealed class NntpSession
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         ArgumentNullException.ThrowIfNull(authorization);
+        var previousPeer = _authorization.TransitPeerName;
         _pendingAuthUsername = null;
         _saslExchange = null;
         _authentication = NntpAuthenticationState.ForUser(username);
         _authorization = authorization.With(isAuthenticated: true);
         _accountPolicy = policy;
+        if (previousPeer is not null && _authorization.TransitPeerName is null)
+        {
+            SessionCensus?.ReleasePeerAttribution(this);
+            PeerMetrics?.RetractAccepted(previousPeer);
+        }
+    }
+
+    /// <summary>
+    /// Attaches the inbound TransitPeerState lease taken at connection identification.
+    /// The listener still disposes the same lease on disconnect; the lease is one-shot.
+    /// </summary>
+    internal void AttachTransitAdmission(TransitInboundConnectionLease lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        _transitAdmission = lease;
+    }
+
+    /// <summary>
+    /// Releases the connection-time TransitPeerState slot when AUTHINFO replaced
+    /// named-peer identity with reader privileges. No-op when the session is still
+    /// a named Transit peer or no slot was taken.
+    /// </summary>
+    internal ValueTask ReleaseTransitAdmissionWhenNotTransitAsync()
+    {
+        if (_authorization.TransitPeerName is not null)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return _transitAdmission?.DisposeAsync() ?? ValueTask.CompletedTask;
     }
 
     /// <summary>
