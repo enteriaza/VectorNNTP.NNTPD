@@ -83,7 +83,7 @@ Invariant: `RabbitMQ:MaximumShutdownDrainTimeoutSeconds` ≤ `Shutdown:GracePeri
 
 Secrets belong in environment / secrets stores, not committed samples. The old tracked `appsettings.json` contains live credentials and **must not be copied**.
 
-Environment / systemd: `DOTNET_ENVIRONMENT`, optional `EnvironmentFile` at `/etc/vectornntp-backfiller/vectornntp-backfiller.env`. Prefix convention for the new project is an open decision (`backfiller__` is the likely analogue of NNTPD `nntpd__`).
+Environment / systemd: `DOTNET_ENVIRONMENT`, optional `EnvironmentFile` at `/etc/vectornntp-backfiller/vectornntp-backfiller.env`. Old worker: no custom prefix (`BackFiller__*`, `ConnectionStrings__GrabberDB`). New canonical prefix: `backfiller__` (see Phase 1).
 
 ## 5. Existing RabbitMQ topology
 
@@ -274,7 +274,7 @@ Create folders only when code exists. Expected later:
 | `Certificates` | ACME + DNS-01 for listener |
 | `ControlPlane` | Backbone usable capacity |
 
-Phase 0 implements only host + logging + a no-op hosted service.
+Phase 0 implemented host + logging. Phase 1 removed the no-op hosted service; the Generic Host stays alive via platform lifetime.
 
 ## 17. Old architecture → new architecture mapping
 
@@ -319,20 +319,77 @@ Phase 0 implements only host + logging + a no-op hosted service.
 1. **Shared Article Work contract ownership.** NNTPD types live in `VectorNNTP.NNTPD.RabbitMq.ArticleWork` and are internal to NNTPD. Extracting a shared project requires a separate approved task. Until then, BackFiller owns consume-side types; do not add a ProjectReference to NNTPD; do not modify NNTPD to expose internals.
 2. **AMQP `RequestId` header.** NNTPD writes it and requires it to match JSON `requestId`. Old worker parsed JSON only. New worker should accept the header without putting it in JSON; mismatch policy (ignore vs InvalidRequest) must be decided when the parser is written.
 3. **`grabbers.*` vs `backfiller.*`.** Interop decision is already made by locked NNTPD: consume `backfiller.*`. Document leftover `grabbers.*` broker entities as out of scope (NNTPD does not delete them).
-4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. Phase 0 uses Generic Host + one hosted service.
+4. **Lifecycle model.** Port old `ServiceLifecycle` vs adopt NNTPD `ApplicationLifecycle`/`ApplicationServiceManager` vs Generic Host only. **Phase 1:** Generic Host + platform lifetime only (no placeholder `BackgroundService`, no `ApplicationLifecycle`). Later phases add real hosted services when consume/listener work exists.
 5. **Listener vs NNTPD fetch.** Whether NNTPD will later pull `cache://` URIs, and whether Listener remains a separate protocol, is integration work — not this phase.
 6. **Transit coupling.** Whether recovered articles must still TAKETHIS to TransitServer in every Success path, and the drop-on-transit-reject settlement, needs confirmation before that path is rewritten.
 7. **MySQL account schema.** Keep `nntpbackfilleraccounts` as-is vs any later shared auth store. Default: keep the table contract.
 8. **Certificate stack.** Reuse NNTPD ACME/Cloudflare code via a future shared library vs a BackFiller-local rewrite. Do not reference NNTPD to borrow it.
-9. **Environment-variable prefix.** Propose `backfiller__` to match NNTPD’s `nntpd__` pattern; confirm when configuration is implemented.
+9. **Environment-variable prefix.** **Decided in Phase 1 review:** one canonical contract. Prefix `backfiller__` is stripped, then `__` maps to `:`. RabbitMQ and Let's Encrypt are nested under `BackFiller`, so secrets use `backfiller__BackFiller__RabbitMQ__*` and `backfiller__BackFiller__LetsEncrypt__*`. GrabberDB stays on the framework `ConnectionStrings` section: `backfiller__ConnectionStrings__GrabberDB`. Short-form `backfiller__RabbitMQ__Username` is **not** supported. The old worker had no custom prefix and does not require that alias.
 10. **Unsafe / R2R / single-file / 4 MB socket buffers.** Old defaults are deployment optimizations, not protocol. Revisit with evidence.
 
-## Phase 0 implementation status
+## Phase 1 — configuration and hosting foundation
+
+Implemented in `src/VectorNNTP.BackFiller/Configuration` and `Hosting`. Bindable `BackFillerOptions` + `BackFillerConnectionStringsOptions` → `ValidateOnStart` → immutable `BackFillerRuntimeOptions` produced once from those option objects. Application services consume the snapshot. The factory does not re-read `IConfiguration`. `HostOptions.ShutdownTimeout` is post-configured from the snapshot grace period.
+
+### Canonical configuration contract
+
+| Item | Canonical value |
+|---|---|
+| BackFiller section | `BackFiller` |
+| Connection-strings section | `ConnectionStrings` (framework section; only `GrabberDB` is consumed) |
+| Environment-variable prefix | `backfiller__` (stripped, then `__` → `:`) |
+| Identity | `backfiller__BackFiller__Name`, `backfiller__BackFiller__ServerId` |
+| RabbitMQ secrets | `backfiller__BackFiller__RabbitMQ__Username`, `backfiller__BackFiller__RabbitMQ__Password` |
+| ACME secrets | `backfiller__BackFiller__LetsEncrypt__CloudFlareApiToken`, `backfiller__BackFiller__LetsEncrypt__PfxExportPassword` |
+| GrabberDB | `backfiller__ConnectionStrings__GrabberDB` |
+
+Other `BackFiller:*` keys follow the same rule: `backfiller__` + section path with `__` separators (for example `backfiller__BackFiller__BindPort`).
+
+Non-canonical names that are **not** a supported contract:
+
+| Name | Why it is rejected |
+|---|---|
+| `backfiller__RabbitMQ__Username` / `Password` | NNTPD-style short form. NNTPD’s RabbitMQ section is top-level; BackFiller’s is nested. Not an alias. |
+| `backfiller__LetsEncrypt__*` | Same: Let's Encrypt is nested under `BackFiller`. |
+| `backfiller__BackFiller__Id` / `BackFiller:Id` | Intentional rename to `ServerId`. Not an alias. |
+| Unprefixed `BackFiller__*` / `ConnectionStrings__GrabberDB` | Old worker used Generic Host’s default environment source (no custom prefix). The default host still loads unprefixed environment variables, but that is framework behavior, not a second first-class BackFiller contract. Operators should set the prefixed names. |
+
+### Why the short-form alias was removed
+
+A Phase 1 draft copied short-form `RabbitMQ` / `LetsEncrypt` keys onto the nested `BackFiller` options so `backfiller__RabbitMQ__Username` would look like NNTPD’s `nntpd__RabbitMQ__Username`.
+
+The old worker does **not** require that:
+
+- It called `Host.CreateApplicationBuilder` and used the default (unprefixed) environment source.
+- RabbitMQ was already nested: the observable env path was `BackFiller__RabbitMQ__Username`, not a root `RabbitMQ__Username` alias.
+- GrabberDB was `ConnectionStrings__GrabberDB` (framework section), never a BackFiller-nested alias.
+
+The alias was convenience, not compatibility. It is not retained.
+
+### Intentional differences from the old worker
+
+| Topic | Old | New |
+|---|---|---|
+| Server identifier key | `BackFiller:Id` | `BackFiller:ServerId` (range still **0–99**, not NNTPD’s 1–99) |
+| Log / cert directories | `DirLogs`, `DirCerts` | `LogDirectory`, `CertificateDirectory` |
+| Directory startup probe | Create directory and write/read/delete probe files | Path required and resolved to absolute; no filesystem mutation during validation |
+| Bind port-in-use check | Attempted live bind | Syntax + local-NIC check only (NNTPD convention; no sockets) |
+| GrabberDB | Shape + live connectivity probe | Shape only (`MySqlConnectionStringBuilder`); no connection |
+| Secret defaults | Tracked placeholders / live values | No committed secrets; required via env / secrets |
+| Cloudflare zone default | Hard-coded zone id | Required, no default |
+| Env prefix | None (default host env: `BackFiller__*`, `ConnectionStrings__GrabberDB`) | Canonical `backfiller__` + nested path. No short-form alias. |
+| Lifecycle | `ServiceLifecycle` + pre-host validation pipeline + many hosted services | Generic Host + `ValidateOnStart` + platform lifetime. No placeholder `BackgroundService`. `ApplicationLifecycle` deferred. |
+
+### Lifecycle decision (Phase 1)
+
+`IHost.RunAsync()` waits on platform lifetime (`ConsoleLifetime` / systemd / Windows Service). A placeholder `BackgroundService` is not required to keep the process alive and would be an architectural dependency to undo when real workers arrive. Do not port old `ServiceLifecycle`/`ShutdownCoordinator` and do not adopt NNTPD `ApplicationLifecycle` until later services need ordered start/stop.
+
+## Phase 0 / Phase 1 implementation status
 
 Created in this repository:
 
-- `src/VectorNNTP.BackFiller` — net10.0 worker host, Serilog-only logging, systemd/Windows Service registration, placeholder hosted service.
-- `tests/VectorNNTP.BackFiller.Tests` — host-composition smoke tests (no old tests copied).
+- `src/VectorNNTP.BackFiller` — net10.0 worker host, Serilog-only logging, systemd/Windows Service registration, options + `ValidateOnStart` + immutable runtime snapshot. No placeholder hosted service.
+- `tests/VectorNNTP.BackFiller.Tests` — configuration binding, validation, snapshot, and host-composition tests (no old tests copied).
 - This document.
 
 Not created: RabbitMQ, NNTP, transit, retention, listener, accounts, certificates, or any NNTPD integration.

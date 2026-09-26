@@ -1,0 +1,164 @@
+using System.Net;
+
+namespace VectorNNTP.BackFiller.Configuration;
+
+/// <summary>
+/// Builds <see cref="BackFillerRuntimeOptions"/> from already-validated bindable options.
+/// </summary>
+public static class BackFillerRuntimeOptionsFactory
+{
+    /// <summary>
+    /// Projects validated options into the immutable runtime snapshot.
+    /// </summary>
+    /// <param name="options">Validated bindable options.</param>
+    /// <param name="connectionStrings">Validated connection-string options.</param>
+    /// <returns>Immutable snapshot.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a required value is missing after validation.</exception>
+    public static BackFillerRuntimeOptions Create(
+        BackFillerOptions options,
+        BackFillerConnectionStringsOptions connectionStrings)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(connectionStrings);
+
+        if (string.IsNullOrWhiteSpace(options.Name) || options.ServerId is not { } serverId)
+        {
+            throw new InvalidOperationException("Validated BackFiller identity is required to build runtime options.");
+        }
+
+        var name = BackFillerIdentity.CanonicalizeName(options.Name);
+        var dnsSuffix = BackFillerIdentity.CanonicalizeDnsSuffix(options.DnsSuffix);
+        var fqdn = BackFillerIdentity.BuildFqdn(name, serverId, dnsSuffix);
+        var bindPort = options.BindPort
+            ?? throw new InvalidOperationException("BackFiller:BindPort is required to build runtime options.");
+
+        var tokens = (options.BindAddress ?? [])
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(static x => x.Trim())
+            .ToArray();
+
+        var addresses = new List<IPAddress>();
+        foreach (var token in tokens)
+        {
+            if (BackFillerOptions.IsBindAddressWildcard(token))
+            {
+                continue;
+            }
+
+            if (IPAddress.TryParse(token, out var address))
+            {
+                addresses.Add(address);
+            }
+        }
+
+        var grabberDbValue = connectionStrings.GrabberDB;
+        if (!GrabberDbConnectionString.TryParse(grabberDbValue, out var server, out var database, out var userId, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var rabbit = options.RabbitMQ ?? throw new InvalidOperationException("BackFiller:RabbitMQ is required.");
+        var hosts = (rabbit.Hosts ?? [])
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(static x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var letsEncrypt = options.LetsEncrypt ?? throw new InvalidOperationException("BackFiller:LetsEncrypt is required.");
+        var retention = options.ArticleRetention ?? throw new InvalidOperationException("BackFiller:ArticleRetention is required.");
+        var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
+        var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
+        var transit = options.TransitServer ?? throw new InvalidOperationException("BackFiller:TransitServer is required.");
+
+        return new BackFillerRuntimeOptions(
+            Name: name,
+            ServerId: serverId,
+            DnsSuffix: dnsSuffix,
+            Fqdn: fqdn,
+            BindAddressTokens: tokens,
+            CanonicalBindAddresses: addresses,
+            BindPort: bindPort,
+            LogDirectory: Path.GetFullPath(options.LogDirectory.Trim()),
+            CertificateDirectory: Path.GetFullPath(options.CertificateDirectory.Trim()),
+            Shutdown: new BackFillerShutdownRuntimeOptions(
+                TimeSpan.FromSeconds(shutdown.GracePeriodSeconds),
+                shutdown.DrainQueuedWork,
+                shutdown.FinishActiveArticles),
+            Listener: new BackFillerListenerRuntimeOptions(
+                listener.ParserAccumulationMaxBytes,
+                TimeSpan.FromSeconds(listener.TlsHandshakeTimeoutSeconds),
+                TimeSpan.FromSeconds(listener.IoProgressTimeoutSeconds),
+                TimeSpan.FromSeconds(listener.AwaitingReceiptAckTimeoutSeconds),
+                listener.MaxQueuedFoundPayloadBytes,
+                listener.MaxActiveConnections),
+            ArticleRetention: new BackFillerArticleRetentionRuntimeOptions(
+                checked(retention.MaximumRetainedPayloadGigabytes * BackFillerArticleRetentionOptions.BytesPerGibibyte),
+                TimeSpan.FromSeconds(retention.RetentionTtlSeconds),
+                TimeSpan.FromSeconds(retention.SweepIntervalSeconds)),
+            TransitServer: new BackFillerTransitServerRuntimeOptions(
+                transit.Host.Trim(),
+                transit.Port,
+                transit.UseSsl),
+            RabbitMq: new BackFillerRabbitMqRuntimeOptions(
+                Hosts: hosts,
+                Port: rabbit.Port ?? 0,
+                Username: NullIfWhiteSpace(rabbit.Username),
+                Password: rabbit.Password,
+                VirtualHost: string.IsNullOrWhiteSpace(rabbit.VirtualHost) ? "/" : rabbit.VirtualHost.Trim(),
+                EnableSsl: rabbit.EnableSsl ?? true,
+                WorkRequestMaxPayloadBytes: rabbit.WorkRequestMaxPayloadBytes ?? 1024,
+                ChannelLeaseTimeoutSeconds: rabbit.ChannelLeaseTimeoutSeconds ?? 60,
+                RpcTimeoutSeconds: rabbit.RpcTimeoutSeconds ?? 30,
+                ConnectionBlockedTimeoutSeconds: rabbit.ConnectionBlockedTimeoutSeconds ?? 30,
+                ChannelPoolSize: rabbit.ChannelPoolSize ?? 512,
+                MinConnections: rabbit.MinConnections ?? 4,
+                MaxConnections: rabbit.MaxConnections ?? 16,
+                MaxConsecutiveRecoveryFailures: rabbit.MaxConsecutiveRecoveryFailures ?? 5,
+                MaxPendingLeaseWaiters: rabbit.MaxPendingLeaseWaiters ?? 1024,
+                ConnectionScaleDownIdleSeconds: rabbit.ConnectionScaleDownIdleSeconds ?? 300,
+                ScaleDownCooldownSeconds: rabbit.ScaleDownCooldownSeconds ?? 30,
+                NetworkRecoveryIntervalSeconds: rabbit.NetworkRecoveryIntervalSeconds ?? 5,
+                PoolReconnectBaseDelayMs: rabbit.PoolReconnectBaseDelayMs ?? 250,
+                PoolReconnectMaxDelayMs: rabbit.PoolReconnectMaxDelayMs ?? 30000,
+                MinimumConnectionLifetimeSeconds: rabbit.MinimumConnectionLifetimeSeconds ?? 300,
+                PublishConfirmTimeoutSeconds: rabbit.PublishConfirmTimeoutSeconds ?? 10,
+                MaximumShutdownDrainTimeoutSeconds: rabbit.MaximumShutdownDrainTimeoutSeconds ?? 30,
+                DegradedThreshold: rabbit.DegradedThreshold ?? 0.75,
+                UnhealthyThreshold: rabbit.UnhealthyThreshold ?? 5,
+                RequestedHeartbeatSeconds: rabbit.RequestedHeartbeatSeconds ?? 60,
+                SocketTimeoutSeconds: rabbit.SocketTimeoutSeconds ?? 30,
+                RequestedChannelMax: rabbit.RequestedChannelMax ?? 2047,
+                ConsumerPrefetchCount: rabbit.ConsumerPrefetchCount,
+                DiagnosticPayloadCorrelationId: NullIfWhiteSpace(rabbit.DiagnosticPayloadCorrelationId)),
+            LetsEncrypt: new BackFillerLetsEncryptRuntimeOptions(
+                AcmeAccountEmail: letsEncrypt.AcmeAccountEmail.Trim(),
+                AcmeAccountKeyPem: letsEncrypt.AcmeAccountKeyPem.Trim(),
+                AcmeTransientRetryMaxAttempts: letsEncrypt.AcmeTransientRetryMaxAttempts ?? 5,
+                ClockSkewCheckTtl: TimeSpan.FromMinutes(letsEncrypt.ClockSkewCheckTtlMinutes ?? 5),
+                ClockSkewMax: TimeSpan.FromMinutes(letsEncrypt.ClockSkewMaxMinutes ?? 10),
+                DnsAuthoritativeNsCache: TimeSpan.FromMinutes(letsEncrypt.DnsAuthoritativeNsCacheMinutes ?? 5),
+                DnsAuthoritativeQuorumRatio: letsEncrypt.DnsAuthoritativeQuorumRatio ?? 0.7,
+                DnsPropagationDelay: TimeSpan.FromSeconds(letsEncrypt.DnsPropagationDelaySeconds ?? 15),
+                DnsTxtPollInterval: TimeSpan.FromSeconds(letsEncrypt.DnsTxtPollIntervalSeconds ?? 3),
+                DnsTxtPollTimeout: TimeSpan.FromSeconds(letsEncrypt.DnsTxtPollTimeoutSeconds ?? 600),
+                DomainNames: (letsEncrypt.DomainNames ?? [])
+                    .Where(static x => !string.IsNullOrWhiteSpace(x))
+                    .Select(static x => x.Trim())
+                    .ToArray(),
+                PfxExportPassword: letsEncrypt.PfxExportPassword ?? string.Empty,
+                RenewalCheckInterval: TimeSpan.FromHours(letsEncrypt.RenewalCheckIntervalHours ?? 6),
+                RenewalJitterRatio: letsEncrypt.RenewalJitterRatio ?? 0.1,
+                RenewBeforeExpiryDays: letsEncrypt.RenewBeforeExpiryDays ?? 7,
+                UseStagingDirectory: letsEncrypt.UseStagingDirectory,
+                CloudFlareApiToken: letsEncrypt.CloudFlareApiToken ?? string.Empty,
+                CloudFlareZoneId: letsEncrypt.CloudFlareZoneId?.Trim() ?? string.Empty),
+            GrabberDb: new GrabberDbRuntimeOptions(
+                grabberDbValue!.Trim(),
+                server!,
+                database!,
+                userId!));
+    }
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}

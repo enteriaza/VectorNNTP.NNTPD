@@ -1,6 +1,8 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.BackFiller.Configuration;
 
 namespace VectorNNTP.BackFiller.Hosting;
 
@@ -10,21 +12,50 @@ namespace VectorNNTP.BackFiller.Hosting;
 public static class BackFillerServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds Phase 0 BackFiller host services: system time and the placeholder hosted service.
+    /// Adds Phase 1 BackFiller host services: configuration, validation, and system time.
     /// </summary>
-    /// <param name="services">The service collection.</param>
-    /// <returns>The same <paramref name="services"/> instance.</returns>
+    /// <param name="builder">The host application builder.</param>
+    /// <returns>The same <paramref name="builder"/> instance.</returns>
     /// <remarks>
-    /// Article-work, RabbitMQ, NNTP, transit, retention, listener, accounts, and certificates
-    /// are not registered in Phase 0.
+    /// No placeholder <see cref="IHostedService"/> is registered. The Generic Host stays
+    /// alive via platform lifetime (console / systemd / Windows Service). Later phases add
+    /// real hosted services. Article-work, RabbitMQ consume, NNTP, transit, retention,
+    /// listener, accounts, and certificates are not registered in Phase 1.
     /// </remarks>
-    public static IServiceCollection AddBackFillerHosting(this IServiceCollection services)
+    public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
-        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(builder);
 
-        services.TryAddSingleton(TimeProvider.System);
-        services.AddHostedService<BackFillerHostedService>();
-        return services;
+        builder.Services.TryAddSingleton<ILocalIpAddressAssignee, NetworkInterfaceLocalIpAddressAssignee>();
+        builder.Services.TryAddSingleton<IPhysicalMemoryProvider, GcPhysicalMemoryProvider>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
+
+        builder.Services
+            .AddOptions<BackFillerOptions>()
+            .BindConfiguration(BackFillerOptions.SectionName)
+            .ValidateOnStart();
+        builder.Services.AddSingleton<IValidateOptions<BackFillerOptions>, BackFillerOptionsValidator>();
+
+        builder.Services
+            .AddOptions<BackFillerConnectionStringsOptions>()
+            .BindConfiguration(BackFillerConnectionStringsOptions.SectionName)
+            .ValidateOnStart();
+        builder.Services.AddSingleton<IValidateOptions<BackFillerConnectionStringsOptions>, BackFillerConnectionStringsOptionsValidator>();
+
+        builder.Services.AddSingleton(static provider =>
+        {
+            var options = provider.GetRequiredService<IOptions<BackFillerOptions>>().Value;
+            var connectionStrings = provider.GetRequiredService<IOptions<BackFillerConnectionStringsOptions>>().Value;
+            return BackFillerRuntimeOptionsFactory.Create(options, connectionStrings);
+        });
+
+        builder.Services.AddOptions<HostOptions>()
+            .PostConfigure<BackFillerRuntimeOptions>(static (host, runtime) =>
+            {
+                host.ShutdownTimeout = runtime.Shutdown.GracePeriod;
+            });
+
+        return builder;
     }
 
     /// <summary>
@@ -32,14 +63,11 @@ public static class BackFillerServiceCollectionExtensions
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
-    /// <remarks>
-    /// <c>AddSystemd()</c> activates notify support only when the process is a systemd service
-    /// or <c>NOTIFY_SOCKET</c> is set. Microsoft console formatter options registered by
-    /// <c>AddSystemd()</c> are removed because Serilog owns console output.
-    /// </remarks>
     public static HostApplicationBuilder ConfigureBackFillerPlatformHosting(this HostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Configuration.AddEnvironmentVariables(prefix: BackFillerOptions.EnvironmentVariablePrefix);
 
         builder.Services.AddWindowsService(options =>
         {

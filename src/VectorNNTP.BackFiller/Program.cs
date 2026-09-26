@@ -13,7 +13,7 @@ try
 
     builder.ConfigureBackFillerLogging();
     builder.ConfigureBackFillerPlatformHosting();
-    builder.Services.AddBackFillerHosting();
+    builder.AddBackFillerHosting();
 
     var host = builder.Build();
     BackFillerLoggingExtensions.WriteLoggingInitialized(
