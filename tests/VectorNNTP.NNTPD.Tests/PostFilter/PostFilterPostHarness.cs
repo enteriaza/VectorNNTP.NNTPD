@@ -121,7 +121,8 @@ internal sealed class PostFilterPostDuplex : IAsyncDisposable
         PostFilterMetrics? metrics = null,
         IHistoryDb? historyDb = null,
         bool cancelConnectionAfterAccept = false,
-        IPAddress? clientAddress = null)
+        IPAddress? clientAddress = null,
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
     {
         var address = clientAddress ?? IPAddress.Loopback;
         var connection = new PolicyPipeConnection(
@@ -142,7 +143,8 @@ internal sealed class PostFilterPostDuplex : IAsyncDisposable
             postingTraceProtector: AesGcmPostingTraceProtector.Create(
                 new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey }),
             postFilter: wired,
-            postFilterMetrics: metrics);
+            postFilterMetrics: metrics,
+            postFilterEvidence: postFilterEvidence);
     }
 
     public async Task WriteClientLineAsync(string line) =>
