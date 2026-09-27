@@ -1,4 +1,4 @@
-namespace VectorNNTP.NNTPD.ArticleIngestion;
+namespace VectorNNTP.Common.Articles;
 
 /// <summary>
 /// Deterministic Diablo-style article classification from header and body-prefix bytes.
@@ -6,7 +6,8 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// Mapped from Diablo <c>lib/arttype.c</c> <c>ArticleType()</c> / <c>ArtTypeConv()</c>.
 /// Does not decode yEnc, BASE64, or uuencode. Does not scan the whole body when a
-/// header or prefix marker is sufficient.
+/// header or prefix marker is sufficient. Does not implement Diablo
+/// <c>classifyLineAsTypes()</c> character-table / 8-line confirmation.
 /// </remarks>
 public static class ArticleTypeClassifier
 {

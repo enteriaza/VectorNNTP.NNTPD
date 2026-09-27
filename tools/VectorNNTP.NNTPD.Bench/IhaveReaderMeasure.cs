@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Text;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Session.Framing;
 

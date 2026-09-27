@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Tests.Integration;
 
 public sealed class BackFillerEndToEndTests
 {
-    private static readonly byte[] CanonicalPayload = "From: a@b\r\n\r\nbody"u8.ToArray();
+    private static readonly byte[] CanonicalPayload = ArticleWorkTestArticles.Valid();
 
     [Fact]
     public async Task Successful_article_work_confirms_then_acks_and_serves_exact_bytes()
@@ -130,8 +130,8 @@ public sealed class BackFillerEndToEndTests
     public async Task Same_message_id_first_wins_and_listener_keeps_original_bytes()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
-        var first = "From: a@b\r\n\r\nfirst-body"u8.ToArray();
-        var second = "From: a@b\r\n\r\nsecond-body"u8.ToArray();
+        var first = ArticleWorkTestArticles.Valid(body: "first-body\r\n");
+        var second = ArticleWorkTestArticles.Valid(body: "second-body\r\n");
         harness.EnqueueArticle(first);
         harness.EnqueueArticle(second);
         var channel = new FakeBackFillerRabbitMqChannel(1);

@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.Tests.Integration;
 
 public sealed class BackFillerConcurrencyIntegrationTests
 {
-    private static readonly byte[] Payload = "From: a@b\r\n\r\nbody"u8.ToArray();
+    private static readonly byte[] Payload = ArticleWorkTestArticles.Valid();
 
     [Fact]
     public async Task Retryable_failures_then_redelivery_acks_only_the_second_attempt()
@@ -52,7 +52,7 @@ public sealed class BackFillerConcurrencyIntegrationTests
     public async Task Retention_rejection_requeues_and_publish_failure_after_success_acks()
     {
         await using var tiny = await BackFillerPipelineHarness.StartAsync();
-        var oversized = System.Text.Encoding.ASCII.GetBytes("From: a@b\r\n\r\n" + new string('x', (1024 * 1024) + 1));
+        var oversized = ArticleWorkTestArticles.OversizedForOneMegabyteRetention();
         tiny.EnqueueArticle(oversized);
         var rejectChannel = new FakeBackFillerRabbitMqChannel(1);
         var rejected = await tiny.ProcessCanonicalAsync(rejectChannel);

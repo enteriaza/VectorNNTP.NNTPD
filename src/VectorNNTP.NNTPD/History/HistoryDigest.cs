@@ -1,33 +1,27 @@
-using System.Buffers.Binary;
-using Blake3;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.NNTPD.History;
 
 /// <summary>32-byte BLAKE3 digest of a Message-ID's protocol bytes.</summary>
+/// <remarks>
+/// Delegates to Common <see cref="ArticleId"/> so History and ArticleRecord share
+/// the same BLAKE3(Message-ID) identity bytes.
+/// </remarks>
 public readonly struct HistoryDigest : IEquatable<HistoryDigest>
 {
     /// <summary>BLAKE3 output length in bytes.</summary>
-    public const int Length = 32;
+    public const int Length = ArticleId.Length;
 
-    private readonly ulong _w0;
-    private readonly ulong _w1;
-    private readonly ulong _w2;
-    private readonly ulong _w3;
+    private readonly ArticleId _id;
 
-    private HistoryDigest(ulong w0, ulong w1, ulong w2, ulong w3)
+    private HistoryDigest(ArticleId id)
     {
-        _w0 = w0;
-        _w1 = w1;
-        _w2 = w2;
-        _w3 = w3;
+        _id = id;
     }
 
     /// <summary>Computes the HistoryDB digest from Message-ID wire octets.</summary>
     public static HistoryDigest FromMessageId(ReadOnlySpan<byte> messageId)
-    {
-        var hash = Hasher.Hash(messageId);
-        return FromSpan(hash.AsSpan());
-    }
+        => new(ArticleId.FromMessageId(messageId));
 
     /// <summary>Creates a digest from an existing 32-byte BLAKE3 output.</summary>
     public static HistoryDigest FromSpan(ReadOnlySpan<byte> digest)
@@ -37,11 +31,7 @@ public readonly struct HistoryDigest : IEquatable<HistoryDigest>
             throw new ArgumentException($"History digest must be {Length} bytes.", nameof(digest));
         }
 
-        return new HistoryDigest(
-            BinaryPrimitives.ReadUInt64LittleEndian(digest),
-            BinaryPrimitives.ReadUInt64LittleEndian(digest[8..]),
-            BinaryPrimitives.ReadUInt64LittleEndian(digest[16..]),
-            BinaryPrimitives.ReadUInt64LittleEndian(digest[24..]));
+        return new HistoryDigest(ArticleId.FromSpan(digest));
     }
 
     /// <summary>Copies the digest bytes into <paramref name="destination"/>.</summary>
@@ -52,21 +42,17 @@ public readonly struct HistoryDigest : IEquatable<HistoryDigest>
             throw new ArgumentException("Destination is shorter than the digest.", nameof(destination));
         }
 
-        BinaryPrimitives.WriteUInt64LittleEndian(destination, _w0);
-        BinaryPrimitives.WriteUInt64LittleEndian(destination[8..], _w1);
-        BinaryPrimitives.WriteUInt64LittleEndian(destination[16..], _w2);
-        BinaryPrimitives.WriteUInt64LittleEndian(destination[24..], _w3);
+        _id.CopyTo(destination);
     }
 
     /// <inheritdoc />
-    public bool Equals(HistoryDigest other) =>
-        _w0 == other._w0 && _w1 == other._w1 && _w2 == other._w2 && _w3 == other._w3;
+    public bool Equals(HistoryDigest other) => _id.Equals(other._id);
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => obj is HistoryDigest other && Equals(other);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(_w0, _w1, _w2, _w3);
+    public override int GetHashCode() => _id.GetHashCode();
 
     /// <summary>Equality operator.</summary>
     public static bool operator ==(HistoryDigest left, HistoryDigest right) => left.Equals(right);

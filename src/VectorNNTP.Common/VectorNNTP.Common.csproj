@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>VectorNNTP.Common</RootNamespace>
     <AssemblyName>VectorNNTP.Common</AssemblyName>
-    <Description>Shared ACME, Cloudflare DNS, bind-address, and NntpDB configuration infrastructure for VectorNNTP.NNTPD and VectorNNTP.BackFiller.</Description>
+    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, byte-oriented article parsing, yEnc validation, and canonical article materialization for VectorNNTP.NNTPD and VectorNNTP.BackFiller.</Description>
     <IsPackable>false</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>
@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Blake3" Version="2.2.1" />
     <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />

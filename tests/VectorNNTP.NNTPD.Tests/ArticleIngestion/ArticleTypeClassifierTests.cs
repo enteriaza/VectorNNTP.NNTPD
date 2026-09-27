@@ -1,5 +1,7 @@
 using System.Text;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 
@@ -69,6 +71,38 @@ public sealed class ArticleTypeClassifierTests
     public void YEncoded_MatchesTransitYencBit()
     {
         Assert.Equal((int)VectorNNTP.NNTPD.Configuration.TransitMessageTypes.Yenc, (int)ArticleType.YEncoded);
+    }
+
+    [Fact]
+    public void CommonArticleTypeBits_MatchTransitMessageTypes()
+    {
+        Assert.Equal((int)TransitMessageTypes.None, (int)ArticleType.None);
+        Assert.Equal((int)TransitMessageTypes.Default, (int)ArticleType.Default);
+        Assert.Equal((int)TransitMessageTypes.Control, (int)ArticleType.Control);
+        Assert.Equal((int)TransitMessageTypes.Cancel, (int)ArticleType.Cancel);
+        Assert.Equal((int)TransitMessageTypes.Mime, (int)ArticleType.Mime);
+        Assert.Equal((int)TransitMessageTypes.Binary, (int)ArticleType.Binary);
+        Assert.Equal((int)TransitMessageTypes.UuEncode, (int)ArticleType.UuEncode);
+        Assert.Equal((int)TransitMessageTypes.Base64, (int)ArticleType.Base64);
+        Assert.Equal((int)TransitMessageTypes.Yenc, (int)ArticleType.YEncoded);
+        Assert.Equal((int)TransitMessageTypes.BommaNews, (int)ArticleType.BommaNews);
+        Assert.Equal((int)TransitMessageTypes.UniData, (int)ArticleType.UniData);
+        Assert.Equal((int)TransitMessageTypes.Multipart, (int)ArticleType.Multipart);
+        Assert.Equal((int)TransitMessageTypes.Html, (int)ArticleType.Html);
+        Assert.Equal((int)TransitMessageTypes.PostScript, (int)ArticleType.PostScript);
+        Assert.Equal((int)TransitMessageTypes.BinHex, (int)ArticleType.BinHex);
+        Assert.Equal((int)TransitMessageTypes.Partial, (int)ArticleType.Partial);
+        Assert.Equal((int)TransitMessageTypes.PgpMessage, (int)ArticleType.PgpMessage);
+    }
+
+    [Fact]
+    public void IhaveDestuff_UsesCommonClassifier()
+    {
+        var article = IhaveArticleInterpreter.DestuffToArticle(
+            "Control: cancel <m@example.test>\r\n\r\nbody\r\n"u8,
+            64 * 1024);
+        Assert.True(article.Type.HasFlag(ArticleType.Control));
+        Assert.True(article.Type.HasFlag(ArticleType.Cancel));
     }
 
     [Fact]

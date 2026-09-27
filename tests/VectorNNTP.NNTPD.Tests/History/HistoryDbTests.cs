@@ -27,6 +27,18 @@ public sealed class HistoryDbTests
     }
 
     [Fact]
+    public void HistoryDigest_MatchesCommonArticleIdBytes()
+    {
+        var history = HistoryDigest.FromMessageId(MessageId);
+        var articleId = VectorNNTP.Common.Articles.ArticleId.FromMessageId(MessageId);
+        Span<byte> historyBytes = stackalloc byte[HistoryDigest.Length];
+        Span<byte> articleIdBytes = stackalloc byte[VectorNNTP.Common.Articles.ArticleId.Length];
+        history.CopyTo(historyBytes);
+        articleId.CopyTo(articleIdBytes);
+        Assert.True(historyBytes.SequenceEqual(articleIdBytes));
+    }
+
+    [Fact]
     public void DifferentMessageIds_ProduceDifferentKeys()
     {
         var left = HistoryRedisKeys.Create(HistoryDigest.FromMessageId(MessageId));

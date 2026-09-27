@@ -1,4 +1,5 @@
 using System.Buffers;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 
 namespace VectorNNTP.NNTPD.Bench;

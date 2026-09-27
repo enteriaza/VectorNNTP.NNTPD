@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 
 namespace VectorNNTP.NNTPD.Bench;

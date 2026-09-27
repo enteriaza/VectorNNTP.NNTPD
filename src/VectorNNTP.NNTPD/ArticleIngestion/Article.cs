@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Articles;
+
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>

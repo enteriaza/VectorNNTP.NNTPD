@@ -197,7 +197,7 @@ public sealed class ArticleWorkShutdownPolicyTests
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
         var block = NewSource();
-        var server = harness.EnqueueArticle("From: a@b\r\n\r\nbody"u8.ToArray(), block);
+        var server = harness.EnqueueArticle(ArticleWorkTestArticles.Valid(), block);
         await using var context = await ShutdownContext.StartAsync(
             harness.Handler,
             harness.Publisher,
@@ -223,7 +223,7 @@ public sealed class ArticleWorkShutdownPolicyTests
     public async Task Shutdown_after_retention_before_publish_keeps_the_article_and_does_not_ack()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
-        harness.EnqueueArticle("From: a@b\r\n\r\nbody"u8.ToArray());
+        harness.EnqueueArticle(ArticleWorkTestArticles.Valid());
         var publisher = new GatedArticleWorkResponsePublisher { Gate = NewSource() };
         await using var context = await ShutdownContext.StartAsync(
             harness.Handler,
@@ -250,7 +250,7 @@ public sealed class ArticleWorkShutdownPolicyTests
     public async Task Shutdown_after_publish_before_confirm_does_not_ack()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync(FakePublishConfirmBehavior.Wait);
-        harness.EnqueueArticle("From: a@b\r\n\r\nbody"u8.ToArray());
+        harness.EnqueueArticle(ArticleWorkTestArticles.Valid());
         harness.PublishChannel.Enqueued = NewSource();
         await using var context = await ShutdownContext.StartAsync(
             harness.Handler,

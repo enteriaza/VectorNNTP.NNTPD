@@ -11,6 +11,7 @@ using VectorNNTP.BackFiller.Tests.Nntp;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.Common.Articles.Parsing;
 
 namespace VectorNNTP.BackFiller.Tests.Fixtures;
 
@@ -116,7 +117,8 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
             NullLogger<ProviderAccountConfigurationService>.Instance);
         var handler = new ProviderArticleWorkHandler(
             new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
-            retention);
+            retention,
+            new NntpArticleParser(runtime.Fqdn));
 
         var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory
         {

@@ -11,12 +11,15 @@ namespace VectorNNTP.BackFiller.Tests.Nntp;
 
 public sealed class NntpArticleWorkIntegrationTests
 {
+    private static readonly string ValidArticleResponse =
+        ArticleWorkTestArticles.ArticleResponse(ArticleWorkTestArticles.Valid());
+
     [Fact]
     public async Task Retrieved_article_reaches_success_without_ack()
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
-        server.Respond(static _ => "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n");
+        server.Respond(_ => ValidArticleResponse);
         factory.Enqueue(server);
         var (handler, publisher, pipeline) = CreatePipeline(factory);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -47,7 +50,7 @@ public sealed class NntpArticleWorkIntegrationTests
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
-        server.Respond(static _ => "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n");
+        server.Respond(_ => ValidArticleResponse);
         factory.Enqueue(server);
         var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory();
         var connections = BackFillerRabbitMqServiceTests.CreateService(rabbitFactory);
@@ -170,7 +173,7 @@ public sealed class NntpArticleWorkIntegrationTests
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
-        server.Respond(static _ => "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n");
+        server.Respond(_ => ValidArticleResponse);
         factory.Enqueue(server);
         var (handler, publisher, pipeline) = CreatePipeline(factory);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -193,7 +196,7 @@ public sealed class NntpArticleWorkIntegrationTests
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
-        server.Respond(static _ => "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n");
+        server.Respond(_ => ValidArticleResponse);
         factory.Enqueue(server);
         var catalog = new StaticBackFillerProviderCatalog(
         [

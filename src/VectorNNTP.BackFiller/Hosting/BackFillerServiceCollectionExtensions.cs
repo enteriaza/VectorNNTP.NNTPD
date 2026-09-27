@@ -11,6 +11,7 @@ using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Cloudflare;
@@ -174,6 +175,8 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService, BackFillerApplicationHostedService>();
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleRetentionSweepService>());
+        builder.Services.TryAddSingleton(static provider =>
+            new NntpArticleParser(provider.GetRequiredService<BackFillerRuntimeOptions>().Fqdn));
         builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
         builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
             provider.GetRequiredService<IBackFillerRabbitMqService>(),

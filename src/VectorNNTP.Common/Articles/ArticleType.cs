@@ -1,13 +1,13 @@
-namespace VectorNNTP.NNTPD.ArticleIngestion;
+namespace VectorNNTP.Common.Articles;
 
 /// <summary>
-/// Diablo-mapped article classification flags used by the IHAVE reader.
+/// Diablo-mapped article classification flags used as ArticleRecord <c>ArtType</c>.
 /// </summary>
 /// <remarks>
-/// Bit values match <see cref="Configuration.TransitMessageTypes"/> except
-/// <see cref="YEncoded"/>, which is the IHAVE name for Diablo <c>ARTTYPE_YENC</c>
-/// / <c>yenc</c> (same bit as <see cref="Configuration.TransitMessageTypes.Yenc"/>).
-/// Classification is deterministic and does not decode article bodies.
+/// Bit values match NNTPD <c>TransitMessageTypes</c> except <see cref="YEncoded"/>,
+/// which is the IHAVE name for Diablo <c>ARTTYPE_YENC</c> / <c>yenc</c> (same bit as
+/// transit <c>Yenc</c>). Classification is deterministic and does not decode article bodies.
+/// This is not <c>NntpArticleType</c>.
 /// </remarks>
 [Flags]
 public enum ArticleType
