@@ -1,4 +1,6 @@
 using System.Text;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Moderation;
@@ -150,12 +152,28 @@ internal static class Post
             return;
         }
 
-        var inbound = new InboundArticle(
-            read.MessageId!,
+        var created = ArticleRecordIngress.TryCreateFromStuffedWire(
+            context.Session.ArticleParser,
             read.Wire,
+            Math.Max(1, read.Wire.Length));
+        if (!created.IsAccepted)
+        {
+            await RejectAsync(
+                    context,
+                    MapArticleRecordFailure(in created),
+                    read.MessageId,
+                    FormatGroups(read.Newsgroups),
+                    read.Wire.Length,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var inbound = ArticleRecordIngress.CreateQueued(
+            read.MessageId!,
+            created.Record,
             context.Session.ClientIdentity,
             read.InjectionUtc,
-            structured: null,
             InboundArticleProducer.Post);
 
         var enqueue = context.Session.ArticleIngestion.TryAdmit(inbound);
@@ -296,4 +314,36 @@ internal static class Post
 
     private static string FormatGroups(string[] groups) =>
         groups.Length == 0 ? "-" : string.Join(',', groups);
+
+    private static PostingFailure MapArticleRecordFailure(in ArticleRecordCreateResult created)
+    {
+        if (created.ParseFailure != NntpArticleParseFailureCode.None)
+        {
+            return new PostingFailure(MapParseFailure(created.ParseFailure), created.ParseFailure.ToString());
+        }
+
+        return new PostingFailure(PostingFailureCategory.InvalidPath, created.MaterializeFailure.ToString());
+    }
+
+    private static PostingFailureCategory MapParseFailure(NntpArticleParseFailureCode code) =>
+        code switch
+        {
+            NntpArticleParseFailureCode.ArticleTooLarge => PostingFailureCategory.ArticleTooLarge,
+            NntpArticleParseFailureCode.MalformedHeader
+                or NntpArticleParseFailureCode.MalformedHeaderContinuation
+                or NntpArticleParseFailureCode.MissingHeaderBodySeparator
+                or NntpArticleParseFailureCode.ContainsNul
+                or NntpArticleParseFailureCode.ContainsIllegalControlByte => PostingFailureCategory.MalformedHeader,
+            NntpArticleParseFailureCode.MissingMessageId
+                or NntpArticleParseFailureCode.MissingNewsgroups
+                or NntpArticleParseFailureCode.EmptyArticle => PostingFailureCategory.MissingRequiredHeader,
+            NntpArticleParseFailureCode.DuplicateMessageId
+                or NntpArticleParseFailureCode.DuplicateNewsgroups
+                or NntpArticleParseFailureCode.DuplicatePath => PostingFailureCategory.DuplicateHeader,
+            NntpArticleParseFailureCode.InvalidMessageId => PostingFailureCategory.InvalidMessageId,
+            NntpArticleParseFailureCode.MissingOrInvalidDate => PostingFailureCategory.InvalidDate,
+            NntpArticleParseFailureCode.InvalidNewsgroups => PostingFailureCategory.InvalidNewsgroups,
+            NntpArticleParseFailureCode.InvalidPath => PostingFailureCategory.InvalidPath,
+            _ => PostingFailureCategory.PolicyRejected,
+        };
 }

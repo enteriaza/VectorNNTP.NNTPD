@@ -6,11 +6,11 @@ This document describes the **current** implementation. It does not invent APIs,
 
 | Concern | Owner |
 |---|---|
-| Types, factory, parser, Date/Path, classifier, CRC | `src/VectorNNTP.Common/Articles/` |
+| Types, factory, parser, Date/Path, classifier, ArtHash | `src/VectorNNTP.Common/Articles/` |
 | Tests | `tests/VectorNNTP.Common.Tests/Articles/` |
 | History identity reuse | `src/VectorNNTP.NNTPD/History/HistoryDigest.cs` |
 
-ArticleRecord is **not** wired into BackFiller ingestion, NNTPD IHAVE/POST, RabbitMQ, retention, storage, transit, or process-boundary serialization.
+NNTPD TAKETHIS and POST construct an ArticleRecord before queue admission. NNTPD IHAVE remains raw stuffed-wire ingress (not ArticleRecord). ArticleRecord is **not** wired into BackFiller ingestion, RabbitMQ, retention, storage, transit, or process-boundary serialization.
 
 ---
 
@@ -18,7 +18,7 @@ ArticleRecord is **not** wired into BackFiller ingestion, NNTPD IHAVE/POST, Rabb
 
 `ArticleRecord` is a `readonly struct` that holds the result of one successful Common parse, Diablo-derived classification, and Date/Path canonicalization of a **destuffed** NNTP article.
 
-It exists so Vector processes can keep article identity, type, size, line count, overview ranges, and a CRC of the canonical bytes **without scanning the article again**. Downstream code that already has a `CanonicalV1` record should read `ArtId`, `ArtType`, `Fields`, `ArtSize`, and `ArtLines` instead of calling `NntpArticleParser.Parse` again.
+It exists so Vector processes can keep article identity, type, size, line count, overview ranges, and a fast fingerprint of the canonical bytes **without scanning the article again**. Downstream code that already has a `CanonicalV1` record should read `ArtId`, `ArtType`, `Fields`, `ArtSize`, and `ArtLines` instead of calling `NntpArticleParser.Parse` again.
 
 Common owns the reusable model:
 
@@ -27,10 +27,15 @@ Common owns the reusable model:
 
 Current scope is the Common data model and factory only. Destuff is a **caller** responsibility. The factory does not destuff, does not compare a request Message-ID, and does not publish or retain the article.
 
+Current NNTPD wiring:
+
+- TAKETHIS: ArticleRecord ingress is implemented
+- POST: ArticleRecord ingress is implemented
+- IHAVE: remains raw/unstructured (not ArticleRecord ingress)
+
 Deliberately excluded today:
 
 - BackFiller `ProviderArticleWorkHandler` / retention
-- NNTPD IHAVE / POST / TAKETHIS ingestion
 - RabbitMQ Article Work payloads
 - Storage and transit protocols
 - A serialization/wire format for crossing process boundaries
@@ -46,7 +51,7 @@ Defined in [`src/VectorNNTP.Common/Articles/ArticleRecord.cs`](../src/VectorNNTP
 public readonly struct ArticleRecord
 {
     public ArticleId ArtId { get; }
-    public uint ArtCrc { get; }
+    public ulong ArtHash { get; }
     public int ArtSize { get; }          // _artData?.Length ?? 0
     public ArticleType ArtType { get; }
     public int ArtLines { get; }
@@ -70,7 +75,7 @@ The constructor is `internal`. The public construction path is `ArticleRecordFac
 | Member | Type | Meaning |
 |---|---|---|
 | `ArtId` | `ArticleId` | BLAKE3 of the Message-ID **value** bytes in ArtData |
-| `ArtCrc` | `uint` | IEEE CRC-32 of the entire ArtData buffer |
+| `ArtHash` | `ulong` | XXH3-64 fingerprint of the entire ArtData buffer |
 | `ArtSize` | `int` | `ArtData.Length` (0 when the default/empty record has no buffer) |
 | `ArtType` | `ArticleType` | Diablo-derived flags (not `NntpArticleType`) |
 | `ArtLines` | `int` | Body line count from the parser walk (overview `:lines`) |
@@ -107,7 +112,7 @@ Tests:
 - Known vector: BLAKE3 of ASCII `<id@example>` is  
   `CFC44E7F244E2AAB6D1E7FF93F9FB93C5DDE9DAFAA16F6DB2FBBAE712881D250`
 
-ArtId is **identity**, not representation integrity. Path and Date rewrites do not change the Message-ID value, so ArtId stays the same while ArtCrc/ArtSize/ranges change.
+ArtId is **identity**, not a content fingerprint. Path and Date rewrites do not change the Message-ID value, so ArtId stays the same while ArtHash/ArtSize/ranges change.
 
 ### HistoryDigest
 
@@ -117,25 +122,29 @@ This is not the BackFiller MD5 `ArticleIdentity` used for cache URIs.
 
 ---
 
-## 4. ArtCrc
+## 4. ArtHash
 
-Implementation: [`src/VectorNNTP.Common/Articles/Checksum/IeeeCrc32.cs`](../src/VectorNNTP.Common/Articles/Checksum/IeeeCrc32.cs).  
-Factory: `IeeeCrc32.Compute(artData)` after materialize.  
-Tests: [`tests/VectorNNTP.Common.Tests/Articles/Checksum/IeeeCrc32Tests.cs`](../tests/VectorNNTP.Common.Tests/Articles/Checksum/IeeeCrc32Tests.cs), `ArticleRecordTests.TryCreate_ArtCrc_CoversEntireArtData`.
+Implementation: `System.IO.Hashing.XxHash3.HashToUInt64` (package `System.IO.Hashing` 10.0.12).  
+Factory: one-shot `XxHash3.HashToUInt64(artData)` **after** materialize, over the completed canonical `byte[]`.  
+Tests: `ArticleRecordArtHashTests`, `ArticleRecordTests.TryCreate_ArtHash_CoversEntireArtData`.
 
 | Property | Value |
 |---|---|
-| Polynomial | IEEE reflected `0xEDB88320` |
-| Initial accumulator | `0xFFFFFFFF` |
-| Final XOR | `0xFFFFFFFF` |
-| Standard vector | `Compute("123456789") == 0xCBF43926` |
-| Not CRC32C | Castagnoli of the same vector is `0xE3069283` |
+| Algorithm | XXH3-64 (non-cryptographic) |
+| Width | 64-bit `ulong` |
+| Coverage | Exact final canonical ArtData bytes |
+| Known vector | `XxHash3.HashToUInt64("123456789") == 0x72DCB18B67A17DFF` |
+| Invariant | `record.ArtHash == XxHash3.HashToUInt64(record.ArtData.Span)` |
 
-`YEncCrc32` delegates to `IeeeCrc32` but is applied to **decoded yEnc payload** during trailer checks. ArtCrc is IEEE CRC-32 of **canonical ArtData** (still yEnc-encoded if the article is yEnc). Those are different coverages.
+ArtHash is an **internal deterministic fingerprint** of the final canonical ArtData. It is **not** cryptographic identity and **must not** be treated as proof of byte equality. Equal ArtHash values do not prove two buffers are identical.
 
-ArtCrc is computed **after** Date/Path materialization because those rewrites change the article bytes. The invariant is `ArtCrc == IeeeCrc32.Compute(ArtData.Span)`. A Date/Path hop that produced new ArtData would need a new CRC; the factory does not re-CRC destuffed source.
+ArtId remains separate: BLAKE3 of the Message-ID **value** only. Date/Path rewrites change ArtHash (and ArtSize/ranges) but not ArtId.
 
-ArtCrc is representation integrity of this buffer. It is not TLS/AMQP transport integrity and not ArtId.
+Do not hash destuffed input, the Message-ID alone, or only the body. Hash the materialized ArtData.
+
+`YEncCrc32` / `IeeeCrc32` remain IEEE CRC-32 of **decoded yEnc payload** for trailer checks. That is a different coverage and algorithm from ArtHash.
+
+ArtHash is not folded into the materializer. The path is: materialize one `byte[]` → `HashToUInt64` → store on the record.
 
 ---
 
@@ -264,7 +273,7 @@ Date (and Path) value lengths can change. Every later header in ArtData may shif
 | Field | When Date text length changes |
 |---|---|
 | ArtId | Unchanged (Message-ID value unchanged) |
-| ArtSize / ArtCrc | Change (ArtData bytes changed) |
+| ArtSize / ArtHash | Change (ArtData bytes changed) |
 | Field ranges | Relocated on the new buffer |
 | ArtType / ArtLines | Unchanged (body and type markers unchanged) |
 
@@ -380,7 +389,7 @@ Missing or empty Path: analyze succeeds (`Missing` / `Empty`); write uses tracke
 
 | Member | Changes? |
 |---|---|
-| ArtData, ArtSize, ArtCrc | Yes |
+| ArtData, ArtSize, ArtHash | Yes |
 | `Fields.Path` and later header offsets | Yes — relocate on final ArtData |
 | ArtId | **No** (Message-ID unchanged) |
 | ArtType, ArtLines, CanonicalUtc | No (body / type / resolved instant unchanged) |
@@ -452,7 +461,7 @@ Parser offsets into destuffed source must not be kept after Date/Path rewrite.
 - Common parser validation succeeded
 - Diablo `ArticleType` classification was performed
 - ArtId is BLAKE3 of the Message-ID **value** in that ArtData
-- ArtCrc is IEEE CRC-32 of that ArtData
+- ArtHash is XXH3-64 of that ArtData
 - FieldTable ranges refer to that ArtData
 - `CanonicalUtc` / `ArtLines` / `ArtSize` match that construction
 
@@ -477,7 +486,7 @@ destuffed article (caller)
          // one new byte[]: rewrite winning Date value + Path
     → ArticleFieldTable.Locate(canonical, SelectedDateHeaderName)
     → ArticleId.FromMessageId(Message-ID value in ArtData)
-    → IeeeCrc32.Compute(ArtData)
+    → XxHash3.HashToUInt64(ArtData)
     → ArticleTypeClassifier.Classify(destuffed header/body slices)
     → ArticleRecord(CanonicalV1, ArtLines = parse.BodyLineCount, CanonicalUtc = parse.CanonicalUtc)
 ```
@@ -505,7 +514,7 @@ Intended hot-path properties supported by the implementation and tests:
 - Header access is integer ranges, not copied strings or `List<string>` groups
 - One final article-sized canonical buffer; destuffed input is dropped
 - Fixed-size `ArticleId` (32 bytes inline)
-- CRC once over final ArtData
+- XXH3-64 once over final ArtData
 - Parser walk after warmup does not allocate; factory cost is dominated by the materialize `byte[]`
 
 No throughput or latency benchmarks are claimed here.
@@ -545,7 +554,7 @@ Path becomes `news.usenet.ninja!backfiller01.usenet.ninja!peer.example`.
 | Member | Value |
 |---|---|
 | ArtId | BLAKE3(`<shift@example.test>`) |
-| ArtCrc | IEEE CRC-32 of the **new** ArtData |
+| ArtHash | XXH3-64 of the **new** ArtData |
 | ArtSize | Length of rewritten article (≠ destuffed length) |
 | ArtType | `Default` |
 | ArtLines | 2 |
@@ -562,7 +571,7 @@ If another application (`storage01.usenet.ninja`) analyzed the **canonical** Pat
 storage01.usenet.ninja!news.usenet.ninja!backfiller01.usenet.ninja!peer.example
 ```
 
-A rematerialized buffer would change ArtData, ArtSize, ArtCrc, and Path/later ranges. ArtId, ArtType, ArtLines, CanonicalUtc, and Message-ID value would stay the same. `ArticleRecordFactory` does not perform this second hop today.
+A rematerialized buffer would change ArtData, ArtSize, ArtHash, and Path/later ranges. ArtId, ArtType, ArtLines, CanonicalUtc, and Message-ID value would stay the same. `ArticleRecordFactory` does not perform this second hop today.
 
 ---
 
@@ -582,7 +591,7 @@ ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** us
 - Construct records at BackFiller / NNTPD ingest
 - Request Message-ID match as an orchestration step **after** or **beside** factory construction
 - Path prepend that produces a new record without a full reparse
-- Serialized envelope (scalars + ArtData + range table + CRC check)
+- Serialized envelope (scalars + ArtData + range table + ArtHash check)
 - Completing Diablo `classifyLineAsTypes` body confirmation
 
 ---
@@ -593,7 +602,7 @@ ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** us
 |---|---|---|
 | Record / factory | `Articles/ArticleRecord.cs`, `ArticleRecordFactory.cs` | `Articles/ArticleRecordTests.cs` |
 | ArtId | `Articles/ArticleId.cs` | `Articles/ArticleIdTests.cs`, NNTPD `History/HistoryDbTests.cs` |
-| ArtCrc | `Articles/Checksum/IeeeCrc32.cs` | `Articles/Checksum/IeeeCrc32Tests.cs` |
+| ArtHash | `System.IO.Hashing.XxHash3` via factory | `Articles/ArticleRecordArtHashTests.cs` |
 | ArtType | `Articles/ArticleType.cs`, `ArticleTypeClassifier.cs` | `Articles/ArticleTypeClassifierTests.cs`, NNTPD classifier/IHAVE tests |
 | Parse / lines / References | `Articles/Parsing/NntpArticleParser.cs`, `NntpArticleParserContracts.cs` | `Articles/Parsing/NntpArticleParserTests.cs` |
 | Date | `Articles/DateParser/*` | `Articles/DateParser/NewsDateParserTests.cs`, parser Date cases |

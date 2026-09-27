@@ -252,7 +252,10 @@ public sealed class NntpSessionIdleTimeoutTests
         session.TakeThisWindow!.HoldReceive = hold.Task;
         session.TakeThisWindow.AfterReceiveStarted = () => receiveStarted.TrySetResult();
 
-        await duplex.WriteClientAsync("TAKETHIS <idle-take@example.com>\r\nSubject: x\r\n\r\nbody\r\n.\r\n");
+        await duplex.WriteClientAsync(
+            "TAKETHIS <idle-take@example.com>\r\n" +
+            CanonicalArticleText.Destuffed("<idle-take@example.com>") +
+            ".\r\n");
         await receiveStarted.Task.WaitAsync(Safety);
         Assert.True(session.CommandWorkForTests > 0);
 

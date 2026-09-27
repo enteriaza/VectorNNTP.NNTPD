@@ -597,14 +597,14 @@ internal sealed class TakeThisConnection : IAsyncDisposable
     private static bool TryParseSequence(string line, out long sequence)
     {
         sequence = 0;
-        var start = line.IndexOf("<bench-", StringComparison.Ordinal);
-        if (start < 0)
+        var at = line.IndexOf("@vectornntp.local>", StringComparison.Ordinal);
+        if (at < TakeThisCommandBuffer.SequenceWidth + 1)
         {
             return false;
         }
 
-        var digits = start + "<bench-00-".Length;
-        if (digits + TakeThisCommandBuffer.SequenceWidth > line.Length)
+        var digits = at - TakeThisCommandBuffer.SequenceWidth;
+        if (line[digits - 1] != '-')
         {
             return false;
         }

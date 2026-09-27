@@ -12,6 +12,7 @@ internal static class BenchmarkWorkloadCatalog
         new TakeThisWorkload(),
         new CheckWorkload(),
         new IhaveWorkload(),
+        new PostWorkload(),
         new SpeedTestWorkload(),
     ];
 

@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -99,7 +100,8 @@ public sealed class CheckCommandTests
         await duplex.WriteClientLineAsync("CHECK <x@ex.com>");
         Assert.Equal("238 <x@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
 
-        await duplex.WriteClientAsync("TAKETHIS <x@ex.com>\r\nSubject: t\r\n\r\nbody\r\n.\r\n");
+        await duplex.WriteClientAsync(
+            "TAKETHIS <x@ex.com>\r\n" + CanonicalArticleText.Destuffed("<x@ex.com>") + ".\r\n");
         Assert.Equal("239 <x@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
 

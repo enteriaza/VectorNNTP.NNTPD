@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Session;
 
 namespace VectorNNTP.NNTPD.Tests.Session.Commands;
@@ -227,7 +228,7 @@ public sealed class NntpPhaseCResponseTests
         var response = new NntpResponseWriter(duplex.ServerOutput);
         var dispatcher = new NntpCommandDispatcher();
 
-        await duplex.WriteClientAsync("Subject: hi\r\n\r\nbody\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Destuffed(id) + ".\r\n");
         var read = duplex.ReadExactAsciiAsync(expected.Length);
         await NntpCommandTestParse.DispatchAsync(dispatcher, session, response, "TAKETHIS " + id);
         Assert.Equal(1, response.ChannelEnqueueCount);

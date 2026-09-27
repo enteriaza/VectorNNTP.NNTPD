@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -11,11 +12,10 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// Start order: after listeners may accept connections is acceptable; the queue is a singleton
 /// that buffers until this service is running. Stop completes the queue writer and drains
-/// already-accepted articles before exiting. IHAVE items are destuffed once
-/// under <c>ArticleIngestion:MaxArticleBytes</c>. POST items are destuffed once
-/// using the queued stuffed payload length (POST receive already enforced
-/// <c>Nntpd:MaxArticleSize</c> on destuffed client bytes). TAKETHIS payloads
-/// are unchanged.
+/// already-accepted articles before exiting. IHAVE items without a CanonicalV1
+/// <see cref="ArticleRecord"/> are destuffed once under
+/// <c>ArticleIngestion:MaxArticleBytes</c>. TAKETHIS and POST items that already
+/// carry a CanonicalV1 record are not destuffed or parsed again.
 /// Production starts exactly one drain loop. The queue supports concurrent
 /// <see cref="IArticleIngestionQueue.DequeueAsync"/> callers; this service does not
 /// create additional consumers.
@@ -127,7 +127,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _feedDiagnostics.BeginSpoolWork();
             try
             {
-                if (article.Producer is InboundArticleProducer.IHave or InboundArticleProducer.Post)
+                if (article.Record.ParseStatus != ArticleParseStatus.CanonicalV1
+                    && article.Producer is InboundArticleProducer.IHave or InboundArticleProducer.Post)
                 {
                     article = IhaveArticleInterpreter.Interpret(article, DestuffLimit(article));
                 }

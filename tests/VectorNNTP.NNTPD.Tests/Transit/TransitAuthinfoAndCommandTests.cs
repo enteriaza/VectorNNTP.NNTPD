@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Session;
 using VectorNNTP.NNTPD.Transit;
 
@@ -293,7 +294,7 @@ public sealed class TransitAuthinfoAndCommandTests
         Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("TAKETHIS <x@ex.com>");
-        await duplex.WriteClientBytesAsync("Subject: t\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        await duplex.WriteClientBytesAsync(Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<x@ex.com>") + ".\r\n"));
         Assert.Equal("239 <x@ex.com>", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");

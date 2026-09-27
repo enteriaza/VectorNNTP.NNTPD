@@ -13,6 +13,8 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
 using VectorNNTP.NNTPD.Tests.Transit;
 
@@ -41,7 +43,7 @@ public sealed class TakeThisCommandTests
         _ = await duplex.ReadClientLineAsync();
 
         const string id = "<article-one@example.com>";
-        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: hi\r\n\r\nbody\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "body\r\n")));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
 
         var article = await queue.DequeueAsync(CancellationToken.None);
@@ -49,7 +51,15 @@ public sealed class TakeThisCommandTests
         Assert.Equal(id, article!.MessageId);
         Assert.Equal(InboundArticleProducer.TakeThis, article.Producer);
         Assert.Null(article.Structured);
-        Assert.Equal("Subject: hi\r\n\r\nbody\r\n", Encoding.ASCII.GetString(article.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
+        Assert.True(article.Payload.Equals(article.Record.ArtData));
+        Assert.Equal(article.Record.ArtData.Length, article.Record.ArtSize);
+        Assert.Equal(1, article.Record.ArtLines);
+        Assert.NotEqual(ArticleType.None, article.Record.ArtType);
+        Assert.True(article.Record.MessageId.SequenceEqual(Encoding.ASCII.GetBytes(id)));
+        Assert.True(article.Record.Fields.MessageId.IsPresent);
+        Assert.True(article.Record.Fields.Newsgroups.IsPresent);
+        Assert.True(article.Record.Fields.Date.IsPresent);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -57,7 +67,7 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
-    public async Task StreamTakeThis_PreservesDotStuffedWire_AndOmitsTerminator()
+    public async Task StreamTakeThis_InvalidArticle_Returns439_AndDoesNotEnqueue()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         await using var duplex = await TakeThisDuplex.CreateAsync();
@@ -69,10 +79,60 @@ public sealed class TakeThisCommandTests
 
         const string id = "<dot@example.com>";
         await duplex.WriteClientAsync(BuildTakeThis(id, "..foo\r\nbar\r\n"));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task StreamTakeThis_BenchHeaderSet_Returns439_AndDoesNotEnqueue()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<bench-00-000000000001@vectornntp.local>";
+        await duplex.WriteClientAsync(
+            BuildTakeThis(
+                id,
+                "From: benchmark@vectornntp.local\r\n" +
+                "Subject: TAKETHIS benchmark\r\n" +
+                "Message-ID: <bench-00-000000000001@vectornntp.local>\r\n" +
+                "\r\n" +
+                "1234567890abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz12345678\r\n"));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task StreamTakeThis_ValidDottedBody_QueuesDestuffedArtData()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<dot-valid@example.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "..foo\r\nbar\r\n").Replace("..foo\r\n", "...foo\r\n", StringComparison.Ordinal)));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
 
         var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal("..foo\r\nbar\r\n", Encoding.ASCII.GetString(article!.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article!.Record.ParseStatus);
+        var text = Encoding.ASCII.GetString(article.Record.ArtData.Span);
+        Assert.Contains("\r\n\r\n..foo\r\nbar\r\n", text, StringComparison.Ordinal);
+        Assert.True(article.Payload.Equals(article.Record.ArtData));
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -93,7 +153,7 @@ public sealed class TakeThisCommandTests
         var payload = new StringBuilder();
         foreach (var id in ids)
         {
-            payload.Append(BuildTakeThis(id, $"Subject: {id}\r\n\r\nx\r\n"));
+            payload.Append(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "x\r\n")));
         }
 
         await duplex.WriteClientAsync(payload.ToString());
@@ -130,8 +190,8 @@ public sealed class TakeThisCommandTests
         const string first = "<peek1@ex.com>";
         const string second = "<peek2@ex.com>";
         await duplex.WriteClientAsync(
-            BuildTakeThis(first, "Subject: 1\r\n\r\na\r\n") +
-            BuildTakeThis(second, "Subject: 2\r\n\r\nb\r\n"));
+            BuildTakeThis(first, CanonicalArticleText.Destuffed(first, "a\r\n")) +
+            BuildTakeThis(second, CanonicalArticleText.Destuffed(second, "b\r\n")));
 
         Assert.Equal($"239 {first}", await duplex.ReadClientLineAsync());
         Assert.Equal($"239 {second}", await duplex.ReadClientLineAsync());
@@ -156,7 +216,7 @@ public sealed class TakeThisCommandTests
         var payload = new StringBuilder();
         foreach (var id in ids)
         {
-            payload.Append(BuildTakeThis(id, "Subject: x\r\n\r\ny\r\n"));
+            payload.Append(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "y\r\n")));
         }
 
         await duplex.WriteClientAsync(payload.ToString());
@@ -204,7 +264,7 @@ public sealed class TakeThisCommandTests
         var ids = new[] { "<s1@ex.com>", "<s2@ex.com>", "<s3@ex.com>" };
         foreach (var id in ids)
         {
-            await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: s\r\n\r\nz\r\n"));
+            await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "z\r\n")));
             Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
         }
 
@@ -230,30 +290,36 @@ public sealed class TakeThisCommandTests
     [Fact]
     public async Task TakeThis_QueueFull_AppliesBackpressureThenAccepts()
     {
-        const string firstPayload = "Subject: 1\r\n\r\na\r\n";
+        const string firstId = "<q1@ex.com>";
+        const string secondId = "<q2@ex.com>";
+        var firstPayload = CanonicalArticleText.Destuffed(firstId, "a\r\n");
+        var firstRecord = ArticleRecordIngress.TryCreateFromDestuffed(
+            new VectorNNTP.Common.Articles.Parsing.NntpArticleParser("nntpd01.usenet.ninja"),
+            Encoding.ASCII.GetBytes(firstPayload));
+        Assert.True(firstRecord.IsAccepted);
         var queue = new ArticleIngestionQueue(
             new ArticleIngestionOptions(),
-            Encoding.ASCII.GetByteCount(firstPayload));
+            firstRecord.Record.ArtSize);
         await using var duplex = await TakeThisDuplex.CreateAsync();
         var session = duplex.CreateSession(queue);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
-        await duplex.WriteClientAsync(BuildTakeThis("<q1@ex.com>", firstPayload));
-        Assert.Equal("239 <q1@ex.com>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(BuildTakeThis(firstId, firstPayload));
+        Assert.Equal($"239 {firstId}", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
 
         // Second response must wait until capacity frees (enqueue backpressure).
         var secondResponse = duplex.ReadClientLineAsync();
-        await duplex.WriteClientAsync(BuildTakeThis("<q2@ex.com>", "Subject: 2\r\n\r\nb\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(secondId, CanonicalArticleText.Destuffed(secondId, "b\r\n")));
         await Task.Delay(80);
         Assert.False(secondResponse.IsCompleted);
 
         var first = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal("<q1@ex.com>", first!.MessageId);
+        Assert.Equal(firstId, first!.MessageId);
 
-        Assert.Equal("239 <q2@ex.com>", await secondResponse.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal($"239 {secondId}", await secondResponse.WaitAsync(TimeSpan.FromSeconds(5)));
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -357,7 +423,7 @@ public sealed class TakeThisCommandTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
         {
             QueueCapacity = 4,
-            MaxArticleBytes = 40,
+            MaxArticleBytes = 256,
         });
         await using var duplex = await TakeThisDuplex.CreateAsync();
         var session = duplex.CreateSession(queue);
@@ -367,8 +433,8 @@ public sealed class TakeThisCommandTests
 
         var ok = "<ok@ex.com>";
         var big = "<big2@ex.com>";
-        var payload = BuildTakeThis(ok, "Subject: ok\r\n\r\nx\r\n")
-                      + BuildTakeThis(big, "Subject: this-is-definitely-too-large\r\n\r\nbody\r\n");
+        var payload = BuildTakeThis(ok, CanonicalArticleText.Destuffed(ok, "x\r\n"))
+                      + BuildTakeThis(big, "Subject: this-is-definitely-too-large\r\n\r\n" + new string('Z', 300) + "\r\n");
         await duplex.WriteClientAsync(payload);
 
         Assert.Equal($"239 {ok}", await duplex.ReadClientLineAsync());
@@ -407,7 +473,7 @@ public sealed class TakeThisCommandTests
         Assert.Equal(NntpReceiveStrategy.StreamDataPlane, session.ReceiveStrategy);
 
         var id = "<stream-rx@ex.com>";
-        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: s\r\n\r\nbody\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "body\r\n")));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
@@ -434,17 +500,19 @@ public sealed class TakeThisCommandTests
         Assert.Equal(NntpReceiveStrategy.ReaderCommand, session.ReceiveStrategy);
 
         const string id = "<reader-path@ex.com>";
-        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: r\r\n\r\nreader\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "reader\r\n")));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
         var article = await queue.DequeueAsync(CancellationToken.None);
         Assert.Equal(id, article!.MessageId);
-        Assert.Equal("Subject: r\r\n\r\nreader\r\n", Encoding.ASCII.GetString(article.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
+        Assert.Contains("reader\r\n", Encoding.ASCII.GetString(article.Record.ArtData.Span), StringComparison.Ordinal);
 
         const string stuffedId = "<reader-destuff@ex.com>";
-        await duplex.WriteClientAsync(BuildTakeThis(stuffedId, "..foo\r\nbar\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(stuffedId, CanonicalArticleText.Destuffed(stuffedId, ".foo\r\nbar\r\n").Replace(".foo\r\n", "..foo\r\n", StringComparison.Ordinal)));
         Assert.Equal($"239 {stuffedId}", await duplex.ReadClientLineAsync());
         var destuffed = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal(".foo\r\nbar\r\n", Encoding.ASCII.GetString(destuffed!.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, destuffed!.Record.ParseStatus);
+        Assert.Contains("\r\n\r\n.foo\r\nbar\r\n", Encoding.ASCII.GetString(destuffed.Record.ArtData.Span), StringComparison.Ordinal);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -484,12 +552,12 @@ public sealed class TakeThisCommandTests
 
         var stored = "QUIT\r\nCHECK x\r\nTAKETHIS y\r\n";
         await duplex.WriteClientAsync(
-            "CHECK <c@ex.com>\r\n" + BuildTakeThis("<in@body>", stored) + "QUIT\r\n");
+            "CHECK <c@ex.com>\r\n" + BuildTakeThis("<in@body>", CanonicalArticleText.Destuffed("<in@body>", stored)) + "QUIT\r\n");
 
         Assert.Equal("238 <c@ex.com> send article to be transferred", await duplex.ReadClientLineAsync());
         Assert.Equal("239 <in@body>", await duplex.ReadClientLineAsync());
         var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal(stored, Encoding.ASCII.GetString(article!.Payload.Span));
+        Assert.Contains(stored, Encoding.ASCII.GetString(article!.Record.ArtData.Span), StringComparison.Ordinal);
         Assert.StartsWith("205 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await run;
     }
@@ -668,7 +736,7 @@ public sealed class TakeThisCommandTests
         var batch = new StringBuilder();
         foreach (var id in ids)
         {
-            batch.Append(BuildTakeThis(id, $"Subject: {id}\r\n\r\nbody\r\n"));
+            batch.Append(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "body\r\n")));
         }
 
         var bytes = Encoding.ASCII.GetBytes(batch.ToString());

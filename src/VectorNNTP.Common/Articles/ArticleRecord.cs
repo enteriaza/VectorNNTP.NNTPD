@@ -19,7 +19,7 @@ public readonly struct ArticleRecord
     /// Initializes a record that references <paramref name="artData"/> without copying it.
     /// </summary>
     /// <param name="artId">BLAKE3 of the Message-ID header <em>value</em> bytes in <paramref name="artData"/>.</param>
-    /// <param name="artCrc">IEEE CRC-32 of the entire <paramref name="artData"/> buffer.</param>
+    /// <param name="artHash">XXH3-64 fingerprint of the entire <paramref name="artData"/> buffer.</param>
     /// <param name="artType">Diablo-derived classification flags.</param>
     /// <param name="artLines">Body line count for overview <c>:lines</c>.</param>
     /// <param name="canonicalUtc">Winning Date-family header as UTC.</param>
@@ -28,7 +28,7 @@ public readonly struct ArticleRecord
     /// <param name="fields">Header value ranges into <paramref name="artData"/>.</param>
     internal ArticleRecord(
         ArticleId artId,
-        uint artCrc,
+        ulong artHash,
         ArticleType artType,
         int artLines,
         DateTime canonicalUtc,
@@ -37,7 +37,7 @@ public readonly struct ArticleRecord
         ArticleFieldTable fields)
     {
         ArtId = artId;
-        ArtCrc = artCrc;
+        ArtHash = artHash;
         ArtType = artType;
         ArtLines = artLines;
         CanonicalUtc = canonicalUtc;
@@ -49,8 +49,15 @@ public readonly struct ArticleRecord
     /// <summary>Gets the internal article identity BLAKE3(Message-ID value bytes).</summary>
     public ArticleId ArtId { get; }
 
-    /// <summary>Gets IEEE CRC-32 of <see cref="ArtData"/>.</summary>
-    public uint ArtCrc { get; }
+    /// <summary>
+    /// Gets the XXH3-64 fingerprint of <see cref="ArtData"/>.
+    /// </summary>
+    /// <remarks>
+    /// Internal deterministic fingerprint of the final canonical article bytes.
+    /// Not cryptographic identity and not proof of byte equality. Distinct from
+    /// <see cref="ArtId"/>, which is BLAKE3 of the Message-ID value only.
+    /// </remarks>
+    public ulong ArtHash { get; }
 
     /// <summary>Gets the canonical unstuffed article size; always <c>ArtData.Length</c>.</summary>
     public int ArtSize => _artData?.Length ?? 0;

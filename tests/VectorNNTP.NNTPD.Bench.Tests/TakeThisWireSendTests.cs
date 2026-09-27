@@ -51,7 +51,7 @@ public sealed class TakeThisWireSendTests
             var buffers = TakeThisWireSend.CreateBuffers(command.Segment, article);
             var wire = TakeThisWireSend.Concatenate(buffers);
             var commandText = Encoding.ASCII.GetString(wire, 0, command.Length);
-            var expected = $"TAKETHIS {TakeThisCommandBuffer.FormatMessageId(1, sequence)}\r\n";
+            var expected = $"TAKETHIS {TakeThisCommandBuffer.FormatMessageId(1, sequence, command.Instance)}\r\n";
             Assert.Equal(expected, commandText);
             Assert.True(seen.Add(commandText));
             Assert.True(wire.AsSpan(command.Length).SequenceEqual(article));

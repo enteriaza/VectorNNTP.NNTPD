@@ -4,6 +4,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
@@ -15,6 +16,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;
 
@@ -55,7 +57,7 @@ public sealed class TakeThisPipelineTests
         session.TakeThisWindow!.AfterPeekStarted = () => peekHook.TrySetResult();
 
         const string id = "<early-peek@ex.com>";
-        await duplex.WriteClientAsync($"TAKETHIS {id}\r\nSubject: partial\r\n\r\nbody-without-terminator\r\n");
+        await duplex.WriteClientAsync($"TAKETHIS {id}\r\n{CanonicalArticleText.Destuffed(id, "body-without-terminator\r\n")}");
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await peekHook.Task.WaitAsync(safety.Token);
@@ -95,7 +97,7 @@ public sealed class TakeThisPipelineTests
         session.TakeThisWindow!.AfterPeekStarted = () => peekHook.TrySetResult();
 
         const string id = "<ready-hist@ex.com>";
-        await duplex.WriteClientAsync($"TAKETHIS {id}\r\nSubject: still-open\r\n\r\n");
+        await duplex.WriteClientAsync($"TAKETHIS {id}\r\n{CanonicalArticleText.Destuffed(id, string.Empty)}");
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await peekHook.Task.WaitAsync(safety.Token);
         Assert.Equal(1, history.PeekStarted);
@@ -121,7 +123,7 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         const string id = "<wait-hist@ex.com>";
-        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: done\r\n\r\nx\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "x\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => session.TakeThisWindow is { Occupied: 1 } && history.PeekStarted == 1, safety.Token);
@@ -147,11 +149,11 @@ public sealed class TakeThisPipelineTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
-        await duplex.WriteClientAsync(BuildTakeThis("<a@ex.com>", "Subject: a\r\n\r\n1\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<a@ex.com>", CanonicalArticleText.Destuffed("<a@ex.com>", "1\r\n")));
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => history.PeekStarted == 1 && session.TakeThisWindow!.Occupied == 1, safety.Token);
 
-        await duplex.WriteClientAsync(BuildTakeThis("<b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<b@ex.com>", CanonicalArticleText.Destuffed("<b@ex.com>", "2\r\n")));
         await WaitUntilAsync(() => history.PeekStarted == 2 && session.TakeThisWindow!.Occupied == 2, safety.Token);
 
         Assert.True(session.TakeThisWindow!.Occupied <= TakeThisPipeline.Depth);
@@ -206,8 +208,8 @@ public sealed class TakeThisPipelineTests
         session.TakeThisWindow.AfterReceiveCompleted = () => Interlocked.Decrement(ref receivesInFlight);
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<hold-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            BuildTakeThis("<hold-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+            BuildTakeThis("<hold-a@ex.com>", CanonicalArticleText.Destuffed("<hold-a@ex.com>", "1\r\n")) +
+            BuildTakeThis("<hold-b@ex.com>", CanonicalArticleText.Destuffed("<hold-b@ex.com>", "2\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await receiveA.Task.WaitAsync(safety.Token);
@@ -259,17 +261,13 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(1, history.PeekStarted);
         Assert.Equal(1, session.TakeThisWindow.Occupied);
 
-        await duplex.WriteClientAsync(BuildTakeThis("<open-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<open-b@ex.com>", CanonicalArticleText.Destuffed("<open-b@ex.com>", "2\r\n")));
         Assert.False(peekB.Task.IsCompleted);
         Assert.Equal(1, history.PeekStarted);
 
-        Assert.Equal("239 <open-a@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("439 <open-a@ex.com>", await duplex.ReadClientLineAsync());
         Assert.False(peekB.Task.IsCompleted);
         Assert.Equal(1, history.PeekStarted);
-
-        var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal("<open-a@ex.com>", article!.MessageId);
-        Assert.Contains("TAKETHIS <open-b@ex.com>", Encoding.ASCII.GetString(article.Payload.Span), StringComparison.Ordinal);
         Assert.Equal(0, queue.Count);
 
         await QuitAsync(duplex, run);
@@ -315,7 +313,7 @@ public sealed class TakeThisPipelineTests
             }
         };
 
-        await duplex.WriteClientAsync(BuildTakeThis("<seq-a@ex.com>", "Subject: a\r\n\r\n1\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<seq-a@ex.com>", CanonicalArticleText.Destuffed("<seq-a@ex.com>", "1\r\n")));
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await firstReceiveDone.Task.WaitAsync(safety.Token);
         Assert.Equal(1, receiveStarted);
@@ -323,7 +321,7 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(1, session.TakeThisWindow.Occupied);
         Assert.Equal(1, history.PeekStarted);
 
-        await duplex.WriteClientAsync(BuildTakeThis("<seq-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<seq-b@ex.com>", CanonicalArticleText.Destuffed("<seq-b@ex.com>", "2\r\n")));
         await secondReceiveStarted.Task.WaitAsync(safety.Token);
         await WaitUntilAsync(
             () => receiveCompleted >= 2 && session.TakeThisWindow.Occupied == 2,
@@ -372,7 +370,7 @@ public sealed class TakeThisPipelineTests
             }
         };
 
-        await duplex.WriteClientAsync(BuildTakeThis("<det-a@ex.com>", "Subject: a\r\n\r\n1\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<det-a@ex.com>", CanonicalArticleText.Destuffed("<det-a@ex.com>", "1\r\n")));
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await receiveADone.Task.WaitAsync(safety.Token);
         Assert.Single(detached);
@@ -380,7 +378,7 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(0, session.TakeThisWindow.ActiveArticleReads);
         Assert.Null(duplex.TryReadClientLine());
 
-        await duplex.WriteClientAsync(BuildTakeThis("<det-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<det-b@ex.com>", CanonicalArticleText.Destuffed("<det-b@ex.com>", "2\r\n")));
         await receiveBStarted.Task.WaitAsync(safety.Token);
         await WaitUntilAsync(
             () => detached.Count == 2 && session.TakeThisWindow.Occupied == 2,
@@ -449,8 +447,8 @@ public sealed class TakeThisPipelineTests
         };
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<fast-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            BuildTakeThis("<fast-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+            BuildTakeThis("<fast-a@ex.com>", CanonicalArticleText.Destuffed("<fast-a@ex.com>", "1\r\n")) +
+            BuildTakeThis("<fast-b@ex.com>", CanonicalArticleText.Destuffed("<fast-b@ex.com>", "2\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await peekB.Task.WaitAsync(safety.Token);
@@ -482,9 +480,9 @@ public sealed class TakeThisPipelineTests
         session.TakeThisWindow!.AfterArticleDetached = payload => detached.Add(payload);
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<tri-a@ex.com>", "Subject: a\r\n\r\nA\r\n") +
-            BuildTakeThis("<tri-b@ex.com>", "Subject: b\r\n\r\nB\r\n") +
-            BuildTakeThis("<tri-c@ex.com>", "Subject: c\r\n\r\nC\r\n"));
+            BuildTakeThis("<tri-a@ex.com>", CanonicalArticleText.Destuffed("<tri-a@ex.com>", "A\r\n")) +
+            BuildTakeThis("<tri-b@ex.com>", CanonicalArticleText.Destuffed("<tri-b@ex.com>", "B\r\n")) +
+            BuildTakeThis("<tri-c@ex.com>", CanonicalArticleText.Destuffed("<tri-c@ex.com>", "C\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(
@@ -495,9 +493,9 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(0, session.TakeThisWindow.ActiveArticleReads);
         Assert.Equal(1, session.TakeThisWindow.MaxActiveArticleReads);
         Assert.Null(duplex.TryReadClientLine());
-        Assert.Equal("Subject: a\r\n\r\nA\r\n", Encoding.ASCII.GetString(detached[0].Span));
-        Assert.Equal("Subject: b\r\n\r\nB\r\n", Encoding.ASCII.GetString(detached[1].Span));
-        Assert.Equal("Subject: c\r\n\r\nC\r\n", Encoding.ASCII.GetString(detached[2].Span));
+        Assert.Equal(CanonicalArticleText.Destuffed("<tri-a@ex.com>", "A\r\n"), Encoding.ASCII.GetString(detached[0].Span));
+        Assert.Equal(CanonicalArticleText.Destuffed("<tri-b@ex.com>", "B\r\n"), Encoding.ASCII.GetString(detached[1].Span));
+        Assert.Equal(CanonicalArticleText.Destuffed("<tri-c@ex.com>", "C\r\n"), Encoding.ASCII.GetString(detached[2].Span));
         Assert.True(MemoryMarshal.TryGetArray(detached[0], out var aSeg));
         Assert.True(MemoryMarshal.TryGetArray(detached[1], out var bSeg));
         Assert.True(MemoryMarshal.TryGetArray(detached[2], out var cSeg));
@@ -531,7 +529,7 @@ public sealed class TakeThisPipelineTests
         var batch = new StringBuilder();
         for (var i = 0; i < extra; i++)
         {
-            batch.Append(BuildTakeThis($"<d{i}@ex.com>", $"Subject: {i}\r\n\r\nx\r\n"));
+            batch.Append(BuildTakeThis($"<d{i}@ex.com>", CanonicalArticleText.Destuffed($"<d{i}@ex.com>", "x\r\n")));
         }
 
         await duplex.WriteClientAsync(batch.ToString());
@@ -568,8 +566,8 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<bar-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            BuildTakeThis("<bar-b@ex.com>", "Subject: b\r\n\r\n2\r\n") +
+            BuildTakeThis("<bar-a@ex.com>", CanonicalArticleText.Destuffed("<bar-a@ex.com>", "1\r\n")) +
+            BuildTakeThis("<bar-b@ex.com>", CanonicalArticleText.Destuffed("<bar-b@ex.com>", "2\r\n")) +
             "CHECK <bar-chk@ex.com>\r\n");
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -603,7 +601,7 @@ public sealed class TakeThisPipelineTests
         session.TakeThisWindow!.AfterArticleDetached = _ => detached.TrySetResult();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<quit-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
+            BuildTakeThis("<quit-a@ex.com>", CanonicalArticleText.Destuffed("<quit-a@ex.com>", "1\r\n")) +
             "QUIT\r\n");
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -645,13 +643,14 @@ public sealed class TakeThisPipelineTests
             secondDetached.TrySetResult();
         };
 
-        const string wireA = "Subject: keep\r\n\r\n..dot\r\n";
+        var wireA = CanonicalArticleText.Destuffed("<own-a@ex.com>", ".dot\r\n")
+            .Replace(".dot\r\n", "..dot\r\n", StringComparison.Ordinal);
         await duplex.WriteClientAsync(BuildTakeThis("<own-a@ex.com>", wireA));
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await firstDetached.Task.WaitAsync(safety.Token);
         var snapshot = first.ToArray();
 
-        await duplex.WriteClientAsync(BuildTakeThis("<own-b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+        await duplex.WriteClientAsync(BuildTakeThis("<own-b@ex.com>", CanonicalArticleText.Destuffed("<own-b@ex.com>", "2\r\n")));
         await secondDetached.Task.WaitAsync(safety.Token);
         Assert.Equal(wireA, Encoding.ASCII.GetString(first.Span));
         Assert.Equal(snapshot, first.ToArray());
@@ -673,7 +672,7 @@ public sealed class TakeThisPipelineTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
         {
             QueueCapacity = 8,
-            MaxArticleBytes = 8,
+            MaxArticleBytes = 256,
         });
         await using var duplex = new TakeThisPipelineDuplex();
         var session = duplex.CreateSession(queue, history);
@@ -682,15 +681,15 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<big-pipe@ex.com>", "Subject: oversized\r\n\r\nbody\r\n") +
-            BuildTakeThis("<after-big@ex.com>", "ok\r\n"));
+            BuildTakeThis("<big-pipe@ex.com>", "Subject: oversized\r\n\r\n" + new string('Z', 300) + "\r\n") +
+            BuildTakeThis("<after-big@ex.com>", CanonicalArticleText.Destuffed("<after-big@ex.com>", "ok\r\n")));
 
         Assert.Equal("439 <big-pipe@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal("239 <after-big@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
         var article = await queue.DequeueAsync(CancellationToken.None);
         Assert.Equal("<after-big@ex.com>", article!.MessageId);
-        Assert.Equal("ok\r\n", Encoding.ASCII.GetString(article.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
 
         await QuitAsync(duplex, run);
     }
@@ -707,9 +706,9 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<one-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            BuildTakeThis("<one-b@ex.com>", "Subject: b\r\n\r\n2\r\n") +
-            BuildTakeThis("<one-c@ex.com>", "Subject: c\r\n\r\n3\r\n"));
+            BuildTakeThis("<one-a@ex.com>", CanonicalArticleText.Destuffed("<one-a@ex.com>", "1\r\n")) +
+            BuildTakeThis("<one-b@ex.com>", CanonicalArticleText.Destuffed("<one-b@ex.com>", "2\r\n")) +
+            BuildTakeThis("<one-c@ex.com>", CanonicalArticleText.Destuffed("<one-c@ex.com>", "3\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => session.TakeThisWindow is { Occupied: 3 }, safety.Token);
@@ -785,15 +784,17 @@ public sealed class TakeThisPipelineTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
-        const string wire = "..stuffed\r\nplain\r\n";
-        await duplex.WriteClientAsync(BuildTakeThis("<new@ex.com>", wire));
+        const string id = "<new@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, ".stuffed\r\nplain\r\n").Replace(".stuffed\r\n", "..stuffed\r\n", StringComparison.Ordinal)));
         Assert.Equal("239 <new@ex.com>", await duplex.ReadClientLineAsync());
 
         var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal("<new@ex.com>", article!.MessageId);
+        Assert.Equal(id, article!.MessageId);
         Assert.Equal(InboundArticleProducer.TakeThis, article.Producer);
         Assert.Null(article.Structured);
-        Assert.Equal(wire, Encoding.ASCII.GetString(article.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
+        Assert.True(article.Payload.Equals(article.Record.ArtData));
+        Assert.Contains("\r\n\r\n.stuffed\r\nplain\r\n", Encoding.ASCII.GetString(article.Record.ArtData.Span), StringComparison.Ordinal);
         Assert.Contains("<new@ex.com>", history.Remembered);
         Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId("<new@ex.com>"u8)));
 
@@ -847,21 +848,23 @@ public sealed class TakeThisPipelineTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
-        const string wire = "Subject: owned\r\n\r\n..dot\r\n";
-        await duplex.WriteClientAsync(BuildTakeThis("<own@ex.com>", wire));
+        const string id = "<own@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, ".dot\r\n").Replace(".dot\r\n", "..dot\r\n", StringComparison.Ordinal)));
         Assert.Equal("239 <own@ex.com>", await duplex.ReadClientLineAsync());
 
         var article = await queue.DequeueAsync(CancellationToken.None);
-        Assert.Equal(wire, Encoding.ASCII.GetString(article!.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article!.Record.ParseStatus);
+        Assert.True(article.Payload.Equals(article.Record.ArtData));
         Assert.True(MemoryMarshal.TryGetArray(article.Payload, out var segment));
         Assert.NotNull(segment.Array);
-        Assert.Equal(IHaveArticleReader.InitialCapacity, segment.Array.Length);
-        Assert.Equal(Encoding.ASCII.GetByteCount(wire), article.Payload.Length);
-        Assert.True(segment.Array.Length > article.Payload.Length);
+        Assert.Equal(article.Record.ArtSize, segment.Array.Length);
+        Assert.Equal(article.Record.ArtSize, article.Payload.Length);
+        Assert.Contains("\r\n\r\n.dot\r\n", Encoding.ASCII.GetString(article.Record.ArtData.Span), StringComparison.Ordinal);
 
         var interpreted = IhaveArticleInterpreter.Interpret(article, 64 * 1024);
+        Assert.Same(article, interpreted);
         Assert.Null(interpreted.Structured);
-        Assert.Equal(wire, Encoding.ASCII.GetString(interpreted.Payload.Span));
+        Assert.True(interpreted.Record.ArtData.Equals(article.Record.ArtData));
 
         await QuitAsync(duplex, run);
     }
@@ -881,7 +884,7 @@ public sealed class TakeThisPipelineTests
         var batch = new StringBuilder();
         for (var i = 0; i < extra; i++)
         {
-            batch.Append(BuildTakeThis($"<w{i}@ex.com>", $"Subject: {i}\r\n\r\nx\r\n"));
+            batch.Append(BuildTakeThis($"<w{i}@ex.com>", CanonicalArticleText.Destuffed($"<w{i}@ex.com>", "x\r\n")));
         }
 
         await duplex.WriteClientAsync(batch.ToString());
@@ -919,8 +922,8 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            BuildTakeThis("<b@ex.com>", "Subject: b\r\n\r\n2\r\n"));
+            BuildTakeThis("<a@ex.com>", CanonicalArticleText.Destuffed("<a@ex.com>", "1\r\n")) +
+            BuildTakeThis("<b@ex.com>", CanonicalArticleText.Destuffed("<b@ex.com>", "2\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => session.TakeThisWindow is { Occupied: 2 }, safety.Token);
@@ -947,8 +950,8 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            BuildTakeThis("<imm-a@ex.com>", "Subject: a\r\n\r\n1\r\n") +
-            "TAKETHIS <imm-b@ex.com>\r\nSubject: open\r\n\r\nno-term\r\n");
+            BuildTakeThis("<imm-a@ex.com>", CanonicalArticleText.Destuffed("<imm-a@ex.com>", "1\r\n")) +
+            $"TAKETHIS <imm-b@ex.com>\r\n{CanonicalArticleText.Destuffed("<imm-b@ex.com>", "no-term\r\n")}");
 
         Assert.Equal("239 <imm-a@ex.com>", await duplex.ReadClientLineAsync());
         Assert.Null(duplex.TryReadClientLine());
@@ -980,7 +983,7 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync(
-            "CHECK <chk@ex.com>\r\n" + BuildTakeThis("<after-check@ex.com>", "Subject: t\r\n\r\nz\r\n"));
+            "CHECK <chk@ex.com>\r\n" + BuildTakeThis("<after-check@ex.com>", CanonicalArticleText.Destuffed("<after-check@ex.com>", "z\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => session.Pipeline is { Occupied: >= 1 }, safety.Token);
@@ -1002,8 +1005,8 @@ public sealed class TakeThisPipelineTests
     private static ArticleIngestionQueue NewQueue() =>
         new(new ArticleIngestionOptions { QueueCapacity = 32 });
 
-    private static string BuildTakeThis(string messageId, string articleWithoutTerminator) =>
-        $"TAKETHIS {messageId}\r\n{articleWithoutTerminator}.\r\n";
+    private static string BuildTakeThis(string messageId, string? articleWithoutTerminator = null) =>
+        $"TAKETHIS {messageId}\r\n{(articleWithoutTerminator ?? CanonicalArticleText.Destuffed(messageId))}.\r\n";
 
     private static async Task QuitAsync(TakeThisPipelineDuplex duplex, Task run)
     {

@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
@@ -274,7 +275,16 @@ public sealed class PostCommandTests
         Assert.Equal(InboundArticleProducer.Post, inbound.Producer);
         var text = Encoding.ASCII.GetString(inbound.Payload.Span);
         Assert.Contains("Message-ID: <keep@example.com>", text, StringComparison.Ordinal);
-        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
+        Assert.Equal(inbound.Record.ArtData.Length, inbound.Record.ArtSize);
+        Assert.True(inbound.Record.ArtLines >= 0);
+        Assert.NotEqual(ArticleType.None, inbound.Record.ArtType);
+        Assert.True(inbound.Record.MessageId.SequenceEqual("<keep@example.com>"u8));
+        Assert.True(inbound.Record.Fields.MessageId.IsPresent);
+        Assert.True(inbound.Record.Fields.Newsgroups.IsPresent);
+        Assert.Contains("news.usenet.ninja!", text, StringComparison.Ordinal);
+        Assert.Contains(".POSTED", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Path: client.path", text, StringComparison.Ordinal);
 
         await QuitAsync(duplex, run);
@@ -350,6 +360,8 @@ public sealed class PostCommandTests
         await duplex.WriteClientAsync(destuffed + ".\r\n");
         Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
+        var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound!.Record.ParseStatus);
 
         await QuitAsync(duplex, run);
     }
@@ -373,7 +385,7 @@ public sealed class PostCommandTests
     }
 
     [Fact]
-    public async Task DefaultFiveMibExact_IsAccepted()
+    public async Task DefaultFiveMibExact_IsRejectedByArticleRecordBecauseCompleteArticleExceedsCommonLimit()
     {
         var queue = NewQueue();
         await using var duplex = new PostDuplex();
@@ -385,8 +397,33 @@ public sealed class PostCommandTests
         await duplex.WriteClientLineAsync("POST");
         Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
         await duplex.WriteClientAsync(destuffed + ".\r\n");
+        // Receive accepts destuffed client size == MaxArticleSize. POST then injects
+        // server headers and the factory applies Common MaxArticleBytes to the
+        // destuffed complete article, which exceeds 5 MiB.
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task NearDefaultFiveMib_WithRoomForServerHeaders_IsAccepted()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Poster);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        var destuffed = PaddedArticle(NntpdOptions.DefaultMaxArticleSize - 4096);
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(destuffed + ".\r\n");
         Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
         Assert.Equal(1, queue.Count);
+        var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound!.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
 
         await QuitAsync(duplex, run);
     }
@@ -470,7 +507,7 @@ public sealed class PostCommandTests
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
         var text = Encoding.ASCII.GetString(inbound!.Payload.Span);
         var expectedInjection = PostRfcDate.Format(clock.GetUtcNow());
-        Assert.Contains("Date: " + clientDate, text, StringComparison.Ordinal);
+        Assert.Contains("Date: Thu, 24 Sep 2026 08:00:00 +0000", text, StringComparison.Ordinal);
         Assert.Contains("Injection-Date: " + expectedInjection, text, StringComparison.Ordinal);
         Assert.DoesNotContain("NNTP-Posting-Date", text, StringComparison.Ordinal);
         Assert.DoesNotContain("NNTP-Posting-Host", text, StringComparison.Ordinal);
@@ -489,7 +526,8 @@ public sealed class PostCommandTests
         Assert.Equal(119, recovered.Port);
         Assert.Equal(clock.GetUtcNow(), recovered.InjectedAtUtc);
         Assert.Null(recovered.AuthenticatedUsername);
-        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.Contains("news.usenet.ninja!", text, StringComparison.Ordinal);
+        Assert.Contains(".POSTED", text, StringComparison.Ordinal);
         Assert.DoesNotContain("forged", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Xref:", text, StringComparison.Ordinal);
 
@@ -601,15 +639,17 @@ public sealed class PostCommandTests
 
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
         Assert.Null(inbound!.Structured);
-        var text = Encoding.ASCII.GetString(inbound.Payload.Span);
-        Assert.Contains("\r\n\r\n..hidden\r\n", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("\r\n\r\n...hidden", text, StringComparison.Ordinal);
-        Assert.False(text.EndsWith(".\r\n", StringComparison.Ordinal) && text.EndsWith("\r\n.\r\n", StringComparison.Ordinal));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
+        var text = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
+        Assert.Contains("\r\n\r\n.hidden\r\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r\n\r\n..hidden\r\n", text, StringComparison.Ordinal);
         Assert.False(inbound.Payload.Span.EndsWith(".\r\n"u8));
 
         var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Equal(InboundArticleProducer.Post, interpreted.Producer);
-        Assert.Equal(".hidden\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
+        Assert.Same(inbound, interpreted);
+        Assert.Null(interpreted.Structured);
+        Assert.True(interpreted.Record.ArtData.Equals(inbound.Record.ArtData));
 
         await QuitAsync(duplex, run);
     }
@@ -671,9 +711,10 @@ public sealed class PostCommandTests
         Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
 
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
-        var text = Encoding.ASCII.GetString(inbound!.Payload.Span);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound!.Record.ParseStatus);
+        var text = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
         var body = text[(text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..];
-        Assert.Equal("normal\r\n..\r\n...\r\n....\r\n", body);
+        Assert.Equal("normal\r\n.\r\n..\r\n...\r\n", body);
         Assert.False(inbound.Payload.Span.EndsWith("\r\n.\r\n"u8));
 
         await QuitAsync(duplex, run);
@@ -802,9 +843,12 @@ public sealed class PostCommandTests
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
         Assert.Equal(InboundArticleProducer.Post, inbound!.Producer);
         Assert.Null(inbound.Structured);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
         Assert.False(inbound.Payload.Span.EndsWith("\r\n.\r\n"u8));
-        var destuffed = IhaveArticleInterpreter.DestuffToArticle(inbound.Payload.Span, 64 * 1024);
-        Assert.Equal("plain\r\n.dot\r\n", Encoding.ASCII.GetString(destuffed.Body.Span));
+        var text = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
+        var body = text[(text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..];
+        Assert.Equal("plain\r\n.dot\r\n", body);
 
         await QuitAsync(duplex, run);
     }
@@ -926,7 +970,28 @@ public sealed class PostCommandTests
         var prefix = ValidArticle(body: string.Empty);
         var needed = destuffedBytes - Encoding.ASCII.GetByteCount(prefix);
         Assert.True(needed >= 2);
-        return prefix + new string('Z', needed - 2) + "\r\n";
+
+        // Common parser rejects physical lines over 1024 bytes. Keep body lines
+        // at 80 bytes so size-limit tests isolate destuffed size, not line length.
+        const int maxContent = 78;
+        var sb = new StringBuilder(prefix, destuffedBytes);
+        var remaining = needed;
+        while (remaining > 0)
+        {
+            var content = Math.Min(maxContent, remaining - 2);
+            if (remaining > 80 && remaining - (content + 2) == 1)
+            {
+                content--;
+            }
+
+            sb.Append('Z', content);
+            sb.Append("\r\n");
+            remaining -= content + 2;
+        }
+
+        var article = sb.ToString();
+        Assert.Equal(destuffedBytes, Encoding.ASCII.GetByteCount(article));
+        return article;
     }
 
     private sealed class RecordingIngestionQueue : IArticleIngestionQueue

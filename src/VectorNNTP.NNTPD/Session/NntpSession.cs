@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Net;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
@@ -150,6 +151,7 @@ public sealed class NntpSession
         InjectionIdentity = string.IsNullOrWhiteSpace(injectionIdentity)
             ? NntpdOptions.FormatFqdn(1, "usenet.ninja")
             : injectionIdentity.Trim();
+        ArticleParser = new NntpArticleParser(InjectionIdentity);
         NewsgroupPostingPolicy = newsgroupPostingPolicy
             ?? (newsgroupCatalogue is not null
                 ? new Commands.Posting.CatalogueNewsgroupPostingPolicy(newsgroupCatalogue)
@@ -197,6 +199,12 @@ public sealed class NntpSession
     /// (<c>nntpd{ServerId:00}.{DnsSuffix}</c>).
     /// </summary>
     public string InjectionIdentity { get; }
+
+    /// <summary>
+    /// Gets the session-scoped Common article parser (local identity is
+    /// <see cref="InjectionIdentity"/>). Used by TAKETHIS and POST before queue admission.
+    /// </summary>
+    internal NntpArticleParser ArticleParser { get; }
 
     /// <summary>
     /// Gets the newsgroup existence/posting-authorization boundary used by POST.

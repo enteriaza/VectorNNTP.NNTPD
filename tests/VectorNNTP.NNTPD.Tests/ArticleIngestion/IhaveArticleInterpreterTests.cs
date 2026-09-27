@@ -2,7 +2,9 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -75,6 +77,26 @@ public sealed class IhaveArticleInterpreterTests
         Assert.Equal(InboundArticleProducer.Post, interpreted.Producer);
         Assert.NotNull(interpreted.Structured);
         Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
+    }
+
+    [Fact]
+    public void Interpret_CanonicalV1Record_IsReturnedUnchanged()
+    {
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(
+            new NntpArticleParser("nntpd01.usenet.ninja"),
+            Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<rec@example.com>", ".foo\r\n")));
+        Assert.True(created.IsAccepted);
+        var inbound = ArticleRecordIngress.CreateQueued(
+            "<rec@example.com>",
+            created.Record,
+            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+            DateTimeOffset.UtcNow,
+            InboundArticleProducer.Post);
+
+        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
+        Assert.Same(inbound, interpreted);
+        Assert.True(interpreted.Record.ArtData.Equals(created.Record.ArtData));
+        Assert.Null(interpreted.Structured);
     }
 
     [Fact]
@@ -161,6 +183,79 @@ public sealed class IhaveArticleInterpreterTests
         Assert.Equal(InboundArticleProducer.Post, post.Producer);
         Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(post.Structured!.Value.Body.Span));
         Assert.Equal("Subject: d\r\n\r\n.foo\r\n", Encoding.ASCII.GetString(post.Payload.Span));
+    }
+
+    [Fact]
+    public async Task SpoolWriter_CanonicalV1Record_IsNotReparsedOrCopied()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        var captured = new List<InboundArticle>();
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new CapturingPersister(captured),
+            Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
+            NullLogger<IncomingSpoolWriterService>.Instance);
+        await writer.StartAsync(CancellationToken.None);
+
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(
+            new NntpArticleParser("nntpd01.usenet.ninja"),
+            Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<q@example.com>", "one\r\n")));
+        Assert.True(created.IsAccepted);
+        var inbound = ArticleRecordIngress.CreateQueued(
+            "<q@example.com>",
+            created.Record,
+            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+            DateTimeOffset.UtcNow,
+            InboundArticleProducer.TakeThis);
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await queue.EnqueueAsync(inbound, CancellationToken.None));
+
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
+
+        var persisted = Assert.Single(captured);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, persisted.Record.ParseStatus);
+        Assert.True(persisted.Record.ArtData.Equals(created.Record.ArtData));
+        Assert.True(persisted.Payload.Equals(persisted.Record.ArtData));
+        Assert.Null(persisted.Structured);
+    }
+
+    [Fact]
+    public async Task SpoolWriter_CanonicalV1PostRecord_IsNotReparsedOrCopied()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        var captured = new List<InboundArticle>();
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new CapturingPersister(captured),
+            Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
+            NullLogger<IncomingSpoolWriterService>.Instance);
+        await writer.StartAsync(CancellationToken.None);
+
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(
+            new NntpArticleParser("nntpd01.usenet.ninja"),
+            Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<post-q@example.com>", "one\r\n")));
+        Assert.True(created.IsAccepted);
+        var inbound = ArticleRecordIngress.CreateQueued(
+            "<post-q@example.com>",
+            created.Record,
+            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+            DateTimeOffset.UtcNow,
+            InboundArticleProducer.Post);
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await queue.EnqueueAsync(inbound, CancellationToken.None));
+
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
+
+        var persisted = Assert.Single(captured);
+        Assert.Equal(InboundArticleProducer.Post, persisted.Producer);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, persisted.Record.ParseStatus);
+        Assert.True(persisted.Record.ArtData.Equals(created.Record.ArtData));
+        Assert.True(persisted.Payload.Equals(persisted.Record.ArtData));
+        Assert.Null(persisted.Structured);
     }
 
     [Fact]

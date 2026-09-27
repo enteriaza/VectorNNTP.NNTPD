@@ -12,7 +12,7 @@ public enum ArticleParseStatus : byte
     /// This record's own pipeline completed: destuffed canonical ArtData,
     /// Common parser validation, Diablo <c>ArticleType</c> classification,
     /// Date/Path canonicalization, ArtId bound to the Message-ID <em>value</em>,
-    /// ArtCrc bound to that ArtData, and FieldTable ranges bound to the same buffer.
+    /// ArtHash (XXH3-64 of that ArtData), and FieldTable ranges bound to the same buffer.
     /// </summary>
     /// <remarks>
     /// Describes the <see cref="ArticleRecord"/> only. It does not mean an external

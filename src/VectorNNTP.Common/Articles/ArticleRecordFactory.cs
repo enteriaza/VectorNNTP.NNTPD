@@ -1,4 +1,4 @@
-using VectorNNTP.Common.Articles.Checksum;
+using System.IO.Hashing;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
 
@@ -9,12 +9,16 @@ namespace VectorNNTP.Common.Articles;
 /// </summary>
 /// <remarks>
 /// Uses the existing Common parser, Diablo <see cref="ArticleTypeClassifier"/>, and
-/// Date/Path materializer. The destuffed source buffer is not retained. FieldTable
+/// Date/Path materializer. ArtHash is one-shot XXH3-64 of the completed
+/// canonical ArtData (<c>XxHash3.HashToUInt64</c>), not an incremental hash
+/// and not IEEE CRC-32.
+/// The destuffed source buffer is not retained. FieldTable
 /// ranges are located on the materialized ArtData so Date/Path length changes cannot
 /// leave offsets pointing at the discarded source.
 /// This factory has no request Message-ID parameter and does not match an IHAVE/ARTICLE
 /// request. Request matching remains an ingestion/orchestration responsibility.
-/// This factory is not wired into BackFiller or NNTPD ingestion yet.
+/// NNTPD TAKETHIS and POST construct the record before queue admission.
+/// IHAVE and BackFiller ingestion are not wired through this factory.
 /// </remarks>
 public static class ArticleRecordFactory
 {
@@ -45,11 +49,11 @@ public static class ArticleRecordFactory
         var artData = materialize.ArticleBytes;
         var fields = ArticleFieldTable.Locate(artData, parse.SelectedDateHeaderName);
         var artId = ArticleId.FromMessageId(fields.MessageId.Slice(artData));
-        var artCrc = IeeeCrc32.Compute(artData);
+        var artHash = XxHash3.HashToUInt64(artData);
         var artType = ArticleTypeClassifier.Classify(parse.HeaderBytes.Span, parse.BodyBytes.Span);
         var record = new ArticleRecord(
             artId,
-            artCrc,
+            artHash,
             artType,
             parse.BodyLineCount,
             parse.CanonicalUtc,

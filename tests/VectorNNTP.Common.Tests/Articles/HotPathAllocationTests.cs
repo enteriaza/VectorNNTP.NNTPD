@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Articles.Checksum;
 using VectorNNTP.Common.Articles.DateParser;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
@@ -161,6 +162,30 @@ public sealed class HotPathAllocationTests
         Assert.NotNull(result.ArticleBytes);
         Assert.True(allocated >= result.ArticleBytes.Length);
         Assert.True(allocated <= result.ArticleBytes.Length + 64);
+    }
+
+    [Fact]
+    public void Ieee_crc32_compute_does_not_allocate_after_warmup()
+    {
+        var payload = "canonical-art-data-crc-vector"u8.ToArray();
+        _ = IeeeCrc32.Compute(payload);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        _ = IeeeCrc32.Compute(payload);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void XxHash3_HashToUInt64_does_not_allocate_after_warmup()
+    {
+        var payload = "canonical-art-data-xxh3-vector"u8.ToArray();
+        _ = System.IO.Hashing.XxHash3.HashToUInt64(payload);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        _ = System.IO.Hashing.XxHash3.HashToUInt64(payload);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, allocated);
     }
 
     private static void Warm(

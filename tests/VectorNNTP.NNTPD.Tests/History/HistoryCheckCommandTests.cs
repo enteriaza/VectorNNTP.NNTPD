@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;
 
@@ -227,7 +228,9 @@ public sealed class HistoryCheckCommandTests
         Assert.Equal(0, history.Writes.Count);
 
         await duplex.WriteClientAsync(
-            "TAKETHIS <i.am.an.article.you.will.want@example.com>\r\nSubject: t\r\n\r\nbody\r\n.\r\n");
+            "TAKETHIS <i.am.an.article.you.will.want@example.com>\r\n" +
+            CanonicalArticleText.Destuffed("<i.am.an.article.you.will.want@example.com>") +
+            ".\r\n");
         Assert.Equal(
             "239 <i.am.an.article.you.will.want@example.com>",
             await duplex.ReadClientLineAsync());

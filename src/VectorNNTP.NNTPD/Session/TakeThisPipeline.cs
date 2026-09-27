@@ -17,7 +17,8 @@ namespace VectorNNTP.NNTPD.Session;
 /// The session RX task is the only consumer of <c>Connection.Input</c>. It parses the
 /// TAKETHIS command, starts HistoryDB peek, frames the article with
 /// <see cref="IHaveArticleReader"/> (one owned stuffed-wire buffer, terminator omitted),
-/// attaches that buffer to a slot, and returns. Pipeline workers never call
+/// attaches that buffer to a slot, and returns. Pipeline workers destuff and build
+/// <see cref="VectorNNTP.Common.Articles.ArticleRecord"/> before enqueue. They never call
 /// <c>ReadAsync</c> on the session pipe. Depth matches the CHECK window and bounds
 /// how many owned article buffers may be retained.
 /// </para>
@@ -564,13 +565,26 @@ internal sealed class TakeThisPipeline
         }
 
         var messageIdText = System.Text.Encoding.ASCII.GetString(slot.MessageId);
-        var inbound = new InboundArticle(
-            messageIdText,
-            read.Payload,
-            _session.ClientIdentity,
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.TakeThis);
+        if (!TakeThis.TryCreateQueuedRecord(
+                _session,
+                read.Payload,
+                stuffed: true,
+                messageIdText,
+                out var inbound,
+                out var recordReject))
+        {
+            var rejectProbe = _session.FeedProbe;
+            _session.SetActivityState(FeedSessionState.Completing);
+            var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
+                .ConfigureAwait(false);
+            WriteTxIfDebug(slot, recordReject, TransferLogKind.Rejected);
+            rejectProbe?.RecordArticleCompleted(
+                duplicate: false,
+                System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
+            _session.SetActivityState(FeedSessionState.Idle);
+            return;
+        }
 
         ArticleEnqueueResult enqueue;
         try

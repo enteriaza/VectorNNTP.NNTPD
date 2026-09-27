@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
@@ -19,10 +21,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// STREAM path: the session RX task starts HistoryDB peek at the Message-ID, frames
 /// the article with <see cref="IHaveArticleReader"/> (one owned stuffed-wire buffer,
 /// terminator omitted, no destuff), attaches that buffer to
-/// <see cref="TakeThisPipeline"/>, and returns. Peek / enqueue / Remember / ordered
-/// 239/439 run on pipeline completion workers, not on the RX stack. Depth bounds
-/// how many owned articles stay in flight. TAKETHIS responses flush immediately
-/// (no coalesce batch).
+/// <see cref="TakeThisPipeline"/>, and returns. Peek / destuff / ArticleRecord /
+/// enqueue / Remember / ordered 239/439 run on pipeline completion workers, not on
+/// the RX stack. Depth bounds how many owned articles stay in flight. TAKETHIS
+/// responses flush immediately (no coalesce batch). ArticleRecord construction
+/// failure is a permanent <c>439</c>.
 /// </para>
 /// <para>
 /// MODE READER fallback still destuffs via <see cref="NntpMultilineDataReader"/> and
@@ -193,13 +196,21 @@ internal static class TakeThis
         }
 
         var messageId = System.Text.Encoding.ASCII.GetString(messageIdBytes);
-        var inbound = new InboundArticle(
-            messageId,
-            payload,
-            context.Session.ClientIdentity,
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.TakeThis);
+        var stuffed = context.Session.ReceiveStrategy == NntpReceiveStrategy.StreamDataPlane
+            && context.PreReadArticle is null;
+        if (!TryCreateQueuedRecord(
+                context.Session,
+                payload,
+                stuffed,
+                messageId,
+                out var inbound,
+                out var recordReject))
+        {
+            await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = recordReject;
+            return;
+        }
 
         ArticleEnqueueResult enqueue;
         try
@@ -264,5 +275,45 @@ internal static class TakeThis
         }
 
         return context.Response.EnqueueLineImmediateAsync(owned, cancellationToken);
+    }
+
+    /// <summary>
+    /// Destuffs when required, builds <see cref="ArticleRecord"/>, and returns a queue item
+    /// that references ArtData. Does not enqueue.
+    /// </summary>
+    internal static bool TryCreateQueuedRecord(
+        NntpSession session,
+        ReadOnlyMemory<byte> payload,
+        bool stuffed,
+        string messageId,
+        out InboundArticle inbound,
+        out string rejectDetail)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+
+        var created = stuffed
+            ? ArticleRecordIngress.TryCreateFromStuffedWire(
+                session.ArticleParser,
+                payload,
+                session.ArticleIngestion.MaxArticleBytes)
+            : ArticleRecordIngress.TryCreateFromDestuffed(session.ArticleParser, payload);
+        if (!created.IsAccepted)
+        {
+            inbound = null!;
+            rejectDetail = created.ParseFailure != NntpArticleParseFailureCode.None
+                ? "rejected article record " + created.ParseFailure
+                : "rejected article record " + created.MaterializeFailure;
+            return false;
+        }
+
+        inbound = ArticleRecordIngress.CreateQueued(
+            messageId,
+            created.Record,
+            session.ClientIdentity,
+            DateTimeOffset.UtcNow,
+            InboundArticleProducer.TakeThis);
+        rejectDetail = string.Empty;
+        return true;
     }
 }

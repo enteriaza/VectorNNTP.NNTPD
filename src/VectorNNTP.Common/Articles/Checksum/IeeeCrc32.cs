@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 namespace VectorNNTP.Common.Articles.Checksum;
 
 /// <summary>
-/// IEEE CRC-32 (polynomial <c>0xEDB88320</c>) used for ArtCrc and yEnc trailer validation.
+/// IEEE CRC-32 (polynomial <c>0xEDB88320</c>) used for yEnc trailer validation.
 /// </summary>
 /// <remarks>
 /// This is not Castagnoli CRC32C. Reflected polynomial, initial <c>0xFFFFFFFF</c>,

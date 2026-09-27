@@ -48,6 +48,12 @@ internal sealed class BenchOptions
     /// </summary>
     public SpeedTestReceiveMode SpeedTestReceive { get; init; } = SpeedTestReceiveMode.Byte;
 
+    /// <summary>AUTHINFO USER for <c>--benchmark POST</c>.</summary>
+    public string AuthUser { get; init; } = string.Empty;
+
+    /// <summary>AUTHINFO PASS for <c>--benchmark POST</c>. Never printed.</summary>
+    public string AuthPassword { get; init; } = string.Empty;
+
     /// <summary>
     /// Expected SPEEDTEST payload bytes for <see cref="SpeedTestReceiveMode.Raw"/>.
     /// Matches the server default (64 MiB). Unused by the line receiver.
@@ -78,6 +84,8 @@ internal sealed class BenchOptions
         var speedTestPeer = string.Empty;
         var speedTestReceive = SpeedTestReceiveMode.Byte;
         var speedTestBytes = VectorNNTP.NNTPD.Configuration.SpeedTestOptions.DefaultMaxBytes;
+        var authUser = Environment.GetEnvironmentVariable("BENCH_POST_USER") ?? string.Empty;
+        var authPassword = Environment.GetEnvironmentVariable("BENCH_POST_PASSWORD") ?? string.Empty;
         var samplesSpecified = false;
         var warmupSpecified = false;
         var runsSpecified = false;
@@ -159,6 +167,12 @@ internal sealed class BenchOptions
                 case "--speedtest-bytes":
                     speedTestBytes = long.Parse(RequireValue(args, ref i));
                     break;
+                case "--auth-user":
+                    authUser = RequireValue(args, ref i);
+                    break;
+                case "--auth-pass":
+                    authPassword = RequireValue(args, ref i);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown argument: {args[i]}");
             }
@@ -166,18 +180,19 @@ internal sealed class BenchOptions
 
         var isTakeThis = string.Equals(benchmark, "TAKETHIS", StringComparison.OrdinalIgnoreCase);
         var isIhave = string.Equals(benchmark, "IHAVE", StringComparison.OrdinalIgnoreCase);
+        var isPost = string.Equals(benchmark, "POST", StringComparison.OrdinalIgnoreCase);
         var isSpeedTest = string.Equals(benchmark, "SPEEDTEST", StringComparison.OrdinalIgnoreCase);
-        if ((isTakeThis || isIhave) && !warmupSpecified)
+        if ((isTakeThis || isIhave || isPost) && !warmupSpecified)
         {
             warmup = 0;
         }
 
-        if ((isTakeThis || isIhave) && !runsSpecified)
+        if ((isTakeThis || isIhave || isPost) && !runsSpecified)
         {
             runs = 1;
         }
 
-        if ((isTakeThis || isIhave) && !measureSpecified)
+        if ((isTakeThis || isIhave || isPost) && !measureSpecified)
         {
             measure = 30;
         }
@@ -286,6 +301,8 @@ internal sealed class BenchOptions
             SpeedTestPeer = speedTestPeer,
             SpeedTestReceive = speedTestReceive,
             SpeedTestBytes = speedTestBytes,
+            AuthUser = authUser,
+            AuthPassword = authPassword,
         };
     }
 

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 
 namespace VectorNNTP.NNTPD.Session.Framing;
 
@@ -115,5 +116,51 @@ public static class NntpArticleDestuffer
         return new NntpMultilineReadResult(
             NntpMultilineReadStatus.Completed,
             output.WrittenMemory.ToArray());
+    }
+
+    /// <summary>
+    /// Destuffs terminator-omitted stuffed wire into one owned destuffed article buffer.
+    /// </summary>
+    /// <remarks>
+    /// Uses the same line destuff as <see cref="AppendUnstuffedLine(ArrayBufferWriter{byte}, ReadOnlySpan{byte}, int, ref bool)"/>.
+    /// Does not classify, parse, or rewrite Date/Path. A line without a CRLF terminator is
+    /// ignored, matching <see cref="VectorNNTP.NNTPD.ArticleIngestion.IhaveArticleInterpreter"/>.
+    /// </remarks>
+    /// <param name="stuffedWire">Stuffed article bytes without the NNTP terminator.</param>
+    /// <param name="maxArticleBytes">Destuffed size ceiling.</param>
+    /// <param name="destuffed">Owned destuffed bytes when the method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when destuff completed within the limit.</returns>
+    public static bool TryDestuffStuffedWire(
+        ReadOnlySpan<byte> stuffedWire,
+        int maxArticleBytes,
+        [NotNullWhen(true)] out byte[]? destuffed)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
+        var output = new ArrayBufferWriter<byte>(Math.Min(Math.Max(stuffedWire.Length, 1), maxArticleBytes));
+        var exceeded = false;
+        var offset = 0;
+        while (offset < stuffedWire.Length && !exceeded)
+        {
+            var remaining = stuffedWire[offset..];
+            var crlf = remaining.IndexOf(NntpDelimiterSearch.Crlf);
+            if (crlf < 0)
+            {
+                break;
+            }
+
+            AppendUnstuffedLine(output, remaining[..crlf], maxArticleBytes, ref exceeded);
+            offset += crlf + 2;
+        }
+
+        if (exceeded)
+        {
+            destuffed = null;
+            return false;
+        }
+
+        destuffed = output.WrittenCount == 0
+            ? []
+            : output.WrittenMemory.ToArray();
+        return true;
     }
 }

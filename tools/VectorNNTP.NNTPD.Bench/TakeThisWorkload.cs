@@ -49,8 +49,14 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         Console.WriteLine($"Article body:        {bodyBytes:N0} bytes");
         Console.WriteLine($"Article on wire:     {article.Length:N0} bytes (headers + body + terminator)");
         Console.WriteLine($"Command + article:   {wirePerArticle:N0} bytes");
+        Console.WriteLine("Article headers:     Path, From, Newsgroups, Subject, Date, Message-ID");
+        Console.WriteLine($"Newsgroups:          {TakeThisArticlePayload.Newsgroups}");
         Console.WriteLine($"Article Message-ID:  static <{TakeThisArticlePayload.StaticMessageId}>");
-        Console.WriteLine("Command Message-ID:  unique per TAKETHIS (bench-CC-SSSSSSSSSSSS@vectornntp.local)");
+        Console.WriteLine("Command Message-ID:  unique per TAKETHIS <tIIIIIIIIII-CC-SSSSSSSSSSSS@vectornntp.local>");
+        Console.WriteLine("History isolation:   new 't' + 10-digit instance per connection (not bench-CC-seq)");
+        Console.WriteLine("ArticleRecordFactory: accepted at client build (CanonicalV1 destuffed article)");
+        Console.WriteLine("Intended server path: History Unseen → destuff → factory → queue (239)");
+        Console.WriteLine("Seen fast path would also 239; unique instance IDs make Seen impossible here.");
         Console.WriteLine("TLS/compression:     not used (plain TCP)");
         Console.WriteLine();
 
@@ -310,8 +316,18 @@ internal sealed class TakeThisWorkload : IBenchmarkWorkload
         Console.WriteLine($"239 accepted:        {r.Accepted239:N0}");
         Console.WriteLine($"439 rejected:        {r.Rejected439:N0}");
         Console.WriteLine($"Temporary 400s:      {r.Temporary400:N0}");
+        Console.WriteLine($"Other responses:     {r.ProtocolErrors:N0}");
         Console.WriteLine($"Protocol errors:     {r.ProtocolErrors:N0}");
         Console.WriteLine($"Connection errors:   {r.ConnectionErrors:N0}");
+        var unseenOk = r.Sent > 0
+            && r.Accepted239 == r.Sent
+            && r.Rejected439 == 0
+            && r.ProtocolErrors == 0
+            && r.Temporary400 == 0;
+        Console.WriteLine(
+            unseenOk
+                ? "Path check:          239==sent, 439==0, other==0 (Unseen accept; factory reached on ingress binary)"
+                : "Path check:          NOT a clean Unseen accept (see 439/other/400 counts)");
         Console.WriteLine($"Max outstanding:     {r.MaxOutstanding} (limit {r.PipelineDepth}/connection)");
         Console.WriteLine($"Max active sends:    {r.MaxActiveSends} (sender-depth {r.SenderDepth})");
         Console.WriteLine($"Max awaiting 239:    {r.MaxAwaiting239}");

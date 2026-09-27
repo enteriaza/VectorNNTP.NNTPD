@@ -55,6 +55,7 @@ public sealed class BenchmarkSelectorTests
         Assert.Contains("CHECK", ex.Message, StringComparison.Ordinal);
         Assert.Contains("IHAVE", ex.Message, StringComparison.Ordinal);
         Assert.Contains("SPEEDTEST", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("POST", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -85,6 +86,25 @@ public sealed class BenchmarkSelectorTests
         Assert.Equal(1, takeThis.Runs);
         Assert.Equal(30, takeThis.MeasureSeconds);
         Assert.Equal(string.Empty, takeThis.SpeedTestPeer);
+    }
+
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("post")]
+    public void Resolve_Post_IsCaseInsensitive(string name)
+    {
+        Assert.Equal("POST", BenchmarkWorkloadCatalog.Resolve(name).Name);
+    }
+
+    [Fact]
+    public void Parse_Post_SharedDefaultsMatchTakeThis()
+    {
+        var options = BenchOptions.Parse(["--benchmark", "POST"]);
+        Assert.Equal("POST", options.Benchmark);
+        Assert.Equal(0, options.WarmupSeconds);
+        Assert.Equal(30, options.MeasureSeconds);
+        Assert.Equal(1, options.Runs);
+        Assert.Equal("POST", BenchmarkWorkloadCatalog.Resolve(options.Benchmark).Name);
     }
 
     [Fact]

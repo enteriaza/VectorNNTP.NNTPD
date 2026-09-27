@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
@@ -7,18 +8,18 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </summary>
 /// <remarks>
 /// Owned by the ingestion queue until a spool writer successfully persists or discards it.
+/// The queue abstraction remains <see cref="System.Threading.Channels.Channel{T}"/> of this type because IHAVE still
+/// queues stuffed wire and workers need producer / client / command Message-ID metadata.
 /// <para>
 /// IHAVE <see cref="Payload"/> is complete NNTP wire-format article bytes: leading-dot
 /// stuffing is preserved; the terminating <c>CRLF . CRLF</c> is not included. Downstream
-/// <see cref="IhaveArticleInterpreter"/> destuffs exactly once.
+/// <see cref="IhaveArticleInterpreter"/> destuffs exactly once. IHAVE does not set
+/// <see cref="Record"/>.
 /// </para>
 /// <para>
-/// STREAM TAKETHIS supplies framed wire bytes (no destuff). MODE READER multiline
-/// fallback destuffs per RFC 3977 §3.1.1. TAKETHIS enqueue is unchanged.
-/// </para>
-/// <para>
-/// POST <see cref="Payload"/> uses the same stuffed-wire, terminator-omitted contract
-/// as IHAVE after server-owned header normalization.
+/// TAKETHIS and POST construct a Common <see cref="ArticleRecord"/> before admission.
+/// <see cref="Payload"/> then aliases <see cref="ArticleRecord.ArtData"/> (canonical
+/// destuffed bytes after Date/Path materialize). Workers must not destuff or parse again.
 /// </para>
 /// </remarks>
 public sealed class InboundArticle
@@ -30,7 +31,8 @@ public sealed class InboundArticle
         ConnectionClientIdentity clientIdentity,
         DateTimeOffset receivedAtUtc,
         Article? structured = null,
-        InboundArticleProducer producer = InboundArticleProducer.TakeThis)
+        InboundArticleProducer producer = InboundArticleProducer.TakeThis,
+        ArticleRecord record = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentNullException.ThrowIfNull(clientIdentity);
@@ -41,6 +43,7 @@ public sealed class InboundArticle
         ReceivedAtUtc = receivedAtUtc;
         Structured = structured;
         Producer = producer;
+        Record = record;
     }
 
     /// <summary>Gets the message-id supplied with the transfer command (e.g. TAKETHIS or IHAVE).</summary>
@@ -57,10 +60,17 @@ public sealed class InboundArticle
 
     /// <summary>
     /// Gets the destuffed <see cref="Article"/> after IHAVE worker interpretation;
-    /// <see langword="null"/> on the IHAVE receive/queue path and for TAKETHIS.
+    /// <see langword="null"/> on the IHAVE receive/queue path and when
+    /// <see cref="Record"/> is already CanonicalV1.
     /// </summary>
     public Article? Structured { get; }
 
     /// <summary>Gets which command produced this item.</summary>
     public InboundArticleProducer Producer { get; }
+
+    /// <summary>
+    /// Gets the ingress <see cref="ArticleRecord"/> when TAKETHIS or POST parsed
+    /// before queue insertion; default (<see cref="ArticleParseStatus.None"/>) for IHAVE.
+    /// </summary>
+    public ArticleRecord Record { get; }
 }

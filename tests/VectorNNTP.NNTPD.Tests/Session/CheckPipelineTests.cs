@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;
 
@@ -231,7 +232,8 @@ public sealed class CheckPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientAsync("CHECK <a@example.com>\r\nCHECK <b@example.com>\r\n");
-        await duplex.WriteClientAsync("TAKETHIS <c@example.com>\r\nSubject: x\r\n\r\nbody\r\n.\r\n");
+        await duplex.WriteClientAsync(
+            "TAKETHIS <c@example.com>\r\n" + CanonicalArticleText.Destuffed("<c@example.com>") + ".\r\n");
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         while (redis.Database.ExistsStartedCount < 2)
         {

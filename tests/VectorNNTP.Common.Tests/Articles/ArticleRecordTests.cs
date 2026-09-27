@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text;
 using VectorNNTP.Common.Articles;
-using VectorNNTP.Common.Articles.Checksum;
+using System.IO.Hashing;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
 using VectorNNTP.Common.Articles.YEnc;
@@ -37,7 +37,7 @@ public sealed class ArticleRecordTests
 
         Assert.Equal(ArticleParseStatus.CanonicalV1, record.ParseStatus);
         Assert.Equal(record.ArtData.Length, record.ArtSize);
-        Assert.Equal(IeeeCrc32.Compute(record.ArtData.Span), record.ArtCrc);
+        Assert.Equal(XxHash3.HashToUInt64(record.ArtData.Span), record.ArtHash);
         Assert.Equal(parse.BodyLineCount, record.ArtLines);
         Assert.Equal(2, record.ArtLines);
         Assert.Equal(parse.CanonicalUtc, record.CanonicalUtc);
@@ -95,29 +95,28 @@ public sealed class ArticleRecordTests
     }
 
     [Fact]
-    public void TryCreate_ArtCrc_CoversEntireArtData()
+    public void TryCreate_ArtHash_CoversEntireArtData()
     {
         var parser = new NntpArticleParser(LocalFqdn);
         var destuffed = BuildDestuffed(
             path: "peer.example",
             date: "Fri, 23 Aug 2024 07:30:10 +0000",
-            messageId: "<crc@example.test>",
+            messageId: "<hash@example.test>",
             newsgroups: "alt.test",
             from: "user@example.test",
-            subject: "crc",
+            subject: "hash",
             references: null,
             body: "payload\r\n");
 
         var created = ArticleRecordFactory.TryCreate(parser, destuffed);
         Assert.True(created.IsAccepted);
         var record = created.Record;
-        Assert.Equal(IeeeCrc32.Compute(record.ArtData.Span), record.ArtCrc);
-        Assert.NotEqual(0xE3069283u, record.ArtCrc);
+        Assert.Equal(XxHash3.HashToUInt64(record.ArtData.Span), record.ArtHash);
 
         var mutated = record.ArtData.ToArray();
         mutated[^2] ^= 0x01;
-        Assert.NotEqual(record.ArtCrc, IeeeCrc32.Compute(mutated));
-        Assert.Equal(record.ArtCrc, IeeeCrc32.Compute(record.ArtData.Span));
+        Assert.NotEqual(record.ArtHash, XxHash3.HashToUInt64(mutated));
+        Assert.Equal(record.ArtHash, XxHash3.HashToUInt64(record.ArtData.Span));
     }
 
     [Fact]
@@ -195,7 +194,7 @@ public sealed class ArticleRecordTests
 
         Assert.Equal(ArticleParseStatus.CanonicalV1, record.ParseStatus);
         Assert.Equal(ArticleId.FromMessageId(record.MessageId), record.ArtId);
-        Assert.Equal(IeeeCrc32.Compute(record.ArtData.Span), record.ArtCrc);
+        Assert.Equal(XxHash3.HashToUInt64(record.ArtData.Span), record.ArtHash);
         Assert.True(record.Fields.MessageId.IsPresent);
         Assert.True(record.MessageId.SequenceEqual("<record-only@example.test>"u8));
         Assert.NotEqual(ArticleId.FromMessageId("Message-ID: <record-only@example.test>"u8), record.ArtId);

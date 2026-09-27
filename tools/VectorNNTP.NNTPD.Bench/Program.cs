@@ -4,8 +4,8 @@ namespace VectorNNTP.NNTPD.Bench;
 
 /// <summary>
 /// Benchmark runner for VectorNNTP.NNTPD. Workload is selected with
-/// <c>--benchmark BENCHIT|TAKETHIS|CHECK|IHAVE</c> (default BENCHIT).
-/// BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is a
+/// <c>--benchmark BENCHIT|TAKETHIS|CHECK|IHAVE|POST</c> (default BENCHIT).
+/// BENCHIT, TAKETHIS, IHAVE, and POST are real-TCP clients. CHECK is a
 /// session/application measure (Pipes). IHAVE is the serialized production
 /// command path (HistoryDB + raw article receive), not the Pipe-reader
 /// microbenchmark.

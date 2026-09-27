@@ -1,7 +1,7 @@
 # VectorNNTP.NNTPD.Bench
 
 Benchmark runner for VectorNNTP.NNTPD. Select the workload with `--benchmark`.
-BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is an in-process session/application measure.
+BENCHIT, TAKETHIS, IHAVE, and POST are real-TCP clients. CHECK is an in-process session/application measure.
 
 | Workload | Purpose |
 |----------|---------|
@@ -9,6 +9,7 @@ BENCHIT, TAKETHIS, and IHAVE are real-TCP clients. CHECK is an in-process sessio
 | `TAKETHIS` | RFC 4644 STREAM ingest client. Pre-built ~768 KiB article. Real TCP. |
 | `CHECK` | Frozen depth-16 CHECK pipeline. Session/application (Pipes + fake Redis). Not TCP throughput. |
 | `IHAVE` | RFC 3977 serialized IHAVE command. Real TCP to production NNTPD. Production HistoryDB. Real `.artifacts/Articles` corpus, restuffed on the wire. |
+| `POST` | RFC 3977 serialized POST command. Real TCP. Same ArticleRecord-valid article as TAKETHIS. AUTHINFO USER/PASS required. |
 | `SPEEDTEST` | VectorNNTP `SPEEDTEST <peer>` diagnostic. Real TCP. Independent of TAKETHIS/IHAVE/CHECK methodology. |
 
 `BENCHIT` is an internal, unadvertised server command retained for transport baselines and
@@ -42,8 +43,10 @@ Omitting `--benchmark` keeps the historical BENCHIT behaviour (plain/deflate/tls
 
 ## Run TAKETHIS
 
-Plain TCP only. The article payload is built once and reused. The TAKETHIS command
-carries a unique Message-ID; the article header Message-ID is static.
+Plain TCP only. The article is factory-valid (Path, Date, Newsgroups, From, Subject,
+Message-ID) plus the previous 80-byte ~750 KiB body. The article header Message-ID is
+a fixed-width placeholder. The command line uses
+`<tIIIIIIIIII-CC-SSSSSSSSSSSS@vectornntp.local>` so HistoryDB cannot reuse prior-run IDs.
 
 ```powershell
 dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
@@ -104,6 +107,24 @@ Use the flags above to match the BENCHIT/TAKETHIS methodology recorded in
 
 This is **not** the earlier IHAVE Pipe-reader microbenchmark. That forensic
 measure remains documented separately in `PERFORMANCE.md`.
+
+## Run POST
+
+Serialized RFC 3977 POST. Same factory-valid article as TAKETHIS. Unique article
+Message-IDs (`<pIIIIIIIIII-CC-SSSSSSSSSSSS@vectornntp.local>`). AUTHINFO USER/PASS
+is required (`--auth-user` / `--auth-pass` or `BENCH_POST_USER` / `BENCH_POST_PASSWORD`).
+Do not pipeline. Unexpected `441` / `440` fails the run.
+
+```powershell
+dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
+  --benchmark POST `
+  --host 198.18.0.66 --port 1199 `
+  --connections 1 --warmup-seconds 5 --measure-seconds 60 --runs 2 `
+  --auth-user <poster> --auth-pass <secret> `
+  --server-pid <pid>
+```
+
+CLI defaults match TAKETHIS when flags are omitted (warmup 0 s, one run, 30 s).
 
 ### IHAVE diagnostic timing
 

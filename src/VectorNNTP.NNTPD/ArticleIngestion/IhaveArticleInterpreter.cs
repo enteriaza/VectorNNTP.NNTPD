@@ -8,8 +8,9 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// Downstream IHAVE interpretation: destuff wire bytes once and build <see cref="Article"/>.
 /// </summary>
 /// <remarks>
-/// The IHAVE and POST receive paths queue stuffed wire (terminator omitted). This type is the
-/// single destuff point for those producers. TAKETHIS is not interpreted here.
+/// IHAVE still queues stuffed wire (terminator omitted). This type destuffs those
+/// items once. TAKETHIS and POST items that already carry a CanonicalV1
+/// <see cref="ArticleRecord"/> are returned unchanged.
 /// </remarks>
 public static class IhaveArticleInterpreter
 {
@@ -23,7 +24,8 @@ public static class IhaveArticleInterpreter
     {
         ArgumentNullException.ThrowIfNull(inbound);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
-        if (inbound.Producer is not (InboundArticleProducer.IHave or InboundArticleProducer.Post))
+        if (inbound.Record.ParseStatus == ArticleParseStatus.CanonicalV1
+            || inbound.Producer is not (InboundArticleProducer.IHave or InboundArticleProducer.Post))
         {
             return inbound;
         }
