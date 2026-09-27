@@ -38,10 +38,14 @@ public interface INntpDbConnection : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Loads the singleton PostFilter policy and its collection tables.
+    /// Loads one published PostFilter revision and the collection rows that
+    /// belong to that revision.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel the queries.</param>
-    /// <returns>The mapped policy, or <see langword="null"/> when <c>policy_id = 1</c> is missing.</returns>
+    /// <returns>
+    /// The mapped policy, or <see langword="null"/> when
+    /// <c>nntppostfiltercurrent.policy_id = 1</c> is missing.
+    /// </returns>
     ValueTask<PostFilter.PostFilterPolicyRecord?> QueryPostFilterPolicyAsync(
         CancellationToken cancellationToken);
 

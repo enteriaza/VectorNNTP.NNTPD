@@ -8,6 +8,7 @@ namespace VectorNNTP.NNTPD.PostFilter;
 /// </summary>
 /// <remarks>
 /// Initial load failure prevents <c>RUNNING</c>. Refresh failure retains last-known-good.
+/// A successful refresh of the same published revision does not replace the snapshot.
 /// POST observes <see cref="Current"/> via a volatile snapshot read and never queries MySQL.
 /// There is no appsettings fallback.
 /// </remarks>
@@ -162,6 +163,11 @@ internal sealed class PostFilterPolicyService : IPostFilterPolicySource, IApplic
         {
             var previous = Volatile.Read(ref _current);
             var snapshot = await LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            if (previous is not null && previous.Revision == snapshot.Revision)
+            {
+                return;
+            }
+
             Publish(snapshot, previous?.Revision);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

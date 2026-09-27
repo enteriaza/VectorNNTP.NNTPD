@@ -2,7 +2,7 @@ using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.PostFilter;
 
-/// <summary>Loads <c>nntppostfilterpolicy</c> through the existing NntpDB connection pool.</summary>
+/// <summary>Loads the published PostFilter revision through the existing NntpDB connection pool.</summary>
 public sealed class MySqlPostFilterPolicyRepository : IPostFilterPolicyRepository
 {
     private readonly NntpDbService _nntpDb;
@@ -29,7 +29,7 @@ public sealed class MySqlPostFilterPolicyRepository : IPostFilterPolicyRepositor
             if (record is null)
             {
                 throw new InvalidOperationException(
-                    "nntppostfilterpolicy is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
+                    "nntppostfiltercurrent is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
             }
 
             return record;

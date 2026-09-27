@@ -32,7 +32,7 @@ public sealed class PostFilterPolicyServiceTests
         var repository = new InMemoryPostFilterPolicyRepository();
         await using var service = CreateService(repository);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
-        Assert.Contains("nntppostfilterpolicy", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("nntppostfiltercurrent", ex.Message, StringComparison.Ordinal);
         Assert.False(service.HasSnapshot);
     }
 
@@ -165,6 +165,31 @@ public sealed class PostFilterPolicyServiceTests
         Assert.Equal(PostFilterGateState.Closed, second.Current.Gate);
         await first.StopAsync(CancellationToken.None);
         await second.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Refresh_SameRevision_DoesNotRepublish()
+    {
+        var repository = new InMemoryPostFilterPolicyRepository
+        {
+            Record = InMemoryPostFilterPolicyRepository.Create(
+                new PostFilterOptions { Gate = PostFilterGateState.Disabled },
+                revision: 1),
+        };
+        var time = new FakeTimeProvider();
+        await using var service = CreateService(repository, time, TimeSpan.FromSeconds(60));
+        await service.StartAsync(CancellationToken.None);
+        var published = service.Current;
+
+        repository.Record = InMemoryPostFilterPolicyRepository.Create(
+            new PostFilterOptions { Gate = PostFilterGateState.Closed },
+            revision: 1);
+        time.Advance(TimeSpan.FromSeconds(60));
+        await Task.Yield();
+        await Task.Yield();
+        Assert.Same(published, service.Current);
+        Assert.Equal(PostFilterGateState.Disabled, service.Current.Gate);
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]

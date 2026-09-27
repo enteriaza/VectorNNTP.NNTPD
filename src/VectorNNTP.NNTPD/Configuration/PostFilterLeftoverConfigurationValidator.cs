@@ -27,6 +27,6 @@ public sealed class PostFilterLeftoverConfigurationValidator : IValidateOptions<
         }
 
         return ValidateOptionsResult.Fail(
-            "Nntpd:PostFilter is not node-local configuration. Cluster PostFilter policy is loaded from NntpDB table nntppostfilterpolicy.");
+            "Nntpd:PostFilter is not node-local configuration. Cluster PostFilter policy is loaded from NntpDB table nntppostfiltercurrent.");
     }
 }

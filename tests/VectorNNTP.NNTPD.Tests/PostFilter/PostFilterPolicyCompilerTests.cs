@@ -47,6 +47,28 @@ public sealed class PostFilterPolicyCompilerTests
     }
 
     [Fact]
+    public void Compile_InvalidWindow_FailsCompletely()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            PostFilterPolicyCompiler.Compile(new PostFilterOptions
+            {
+                Quota = new PostFilterQuotaOptions { LongWindow = TimeSpan.Zero },
+            }));
+        Assert.Contains("window", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Compile_NegativeMaxArticleSize_FailsCompletely()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            PostFilterPolicyCompiler.Compile(new PostFilterOptions
+            {
+                SpamAssassin = new PostFilterSpamAssassinOptions { MaxArticleSize = -1 },
+            }));
+        Assert.Contains("MaxArticleSize", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Compile_UnknownArtType_FailsCompletely()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>

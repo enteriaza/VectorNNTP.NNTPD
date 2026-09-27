@@ -41,7 +41,7 @@ public enum PostFilterSpamAssassinHostSelection
 
 /// <summary>In-memory PostFilter compile model produced from NntpDB.</summary>
 /// <remarks>
-/// Not bound from <c>Nntpd:PostFilter</c>. Cluster policy is <c>nntppostfilterpolicy</c>.
+/// Not bound from <c>Nntpd:PostFilter</c>. Cluster policy is <c>nntppostfiltercurrent</c>.
 /// POST does not parse this object. The compiler produces an immutable snapshot.
 /// </remarks>
 public sealed class PostFilterOptions

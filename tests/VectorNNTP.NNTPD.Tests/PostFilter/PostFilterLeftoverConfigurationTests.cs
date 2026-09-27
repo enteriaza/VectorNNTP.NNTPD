@@ -18,7 +18,7 @@ public sealed class PostFilterLeftoverConfigurationTests
         var validator = new PostFilterLeftoverConfigurationValidator(configuration);
         var result = validator.Validate(null, new NntpdOptions());
         Assert.False(result.Succeeded);
-        Assert.Contains("nntppostfilterpolicy", result.FailureMessage, StringComparison.Ordinal);
+        Assert.Contains("nntppostfiltercurrent", result.FailureMessage, StringComparison.Ordinal);
     }
 
     [Fact]

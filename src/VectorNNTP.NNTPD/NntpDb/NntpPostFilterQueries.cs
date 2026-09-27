@@ -2,12 +2,16 @@ namespace VectorNNTP.NNTPD.NntpDb;
 
 /// <summary>Authoritative NntpDB queries for the cluster PostFilter policy.</summary>
 /// <remarks>
-/// NNTPD only <c>SELECT</c>s. Schema creation is an operator/DBA step
-/// (see <c>docs/postfilter.md</c>). There is no application migration runner.
+/// NNTPD only <c>SELECT</c>s one published revision. Schema DDL is
+/// <c>docs/postfilter.sql</c>. There is no application migration runner.
 /// </remarks>
 public static class NntpPostFilterQueries
 {
-    /// <summary>Singleton policy row. <c>policy_id</c> is always <c>1</c>.</summary>
+    /// <summary>Published revision pointer. <c>policy_id</c> is always <c>1</c>.</summary>
+    public const string SelectCurrentRevision =
+        "SELECT revision FROM nntppostfiltercurrent WHERE policy_id = 1";
+
+    /// <summary>Scalar policy for one revision.</summary>
     public const string SelectPolicy =
         """
         SELECT
@@ -32,24 +36,27 @@ public static class NntpPostFilterQueries
             sa_connect_timeout_ms,
             sa_operation_timeout_ms
         FROM nntppostfilterpolicy
-        WHERE policy_id = 1
+        WHERE revision = @revision
         """;
 
-    /// <summary>Deny/allow AUTH usernames. <c>list_kind</c> is <c>deny</c> or <c>allow</c>.</summary>
+    /// <summary>Deny/allow AUTH usernames for <c>@revision</c>.</summary>
     public const string SelectAccounts =
-        "SELECT list_kind, account_name FROM nntppostfilteraccounts ORDER BY list_kind, account_name";
+        "SELECT list_kind, account_name FROM nntppostfilteraccounts "
+        + "WHERE revision = @revision ORDER BY list_kind, account_name";
 
-    /// <summary>Deny/allow client CIDRs. <c>list_kind</c> is <c>deny</c> or <c>allow</c>.</summary>
+    /// <summary>Deny/allow client CIDRs for <c>@revision</c>.</summary>
     public const string SelectCidrs =
-        "SELECT list_kind, cidr FROM nntppostfiltercidrs ORDER BY list_kind, cidr";
+        "SELECT list_kind, cidr FROM nntppostfiltercidrs "
+        + "WHERE revision = @revision ORDER BY list_kind, cidr";
 
-    /// <summary>ArtType lists. <c>list_kind</c> is <c>reject</c> or <c>sa_exclude</c>.</summary>
+    /// <summary>ArtType lists for <c>@revision</c>.</summary>
     public const string SelectArtTypes =
-        "SELECT list_kind, art_type FROM nntppostfilterarttypes ORDER BY list_kind, art_type";
+        "SELECT list_kind, art_type FROM nntppostfilterarttypes "
+        + "WHERE revision = @revision ORDER BY list_kind, art_type";
 
-    /// <summary>SPAMD hosts in compiled order.</summary>
+    /// <summary>SPAMD hosts for <c>@revision</c> in compiled order.</summary>
     public const string SelectHosts =
-        "SELECT host FROM nntppostfiltersahosts ORDER BY host_order";
+        "SELECT host FROM nntppostfiltersahosts WHERE revision = @revision ORDER BY host_order";
 
     /// <summary>Account list kind stored for deny.</summary>
     public const string ListKindDeny = "deny";

@@ -1,0 +1,286 @@
+using MySqlConnector;
+using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.Tests.Fixtures;
+
+namespace VectorNNTP.NNTPD.Tests.PostFilter;
+
+[Collection("NntpDbPostFilter")]
+public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
+{
+    private readonly MySqlPostFilterPolicyIntegrationFixture _fixture;
+
+    public MySqlPostFilterPolicyRepositoryIntegrationTests(MySqlPostFilterPolicyIntegrationFixture fixture)
+    {
+        ArgumentNullException.ThrowIfNull(fixture);
+        _fixture = fixture;
+    }
+
+    [Fact]
+    public void OfficialSchemaScript_ContainsRevisionKeyedTables()
+    {
+        var path = PostFilterSchemaScript.FindPath();
+        Assert.EndsWith(Path.Combine("docs", "postfilter.sql"), path, StringComparison.OrdinalIgnoreCase);
+        var sql = File.ReadAllText(path);
+        Assert.Contains("CREATE TABLE nntppostfilterpolicy", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfiltercurrent", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfilteraccounts", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfiltercidrs", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfilterarttypes", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfiltersahosts", sql, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY KEY (revision, list_kind, account_name)", sql, StringComparison.Ordinal);
+        Assert.Contains("trg_nntppostfiltercurrent_revision_forward", sql, StringComparison.Ordinal);
+        Assert.Contains("'Disabled'", sql, StringComparison.Ordinal);
+        Assert.Contains("86400000, 600000", sql, StringComparison.Ordinal);
+        Assert.Contains("'N', NULL, 131072, 783", sql, StringComparison.Ordinal);
+        Assert.Contains("(1, 'sa_exclude', 'YEncoded')", sql, StringComparison.Ordinal);
+        Assert.Contains("INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1)", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("INSERT INTO nntppostfiltersahosts", sql, StringComparison.Ordinal);
+        Assert.Equal(10, PostFilterSchemaScript.ReadStatements().Count);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task FreshDisabledSeed_LoadsCompletePolicy()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        await _fixture.InsertArtTypeAsync(revision, NntpPostFilterQueries.ListKindSaExclude, "YEncoded");
+        await _fixture.PublishAsync(revision);
+
+        var record = await _fixture.LoadAsync();
+        Assert.Equal(revision, record.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, record.Options.Gate);
+        Assert.Equal(TimeSpan.FromDays(1), record.Options.Quota.LongWindow);
+        Assert.Equal(TimeSpan.FromMinutes(10), record.Options.Quota.ShortWindow);
+        Assert.Equal(0, record.Options.Quota.MaxMessagesLong);
+        Assert.Equal(0, record.Options.Quota.MaxMessagesShort);
+        Assert.False(record.Options.SpamAssassin.Enabled);
+        Assert.Null(record.Options.SpamAssassin.OnFailure);
+        Assert.Equal(131072, record.Options.SpamAssassin.MaxArticleSize);
+        Assert.Equal(783, record.Options.SpamAssassin.Port);
+        Assert.Equal("1.5", record.Options.SpamAssassin.ProtocolVersion);
+        Assert.Equal(4, record.Options.SpamAssassin.MaxConnections);
+        Assert.Equal(PostFilterSpamAssassinHostSelection.RoundRobin, record.Options.SpamAssassin.HostSelection);
+        Assert.Equal(["YEncoded"], record.Options.SpamAssassin.ExcludeArtTypes);
+        Assert.Empty(record.Options.SpamAssassin.Hosts);
+        var snapshot = PostFilterPolicyCompiler.Compile(record.Options, record.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, snapshot.Gate);
+        Assert.Equal(revision, snapshot.Revision);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task MissingCurrent_FailsWithoutInventingPolicy()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        await _fixture.PublishAsync(revision);
+        await _fixture.ExecuteRawAsync("DELETE FROM nntppostfiltercurrent WHERE policy_id = 1");
+        try
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(_fixture.LoadAsync);
+            Assert.Contains("nntppostfiltercurrent", ex.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await _fixture.ExecuteRawAsync(
+                "INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, @revision)",
+                command => command.Parameters.AddWithValue("@revision", revision));
+        }
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task InvalidRevision_IsRejectedByDatabase()
+    {
+        RequireReady();
+        var ex = await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.ExecuteRawAsync(
+                """
+                INSERT INTO nntppostfilterpolicy (
+                  revision, updated_utc, gate,
+                  long_window_ms, short_window_ms,
+                  max_messages_long, max_bytes_long, max_identical_long,
+                  max_messages_short, max_bytes_short, max_identical_short,
+                  sa_enabled, sa_on_failure, sa_max_article_size, sa_port,
+                  sa_protocol_version, sa_max_connections, sa_host_selection,
+                  sa_connect_timeout_ms, sa_operation_timeout_ms
+                ) VALUES (
+                  0, UTC_TIMESTAMP(3), 'Disabled',
+                  86400000, 600000,
+                  0, 0, 0, 0, 0, 0,
+                  'N', NULL, 131072, 783,
+                  '1.5', 4, 'RoundRobin',
+                  5000, 30000
+                )
+                """));
+        Assert.Contains("chk_nntppostfilterpolicy_revision", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task DuplicateCollectionRows_AreRejectedByDatabase()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        await _fixture.InsertAccountAsync(revision, NntpPostFilterQueries.ListKindDeny, "poster");
+        await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertAccountAsync(revision, NntpPostFilterQueries.ListKindDeny, "poster"));
+        await _fixture.InsertCidrAsync(revision, NntpPostFilterQueries.ListKindAllow, "10.0.0.0/8");
+        await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertCidrAsync(revision, NntpPostFilterQueries.ListKindAllow, "10.0.0.0/8"));
+        await _fixture.InsertArtTypeAsync(revision, NntpPostFilterQueries.ListKindReject, "Binary");
+        await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertArtTypeAsync(revision, NntpPostFilterQueries.ListKindReject, "Binary"));
+        await _fixture.InsertHostAsync(revision, 1, "127.0.0.1");
+        await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertHostAsync(revision, 1, "10.0.0.1"));
+        await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertHostAsync(revision, 2, "127.0.0.1"));
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task CompleteRevision_LoadsOnlyThatRevisionCollections()
+    {
+        RequireReady();
+        var first = _fixture.NextRevision();
+        var second = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(first);
+        await _fixture.InsertAccountAsync(first, NntpPostFilterQueries.ListKindDeny, "old-poster");
+        await _fixture.InsertCidrAsync(first, NntpPostFilterQueries.ListKindDeny, "192.0.2.0/24");
+        await _fixture.InsertArtTypeAsync(first, NntpPostFilterQueries.ListKindReject, "Html");
+        await _fixture.InsertHostAsync(first, 1, "192.0.2.10");
+        await _fixture.PublishAsync(first);
+
+        await _fixture.InsertDisabledRevisionAsync(second);
+        await _fixture.InsertAccountAsync(second, NntpPostFilterQueries.ListKindDeny, "new-poster");
+        await _fixture.InsertCidrAsync(second, NntpPostFilterQueries.ListKindAllow, "198.51.100.0/24");
+        await _fixture.InsertArtTypeAsync(second, NntpPostFilterQueries.ListKindSaExclude, "YEncoded");
+        await _fixture.InsertHostAsync(second, 1, "198.51.100.10");
+        await _fixture.PublishAsync(second);
+
+        var record = await _fixture.LoadAsync();
+        Assert.Equal(second, record.Revision);
+        Assert.Equal(["new-poster"], record.Options.DeniedAccounts);
+        Assert.DoesNotContain("old-poster", record.Options.DeniedAccounts);
+        Assert.Equal(["198.51.100.0/24"], record.Options.AllowlistedCidrs);
+        Assert.DoesNotContain("192.0.2.0/24", record.Options.DeniedCidrs);
+        Assert.Equal(["YEncoded"], record.Options.SpamAssassin.ExcludeArtTypes);
+        Assert.DoesNotContain("Html", record.Options.RejectArtTypes);
+        Assert.Equal(["198.51.100.10"], record.Options.SpamAssassin.Hosts);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task UncommittedUpdate_IsInvisible_AndRollbackLeavesPrevious()
+    {
+        RequireReady();
+        var published = _fixture.NextRevision();
+        var draft = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(published);
+        await _fixture.PublishAsync(published);
+        var before = await _fixture.LoadAsync();
+        Assert.Equal(published, before.Revision);
+
+        await using var held = await _fixture.BeginHeldWriteAsync();
+        await held.ExecuteAsync(
+            """
+            INSERT INTO nntppostfilterpolicy (
+              revision, updated_utc, gate,
+              long_window_ms, short_window_ms,
+              max_messages_long, max_bytes_long, max_identical_long,
+              max_messages_short, max_bytes_short, max_identical_short,
+              sa_enabled, sa_on_failure, sa_max_article_size, sa_port,
+              sa_protocol_version, sa_max_connections, sa_host_selection,
+              sa_connect_timeout_ms, sa_operation_timeout_ms
+            ) VALUES (
+              @revision, UTC_TIMESTAMP(3), 'Closed',
+              86400000, 600000,
+              0, 0, 0, 0, 0, 0,
+              'N', NULL, 131072, 783,
+              '1.5', 4, 'RoundRobin',
+              5000, 30000
+            )
+            """,
+            command => command.Parameters.AddWithValue("@revision", draft));
+        await held.ExecuteAsync(
+            "UPDATE nntppostfiltercurrent SET revision = @revision WHERE policy_id = 1",
+            command => command.Parameters.AddWithValue("@revision", draft));
+
+        var unseen = await _fixture.LoadAsync();
+        Assert.Equal(published, unseen.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, unseen.Options.Gate);
+
+        await held.RollbackAsync();
+        var afterRollback = await _fixture.LoadAsync();
+        Assert.Equal(published, afterRollback.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, afterRollback.Options.Gate);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task CommittedUpdate_IsVisibleToTwoConsumers()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        await _fixture.PublishAsync(revision);
+        var first = await _fixture.LoadAsync();
+        var second = await _fixture.LoadAsync();
+        Assert.Equal(revision, first.Revision);
+        Assert.Equal(revision, second.Revision);
+        Assert.Equal(first.Options.Gate, second.Options.Gate);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task RevisionRegression_IsRejectedByTrigger()
+    {
+        RequireReady();
+        var first = _fixture.NextRevision();
+        var second = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(first);
+        await _fixture.PublishAsync(first);
+        await _fixture.InsertDisabledRevisionAsync(second);
+        await _fixture.PublishAsync(second);
+        var ex = await Assert.ThrowsAsync<MySqlException>(() => _fixture.PublishAsync(first));
+        Assert.Contains("must increase", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(second, (await _fixture.LoadAsync()).Revision);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task InvalidCidrAndArtType_FailCompilation()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        await _fixture.InsertCidrAsync(revision, NntpPostFilterQueries.ListKindDeny, "not-a-cidr");
+        await _fixture.PublishAsync(revision);
+        var record = await _fixture.LoadAsync();
+        var cidr = Assert.Throws<InvalidOperationException>(() =>
+            PostFilterPolicyCompiler.Compile(record.Options, record.Revision));
+        Assert.Contains("CIDR", cidr.Message, StringComparison.Ordinal);
+
+        var next = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(next);
+        await _fixture.InsertArtTypeAsync(next, NntpPostFilterQueries.ListKindReject, "NotAnArtType");
+        await _fixture.PublishAsync(next);
+        var art = await _fixture.LoadAsync();
+        var artType = Assert.Throws<InvalidOperationException>(() =>
+            PostFilterPolicyCompiler.Compile(art.Options, art.Revision));
+        Assert.Contains("ArtType", artType.Message, StringComparison.Ordinal);
+    }
+
+    private void RequireReady()
+    {
+        if (_fixture.IsConfigured)
+        {
+            return;
+        }
+
+        if (NntpDbIntegration.TryGetConnectionString() is null)
+        {
+            return;
+        }
+
+        Assert.Fail(_fixture.SkipReason ?? "PostFilter MySQL fixture is not configured.");
+    }
+}

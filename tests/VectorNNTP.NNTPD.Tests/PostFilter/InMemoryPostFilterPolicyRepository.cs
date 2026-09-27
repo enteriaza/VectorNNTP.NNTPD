@@ -25,7 +25,7 @@ internal sealed class InMemoryPostFilterPolicyRepository : IPostFilterPolicyRepo
         if (Record is null)
         {
             throw new InvalidOperationException(
-                "nntppostfilterpolicy is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
+                "nntppostfiltercurrent is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
         }
 
         return ValueTask.FromResult(Record);

@@ -173,9 +173,15 @@ IhaveArticleInterpreter (destuff exactly once → Article)
 
 ### POST PostFilter
 
-PostFilter is POST-only accept-path policy after `ArticleRecord` creation and History Peek, before `CreateQueued` / `TryAdmit`. Authoritative policy is NntpDB (`nntppostfilterpolicy`); each NNTPD compiles an immutable local snapshot and refreshes it every 60 seconds. Initial load failure prevents RUNNING. Refresh failure retains last-known-good. POST never queries MySQL. Redis holds distributed quota reservations (`nntpd:pf:q:` / `nntpd:pf:m:`), not policy. It does not run for IHAVE, TAKETHIS, BackFiller, queue workers, or unapproved catalogue `m` submission. The filter reads immutable `ArticleRecord` data and does not mutate it. SPAMD `CHECK` receives a disposable email-like scan, not `ArtData`. Operator contract: [postfilter.md](postfilter.md).
+PostFilter is POST-only accept-path policy after `ArticleRecord` creation and History Peek, before `CreateQueued` / `TryAdmit`. Authoritative policy is NntpDB. Each NNTPD reads one published revision (`nntppostfiltercurrent` → `nntppostfilterpolicy` + revision-keyed collections), compiles an immutable local snapshot, and refreshes it every 60 seconds. Initial load failure prevents RUNNING. Refresh failure retains last-known-good. POST never queries MySQL. Redis holds distributed quota reservations (`nntpd:pf:q:` / `nntpd:pf:m:`), not policy. It does not run for IHAVE, TAKETHIS, BackFiller, queue workers, or unapproved catalogue `m` submission. The filter reads immutable `ArticleRecord` data and does not mutate it. SPAMD `CHECK` receives a disposable email-like scan, not `ArtData`. Operator contract and DDL: [postfilter.md](postfilter.md), [postfilter.sql](postfilter.sql).
 
 ```text
+NntpDB nntppostfiltercurrent.revision
+    → coherent SELECT of that revision (policy + collections)
+    → PostFilterPolicyCompiler
+    → immutable PostFilterPolicySnapshot
+    → POST reads Current only
+
 POST → StreamingPostArticleReader → (moderation early-exit | History Peek)
      → ArticleRecordIngress → PostFilter (RESERVE → optional CHECK)
      → CreateQueued → TryAdmit → COMMIT → History Remember → 240

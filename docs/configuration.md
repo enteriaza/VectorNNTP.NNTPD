@@ -47,7 +47,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
-| `Nntpd:PostFilter` | _(removed)_ | n/a | **must be absent** | Leftover section fails startup. Cluster PostFilter policy is MySQL `nntppostfilterpolicy`. See [postfilter.md](postfilter.md). |
+| `Nntpd:PostFilter` | _(removed)_ | n/a | **must be absent** | Leftover section fails startup. Cluster PostFilter policy is MySQL `nntppostfiltercurrent`. See [postfilter.md](postfilter.md). |
 | `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
 | `SpeedTest:MaxConcurrent` | int | `2` | no | Maximum concurrent SPEEDTEST operations on this host (`1–8`) |
 | `SpeedTest:MaxConcurrentPerPeer` | int | `1` | no | Maximum concurrent SPEEDTEST operations per Transit identifier (`1–4`) |
@@ -78,9 +78,9 @@ Operator runbook (NntpDB schema, 60s snapshot refresh, Redis reservation lifecyc
 
 ## PostFilter (NntpDB)
 
-Cluster posting policy is loaded from MySQL `nntppostfilterpolicy` (plus `nntppostfilteraccounts`, `nntppostfiltercidrs`, `nntppostfilterarttypes`, `nntppostfiltersahosts`) into an immutable snapshot. `PostFilterPolicyService` requires a successful initial load (after `NntpDbService`) and refreshes every 60 seconds. Refresh failure retains last-known-good. POST never queries MySQL.
+Cluster posting policy is **not** configured in appsettings. It is loaded from MySQL `nntppostfiltercurrent` (published revision) plus the matching `nntppostfilterpolicy` row and revision-keyed collection tables. DDL: [postfilter.sql](postfilter.sql). `PostFilterPolicyService` requires a successful initial load (after `NntpDbService`) and refreshes every 60 seconds. Refresh failure retains last-known-good. POST never queries MySQL.
 
-A leftover `Nntpd:PostFilter` section fails startup (`PostFilterLeftoverConfigurationValidator`). There is no node-local Gate or quota override.
+A leftover `Nntpd:PostFilter` section fails startup (`PostFilterLeftoverConfigurationValidator`). There is no node-local Gate, quota, or SPAMD-policy override. Node-local settings that remain are only how to reach NntpDB (`ConnectionStrings:NntpDB`) and Redis (`Redis:*`).
 
 SpamAssassin eligibility (`sa_max_article_size` exclusive, `sa_exclude` ArtTypes) is compiled into that snapshot. A skip does not contact SPAMD and is not an `OnFailure` event. Seed `sa_max_article_size = 131072` and `sa_exclude = YEncoded` match the historical small-article boundary.
 

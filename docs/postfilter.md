@@ -2,13 +2,13 @@
 
 Authoritative operator reference for NNTPD PostFilter as implemented in `src/VectorNNTP.NNTPD/PostFilter/`.
 
-**NntpDB is the only authoritative cluster policy.** Every NNTPD instance loads `nntppostfilterpolicy` (and its collection tables), compiles an immutable local snapshot, and evaluates POST against that snapshot. There is no `Nntpd:PostFilter` options binding. A leftover `Nntpd:PostFilter` section fails startup. Redis holds quota **runtime state** only, never policy.
+**NntpDB is the only authoritative cluster policy.** Every NNTPD instance reads the published revision from `nntppostfiltercurrent`, loads that revision’s scalar row and collections, compiles an immutable local snapshot, and evaluates POST against that snapshot. There is no `Nntpd:PostFilter` options binding. A leftover `Nntpd:PostFilter` section fails startup. Redis holds quota **runtime state** only, never policy.
 
 Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFilter reasons are never sent on the NNTP wire.
 
 | Concern | Owner |
 |---|---|
-| Authoritative policy | MySQL `nntppostfilterpolicy` + collection tables |
+| Authoritative policy | MySQL `nntppostfiltercurrent` + revision-keyed tables |
 | Repository | `MySqlPostFilterPolicyRepository` |
 | Snapshot / refresh | `PostFilterPolicyCompiler`, `PostFilterPolicyService` (60s) |
 | POST evaluation | `PostFilterEvaluator` (snapshot only; no SQL) |
@@ -18,7 +18,7 @@ Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFil
 | POST protocol | [commands.md](commands.md) |
 | Validation matrix | `tests/VectorNNTP.NNTPD.Tests/PostFilter/PostFilterProductionPolicyMatrixTests.cs` |
 
-NNTPD does not create or migrate these tables. Apply the schema below once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators change the database.
+NNTPD does not create or migrate these tables. Apply the canonical provisioning script [`docs/postfilter.sql`](postfilter.sql) once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators publish a new revision.
 
 ---
 
@@ -102,8 +102,9 @@ When `Gate` is `Active`, an unauthenticated session that passes deny/ArtType is 
 ## 5. Authoritative NntpDB policy
 
 ```text
-NntpDB  (nntppostfilterpolicy + collections)
-    → MySqlPostFilterPolicyRepository
+NntpDB nntppostfiltercurrent.revision
+    → SELECT nntppostfilterpolicy WHERE revision = current
+    → SELECT collections WHERE revision = current
     → PostFilterPolicyCompiler
     → immutable PostFilterPolicySnapshot
     → Volatile publish
@@ -113,91 +114,145 @@ NntpDB  (nntppostfilterpolicy + collections)
 NNTPD follows the same catalogue contract as `nntpgroups` / `nntpmoderators`:
 
 - Initial load during `PostFilterPolicyService.StartAsync`. Failure prevents `RUNNING`. There is **no** appsettings fallback.
-- Refresh every **60 seconds**. Success compiles a new snapshot and publishes it with `Volatile.Write`.
-- Refresh failure (MySQL down, missing row, compile error) keeps last-known-good. PostFilter is not disabled and does not revert to local JSON.
+- Refresh every **60 seconds**. A new published revision compiles a snapshot and publishes it with `Volatile.Write`.
+- The same published revision is re-read and recompiled for validity, but does not replace the live snapshot.
+- Refresh failure (MySQL down, missing current row, compile error) keeps last-known-good. PostFilter is not disabled and does not revert to local JSON.
 - Empty/malformed/duplicate collection entries fail compile of that refresh (or startup).
 
-`revision` is an operator-incremented `BIGINT` on the singleton row. Logs emit `revision={Revision}`. Increment it when changing policy so every node can report which revision it is running. NNTPD still reloads row contents every 60s even if `revision` is unchanged.
+`nntppostfiltercurrent.revision` is the operator-visible published revision. Logs emit `revision={Revision}`. NNTPD never reads collection rows from a different revision than the current pointer.
 
-### 5.1 Schema (operator/DBA; NNTPD SELECTs only)
+---
 
-```sql
-CREATE TABLE nntppostfilterpolicy (
-  policy_id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
-  revision BIGINT UNSIGNED NOT NULL,
-  updated_utc DATETIME(3) NOT NULL,
-  gate VARCHAR(16) NOT NULL,
-  long_window_ms BIGINT UNSIGNED NOT NULL,
-  short_window_ms BIGINT UNSIGNED NOT NULL,
-  max_messages_long BIGINT UNSIGNED NOT NULL,
-  max_bytes_long BIGINT UNSIGNED NOT NULL,
-  max_identical_long BIGINT UNSIGNED NOT NULL,
-  max_messages_short BIGINT UNSIGNED NOT NULL,
-  max_bytes_short BIGINT UNSIGNED NOT NULL,
-  max_identical_short BIGINT UNSIGNED NOT NULL,
-  sa_enabled CHAR(1) NOT NULL,
-  sa_on_failure VARCHAR(16) NULL,
-  sa_max_article_size INT NOT NULL,
-  sa_port INT UNSIGNED NOT NULL,
-  sa_protocol_version VARCHAR(16) NOT NULL,
-  sa_max_connections INT UNSIGNED NOT NULL,
-  sa_host_selection VARCHAR(16) NOT NULL,
-  sa_connect_timeout_ms INT UNSIGNED NOT NULL,
-  sa_operation_timeout_ms INT UNSIGNED NOT NULL
-);
+## 6. NntpDB Schema and Administration
 
-CREATE TABLE nntppostfilteraccounts (
-  list_kind VARCHAR(8) NOT NULL,
-  account_name VARCHAR(255) NOT NULL,
-  PRIMARY KEY (list_kind, account_name)
-);
+Existing NntpDB tables (`nntpgroups`, `nntpusers`, `nntpmoderators`) have no checked-in `CREATE TABLE`. NNTPD only `SELECT`s them. PostFilter is the first NntpDB surface with product DDL.
 
-CREATE TABLE nntppostfiltercidrs (
-  list_kind VARCHAR(8) NOT NULL,
-  cidr VARCHAR(64) NOT NULL,
-  PRIMARY KEY (list_kind, cidr)
-);
+**Canonical provisioning script:** [`docs/postfilter.sql`](postfilter.sql)
 
-CREATE TABLE nntppostfilterarttypes (
-  list_kind VARCHAR(16) NOT NULL,
-  art_type VARCHAR(32) NOT NULL,
-  PRIMARY KEY (list_kind, art_type)
-);
+Apply that script once per NntpDB. NNTPD does not create or migrate tables. If an earlier singleton (`nntppostfilterpolicy.policy_id = 1` without revision-keyed collections) was applied, drop those objects and apply this script; there is no automated migrator.
 
-CREATE TABLE nntppostfiltersahosts (
-  host_order INT UNSIGNED NOT NULL PRIMARY KEY,
-  host VARCHAR(255) NOT NULL
-);
-```
+InnoDB + `utf8mb4` / `utf8mb4_unicode_ci` match typical MySQL 8 NntpDB deployments. Confirm `SHOW TABLE STATUS LIKE 'nntpmoderators'` if your server uses another collation.
 
-`list_kind` values: accounts/CIDRs use `deny` or `allow`; ArtTypes use `reject` or `sa_exclude`. `sa_enabled` is `Y`/`N` (same convention as `nntpmoderators.is_enabled`).
+### 6.1 Control-plane model
 
-Seed (cluster-inert, matches the former local defaults):
+| Object | Role |
+|--------|------|
+| `nntppostfilterpolicy` | Append-only scalar revisions. Primary key is `revision`. |
+| `nntppostfiltercurrent` | Singleton `policy_id = 1` pointing at the published revision. |
+| `nntppostfilteraccounts` | Deny/allow AUTH names for **that revision**. |
+| `nntppostfiltercidrs` | Deny/allow CIDRs for **that revision**. |
+| `nntppostfilterarttypes` | `reject` / `sa_exclude` ArtTypes for **that revision**. |
+| `nntppostfiltersahosts` | SPAMD hosts (`host_order`) for **that revision**. |
+| `trg_nntppostfiltercurrent_revision_forward` | Published revision must increase. |
+
+Collection rows belong to a revision because `revision` is part of every primary key and a foreign key to `nntppostfilterpolicy.revision`. A loader that binds `@revision` from `nntppostfiltercurrent` cannot assemble accounts from revision 11 with scalars from revision 12 unless the database itself is deliberately broken (missing FK).
+
+Historical revisions remain after publish. Rollback is **not** pointing current backward (the trigger rejects that). Rollback is inserting a **new higher** revision that copies the previous content, then publishing it.
+
+### 6.2 Atomic update
+
+Every publish is one transaction. Insert the new revision and **all** of its collections, then update `nntppostfiltercurrent` last.
 
 ```sql
-INSERT INTO nntppostfilterpolicy (
-  policy_id, revision, updated_utc, gate,
-  long_window_ms, short_window_ms,
-  max_messages_long, max_bytes_long, max_identical_long,
-  max_messages_short, max_bytes_short, max_identical_short,
-  sa_enabled, sa_on_failure, sa_max_article_size, sa_port,
-  sa_protocol_version, sa_max_connections, sa_host_selection,
-  sa_connect_timeout_ms, sa_operation_timeout_ms
-) VALUES (
-  1, 1, UTC_TIMESTAMP(3), 'Disabled',
-  86400000, 600000,
-  0, 0, 0, 0, 0, 0,
-  'N', NULL, 131072, 783,
-  '1.5', 4, 'RoundRobin',
-  5000, 30000
-);
+START TRANSACTION;
 
-INSERT INTO nntppostfilterarttypes (list_kind, art_type) VALUES ('sa_exclude', 'YEncoded');
+SELECT revision FROM nntppostfiltercurrent WHERE policy_id = 1 FOR UPDATE;
+-- @old = that value; @new = @old + 1
+
+INSERT INTO nntppostfilterpolicy (revision, updated_utc, gate, ...) VALUES (@new, UTC_TIMESTAMP(3), ...);
+INSERT INTO nntppostfilteraccounts (revision, list_kind, account_name) VALUES (@new, 'deny', 'spammer');
+INSERT INTO nntppostfiltercidrs ...
+INSERT INTO nntppostfilterarttypes ...
+INSERT INTO nntppostfiltersahosts ...
+
+UPDATE nntppostfiltercurrent SET revision = @new WHERE policy_id = 1 AND revision = @old;
+
+COMMIT;
 ```
 
-Missing `policy_id = 1` prevents startup. NNTPD will not invent a Disabled policy.
+`FOR UPDATE` serializes two operators. A duplicate `@new` hits the policy primary key. An uncommitted transaction is invisible to NNTPD. `ROLLBACK` leaves the previous published revision intact.
 
-### 5.2 Former `Nntpd:PostFilter` mapping
+Do **not** `UPDATE` an already-published revision in place. NNTPD ignores same-revision reloads for snapshot publication.
+
+### 6.3 Atomic read
+
+`MySqlNntpDbConnection.QueryPostFilterPolicyAsync` starts a `REPEATABLE READ` transaction, reads `nntppostfiltercurrent.revision`, then selects policy and collections with `WHERE revision = @revision`. Missing `policy_id = 1` fails startup. A current pointer with no policy row fails the load (FK should prevent that).
+
+Maximum cluster propagation delay after `COMMIT` is one refresh interval: **60 seconds**.
+
+### 6.4 Seed / what a new NntpDB must contain
+
+Before NNTPD can start, these objects and rows must exist:
+
+1. The six tables and the forward-revision trigger from [`docs/postfilter.sql`](postfilter.sql).
+2. Policy revision `1` (Disabled, 1 day / 10 minutes, all ceilings `0`, SA disabled, no invented SPAMD host).
+3. `nntppostfilterarttypes (1, 'sa_exclude', 'YEncoded')`.
+4. `nntppostfiltercurrent (1, 1)`.
+
+No host rows. `sa_on_failure` is NULL while disabled. Missing current row prevents startup. NNTPD will not invent a Disabled policy.
+
+Inspect:
+
+```sql
+SELECT c.revision, p.gate, p.updated_utc
+FROM nntppostfiltercurrent c
+JOIN nntppostfilterpolicy p ON p.revision = c.revision
+WHERE c.policy_id = 1;
+
+SELECT list_kind, account_name FROM nntppostfilteraccounts WHERE revision = (
+  SELECT revision FROM nntppostfiltercurrent WHERE policy_id = 1);
+```
+
+### 6.5 Operator change cases
+
+| Change | Procedure |
+|--------|-----------|
+| A–F. Any scalar and/or collection change | Insert `@old+1` with the **complete** new policy (copy unchanged lists), publish current. |
+| G. Transaction never committed | Invisible. Nodes keep last published revision. |
+| H. `ROLLBACK` | Previous published revision remains. |
+| I. Duplicate collection entry | Primary key / unique key rejects the `INSERT`. |
+| J. Invalid CIDR syntax | Database accepts the string; compiler fails the refresh; last-good retained. |
+| K. Invalid ArtType name | Same as J. |
+| L. Publish a lower revision | Trigger rejects `UPDATE nntppostfiltercurrent`. |
+| M. Two operators | `FOR UPDATE` or duplicate revision PK; one commit wins. |
+
+When NntpDB is unavailable after a successful start: last-known-good snapshot remains. PostFilter stays enabled. There is no appsettings fallback.
+
+### 6.6 Runtime property → column map
+
+| Runtime | Table.column | SQL | Null | Seed | Validation |
+|---------|--------------|-----|------|------|------------|
+| Snapshot.Revision | `nntppostfiltercurrent.revision` / `nntppostfilterpolicy.revision` | `BIGINT UNSIGNED` | no | `1` | `>= 1`; published value must increase |
+| Record.UpdatedUtc | `nntppostfilterpolicy.updated_utc` | `DATETIME(3)` | no | `UTC_TIMESTAMP(3)` | set on insert |
+| Gate | `gate` | `VARCHAR(16)` | no | `Disabled` | `Disabled`/`Active`/`Closed` |
+| Quota.LongWindow | `long_window_ms` | `BIGINT UNSIGNED` | no | `86400000` | `>= 1` |
+| Quota.ShortWindow | `short_window_ms` | `BIGINT UNSIGNED` | no | `600000` | `>= 1` |
+| Quota.MaxMessagesLong | `max_messages_long` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| Quota.MaxBytesLong | `max_bytes_long` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| Quota.MaxIdenticalLong | `max_identical_long` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| Quota.MaxMessagesShort | `max_messages_short` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| Quota.MaxBytesShort | `max_bytes_short` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| Quota.MaxIdenticalShort | `max_identical_short` | `BIGINT UNSIGNED` | no | `0` | `0` disables |
+| DeniedAccounts | `nntppostfilteraccounts` `deny` | `VARCHAR(255)` | n/a | empty | unique per revision; compiler rejects blank/duplicate |
+| AllowlistedAccounts | `nntppostfilteraccounts` `allow` | `VARCHAR(255)` | n/a | empty | same |
+| DeniedCidrs | `nntppostfiltercidrs` `deny` | `VARCHAR(64)` | n/a | empty | unique; compiler parses CIDR |
+| AllowlistedCidrs | `nntppostfiltercidrs` `allow` | `VARCHAR(64)` | n/a | empty | same |
+| RejectArtTypes | `nntppostfilterarttypes` `reject` | `VARCHAR(32)` | n/a | empty | compiler `ArticleType` |
+| SA.Enabled | `sa_enabled` | `CHAR(1)` | no | `N` | `Y`/`N` |
+| SA.OnFailure | `sa_on_failure` | `VARCHAR(16)` | yes when disabled | `NULL` | required `Reject`/`Accept` when `Y` |
+| SA.MaxArticleSize | `sa_max_article_size` | `INT` | no | `131072` | `>= 0`; `0` disables size gate |
+| SA.ExcludeArtTypes | `nntppostfilterarttypes` `sa_exclude` | `VARCHAR(32)` | n/a | `YEncoded` | compiler `ArticleType` |
+| SA.Hosts | `nntppostfiltersahosts.host` | `VARCHAR(255)` | n/a | empty | unique host/order; required when SA enabled |
+| SA.Port | `sa_port` | `INT UNSIGNED` | no | `783` | `1–65535` |
+| SA.ProtocolVersion | `sa_protocol_version` | `VARCHAR(16)` | no | `1.5` | required when SA enabled |
+| SA.MaxConnections | `sa_max_connections` | `INT UNSIGNED` | no | `4` | `1–32` |
+| SA.HostSelection | `sa_host_selection` | `VARCHAR(16)` | no | `RoundRobin` | `RoundRobin`/`Failover` |
+| SA.ConnectTimeout | `sa_connect_timeout_ms` | `INT UNSIGNED` | no | `5000` | `>= 1` and `<=` operation |
+| SA.OperationTimeout | `sa_operation_timeout_ms` | `INT UNSIGNED` | no | `30000` | `>= 1`; compiler `1s–2m` when SA enabled |
+
+Reservation TTL is compiled, not stored. `ServerId` and `Redis:*` are node-local infrastructure, not PostFilter policy.
+
+### 6.7 Former `Nntpd:PostFilter` mapping
 
 | Former key | NntpDB |
 |------------|--------|
@@ -221,11 +276,11 @@ SPAMD endpoints are **cluster policy** (same Hosts/Port on every node). Reservat
 
 `ArticleType` names: `Default`, `Control`, `Cancel`, `Mime`, `Binary`, `UuEncode`, `Base64`, `YEncoded`, `BommaNews`, `UniData`, `Multipart`, `Html`, `PostScript`, `BinHex`, `Partial`, `PgpMessage`.
 
-Account names compare **ordinal** after trim. Empty or duplicate collection rows fail compile. Ceiling `0` disables that quota dimension. Reservation TTL is not a database column (see §7).
+Account names compare **ordinal** after trim. Empty or duplicate collection rows fail compile. Ceiling `0` disables that quota dimension. Reservation TTL is not a database column (see Redis).
 
 ---
 
-## 6. Policy semantics
+## 7. Policy semantics
 
 Compiled snapshot fields include gate, deny/allow sets, reject ArtType mask, quota windows/ceilings, SpamAssassin enablement, `OnFailure`, eligibility, hosts, port, protocol, pool size, host selection, timeouts, and reservation hold.
 
@@ -242,7 +297,7 @@ Allowlist skips step 5 only.
 
 ---
 
-## 7. Redis
+## 8. Redis
 
 Redis holds **distributed runtime quota state**, not policy. Policy is the local immutable snapshot. The same account on every NNTPD node shares the same Redis hashes.
 
@@ -272,7 +327,7 @@ Redis itself remains a required NNTPD dependency (startup connect/PING). PostFil
 
 ---
 
-## 8. Quotas
+## 9. Quotas
 
 Dimensions (each independently disableable with ceiling `0`):
 
@@ -299,7 +354,7 @@ Deterministic reserve outcomes (log `reason`, never on the wire):
 
 ---
 
-## 9. SpamAssassin
+## 10. SpamAssassin
 
 SPAMD does **not** receive `ArticleRecord` / `ArtData` directly.
 
@@ -311,7 +366,7 @@ ArticleRecord (read-only)
 
 `ArtData` is not mutated. The scan buffer is independent and discarded after CHECK.
 
-### 9.1 Scan representation (current builder only)
+### 10.1 Scan representation (current builder only)
 
 Synthetic headers prepended:
 
@@ -324,7 +379,7 @@ Stripped (not copied into the scan): `Path`, `Xref`, `Injection-Info`, `X-Trace`
 
 All other original header blocks are copied. The body after the first `CRLF CRLF` is copied verbatim. A missing/unsafe FQDN becomes `localhost`.
 
-### 9.2 Transport
+### 10.2 Transport
 
 - Protocol: SPAMC/SPAMD `CHECK` with configured `ProtocolVersion` (default `1.5`).
 - Persistent connection pool sized by `MaxConnections`.
@@ -335,7 +390,7 @@ All other original header blocks are copied. The body after the first `CRLF CRLF
 - Stale idle socket (`closed` / `connection` on a reused connection): retry **once on the same host**.
 - Bytes after the response `\r\n\r\n` are `Failed leftover`; the connection is evicted.
 
-### 9.3 Eligibility (`ShouldScan`)
+### 10.3 Eligibility (`ShouldScan`)
 
 CHECK runs only when all of the following are true:
 
@@ -349,7 +404,7 @@ A skip does **not** contact SPAMD and is **not** an `OnFailure` event. Quota res
 
 Default eligibility matches the historical small-article boundary: `ArtSize < 131072` and not `YEncoded`. A 768 KiB article is not sent to SPAMD under that default.
 
-### 9.4 Results
+### 10.4 Results
 
 | Scanner outcome | Filter | Reservation |
 |-----------------|--------|-------------|
@@ -361,7 +416,7 @@ Default eligibility matches the historical small-article boundary: `ArtSize < 13
 
 ---
 
-## 10. Failure matrix
+## 11. Failure matrix
 
 Client rejects after `340` are `441 Posting failed`. Success is `240 Article received OK`.
 
@@ -386,7 +441,7 @@ Eligibility skips (size / excluded ArtType / allowlist / SA disabled) are **not*
 
 ---
 
-## 11. Observability
+## 12. Observability
 
 Filter reasons stay off the wire. Use logs.
 
@@ -415,33 +470,33 @@ In-process counters (not a metrics HTTP endpoint):
 **Current limitations (do not add noisy logging solely to close these):**
 
 - EventIds 2800–2808 **overlap** RabbitMQ lifecycle EventIds. Filter on message text (`PostFilter …`) or logger category, not EventId alone.
-- Successful 60s refresh with an unchanged revision is not separately logged (2808 still fires on every publish).
+- Successful 60s refresh of an unchanged published revision is not logged and does not replace the snapshot.
 - `RESERVE` Unavailable appears as EventId 2800 `stage=Quota reason=Unavailable`, not a dedicated Redis-down event.
 
 POST also emits existing `PostLogMessages` Accepted/Rejected lines (`441` category `PolicyRejected` plus the internal reason).
 
 ---
 
-## 12. Safe deployment / activation
+## 13. Safe deployment / activation
 
-1. Apply the schema and Disabled seed to NntpDB. Do not add `Nntpd:PostFilter` to appsettings.
-2. Confirm every NNTPD can `SELECT` `nntppostfilterpolicy` (initial load is required for RUNNING).
+1. Apply [`docs/postfilter.sql`](postfilter.sql) (tables, trigger, Disabled seed). Do not add `Nntpd:PostFilter` to appsettings.
+2. Confirm `nntppostfiltercurrent.policy_id = 1` exists. Initial load is required for RUNNING.
 3. Confirm Redis (`Redis:Host` / startup PING). PostFilter uses the same multiplexer for quota state.
-4. If SpamAssassin will be used, confirm SPAMD from every NNTPD host, then set `sa_enabled='Y'` and hosts in NntpDB.
-5. Edit deny/allow/ArtType/quotas in NntpDB. Keep `gate='Disabled'` while editing. Increment `revision`.
+4. If SpamAssassin will be used, confirm SPAMD from every NNTPD host, then publish a new revision with `sa_enabled='Y'` and host rows.
+5. Change policy only by inserting a complete new revision and updating `nntppostfiltercurrent` in one transaction. Keep `gate='Disabled'` while rehearsing.
 6. Start with **conservative** ceilings (or `0` to disable a dimension). There is no universal production number.
-7. Watch EventId 2808 (`revision=`) on each node. Failed compile/refresh keeps last-good (2805 / 2809).
-8. Set `gate='Active'`, increment `revision`. Within 60s both nodes should log 2810 and the new revision.
+7. Watch EventId 2808 (`revision=`) on each node after a new publish. Failed compile/refresh keeps last-good (2805 / 2809).
+8. Publish `gate='Active'` as a new revision. Within 60s both nodes should log 2810 and the new revision.
 9. POST a known HAM from an authenticated account that is not denied. Expect `240` and a Redis COMMIT.
 10. POST enough volume to hit a test ceiling. Expect `441` and EventId 2800 `stage=Quota`.
 11. Confirm clients see only `240` / `441`. Confirm both nodes report the same revision.
 12. Inspect Redis keys `nntpd:pf:q:*` / `nntpd:pf:m:*` (runtime state, not policy).
 
-To disable quickly: `UPDATE nntppostfilterpolicy SET gate='Disabled', revision = revision + 1` (or `Closed`) and wait up to 60s.
+To disable quickly: insert a new revision that copies the current scalars with `gate='Disabled'` (or `Closed`), publish `nntppostfiltercurrent`, and wait up to 60s. Do not `UPDATE` the live revision in place.
 
 ---
 
-## 13. Troubleshooting
+## 14. Troubleshooting
 
 | Symptom | Distinguish | What to check |
 |---------|-------------|---------------|
@@ -459,7 +514,7 @@ To disable quickly: `UPDATE nntppostfilterpolicy SET gate='Disabled', revision =
 
 ---
 
-## 14. Current limitations
+## 15. Current limitations
 
 Absent from this implementation (not implied as a roadmap):
 
@@ -475,7 +530,7 @@ Absent from this implementation (not implied as a roadmap):
 
 ---
 
-## 15. Test / validation evidence
+## 16. Test / validation evidence
 
 POST-boundary coverage lives in `PostFilterProductionPolicyMatrixTests` (test-local snapshots; production `Gate` stays `Disabled`):
 

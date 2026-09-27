@@ -17,7 +17,7 @@ public sealed class PostFilterPolicyRecord
         Options = options;
     }
 
-    /// <summary>Gets the operator-visible policy revision.</summary>
+    /// <summary>Gets the published NntpDB revision (<c>nntppostfiltercurrent.revision</c>).</summary>
     public long Revision { get; }
 
     /// <summary>Gets <c>nntppostfilterpolicy.updated_utc</c>.</summary>

@@ -1,3 +1,5 @@
+using System.Data;
+using System.Globalization;
 using MySqlConnector;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
@@ -114,63 +116,95 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     {
         try
         {
-            PostFilterPolicyRecord record;
-            await using (var policyCommand = _connection.CreateCommand())
+            await using var transaction = await _connection
+                .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+                .ConfigureAwait(false);
+            try
             {
-                policyCommand.CommandText = NntpPostFilterQueries.SelectPolicy;
-                await using var policyReader = await policyCommand
-                    .ExecuteReaderAsync(cancellationToken)
+                var revision = await ReadCurrentRevisionAsync(transaction, cancellationToken)
                     .ConfigureAwait(false);
-                if (!await policyReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                if (revision is null)
                 {
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                     return null;
                 }
 
-                record = MapPolicyScalars(policyReader);
+                PostFilterPolicyRecord record;
+                await using (var policyCommand = CreateRevisionCommand(
+                    NntpPostFilterQueries.SelectPolicy,
+                    revision.Value,
+                    transaction))
+                {
+                    await using var policyReader = await policyCommand
+                        .ExecuteReaderAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (!await policyReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException(
+                            "nntppostfiltercurrent.revision "
+                            + revision.Value.ToString(CultureInfo.InvariantCulture)
+                            + " has no nntppostfilterpolicy row.");
+                    }
+
+                    record = MapPolicyScalars(policyReader);
+                }
+
+                var deniedAccounts = new List<string>();
+                var allowlistedAccounts = new List<string>();
+                await ReadKeyedStringsAsync(
+                        NntpPostFilterQueries.SelectAccounts,
+                        revision.Value,
+                        transaction,
+                        NntpPostFilterQueries.ListKindDeny,
+                        NntpPostFilterQueries.ListKindAllow,
+                        deniedAccounts,
+                        allowlistedAccounts,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                var deniedCidrs = new List<string>();
+                var allowlistedCidrs = new List<string>();
+                await ReadKeyedStringsAsync(
+                        NntpPostFilterQueries.SelectCidrs,
+                        revision.Value,
+                        transaction,
+                        NntpPostFilterQueries.ListKindDeny,
+                        NntpPostFilterQueries.ListKindAllow,
+                        deniedCidrs,
+                        allowlistedCidrs,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                var rejectArtTypes = new List<string>();
+                var excludeArtTypes = new List<string>();
+                await ReadKeyedStringsAsync(
+                        NntpPostFilterQueries.SelectArtTypes,
+                        revision.Value,
+                        transaction,
+                        NntpPostFilterQueries.ListKindReject,
+                        NntpPostFilterQueries.ListKindSaExclude,
+                        rejectArtTypes,
+                        excludeArtTypes,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                var hosts = await ReadHostsAsync(revision.Value, transaction, cancellationToken)
+                    .ConfigureAwait(false);
+                record.Options.DeniedAccounts = [.. deniedAccounts];
+                record.Options.AllowlistedAccounts = [.. allowlistedAccounts];
+                record.Options.DeniedCidrs = [.. deniedCidrs];
+                record.Options.AllowlistedCidrs = [.. allowlistedCidrs];
+                record.Options.RejectArtTypes = [.. rejectArtTypes];
+                record.Options.SpamAssassin.ExcludeArtTypes = [.. excludeArtTypes];
+                record.Options.SpamAssassin.Hosts = [.. hosts];
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return record;
             }
-
-            var deniedAccounts = new List<string>();
-            var allowlistedAccounts = new List<string>();
-            await ReadKeyedStringsAsync(
-                    NntpPostFilterQueries.SelectAccounts,
-                    NntpPostFilterQueries.ListKindDeny,
-                    NntpPostFilterQueries.ListKindAllow,
-                    deniedAccounts,
-                    allowlistedAccounts,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            var deniedCidrs = new List<string>();
-            var allowlistedCidrs = new List<string>();
-            await ReadKeyedStringsAsync(
-                    NntpPostFilterQueries.SelectCidrs,
-                    NntpPostFilterQueries.ListKindDeny,
-                    NntpPostFilterQueries.ListKindAllow,
-                    deniedCidrs,
-                    allowlistedCidrs,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            var rejectArtTypes = new List<string>();
-            var excludeArtTypes = new List<string>();
-            await ReadKeyedStringsAsync(
-                    NntpPostFilterQueries.SelectArtTypes,
-                    NntpPostFilterQueries.ListKindReject,
-                    NntpPostFilterQueries.ListKindSaExclude,
-                    rejectArtTypes,
-                    excludeArtTypes,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            var hosts = await ReadHostsAsync(cancellationToken).ConfigureAwait(false);
-            record.Options.DeniedAccounts = [.. deniedAccounts];
-            record.Options.AllowlistedAccounts = [.. allowlistedAccounts];
-            record.Options.DeniedCidrs = [.. deniedCidrs];
-            record.Options.AllowlistedCidrs = [.. allowlistedCidrs];
-            record.Options.RejectArtTypes = [.. rejectArtTypes];
-            record.Options.SpamAssassin.ExcludeArtTypes = [.. excludeArtTypes];
-            record.Options.SpamAssassin.Hosts = [.. hosts];
-            return record;
+            catch
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException
             and not NntpDbUnavailableException
@@ -550,16 +584,42 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         return new PostFilterPolicyRecord(revision, updatedUtc, options);
     }
 
+    private async Task<long?> ReadCurrentRevisionAsync(
+        MySqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = NntpPostFilterQueries.SelectCurrentRevision;
+        var scalar = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return scalar is null or DBNull
+            ? null
+            : Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
+    }
+
+    private MySqlCommand CreateRevisionCommand(
+        string commandText,
+        long revision,
+        MySqlTransaction transaction)
+    {
+        var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = commandText;
+        command.Parameters.AddWithValue("@revision", revision);
+        return command;
+    }
+
     private async Task ReadKeyedStringsAsync(
         string commandText,
+        long revision,
+        MySqlTransaction transaction,
         string firstKind,
         string secondKind,
         List<string> first,
         List<string> second,
         CancellationToken cancellationToken)
     {
-        await using var command = _connection.CreateCommand();
-        command.CommandText = commandText;
+        await using var command = CreateRevisionCommand(commandText, revision, transaction);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -580,10 +640,15 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         }
     }
 
-    private async Task<List<string>> ReadHostsAsync(CancellationToken cancellationToken)
+    private async Task<List<string>> ReadHostsAsync(
+        long revision,
+        MySqlTransaction transaction,
+        CancellationToken cancellationToken)
     {
-        await using var command = _connection.CreateCommand();
-        command.CommandText = NntpPostFilterQueries.SelectHosts;
+        await using var command = CreateRevisionCommand(
+            NntpPostFilterQueries.SelectHosts,
+            revision,
+            transaction);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var hosts = new List<string>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

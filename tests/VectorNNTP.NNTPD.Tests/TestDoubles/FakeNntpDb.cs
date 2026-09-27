@@ -49,6 +49,10 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
     public PostFilterPolicyRecord? PostFilterPolicy { get; set; } =
         new(1, DateTimeOffset.UtcNow, new PostFilterOptions());
 
+    public Dictionary<long, PostFilterPolicyRecord> PostFilterRevisions { get; } = [];
+
+    public long? PostFilterCurrentRevision { get; set; }
+
     public Exception? QueryPostFilterPolicyException { get; set; }
 
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
@@ -119,6 +123,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             Moderators = Moderators,
             QueryModeratorsException = QueryModeratorsException,
             PostFilterPolicy = PostFilterPolicy,
+            PostFilterRevisions = PostFilterRevisions,
+            PostFilterCurrentRevision = PostFilterCurrentRevision,
             QueryPostFilterPolicyException = QueryPostFilterPolicyException,
             BlockQueryNewsgroups = BlockQueryNewsgroups,
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
@@ -169,6 +175,10 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
     public int QueryModeratorsCount { get; private set; }
 
     public PostFilterPolicyRecord? PostFilterPolicy { get; set; }
+
+    public Dictionary<long, PostFilterPolicyRecord> PostFilterRevisions { get; set; } = [];
+
+    public long? PostFilterCurrentRevision { get; set; }
 
     public Exception? QueryPostFilterPolicyException { get; set; }
 
@@ -307,6 +317,17 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         if (QueryPostFilterPolicyException is not null)
         {
             throw QueryPostFilterPolicyException;
+        }
+
+        if (PostFilterRevisions.Count > 0)
+        {
+            if (PostFilterCurrentRevision is not { } revision)
+            {
+                return ValueTask.FromResult<PostFilterPolicyRecord?>(null);
+            }
+
+            return ValueTask.FromResult(
+                PostFilterRevisions.TryGetValue(revision, out var versioned) ? versioned : null);
         }
 
         return ValueTask.FromResult(PostFilterPolicy);
