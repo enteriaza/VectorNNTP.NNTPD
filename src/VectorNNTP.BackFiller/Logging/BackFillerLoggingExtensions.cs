@@ -24,7 +24,7 @@ public static partial class BackFillerLoggingExtensions
         return new LoggerConfiguration()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
             .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", "VectorNNTP.BackFiller")
+            .Enrich.WithProperty("Application", BackFillerFileLogging.ApplicationName)
             .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
             .CreateBootstrapLogger();
     }
@@ -33,9 +33,12 @@ public static partial class BackFillerLoggingExtensions
     /// Makes <see cref="Console.Out"/> flush every write.
     /// </summary>
     /// <remarks>
-    /// When stdout is a pipe, <see cref="Console.Out"/> is block-buffered. Serilog's Console
-    /// sink writes to <see cref="Console.Out"/> and does not flush. This must run before the
-    /// first Serilog Console sink is created.
+    /// When stdout is a console, the runtime already flushes often enough that Information
+    /// lines appear immediately. When stdout is a pipe (IDE, redirected capture),
+    /// <see cref="Console.Out"/> is block-buffered: a startup burst fills the buffer and
+    /// becomes visible, then later Information events sit unseen until the buffer fills
+    /// again or the process exits. Serilog's Console sink writes to <see cref="Console.Out"/>
+    /// and does not Flush. This must run before the first Serilog Console sink is created.
     /// </remarks>
     public static void UseAutoFlushConsoleOutput()
     {
@@ -55,6 +58,18 @@ public static partial class BackFillerLoggingExtensions
     /// Used by tests to attach in-memory sinks without reintroducing MEL providers.
     /// </param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
+    /// <remarks>
+    /// <para>
+    /// Call order: clear MEL providers, remove default <see cref="ILoggerFactory"/> registrations,
+    /// then <c>AddSerilog</c> with <c>writeToProviders: false</c> so framework and application
+    /// <see cref="ILogger{T}"/> traffic flows only through Serilog sinks.
+    /// </para>
+    /// <para>
+    /// Console formatting is owned by Serilog. journald collects Serilog console stdout under
+    /// systemd. Microsoft console formatter options that <c>AddSystemd()</c> may register are
+    /// stripped by <c>ConfigureBackFillerPlatformHosting</c> and are not part of this logging pipeline.
+    /// </para>
+    /// </remarks>
     public static HostApplicationBuilder ConfigureBackFillerLogging(
         this HostApplicationBuilder builder,
         Action<LoggerConfiguration>? configure = null)
@@ -62,8 +77,13 @@ public static partial class BackFillerLoggingExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Logging.ClearProviders();
+
+        // Host.CreateApplicationBuilder registers a default LoggerFactory; remove it so
+        // SerilogLoggerFactory is the only ILoggerFactory in the container.
         builder.Services.RemoveAll<ILoggerFactory>();
         builder.Services.RemoveAll<ILoggerProvider>();
+
+        BackFillerFileLogging.BindResolvedFilePath(builder.Configuration);
 
         builder.Services.AddSerilog(
             (services, loggerConfiguration) =>
@@ -72,11 +92,15 @@ public static partial class BackFillerLoggingExtensions
                     .ReadFrom.Configuration(builder.Configuration)
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext()
-                    .Enrich.WithProperty("Application", "VectorNNTP.BackFiller");
+                    .Enrich.WithProperty("Application", BackFillerFileLogging.ApplicationName);
 
+                // Ensure a console sink exists even if configuration omits WriteTo,
+                // so interactive and systemd journal collection always have an output path.
                 if (!builder.Configuration.GetSection("Serilog:WriteTo").GetChildren().Any())
                 {
-                    loggerConfiguration.WriteTo.Console(outputTemplate: ConsoleOutputTemplate);
+                    loggerConfiguration.WriteTo.Console(
+                        restrictedToMinimumLevel: BackFillerFileLogging.ConsoleMinimumLevel,
+                        outputTemplate: ConsoleOutputTemplate);
                 }
 
                 configure?.Invoke(loggerConfiguration);
@@ -104,23 +128,39 @@ public static partial class BackFillerLoggingExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRootPath);
 
         var factory = services.GetRequiredService<ILoggerFactory>();
-        var logger = factory.CreateLogger("VectorNNTP.BackFiller.Hosting");
+        var logger = factory.CreateLogger(BackFillerLogCategories.Hosting);
         LoggingInitialized(
             logger,
-            "VectorNNTP.BackFiller",
+            BackFillerFileLogging.ApplicationName,
             factory.GetType().Name,
+            BackFillerLogCategories.Hosting,
             environmentName,
             contentRootPath);
+    }
+
+    /// <summary>
+    /// Returns registered <see cref="ILoggerProvider"/> implementations for diagnostics and tests.
+    /// </summary>
+    /// <remarks>
+    /// When Serilog is configured via <c>AddSerilog</c>, logging is provided by replacing
+    /// <see cref="ILoggerFactory"/> with <c>SerilogLoggerFactory</c>. In that mode the provider
+    /// list is typically empty, which confirms Microsoft default providers were not retained.
+    /// </remarks>
+    public static IReadOnlyList<ILoggerProvider> GetLoggerProviders(this IServiceProvider services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return services.GetServices<ILoggerProvider>().ToArray();
     }
 
     [LoggerMessage(
         EventId = 1,
         Level = LogLevel.Information,
-        Message = "Logging initialized for {Application}. Factory={LoggerFactoryType} Environment={EnvironmentName} ContentRoot={ContentRootPath}")]
+        Message = "Application logging initialized Application={Application} Provider={Provider} Category={Category} Environment={Environment} ContentRoot={ContentRoot}")]
     private static partial void LoggingInitialized(
         Microsoft.Extensions.Logging.ILogger logger,
         string application,
-        string loggerFactoryType,
-        string environmentName,
-        string contentRootPath);
+        string provider,
+        string category,
+        string environment,
+        string contentRoot);
 }

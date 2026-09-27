@@ -161,10 +161,10 @@ public sealed class BackFillerOptions
     /// Gets or sets the directory used for application log files.
     /// </summary>
     /// <remarks>
-    /// Old key: <c>DirLogs</c>. Relative paths resolve against the host content root
-    /// (<see cref="AppContext.BaseDirectory"/> by default), not the process working directory.
-    /// The current Serilog configuration writes to stdout only; this directory is reserved
-    /// for operators and future file sinks.
+    /// Old key: <c>DirLogs</c>. Relative paths resolve through Common
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
+    /// <see cref="AppContext.BaseDirectory"/>, not the process working directory.
+    /// Serilog overwrites the File sink placeholder from this directory at startup.
     /// </remarks>
     public string LogDirectory { get; set; } = DefaultLogDirectory;
 

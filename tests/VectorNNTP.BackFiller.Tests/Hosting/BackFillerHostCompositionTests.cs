@@ -172,6 +172,7 @@ public sealed class BackFillerHostCompositionTests
         var tlsPort = GetFreePort();
         pairs["BackFiller:BindPortTls"] = tlsPort.ToString();
         pairs["BackFiller:BindAddress:0"] = "*";
+        pairs["BackFiller:LogDirectory"] = Directory.CreateTempSubdirectory("bf-host-logs-").FullName;
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
