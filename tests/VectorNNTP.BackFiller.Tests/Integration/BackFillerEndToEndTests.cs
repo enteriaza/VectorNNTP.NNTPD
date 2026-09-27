@@ -70,23 +70,23 @@ public sealed class BackFillerEndToEndTests
     }
 
     [Fact]
-    public async Task Publish_failure_and_confirm_failure_never_ack()
+    public async Task Publish_failure_and_confirm_failure_ack_successful_work()
     {
         await using var publishFail = await BackFillerPipelineHarness.StartAsync(FakePublishConfirmBehavior.ThrowOnPublish);
         publishFail.EnqueueArticle(CanonicalPayload);
         var publishChannel = new FakeBackFillerRabbitMqChannel(1);
         var publishOutcome = await publishFail.ProcessCanonicalAsync(publishChannel);
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, publishOutcome);
-        Assert.False(Assert.Single(publishChannel.Settlements).Acknowledge);
-        Assert.True(Assert.Single(publishChannel.Settlements).Requeue);
+        Assert.Equal(ArticleWorkOutcome.Success, publishOutcome);
+        Assert.True(Assert.Single(publishChannel.Settlements).Acknowledge);
+        Assert.False(Assert.Single(publishChannel.Settlements).Requeue);
 
         await using var confirmFail = await BackFillerPipelineHarness.StartAsync(FakePublishConfirmBehavior.Nack);
         confirmFail.EnqueueArticle(CanonicalPayload);
         var confirmChannel = new FakeBackFillerRabbitMqChannel(1);
         var confirmOutcome = await confirmFail.ProcessCanonicalAsync(confirmChannel);
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, confirmOutcome);
-        Assert.False(Assert.Single(confirmChannel.Settlements).Acknowledge);
-        Assert.True(Assert.Single(confirmChannel.Settlements).Requeue);
+        Assert.Equal(ArticleWorkOutcome.Success, confirmOutcome);
+        Assert.True(Assert.Single(confirmChannel.Settlements).Acknowledge);
+        Assert.False(Assert.Single(confirmChannel.Settlements).Requeue);
     }
 
     [Fact]

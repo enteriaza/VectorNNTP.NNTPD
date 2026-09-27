@@ -334,6 +334,7 @@ internal enum FakePublishConfirmBehavior
     ThrowOnPublish = 3,
     Timeout = 4,
     CloseChannel = 5,
+    Unroutable = 6,
 }
 
 internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IBackFillerRabbitMqPublishChannel
@@ -379,6 +380,8 @@ internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IB
                 return;
             case FakePublishConfirmBehavior.Nack:
                 throw new InvalidOperationException("publisher nack");
+            case FakePublishConfirmBehavior.Unroutable:
+                throw new InvalidOperationException("RabbitMQ returned the Article Work response as unroutable.");
             case FakePublishConfirmBehavior.Timeout:
                 throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
             case FakePublishConfirmBehavior.CloseChannel:

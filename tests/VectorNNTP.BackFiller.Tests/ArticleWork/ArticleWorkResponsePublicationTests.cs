@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.RabbitMq;
@@ -67,21 +68,22 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Fact]
-    public async Task Confirm_failures_are_retryable_and_never_ack()
+    public async Task Success_publication_failures_ack_and_do_not_requeue()
     {
         FakePublishConfirmBehavior[] behaviors =
         [
             FakePublishConfirmBehavior.ThrowOnPublish,
             FakePublishConfirmBehavior.Nack,
-            FakePublishConfirmBehavior.Timeout,
             FakePublishConfirmBehavior.CloseChannel,
+            FakePublishConfirmBehavior.Unroutable,
         ];
 
         foreach (var behavior in behaviors)
         {
             await using var context = await PublicationContext.StartAsync(behavior);
+            var handler = SuccessHandler();
             var channel = new FakeBackFillerRabbitMqChannel(1);
-            var pipeline = new ArticleWorkDeliveryPipeline(SuccessHandler(), context.Publisher, 1024);
+            var pipeline = new ArticleWorkDeliveryPipeline(handler, context.Publisher, 1024);
 
             var outcome = await pipeline.ProcessAsync(
                 ArticleWorkTestDeliveries.Canonical(),
@@ -90,10 +92,32 @@ public sealed class ArticleWorkResponsePublicationTests
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
-            Assert.False(Assert.Single(channel.Settlements).Acknowledge);
-            Assert.True(Assert.Single(channel.Settlements).Requeue);
+            Assert.Equal(ArticleWorkOutcome.Success, outcome);
+            Assert.Equal(1, handler.HandleCount);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.True(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
         }
+    }
+
+    [Fact]
+    public async Task Confirm_timeout_remains_retryable()
+    {
+        await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Timeout);
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+        var pipeline = new ArticleWorkDeliveryPipeline(SuccessHandler(), context.Publisher, 1024);
+
+        var outcome = await pipeline.ProcessAsync(
+            ArticleWorkTestDeliveries.Canonical(),
+            "Giganews",
+            channel,
+            static () => true,
+            CancellationToken.None);
+
+        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Requeue);
     }
 
     [Fact]
@@ -111,7 +135,7 @@ public sealed class ArticleWorkResponsePublicationTests
             () => context.Connections.TryGetCurrent(out var handle) && handle.Generation == 1,
             CancellationToken.None);
 
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+        Assert.Equal(ArticleWorkOutcome.Success, outcome);
         Assert.Empty(channel.Settlements);
     }
 
@@ -205,7 +229,7 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Fact]
-    public async Task Terminal_response_confirm_failure_nacks_with_requeue()
+    public async Task Terminal_response_confirm_failure_nacks_without_requeue()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Nack);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -221,13 +245,14 @@ public sealed class ArticleWorkResponsePublicationTests
             static () => true,
             CancellationToken.None);
 
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
-        Assert.True(Assert.Single(channel.Settlements).Requeue);
-        Assert.False(Assert.Single(channel.Settlements).Acknowledge);
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, outcome);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.False(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
     }
 
     [Fact]
-    public async Task InvalidRequest_publish_failure_nacks_with_requeue()
+    public async Task InvalidRequest_publish_failure_nacks_without_requeue()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.ThrowOnPublish);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -240,8 +265,10 @@ public sealed class ArticleWorkResponsePublicationTests
             static () => true,
             CancellationToken.None);
 
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
-        Assert.True(Assert.Single(channel.Settlements).Requeue);
+        Assert.Equal(ArticleWorkOutcome.InvalidRequest, outcome);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.False(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
     }
 
     [Theory]
@@ -426,7 +453,66 @@ public sealed class ArticleWorkResponsePublicationTests
 
         Assert.Equal(1, handler.HandleCount);
         Assert.Single(context.PublishChannel.Publications);
-        Assert.Single(channel.Settlements);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.True(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
+    }
+
+    [Fact]
+    public async Task Unroutable_success_response_cannot_requeue_into_an_execution_loop()
+    {
+        await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Unroutable);
+        var handler = SuccessHandler();
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+        var pipeline = new ArticleWorkDeliveryPipeline(handler, context.Publisher, 1024);
+        var delivery = ArticleWorkTestDeliveries.Canonical();
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            if (attempt > 0 && channel.Settlements.Count > 0 && !channel.Settlements[^1].Requeue)
+            {
+                break;
+            }
+
+            await pipeline.ProcessAsync(
+                delivery,
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+        }
+
+        Assert.Equal(1, handler.HandleCount);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.True(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
+    }
+
+    [Fact]
+    public async Task Unroutable_success_publication_is_logged_with_request_id_and_outcome()
+    {
+        var logger = new CollectingLogger<ArticleWorkResponsePublisher>();
+        await using var context = await PublicationContext.StartAsync(
+            FakePublishConfirmBehavior.Unroutable,
+            logger);
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+        var pipeline = new ArticleWorkDeliveryPipeline(SuccessHandler(), context.Publisher, 1024);
+
+        var outcome = await pipeline.ProcessAsync(
+            ArticleWorkTestDeliveries.Canonical(),
+            "Giganews",
+            channel,
+            static () => true,
+            CancellationToken.None);
+
+        Assert.Equal(ArticleWorkOutcome.Success, outcome);
+        Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+        Assert.Contains(
+            logger.Messages,
+            static message =>
+                message.Contains(ArticleWorkTestDeliveries.CanonicalRequestId, StringComparison.Ordinal)
+                && message.Contains("Success", StringComparison.Ordinal)
+                && message.Contains("unroutable", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -492,7 +578,9 @@ public sealed class ArticleWorkResponsePublicationTests
         public FakeBackFillerRabbitMqPublishChannel PublishChannel =>
             Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(Publisher.Channel);
 
-        public static async Task<PublicationContext> StartAsync(FakePublishConfirmBehavior behavior)
+        public static async Task<PublicationContext> StartAsync(
+            FakePublishConfirmBehavior behavior,
+            ILogger<ArticleWorkResponsePublisher>? logger = null)
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
             var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
@@ -501,7 +589,7 @@ public sealed class ArticleWorkResponsePublicationTests
             var publisher = new ArticleWorkResponsePublisher(
                 connections,
                 BackFillerRabbitMqServiceTests.CreateFastRuntime(),
-                NullLogger<ArticleWorkResponsePublisher>.Instance);
+                logger ?? NullLogger<ArticleWorkResponsePublisher>.Instance);
             await publisher.StartAsync(CancellationToken.None);
             Assert.Equal(ArticleWorkResponsePublisherState.Running, publisher.State);
             return new PublicationContext(factory, connections, publisher);

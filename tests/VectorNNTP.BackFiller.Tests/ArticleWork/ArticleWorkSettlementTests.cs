@@ -184,7 +184,7 @@ public sealed class ArticleWorkSettlementTests
     }
 
     [Fact]
-    public async Task InvalidRequest_publish_failure_is_retryable()
+    public async Task InvalidRequest_publish_failure_nacks_without_requeue()
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher
@@ -203,15 +203,15 @@ public sealed class ArticleWorkSettlementTests
             static () => true,
             CancellationToken.None);
 
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+        Assert.Equal(ArticleWorkOutcome.InvalidRequest, outcome);
         Assert.Empty(publisher.Published);
         var settlement = Assert.Single(channel.Settlements);
         Assert.False(settlement.Acknowledge);
-        Assert.True(settlement.Requeue);
+        Assert.False(settlement.Requeue);
     }
 
     [Fact]
-    public async Task Publish_failure_is_retryable_and_does_not_ack()
+    public async Task Success_publish_failure_acks_and_does_not_requeue()
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher
@@ -229,11 +229,11 @@ public sealed class ArticleWorkSettlementTests
             static () => true,
             CancellationToken.None);
 
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+        Assert.Equal(ArticleWorkOutcome.Success, outcome);
         Assert.Empty(publisher.Published);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
-        Assert.True(settlement.Requeue);
+        Assert.True(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
     }
 
     [Fact]

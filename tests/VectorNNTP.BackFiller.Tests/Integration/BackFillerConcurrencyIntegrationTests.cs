@@ -49,7 +49,7 @@ public sealed class BackFillerConcurrencyIntegrationTests
     }
 
     [Fact]
-    public async Task Retention_rejection_and_publish_failure_requeue_then_later_success_acks()
+    public async Task Retention_rejection_requeues_and_publish_failure_after_success_acks()
     {
         await using var tiny = await BackFillerPipelineHarness.StartAsync();
         var oversized = System.Text.Encoding.ASCII.GetBytes("From: a@b\r\n\r\n" + new string('x', (1024 * 1024) + 1));
@@ -64,8 +64,10 @@ public sealed class BackFillerConcurrencyIntegrationTests
         await using var publishFail = await BackFillerPipelineHarness.StartAsync(FakePublishConfirmBehavior.Nack);
         publishFail.EnqueueArticle(Payload);
         var failChannel = new FakeBackFillerRabbitMqChannel(1);
-        Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, await publishFail.ProcessCanonicalAsync(failChannel));
-        Assert.True(Assert.Single(failChannel.Settlements).Requeue);
+        Assert.Equal(ArticleWorkOutcome.Success, await publishFail.ProcessCanonicalAsync(failChannel));
+        var failedPublication = Assert.Single(failChannel.Settlements);
+        Assert.True(failedPublication.Acknowledge);
+        Assert.False(failedPublication.Requeue);
 
         await using var recovered = await BackFillerPipelineHarness.StartAsync();
         recovered.EnqueueArticle(Payload);

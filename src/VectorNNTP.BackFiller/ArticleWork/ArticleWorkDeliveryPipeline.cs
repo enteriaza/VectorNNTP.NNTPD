@@ -70,7 +70,7 @@ public sealed class ArticleWorkDeliveryPipeline
                 return ArticleWorkOutcome.InvalidRequest;
             }
 
-            if (!await PublishIfRequiredAsync(
+            var invalidPublished = await TryPublishIfRequiredAsync(
                     invalid,
                     ArticleWorkOutcome.InvalidRequest,
                     failure.Identities.RequestId,
@@ -81,18 +81,15 @@ public sealed class ArticleWorkDeliveryPipeline
                     failure.Reason,
                     cacheUri: null,
                     cancellationToken)
-                .ConfigureAwait(false))
-            {
-                await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
-                return ArticleWorkOutcome.UnexpectedFailure;
-            }
-
-            await lease.TrySettleAsync(
-                    invalid,
-                    channelStillCurrent() && lease.IsOriginalChannel(channel),
-                    CancellationToken.None)
                 .ConfigureAwait(false);
-            return ArticleWorkOutcome.InvalidRequest;
+            return await CompleteAfterPublishAttemptAsync(
+                    invalidPublished,
+                    invalid,
+                    ArticleWorkOutcome.InvalidRequest,
+                    lease,
+                    channel,
+                    channelStillCurrent)
+                .ConfigureAwait(false);
         }
 
         var item = new ArticleWorkItem(
@@ -155,8 +152,10 @@ public sealed class ArticleWorkDeliveryPipeline
             return outcome;
         }
 
-        if (disposition.PublishResponse
-            && !await PublishIfRequiredAsync(
+        var published = ArticleWorkPublishAttempt.Confirmed;
+        if (disposition.PublishResponse)
+        {
+            published = await TryPublishIfRequiredAsync(
                     disposition,
                     outcome,
                     item.Request.RequestId,
@@ -167,18 +166,17 @@ public sealed class ArticleWorkDeliveryPipeline
                     error,
                     cacheUri,
                     cancellationToken)
-                .ConfigureAwait(false))
-        {
-            await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
-            return ArticleWorkOutcome.UnexpectedFailure;
+                .ConfigureAwait(false);
         }
 
-        await lease.TrySettleAsync(
+        return await CompleteAfterPublishAttemptAsync(
+                published,
                 disposition,
-                channelStillCurrent() && lease.IsOriginalChannel(channel),
-                CancellationToken.None)
+                outcome,
+                lease,
+                channel,
+                channelStillCurrent)
             .ConfigureAwait(false);
-        return outcome;
     }
 
     private async Task SettleRetryableAsync(
@@ -194,7 +192,33 @@ public sealed class ArticleWorkDeliveryPipeline
             .ConfigureAwait(false);
     }
 
-    private async Task<bool> PublishIfRequiredAsync(
+    // Execution disposition wins after a publication failure. Cancellation of the
+    // publish attempt (shutdown or confirm timeout) keeps the existing retryable
+    // settlement so in-flight stop is unchanged.
+    private async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
+        ArticleWorkPublishAttempt published,
+        ArticleWorkDisposition disposition,
+        ArticleWorkOutcome outcome,
+        ArticleWorkSettlementLease lease,
+        IBackFillerRabbitMqChannel channel,
+        Func<bool> channelStillCurrent)
+    {
+        if (published == ArticleWorkPublishAttempt.Cancelled
+            || (published == ArticleWorkPublishAttempt.Failed && disposition.Requeue))
+        {
+            await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
+            return ArticleWorkOutcome.UnexpectedFailure;
+        }
+
+        await lease.TrySettleAsync(
+                disposition,
+                channelStillCurrent() && lease.IsOriginalChannel(channel),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        return outcome;
+    }
+
+    private async Task<ArticleWorkPublishAttempt> TryPublishIfRequiredAsync(
         ArticleWorkDisposition disposition,
         ArticleWorkOutcome outcome,
         Guid? requestId,
@@ -208,7 +232,7 @@ public sealed class ArticleWorkDeliveryPipeline
     {
         if (!disposition.PublishResponse)
         {
-            return true;
+            return ArticleWorkPublishAttempt.Confirmed;
         }
 
         try
@@ -225,11 +249,22 @@ public sealed class ArticleWorkDeliveryPipeline
                         outcome == ArticleWorkOutcome.Success ? cacheUri : null),
                     cancellationToken)
                 .ConfigureAwait(false);
-            return true;
+            return ArticleWorkPublishAttempt.Confirmed;
+        }
+        catch (OperationCanceledException)
+        {
+            return ArticleWorkPublishAttempt.Cancelled;
         }
         catch (Exception)
         {
-            return false;
+            return ArticleWorkPublishAttempt.Failed;
         }
+    }
+
+    private enum ArticleWorkPublishAttempt
+    {
+        Confirmed,
+        Cancelled,
+        Failed,
     }
 }
