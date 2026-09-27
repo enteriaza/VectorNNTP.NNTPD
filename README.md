@@ -32,6 +32,7 @@ deploy/
 docs/
   architecture.md
   configuration.md
+  postfilter.md                 # POST PostFilter operator guide (default Gate=Disabled)
   logging.md
   systemd.md
   systemd-integration-verification.md

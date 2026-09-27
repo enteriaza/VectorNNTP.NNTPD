@@ -171,6 +171,16 @@ IhaveArticleInterpreter (destuff exactly once → Article)
 - **HistoryDB:** CHECK, IHAVE, and TAKETHIS use `PeekAsync` (no miss reservation). IHAVE and TAKETHIS call `Remember` after a successful enqueue.
 - **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis` and may wait for byte-budget capacity. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after receive. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
 
+### POST PostFilter
+
+PostFilter is POST-only accept-path policy after `ArticleRecord` creation and History Peek, before `CreateQueued` / `TryAdmit`. Default `Nntpd:PostFilter:Gate` is `Disabled` (no Redis reservation, no SPAMD). It does not run for IHAVE, TAKETHIS, BackFiller, queue workers, or unapproved catalogue `m` submission. The filter reads immutable `ArticleRecord` data and does not mutate it. Redis holds distributed quota reservations (`nntpd:pf:q:` / `nntpd:pf:m:`); policy is a local five-minute snapshot. SPAMD `CHECK` receives a disposable email-like scan, not `ArtData`. Operator contract: [postfilter.md](postfilter.md).
+
+```text
+POST → StreamingPostArticleReader → (moderation early-exit | History Peek)
+     → ArticleRecordIngress → PostFilter (RESERVE → optional CHECK)
+     → CreateQueued → TryAdmit → COMMIT → History Remember → 240
+```
+
 ### Outbound Email service
 
 `EmailService` is a generic outbound email subsystem. It has no dependency on newsgroups, NNTP commands, moderation, `Approved`, articles, or HistoryDB. Moderation is the first producer; later producers (alerts, account mail) call the same `IEmailService.SendAsync`.
@@ -655,7 +665,7 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 ## Configuration
 
-`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. RabbitMQ binds from the top-level `RabbitMQ` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615. RabbitMQ lifecycle EventIds are 2800–2819. RabbitMQ topology EventIds are 2820–2823. Article-work RPC EventIds are 2830–2839.
+`NntpdOptions` binds from the `Nntpd` section, including nested `Systemd` options, listener bind settings, Cloudflare DNS settings, `HistoryTime`, `IdleTime` (NNTP command idle seconds), `MaxArticleSize` (destuffed POST article limit), `PostFilter` (POST-only; default gate `Disabled`), and a generated FQDN (`nntpd{ServerId:00}.{DnsSuffix}`). Redis binds from the top-level `Redis` section. RabbitMQ binds from the top-level `RabbitMQ` section. Outbound email binds from the top-level `Email` section (disabled by default). Email EventIds are 2600–2615. RabbitMQ lifecycle EventIds are 2800–2819. RabbitMQ topology EventIds are 2820–2823. Article-work RPC EventIds are 2830–2839. PostFilter EventIds are also 2800–2808 and currently overlap the RabbitMQ lifecycle range; distinguish by message text (`PostFilter …`) or logger category, not EventId alone.
 
 Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), `Redis:Host`, and `RabbitMQ:Hosts`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs, then `RabbitMqService` establishes a usable broker connection, then `RabbitMqTopologyService` declares the thirteen `backfiller.*` article-retrieval endpoints (twelve providers plus internal `backfiller.storage`), then `ArticleWorkRpcService` attaches the article-work RPC reply consumer; any of those failures prevent `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 

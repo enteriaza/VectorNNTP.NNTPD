@@ -48,12 +48,19 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
 | `Nntpd:PostFilter:Gate` | `Disabled` / `Active` / `Closed` | `Disabled` | no | POST-only PostFilter gate. `Disabled` skips remaining stages (including quota and SpamAssassin). `Closed` rejects with `441`. Compiled into a snapshot at startup and every 5 minutes; POST does not parse this section. |
-| `Nntpd:PostFilter:DeniedAccounts` | string array | `[]` | no | Exact authenticated account names denied before quotas. |
+| `Nntpd:PostFilter:DeniedAccounts` | string array | `[]` | no | Exact authenticated account names denied before quotas. Compared ordinal (case-sensitive) after trim. |
 | `Nntpd:PostFilter:DeniedCidrs` | string array | `[]` | no | Client CIDRs denied before quotas. |
-| `Nntpd:PostFilter:AllowlistedAccounts` | string array | `[]` | no | Accounts that skip SpamAssassin only. Still run deny, ArtType, and quotas. |
+| `Nntpd:PostFilter:AllowlistedAccounts` | string array | `[]` | no | Accounts that skip SpamAssassin only. Still run deny, ArtType, and quotas. Compared ordinal (case-sensitive) after trim. |
 | `Nntpd:PostFilter:AllowlistedCidrs` | string array | `[]` | no | Client CIDRs that skip SpamAssassin only. |
 | `Nntpd:PostFilter:RejectArtTypes` | string array | `[]` | no | `ArticleType` names rejected (for example `YEncoded`). Empty disables type policy. |
-| `Nntpd:PostFilter:Quota:*` | windows + ceilings | 1d / 10m; ceilings `0` | no | Accept-quota windows and ceilings. Ceiling `0` disables that dimension. Redis RESERVE is fail-closed. |
+| `Nntpd:PostFilter:Quota:LongWindow` | duration | `1.00:00:00` | no | Sustained (L) fixed window. Must be `> 0`. Compiled into the snapshot. |
+| `Nntpd:PostFilter:Quota:ShortWindow` | duration | `00:10:00` | no | Burst (S) fixed window. Must be `> 0`. Compiled into the snapshot. |
+| `Nntpd:PostFilter:Quota:MaxMessagesLong` | long | `0` | no | L message ceiling. `0` disables. Negative fails startup. |
+| `Nntpd:PostFilter:Quota:MaxBytesLong` | long | `0` | no | L byte ceiling (`ArticleRecord.ArtSize`). `0` disables. |
+| `Nntpd:PostFilter:Quota:MaxIdenticalLong` | long | `0` | no | L identical-body ceiling. `0` disables. Identity is XXH3-64 of canonical body octets, not `ArtHash`. |
+| `Nntpd:PostFilter:Quota:MaxMessagesShort` | long | `0` | no | S message ceiling. `0` disables. |
+| `Nntpd:PostFilter:Quota:MaxBytesShort` | long | `0` | no | S byte ceiling. `0` disables. |
+| `Nntpd:PostFilter:Quota:MaxIdenticalShort` | long | `0` | no | S identical-body ceiling. `0` disables. |
 | `Nntpd:PostFilter:SpamAssassin:Enabled` | bool | `false` | no | When true, eligible non-allowlisted articles run SPAMD CHECK. Ineligible articles skip CHECK (not an `OnFailure` event). |
 | `Nntpd:PostFilter:SpamAssassin:OnFailure` | `Reject` / `Accept` | _(required when enabled)_ | when enabled | Scanner-fault action (connect, protocol, timeout). Cancellation is not `OnFailure`. Spam findings always reject in v1. |
 | `Nntpd:PostFilter:SpamAssassin:MaxArticleSize` | int | `131072` | no | Exclusive ArtSize maximum for CHECK. `ArtSize >= MaxArticleSize` skips SPAMD. `0` disables the size gate. Default matches the historical production eligibility boundary (`< 131072`). A 768 KB article is not sent to SPAMD under this default. |
@@ -90,6 +97,8 @@ CHECK in-flight depth is **not configurable**. Per-session overlap is the archit
 The count is the destuffed client article: header block, the blank header/body separator, and body. The NNTP multiline terminator (`CRLF . CRLF`) is not included. Stuffing dots (`..` on the wire for a destuffed `.` line) are not counted. The limit is enforced while the article is streamed; exceeding it ends reception and returns `441 Posting failed`. The server does not buffer an oversized article merely because the terminator has not arrived yet.
 
 This setting is distinct from `ArticleIngestion:MaxArticleBytes`, which bounds IHAVE/TAKETHIS receive and IHAVE worker destuff (default 4 MiB). A valid 5 MiB POST is not re-checked against `MaxArticleBytes`. The spool worker destuffs POST using the queued stuffed payload length so server-owned headers added after receive cannot cause a second size reject.
+
+Operator runbook (flow, Redis reservation lifecycle, SPAMD scan representation, failure matrix, activation, troubleshooting): [postfilter.md](postfilter.md). Default `Gate` is `Disabled`; production `appsettings.json` does not enable the filter.
 
 ## PostFilter SpamAssassin eligibility
 
@@ -366,7 +375,7 @@ Top-level `Redis` section (not nested under `Nntpd`). Redis is a required applic
 | `Host` | string array | _(none)_ | **yes** | Redis hostnames or IP addresses used as StackExchange.Redis endpoints/seeds for one shared topology |
 | `Port` | int | `6379` | no | TCP port applied to every configured host (`1–65535`) |
 
-There is no `MaxConnections` setting and no application-level connection pool. One long-lived `ConnectionMultiplexer` is shared by all Redis consumers.
+There is no `MaxConnections` setting and no application-level connection pool. One long-lived `ConnectionMultiplexer` is shared by all Redis consumers, including PostFilter accept-quota (`nntpd:pf:q:` / `nntpd:pf:m:`). Quota policy is local configuration; Redis holds runtime reservations only. See [postfilter.md](postfilter.md).
 
 Multiple hosts are multiplexer seeds, not independently round-robined servers. They must belong to a topology that actually shares HistoryDB data.
 
