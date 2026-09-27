@@ -158,6 +158,7 @@ public sealed class AccountPolicyMatrixTests
     {
         Assert.DoesNotContain("account_type", NntpUserQueries.SelectUserByName, StringComparison.Ordinal);
         Assert.Contains("account_rate_limit, account_byte_limit, account_session_limit, account_srcip_limit", NntpUserQueries.SelectUserByName, StringComparison.Ordinal);
+        Assert.Contains("account_art_type", NntpUserQueries.SelectUserByName, StringComparison.Ordinal);
         Assert.DoesNotContain("account_type", NntpUserQueries.SelectByteQuotaForUpdate, StringComparison.Ordinal);
         Assert.DoesNotContain("account_type", NntpUserQueries.SelectAccountByteRemaining, StringComparison.Ordinal);
         Assert.StartsWith("SELECT account_byte_limit", NntpUserQueries.SelectByteQuotaForUpdate, StringComparison.Ordinal);

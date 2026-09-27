@@ -161,6 +161,18 @@ public sealed class SessionStateLuaStaticAuditTests
         Assert.Equal("192.0.2.10", SourceAddressIdentity.Format(mapped));
         Assert.Equal("192.0.2.10", SourceAddressIdentity.Format(IPAddress.Parse("192.0.2.10")));
         Assert.Equal("2001:db8::10", SourceAddressIdentity.Format(IPAddress.Parse("2001:db8::10")));
+        Assert.Equal(
+            IPAddress.Parse("198.18.0.70").GetAddressBytes(),
+            SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("198.18.0.70")));
+        Assert.Equal(4, SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("198.18.0.70")).Length);
+        Assert.Equal(
+            IPAddress.Parse("2001:db8::1234").GetAddressBytes(),
+            SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("2001:db8::1234")));
+        Assert.Equal(16, SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("2001:db8::1234")).Length);
+        Assert.Equal(
+            IPAddress.Parse("198.18.0.70").GetAddressBytes(),
+            SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("::ffff:198.18.0.70")));
+        Assert.Equal(4, SourceAddressIdentity.ToNetworkBytes(IPAddress.Parse("::ffff:198.18.0.70")).Length);
     }
 
     [Fact]

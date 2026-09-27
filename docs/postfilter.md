@@ -20,6 +20,8 @@ Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFil
 
 NNTPD does not create or migrate these tables. Apply the canonical provisioning script [`docs/postfilter.sql`](postfilter.sql) once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators publish a new revision.
 
+Account ArtType capability is a separate additive change on existing `nntpusers`. Apply [`docs/nntpusers-account-art-type.sql`](nntpusers-account-art-type.sql) to the account database **before** deploying an NNTPD that `SELECT`s `account_art_type`. A missing column is AUTHINFO `503`, not `481` and not unrestricted access.
+
 ---
 
 ## 1. What PostFilter does
@@ -49,6 +51,7 @@ POST
   → History Peek (Seen / Unavailable → 441; no PostFilter)
   → ArticleRecordIngress.TryCreateFromDestuffed
   → ArticleRecord (immutable canonical bytes)
+  → account ArtType capability (AUTHINFO flags; unrestricted when no policy)
   → PostFilter.EvaluateAsync  (one captured policy snapshot)
         Gate Disabled → accept, no Redis, no SPAMD
         Gate Closed   → 441
@@ -57,11 +60,15 @@ POST
         optional SPAMD CHECK
   → CreateQueued
   → TryAdmit
-        fail → Redis RELEASE + 441
+        fail → Redis RELEASE + enqueue admission evidence + 441
   → Redis COMMIT          (never RELEASE on COMMIT failure)
   → History Remember
   → 240 Article received OK
 ```
+
+Every PostFilter `Reject` (and post-accept `TryAdmit` failure) enqueues one evidence row onto a bounded background queue. The 441 is written regardless of whether the enqueue or later MySQL insert succeeds. Acceptance never writes evidence.
+
+Complete unstuffed article bytes (`ArticleRecord.ArtData`) are available at every PostFilter decision in the current POST path. The evidence payload is therefore those bytes when present, or NULL only if a future path rejects without a complete article.
 
 One POST captures `PostFilterPolicyService.Current` once. That snapshot is used for the entire request. POST never queries NntpDB. Mid-request database edits do not affect that evaluation.
 
@@ -139,11 +146,30 @@ InnoDB + `utf8mb4` / `utf8mb4_unicode_ci` match typical MySQL 8 NntpDB deploymen
 |--------|------|
 | `nntppostfilterpolicy` | Append-only scalar revisions. Primary key is `revision`. |
 | `nntppostfiltercurrent` | Singleton `policy_id = 1` pointing at the published revision. |
-| `nntppostfilteraccounts` | Deny/allow AUTH names for **that revision**. |
+| `nntppostfilteraccounts` | Deny/allow **MD5 hex** AUTH identities (`CHAR(32)`). Real usernames are not stored. |
 | `nntppostfiltercidrs` | Deny/allow CIDRs for **that revision**. |
-| `nntppostfilterarttypes` | `reject` / `sa_exclude` ArtTypes for **that revision**. |
+| `nntppostfilterarttypes` | `reject` / `sa_exclude` **one** classifier name per row (`ENUM` of `ArticleType` names). |
 | `nntppostfiltersahosts` | SPAMD hosts (`host_order`) for **that revision**. |
+| `nntppostfilterrejections` | Append-only PostFilter rejection evidence (not SA-specific). |
 | `trg_nntppostfiltercurrent_revision_forward` | Published revision must increase. |
+
+`nntpusers.account_art_type` is **not** created by `postfilter.sql`. Apply [`nntpusers-account-art-type.sql`](nntpusers-account-art-type.sql) on the existing account table (`INT UNSIGNED NOT NULL DEFAULT 65535` = `ArticleTypeCapabilities.All`). That is the AUTHINFO session capability, not a PostFilter policy ENUM.
+
+Three related but different ArtType representations:
+
+| Surface | Representation | Meaning |
+|---------|----------------|---------|
+| `nntppostfilterarttypes.art_type` | MySQL `ENUM` of public `ArticleType` names | One type per policy row (`reject` / `sa_exclude`) |
+| `ArticleRecord.ArtType` | `[Flags]` classifier bitmask | What this article is |
+| `nntpusers.account_art_type` | `INT UNSIGNED` of the same flags | Types the authenticated account may post/read |
+
+Matching: policy lists trim then MD5 (UTF-8, lowercase hex). The evaluator hashes the session username **without** introducing a new trim. Case remains ordinal.
+
+`nntppostfilterrejections` is append-oriented. NNTPD has no evidence retention sweeper; deletion is an operator decision.
+
+Evidence writes are asynchronous (`PostFilterRejectionEvidenceQueue`, capacity 128, drop-newest-on-full). Queue-full or MySQL failure is logged and counted. It never turns 441 into 240 or the reverse.
+
+The article payload column is `LONGBLOB` so it can hold `Nntpd:MaxArticleSize` up to the configured 100 MiB ceiling. Stored bytes are the unstuffed complete article, not an `ArticleRecord` and not a restuffed wire copy. `source_ip` is `VARBINARY(16)` after the same IPv4-mapped normalization as session identity (`::ffff:a.b.c.d` stores as IPv4). Display with `INET6_NTOA(source_ip)`.
 
 Collection rows belong to a revision because `revision` is part of every primary key and a foreign key to `nntppostfilterpolicy.revision`. A loader that binds `@revision` from `nntppostfiltercurrent` cannot assemble accounts from revision 11 with scalars from revision 12 unless the database itself is deliberately broken (missing FK).
 
@@ -160,7 +186,8 @@ SELECT revision FROM nntppostfiltercurrent WHERE policy_id = 1 FOR UPDATE;
 -- @old = that value; @new = @old + 1
 
 INSERT INTO nntppostfilterpolicy (revision, updated_utc, gate, ...) VALUES (@new, UTC_TIMESTAMP(3), ...);
-INSERT INTO nntppostfilteraccounts (revision, list_kind, account_name) VALUES (@new, 'deny', 'spammer');
+INSERT INTO nntppostfilteraccounts (revision, list_kind, account_name)
+  VALUES (@new, 'deny', LOWER(MD5('spammer')));
 INSERT INTO nntppostfiltercidrs ...
 INSERT INTO nntppostfilterarttypes ...
 INSERT INTO nntppostfiltersahosts ...
@@ -527,6 +554,8 @@ Absent from this implementation (not implied as a roadmap):
 - Generic filter framework / plugin stages beyond gate, deny, ArtType, quota, and SpamAssassin
 - Per-POST metrics export or a dedicated Redis-down EventId
 - Configurable reservation TTL
+- IHAVE ArtType capability enforcement (classification is after the `235` boundary)
+- ARTICLE/HEAD/BODY/STAT ArtType capability enforcement (no article repository exposes persisted `ArticleType`)
 
 ---
 

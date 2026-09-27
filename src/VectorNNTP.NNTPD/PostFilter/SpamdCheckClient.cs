@@ -528,17 +528,38 @@ internal sealed class SpamdCheckClient : IPostFilterSpamAssassin, IAsyncDisposab
 
         var lineEnd = text.IndexOf("\r\n", spamIndex, StringComparison.Ordinal);
         var spamLine = lineEnd < 0 ? text[spamIndex..] : text[spamIndex..lineEnd];
+        TryParseSpamScores(spamLine, out var score, out var threshold);
         if (spamLine.Contains("True", StringComparison.OrdinalIgnoreCase))
         {
-            return PostFilterSpamAssassinResult.Spam(spamLine);
+            return PostFilterSpamAssassinResult.Spam(spamLine, score, threshold);
         }
 
         if (spamLine.Contains("False", StringComparison.OrdinalIgnoreCase))
         {
-            return PostFilterSpamAssassinResult.Ham();
+            return PostFilterSpamAssassinResult.Ham(score, threshold);
         }
 
         return PostFilterSpamAssassinResult.Failed(spamLine);
+    }
+
+    private static void TryParseSpamScores(string spamLine, out decimal? score, out decimal? threshold)
+    {
+        score = null;
+        threshold = null;
+        var separator = spamLine.IndexOf(';');
+        if (separator < 0)
+        {
+            return;
+        }
+
+        var scores = spamLine[(separator + 1)..].Split('/', 2, StringSplitOptions.TrimEntries);
+        if (scores.Length == 2
+            && decimal.TryParse(scores[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedScore)
+            && decimal.TryParse(scores[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedThreshold))
+        {
+            score = parsedScore;
+            threshold = parsedThreshold;
+        }
     }
 
     private static PostFilterSpamAssassinResult ClassifyConnect(Exception ex) =>

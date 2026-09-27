@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Articles;
+
 namespace VectorNNTP.NNTPD.Authentication;
 
 /// <summary>
@@ -22,7 +24,8 @@ public sealed class NntpAccountPolicy
         long byteLimit,
         int sessionLimit,
         int srcIpLimit,
-        string customerId)
+        string customerId,
+        ArticleType allowedArtTypes = ArticleTypeCapabilities.All)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         Username = username;
@@ -31,6 +34,7 @@ public sealed class NntpAccountPolicy
         SessionLimit = sessionLimit;
         SrcIpLimit = srcIpLimit;
         CustomerId = customerId ?? string.Empty;
+        AllowedArtTypes = allowedArtTypes;
     }
 
     /// <summary>Gets the plaintext wire username.</summary>
@@ -63,6 +67,13 @@ public sealed class NntpAccountPolicy
     public string CustomerId { get; }
 
     /// <summary>
+    /// Gets the account ArtType capability flags loaded at AUTHINFO.
+    /// <see cref="ArticleTypeCapabilities.All"/> is unrestricted and is the
+    /// default for existing users.
+    /// </summary>
+    public ArticleType AllowedArtTypes { get; }
+
+    /// <summary>
     /// Gets whether cluster admission must run: session limit, source-IP limit,
     /// or a positive rate that needs a cluster session count.
     /// </summary>
@@ -84,6 +95,7 @@ public sealed class NntpAccountPolicy
             record.ByteLimit,
             record.SessionLimit,
             record.SrcIpLimit,
-            record.CustomerId);
+            record.CustomerId,
+            record.AllowedArtTypes);
     }
 }

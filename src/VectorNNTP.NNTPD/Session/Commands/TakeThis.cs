@@ -1,6 +1,7 @@
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -304,6 +305,13 @@ internal static class TakeThis
             rejectDetail = created.ParseFailure != NntpArticleParseFailureCode.None
                 ? "rejected article record " + created.ParseFailure
                 : "rejected article record " + created.MaterializeFailure;
+            return false;
+        }
+
+        if (!ArticleTypeAccessPolicy.CanPostArticleType(session, created.Record.ArtType))
+        {
+            inbound = null!;
+            rejectDetail = "rejected article type";
             return false;
         }
 

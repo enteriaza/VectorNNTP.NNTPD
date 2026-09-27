@@ -586,6 +586,7 @@ public sealed class CachedNntpUserRecordStoreTests
         Assert.Equal(expected.SrcIpLimit, actual.SrcIpLimit);
         Assert.Equal(expected.IsEnabled, actual.IsEnabled);
         Assert.Equal(expected.CustomerId, actual.CustomerId);
+        Assert.Equal(expected.AllowedArtTypes, actual.AllowedArtTypes);
     }
 
     private static void AssertNoSecrets(CollectingLogger<CachedNntpUserRecordStore> logger)

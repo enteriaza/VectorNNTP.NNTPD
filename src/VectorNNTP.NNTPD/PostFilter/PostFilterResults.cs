@@ -32,6 +32,9 @@ public enum PostFilterStage
 
     /// <summary>Accepted after all enabled stages.</summary>
     Complete = 5,
+
+    /// <summary>Queue admission after an Accept decision (<c>TryAdmit</c>).</summary>
+    Admission = 6,
 }
 
 /// <summary>Lease held after a successful RESERVE. POST owns commit/release.</summary>
@@ -104,12 +107,40 @@ public readonly struct PostFilterResult
         string reason,
         PostFilterLease? lease,
         PostFilterQuotaReserveStatus? quotaStatus)
+        : this(
+            decision,
+            stage,
+            reason,
+            lease,
+            quotaStatus,
+            policyRevision: 0,
+            spamAssassinStatus: null,
+            spamAssassinScore: null,
+            spamAssassinThreshold: null)
+    {
+    }
+
+    /// <summary>Initializes a result with policy revision and optional SA metadata.</summary>
+    internal PostFilterResult(
+        PostFilterDecision decision,
+        PostFilterStage stage,
+        string reason,
+        PostFilterLease? lease,
+        PostFilterQuotaReserveStatus? quotaStatus,
+        long policyRevision,
+        PostFilterSpamAssassinStatus? spamAssassinStatus,
+        decimal? spamAssassinScore,
+        decimal? spamAssassinThreshold)
     {
         Decision = decision;
         Stage = stage;
         Reason = reason;
         Lease = lease;
         QuotaStatus = quotaStatus;
+        PolicyRevision = policyRevision;
+        SpamAssassinStatus = spamAssassinStatus;
+        SpamAssassinScore = spamAssassinScore;
+        SpamAssassinThreshold = spamAssassinThreshold;
     }
 
     /// <summary>Gets Accept or Reject.</summary>
@@ -127,22 +158,87 @@ public readonly struct PostFilterResult
     /// <summary>Gets the RESERVE status when the quota stage ran.</summary>
     internal PostFilterQuotaReserveStatus? QuotaStatus { get; }
 
+    /// <summary>Gets the published policy revision observed for this decision.</summary>
+    public long PolicyRevision { get; }
+
+    /// <summary>Gets the SA status when the SpamAssassin stage produced the decision.</summary>
+    internal PostFilterSpamAssassinStatus? SpamAssassinStatus { get; }
+
+    /// <summary>Gets the SA score when the Spam header included one.</summary>
+    public decimal? SpamAssassinScore { get; }
+
+    /// <summary>Gets the SA threshold when the Spam header included one.</summary>
+    public decimal? SpamAssassinThreshold { get; }
+
     /// <summary>Accept with no reservation (disabled gate).</summary>
-    public static PostFilterResult AcceptedDisabled() =>
-        new(PostFilterDecision.Accept, PostFilterStage.Gate, "disabled", lease: null);
+    public static PostFilterResult AcceptedDisabled(long policyRevision = 0) =>
+        new(
+            PostFilterDecision.Accept,
+            PostFilterStage.Gate,
+            "disabled",
+            lease: null,
+            quotaStatus: null,
+            policyRevision,
+            spamAssassinStatus: null,
+            spamAssassinScore: null,
+            spamAssassinThreshold: null);
 
     /// <summary>Accept after enabled stages.</summary>
-    public static PostFilterResult Accepted(PostFilterLease? lease) =>
-        new(PostFilterDecision.Accept, PostFilterStage.Complete, "accepted", lease);
+    public static PostFilterResult Accepted(PostFilterLease? lease, long policyRevision = 0) =>
+        new(
+            PostFilterDecision.Accept,
+            PostFilterStage.Complete,
+            "accepted",
+            lease,
+            quotaStatus: null,
+            policyRevision,
+            spamAssassinStatus: null,
+            spamAssassinScore: null,
+            spamAssassinThreshold: null);
 
     /// <summary>Reject.</summary>
-    public static PostFilterResult Rejected(PostFilterStage stage, string reason) =>
-        new(PostFilterDecision.Reject, stage, reason, lease: null);
+    public static PostFilterResult Rejected(PostFilterStage stage, string reason, long policyRevision = 0) =>
+        new(
+            PostFilterDecision.Reject,
+            stage,
+            reason,
+            lease: null,
+            quotaStatus: null,
+            policyRevision,
+            spamAssassinStatus: null,
+            spamAssassinScore: null,
+            spamAssassinThreshold: null);
 
     /// <summary>Reject with a quota reserve status.</summary>
     internal static PostFilterResult Rejected(
         PostFilterStage stage,
         string reason,
-        PostFilterQuotaReserveStatus? quotaStatus) =>
-        new(PostFilterDecision.Reject, stage, reason, lease: null, quotaStatus);
+        PostFilterQuotaReserveStatus? quotaStatus,
+        long policyRevision = 0) =>
+        new(
+            PostFilterDecision.Reject,
+            stage,
+            reason,
+            lease: null,
+            quotaStatus,
+            policyRevision,
+            spamAssassinStatus: null,
+            spamAssassinScore: null,
+            spamAssassinThreshold: null);
+
+    /// <summary>Reject after SpamAssassin CHECK.</summary>
+    internal static PostFilterResult RejectedSpamAssassin(
+        string reason,
+        long policyRevision,
+        PostFilterSpamAssassinResult scan) =>
+        new(
+            PostFilterDecision.Reject,
+            PostFilterStage.SpamAssassin,
+            reason,
+            lease: null,
+            quotaStatus: null,
+            policyRevision,
+            scan.Status,
+            scan.Score,
+            scan.Threshold);
 }

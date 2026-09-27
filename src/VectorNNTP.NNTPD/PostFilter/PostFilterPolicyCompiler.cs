@@ -151,7 +151,8 @@ internal static class PostFilterPolicyCompiler
             }
 
             var trimmed = value.Trim();
-            if (!set.Add(trimmed))
+            var identifier = PostFilterAccountIdentity.FromPolicyEntry(trimmed);
+            if (!set.Add(identifier))
             {
                 throw new InvalidOperationException($"PostFilter {name} contains a duplicate entry: '{trimmed}'.");
             }

@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Authentication.Sasl;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
@@ -49,7 +50,31 @@ public sealed class NntpReaderAuthenticationTests
         Assert.NotNull(session.AccountPolicy);
         Assert.Equal(0, session.AccountPolicy!.RateLimitBps);
         Assert.True(session.AccountPolicy.ByteLimit > 0);
+        Assert.Equal(ArticleTypeCapabilities.All, session.AccountPolicy.AllowedArtTypes);
 
+        await harness.WriteClientLineAsync("QUIT");
+        await harness.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task UserPass_CachesTextOnlyArtTypeCapability()
+    {
+        await using var harness = await AuthHarness.CreateAsync(
+            MemoryNntpUserRecordStore.Create(
+                "alice",
+                "secret",
+                allowedArtTypes: ArticleTypeCapabilities.TextOnly));
+        var session = harness.CreateSession();
+        var run = session.RunAsync();
+        await harness.ReadGreetingAsync();
+        await harness.WriteClientLineAsync("AUTHINFO USER alice");
+        Assert.StartsWith("381 ", await harness.ReadClientLineAsync(), StringComparison.Ordinal);
+        await harness.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.StartsWith("281 ", await harness.ReadClientLineAsync(), StringComparison.Ordinal);
+        Assert.Equal(ArticleTypeCapabilities.TextOnly, session.AccountPolicy!.AllowedArtTypes);
+        Assert.True(ArticleTypeAccessPolicy.CanPostArticleType(session, ArticleType.Default));
+        Assert.False(ArticleTypeAccessPolicy.CanPostArticleType(session, ArticleType.Binary));
         await harness.WriteClientLineAsync("QUIT");
         await harness.ReadClientLineAsync();
         await run;
@@ -101,6 +126,30 @@ public sealed class NntpReaderAuthenticationTests
         await harness.ReadClientLineAsync();
         await harness.WriteClientLineAsync("AUTHINFO PASS secret");
         Assert.Equal("481 Authentication failed", await harness.ReadClientLineAsync());
+        Assert.False(session.Authentication.IsAuthenticated);
+
+        await harness.WriteClientLineAsync("QUIT");
+        await harness.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task MissingAccountArtTypeColumn_Returns503_Not481()
+    {
+        var store = new MemoryNntpUserRecordStore();
+        store.Add(MemoryNntpUserRecordStore.Create("alice", "secret"));
+        store.Exception = new NntpDbUnavailableException(
+            "MySQL nntpusers lookup failed.",
+            new InvalidOperationException("Unknown column 'account_art_type'"));
+        await using var harness = await AuthHarness.CreateAsync(store);
+        var session = harness.CreateSession();
+        var run = session.RunAsync();
+        await harness.ReadGreetingAsync();
+
+        await harness.WriteClientLineAsync("AUTHINFO USER alice");
+        await harness.ReadClientLineAsync();
+        await harness.WriteClientLineAsync("AUTHINFO PASS secret");
+        Assert.Equal("503 Temporary authentication failure", await harness.ReadClientLineAsync());
         Assert.False(session.Authentication.IsAuthenticated);
 
         await harness.WriteClientLineAsync("QUIT");

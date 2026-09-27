@@ -55,6 +55,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
 
     public Exception? QueryPostFilterPolicyException { get; set; }
 
+    public Exception? InsertPostFilterRejectionException { get; set; }
+
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
 
     public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
@@ -126,6 +128,7 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             PostFilterRevisions = PostFilterRevisions,
             PostFilterCurrentRevision = PostFilterCurrentRevision,
             QueryPostFilterPolicyException = QueryPostFilterPolicyException,
+            InsertPostFilterRejectionException = InsertPostFilterRejectionException,
             BlockQueryNewsgroups = BlockQueryNewsgroups,
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
         };
@@ -333,6 +336,28 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         return ValueTask.FromResult(PostFilterPolicy);
     }
 
+    public List<PostFilterRejectionEvidence> Rejections { get; } = [];
+
+    public Exception? InsertPostFilterRejectionException { get; set; }
+
+    public int InsertPostFilterRejectionCount { get; private set; }
+
+    public ValueTask InsertPostFilterRejectionAsync(
+        PostFilterRejectionEvidence evidence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        cancellationToken.ThrowIfCancellationRequested();
+        InsertPostFilterRejectionCount++;
+        if (InsertPostFilterRejectionException is not null)
+        {
+            throw InsertPostFilterRejectionException;
+        }
+
+        Rejections.Add(evidence);
+        return ValueTask.CompletedTask;
+    }
+
     public ValueTask DisposeAsync()
     {
         DisposeCount++;
@@ -354,5 +379,6 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
             record.SessionLimit,
             record.SrcIpLimit,
             record.IsEnabled,
-            record.CustomerId);
+            record.CustomerId,
+            record.AllowedArtTypes);
 }

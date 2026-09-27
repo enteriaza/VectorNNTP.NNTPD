@@ -49,14 +49,18 @@ public sealed class PostFilterOptions
     /// <summary>Gets or sets the operational gate.</summary>
     public PostFilterGateState Gate { get; set; } = PostFilterGateState.Disabled;
 
-    /// <summary>Gets or sets exact authenticated account names that are denied.</summary>
+    /// <summary>
+    /// Gets or sets deny-list entries. Plaintext usernames are hashed to
+    /// lowercase MD5 hex at compile time. Stored NntpDB values are already hashed.
+    /// </summary>
     public string[] DeniedAccounts { get; set; } = [];
 
     /// <summary>Gets or sets client CIDRs that are denied.</summary>
     public string[] DeniedCidrs { get; set; } = [];
 
     /// <summary>
-    /// Gets or sets authenticated account names that skip SpamAssassin only.
+    /// Gets or sets allow-list entries (same MD5 identity rules as
+    /// <see cref="DeniedAccounts"/>) that skip SpamAssassin only.
     /// Does not skip the gate, deny, ArtType, or quotas.
     /// </summary>
     public string[] AllowlistedAccounts { get; set; } = [];

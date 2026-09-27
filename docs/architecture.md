@@ -244,7 +244,11 @@ AUTHINFO PASS password
     → authority from MODE, never from source IP (no Transit ↔ MySQL fallback)
     → MODE STREAM / Stream: Transit peer credentials only
     → MODE READER / unspecified: INntpAuthenticationProvider (newsmaster, then nntpusers).
-      Reader `nntpusers` lookup is `INntpUserRecordStore`:
+      Reader `nntpusers` lookup is `INntpUserRecordStore` and also selects
+      `account_art_type` (INT flags; default 65535 = `ArticleTypeCapabilities.All`).
+      Operators must apply `docs/nntpusers-account-art-type.sql` first; a missing
+      column is `503`, not unrestricted. The mask is copied onto
+      `NntpAccountPolicy` for the session lifetime:
 
         AUTHINFO
            |

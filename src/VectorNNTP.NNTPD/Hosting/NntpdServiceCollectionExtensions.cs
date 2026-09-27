@@ -338,6 +338,13 @@ public static class NntpdServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, PostFilterPolicyService>(static sp =>
                 sp.GetRequiredService<PostFilterPolicyService>()));
         services.TryAddSingleton<IPostFilter, PostFilterEvaluator>();
+        services.TryAddSingleton<PostFilterRejectionEvidenceQueue>();
+        services.TryAddSingleton<IPostFilterRejectionEvidenceQueue>(static sp =>
+            sp.GetRequiredService<PostFilterRejectionEvidenceQueue>());
+        services.TryAddSingleton<PostFilterRejectionEvidenceService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, PostFilterRejectionEvidenceService>(static sp =>
+                sp.GetRequiredService<PostFilterRejectionEvidenceService>()));
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());

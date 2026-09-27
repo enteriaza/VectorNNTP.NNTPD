@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -62,6 +63,34 @@ public sealed class TakeThisCommandTests
         Assert.True(article.Record.Fields.MessageId.IsPresent);
         Assert.True(article.Record.Fields.Newsgroups.IsPresent);
         Assert.True(article.Record.Fields.Date.IsPresent);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task TakeThis_TextOnlyCapability_RejectsYEncoded()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        session.ApplySuccessfulAuthentication(
+            "poster",
+            TransitAuth,
+            new NntpAccountPolicy("poster", 0, 0, 0, 0, "c", ArticleTypeCapabilities.TextOnly));
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<yenc-denied@example.com>";
+        var article = CanonicalArticleText.Destuffed(
+            id,
+            "=ybegin line=128 size=3 name=a.bin\r\nabc\r\n=yend size=3\r\n");
+        await duplex.WriteClientAsync(BuildTakeThis(id, article));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();

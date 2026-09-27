@@ -50,6 +50,36 @@ internal static partial class PostFilterLogMessages
     public static partial void PolicyRepositoryFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(
+        EventId = 2840,
+        Level = LogLevel.Information,
+        Message = "PostFilter evidence writer started capacity={Capacity}")]
+    public static partial void EvidenceWriterStarted(ILogger logger, int capacity);
+
+    [LoggerMessage(
+        EventId = 2841,
+        Level = LogLevel.Information,
+        Message = "PostFilter evidence writer stopped written={Written} dropped={Dropped} writeFailures={WriteFailures}")]
+    public static partial void EvidenceWriterStopped(ILogger logger, long written, long dropped, long writeFailures);
+
+    [LoggerMessage(
+        EventId = 2842,
+        Level = LogLevel.Warning,
+        Message = "PostFilter evidence writer stopped with queued items remaining={Remaining}")]
+    public static partial void EvidenceWriterStoppedWithQueued(ILogger logger, int remaining);
+
+    [LoggerMessage(
+        EventId = 2843,
+        Level = LogLevel.Error,
+        Message = "PostFilter evidence write failed stage={Stage} reason={Reason}")]
+    public static partial void EvidenceWriteFailed(ILogger logger, Exception exception, PostFilterStage stage, string reason);
+
+    [LoggerMessage(
+        EventId = 2844,
+        Level = LogLevel.Warning,
+        Message = "PostFilter evidence queue full; rejection evidence dropped stage={Stage} reason={Reason}")]
+    public static partial void EvidenceQueueFull(ILogger logger, PostFilterStage stage, string reason);
+
+    [LoggerMessage(
         EventId = 2807,
         Level = LogLevel.Information,
         Message = "PostFilter SPAMD transport stopped connects={Connects} checks={Checks} reuses={Reuses} reconnects={Reconnects} evictions={Evictions}")]

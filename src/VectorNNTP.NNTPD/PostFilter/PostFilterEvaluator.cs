@@ -47,29 +47,29 @@ internal sealed class PostFilterEvaluator : IPostFilter
         if (snapshot.Gate == PostFilterGateState.Disabled)
         {
             PostFilterLogMessages.Accepted(_logger, PostFilterStage.Gate, account, artId, reserved: false);
-            return PostFilterResult.AcceptedDisabled();
+            return PostFilterResult.AcceptedDisabled(snapshot.Revision);
         }
 
         if (snapshot.Gate == PostFilterGateState.Closed)
         {
-            return Reject(PostFilterStage.Gate, "closed", account, artId);
+            return Reject(snapshot, PostFilterStage.Gate, "closed", account, artId);
         }
 
         if (IsDenied(snapshot, request))
         {
-            return Reject(PostFilterStage.Deny, "denied", account, artId);
+            return Reject(snapshot, PostFilterStage.Deny, "denied", account, artId);
         }
 
         if (snapshot.RejectArtTypes != ArticleType.None
             && (request.Article.ArtType & snapshot.RejectArtTypes) != 0)
         {
-            return Reject(PostFilterStage.ArtType, "arttype", account, artId);
+            return Reject(snapshot, PostFilterStage.ArtType, "arttype", account, artId);
         }
 
         var allowlisted = IsAllowlisted(snapshot, request);
         if (string.IsNullOrWhiteSpace(request.AccountName))
         {
-            return Reject(PostFilterStage.Quota, "unauthenticated", account, artId);
+            return Reject(snapshot, PostFilterStage.Quota, "unauthenticated", account, artId);
         }
 
         var reservation = _identity.Next();
@@ -105,7 +105,7 @@ internal sealed class PostFilterEvaluator : IPostFilter
 
         if (reserved != PostFilterQuotaReserveStatus.Accepted)
         {
-            return Reject(PostFilterStage.Quota, reserved.ToString(), account, artId, reserved);
+            return Reject(snapshot, PostFilterStage.Quota, reserved.ToString(), account, artId, reserved);
         }
 
         var lease = new PostFilterLease(
@@ -141,7 +141,8 @@ internal sealed class PostFilterEvaluator : IPostFilter
             if (scan.Status == PostFilterSpamAssassinStatus.Spam)
             {
                 await ReleaseQuietAsync(lease, request.Now).ConfigureAwait(false);
-                return Reject(PostFilterStage.SpamAssassin, "spam", account, artId);
+                PostFilterLogMessages.Rejected(_logger, PostFilterStage.SpamAssassin, "spam", account, artId);
+                return PostFilterResult.RejectedSpamAssassin("spam", snapshot.Revision, scan);
             }
 
             if (scan.Status == PostFilterSpamAssassinStatus.Failed)
@@ -158,16 +159,26 @@ internal sealed class PostFilterEvaluator : IPostFilter
                 if (action == PostFilterSpamOnFailure.Reject)
                 {
                     await ReleaseQuietAsync(lease, request.Now).ConfigureAwait(false);
-                    return Reject(PostFilterStage.SpamAssassin, "scanner-failure", account, artId);
+                    PostFilterLogMessages.Rejected(
+                        _logger,
+                        PostFilterStage.SpamAssassin,
+                        "scanner-failure",
+                        account,
+                        artId);
+                    return PostFilterResult.RejectedSpamAssassin(
+                        "scanner-failure",
+                        snapshot.Revision,
+                        scan);
                 }
             }
         }
 
         PostFilterLogMessages.Accepted(_logger, PostFilterStage.Complete, account, artId, reserved: true);
-        return PostFilterResult.Accepted(lease);
+        return PostFilterResult.Accepted(lease, snapshot.Revision);
     }
 
     private PostFilterResult Reject(
+        PostFilterPolicySnapshot snapshot,
         PostFilterStage stage,
         string reason,
         string account,
@@ -175,7 +186,7 @@ internal sealed class PostFilterEvaluator : IPostFilter
         PostFilterQuotaReserveStatus? quotaStatus = null)
     {
         PostFilterLogMessages.Rejected(_logger, stage, reason, account, artId);
-        return PostFilterResult.Rejected(stage, reason, quotaStatus);
+        return PostFilterResult.Rejected(stage, reason, quotaStatus, snapshot.Revision);
     }
 
     private async ValueTask ReleaseQuietAsync(PostFilterLease lease, DateTimeOffset now)
@@ -202,8 +213,8 @@ internal sealed class PostFilterEvaluator : IPostFilter
 
     private static bool IsDenied(PostFilterPolicySnapshot snapshot, in PostFilterRequest request)
     {
-        if (request.AccountName is { Length: > 0 }
-            && snapshot.DeniedAccounts.Contains(request.AccountName))
+        var accountId = PostFilterAccountIdentity.TryFromRequest(request.AccountName);
+        if (accountId is not null && snapshot.DeniedAccounts.Contains(accountId))
         {
             return true;
         }
@@ -222,8 +233,8 @@ internal sealed class PostFilterEvaluator : IPostFilter
 
     private static bool IsAllowlisted(PostFilterPolicySnapshot snapshot, in PostFilterRequest request)
     {
-        if (request.AccountName is { Length: > 0 }
-            && snapshot.AllowlistedAccounts.Contains(request.AccountName))
+        var accountId = PostFilterAccountIdentity.TryFromRequest(request.AccountName);
+        if (accountId is not null && snapshot.AllowlistedAccounts.Contains(accountId))
         {
             return true;
         }

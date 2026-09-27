@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Articles;
+
 namespace VectorNNTP.NNTPD.Authentication;
 
 /// <summary>
@@ -26,7 +28,8 @@ public sealed class NntpUserRecord
         int sessionLimit,
         int srcIpLimit,
         bool isEnabled,
-        string customerId)
+        string customerId,
+        ArticleType allowedArtTypes = ArticleTypeCapabilities.All)
     {
         ArgumentException.ThrowIfNullOrEmpty(accountName);
         ArgumentOutOfRangeException.ThrowIfNegative(scramIterations);
@@ -44,6 +47,7 @@ public sealed class NntpUserRecord
         SrcIpLimit = srcIpLimit;
         IsEnabled = isEnabled;
         CustomerId = customerId ?? string.Empty;
+        AllowedArtTypes = allowedArtTypes;
     }
 
     /// <summary>Gets the plaintext wire username (not the MD5 column value).</summary>
@@ -95,6 +99,12 @@ public sealed class NntpUserRecord
 
     /// <summary>Gets <c>customer_id</c>.</summary>
     public string CustomerId { get; }
+
+    /// <summary>
+    /// Gets <c>account_art_type</c> flags loaded at AUTHINFO.
+    /// <see cref="ArticleTypeCapabilities.All"/> is unrestricted.
+    /// </summary>
+    public ArticleType AllowedArtTypes { get; }
 
     /// <summary>Gets whether stored SCRAM material is complete enough to begin an exchange.</summary>
     public bool HasScramMaterial =>

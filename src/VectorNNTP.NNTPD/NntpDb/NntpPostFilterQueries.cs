@@ -39,10 +39,47 @@ public static class NntpPostFilterQueries
         WHERE revision = @revision
         """;
 
-    /// <summary>Deny/allow AUTH usernames for <c>@revision</c>.</summary>
+    /// <summary>Deny/allow MD5 account identifiers for <c>@revision</c>.</summary>
     public const string SelectAccounts =
         "SELECT list_kind, account_name FROM nntppostfilteraccounts "
         + "WHERE revision = @revision ORDER BY list_kind, account_name";
+
+    /// <summary>
+    /// Inserts one PostFilter rejection evidence row. Payload is the unstuffed
+    /// article when available. Never used on the accept path.
+    /// </summary>
+    public const string InsertRejection =
+        """
+        INSERT INTO nntppostfilterrejections (
+          rejected_utc,
+          revision,
+          account_name,
+          source_ip,
+          art_type,
+          message_id,
+          article_size,
+          stage,
+          reason,
+          sa_status,
+          sa_score,
+          sa_threshold,
+          article_payload
+        ) VALUES (
+          @rejected_utc,
+          @revision,
+          @account_name,
+          @source_ip,
+          @art_type,
+          @message_id,
+          @article_size,
+          @stage,
+          @reason,
+          @sa_status,
+          @sa_score,
+          @sa_threshold,
+          @article_payload
+        )
+        """;
 
     /// <summary>Deny/allow client CIDRs for <c>@revision</c>.</summary>
     public const string SelectCidrs =

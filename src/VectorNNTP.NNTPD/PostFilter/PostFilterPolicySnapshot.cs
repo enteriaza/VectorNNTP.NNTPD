@@ -58,13 +58,13 @@ internal sealed class PostFilterPolicySnapshot
     /// <summary>Gets the operational gate.</summary>
     public PostFilterGateState Gate { get; }
 
-    /// <summary>Gets denied account names (ordinal).</summary>
+    /// <summary>Gets denied account MD5 identifiers (ordinal lowercase hex).</summary>
     public IReadOnlySet<string> DeniedAccounts { get; }
 
     /// <summary>Gets denied client networks.</summary>
     public IReadOnlyList<IPNetwork> DeniedCidrs { get; }
 
-    /// <summary>Gets allowlisted account names (ordinal).</summary>
+    /// <summary>Gets allowlisted account MD5 identifiers (ordinal lowercase hex).</summary>
     public IReadOnlySet<string> AllowlistedAccounts { get; }
 
     /// <summary>Gets allowlisted client networks.</summary>

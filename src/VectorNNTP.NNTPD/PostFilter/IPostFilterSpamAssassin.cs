@@ -33,7 +33,7 @@ internal readonly record struct PostFilterSpamAssassinTarget(
     PostFilterSpamAssassinHostSelection HostSelection);
 
 /// <summary>CHECK outcome classified for PostFilter policy.</summary>
-internal enum PostFilterSpamAssassinStatus
+public enum PostFilterSpamAssassinStatus
 {
     /// <summary>SPAMD reported ham.</summary>
     Ham = 0,
@@ -49,10 +49,16 @@ internal enum PostFilterSpamAssassinStatus
 internal readonly struct PostFilterSpamAssassinResult
 {
     /// <summary>Initializes a result.</summary>
-    public PostFilterSpamAssassinResult(PostFilterSpamAssassinStatus status, string detail)
+    public PostFilterSpamAssassinResult(
+        PostFilterSpamAssassinStatus status,
+        string detail,
+        decimal? score = null,
+        decimal? threshold = null)
     {
         Status = status;
         Detail = detail;
+        Score = score;
+        Threshold = threshold;
     }
 
     /// <summary>Gets the classified status.</summary>
@@ -61,13 +67,22 @@ internal readonly struct PostFilterSpamAssassinResult
     /// <summary>Gets an internal detail.</summary>
     public string Detail { get; }
 
+    /// <summary>Gets the SPAMD score when the Spam header included one.</summary>
+    public decimal? Score { get; }
+
+    /// <summary>Gets the SPAMD threshold when the Spam header included one.</summary>
+    public decimal? Threshold { get; }
+
     /// <summary>Ham.</summary>
-    public static PostFilterSpamAssassinResult Ham() =>
-        new(PostFilterSpamAssassinStatus.Ham, "ham");
+    public static PostFilterSpamAssassinResult Ham(decimal? score = null, decimal? threshold = null) =>
+        new(PostFilterSpamAssassinStatus.Ham, "ham", score, threshold);
 
     /// <summary>Spam.</summary>
-    public static PostFilterSpamAssassinResult Spam(string detail) =>
-        new(PostFilterSpamAssassinStatus.Spam, detail);
+    public static PostFilterSpamAssassinResult Spam(
+        string detail,
+        decimal? score = null,
+        decimal? threshold = null) =>
+        new(PostFilterSpamAssassinStatus.Spam, detail, score, threshold);
 
     /// <summary>Scanner fault.</summary>
     public static PostFilterSpamAssassinResult Failed(string detail) =>

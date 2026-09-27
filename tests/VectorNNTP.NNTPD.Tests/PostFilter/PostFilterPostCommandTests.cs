@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -70,6 +71,126 @@ public sealed class PostFilterPostCommandTests
         await PostAsync(duplex, duplex.CreateSession(queue, CreateFilter(snapshot, quota)), "441 Posting failed");
         Assert.Equal(0, queue.Count);
         Assert.Empty(quota.Operations);
+    }
+
+    [Fact]
+    public async Task DeniedAccount_EnqueuesRejectionEvidence()
+    {
+        var quota = new RecordingQuotaStore();
+        var evidence = new PostFilterRejectionEvidenceQueue();
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            DeniedAccounts = ["poster"],
+        });
+        await using var duplex = new PostDuplex();
+        await PostAsync(
+            duplex,
+            duplex.CreateSession(NewQueue(), CreateFilter(snapshot, quota), postFilterEvidence: evidence),
+            "441 Posting failed");
+        var row = Assert.Single(await DrainAsync(evidence));
+        Assert.Equal(PostFilterStage.Deny, row.Stage);
+        Assert.Equal("denied", row.Reason);
+        Assert.Equal(PostFilterAccountIdentity.FromUsername("poster"), row.AccountName);
+        Assert.Equal(IPAddress.Loopback, row.SourceAddress);
+        Assert.Equal(ArticleType.Default, row.ArtType);
+        Assert.NotNull(row.MessageId);
+        Assert.True(row.ArticleSize > 0);
+        Assert.NotNull(row.ArticlePayload);
+        Assert.Null(row.SpamAssassinStatus);
+    }
+
+    [Fact]
+    public async Task AcceptedPost_DoesNotEnqueueRejectionEvidence()
+    {
+        var evidence = new PostFilterRejectionEvidenceQueue();
+        await using var duplex = new PostDuplex();
+        await PostAsync(
+            duplex,
+            duplex.CreateSession(
+                NewQueue(),
+                CreateFilter(PostFilterPolicySnapshot.Disabled, new RecordingQuotaStore()),
+                postFilterEvidence: evidence),
+            "240 Article received OK");
+        evidence.Complete();
+        Assert.Null(await evidence.DequeueAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task QueueFull_StillReturns441()
+    {
+        var evidence = new PostFilterRejectionEvidenceQueue(capacity: 1);
+        Assert.True(evidence.TryEnqueue(new PostFilterRejectionEvidence(
+            DateTimeOffset.UtcNow,
+            1,
+            "other",
+            IPAddress.Loopback,
+            ArticleType.Default,
+            "<x@example.com>",
+            1,
+            PostFilterStage.Gate,
+            "closed",
+            null,
+            null,
+            null,
+            null)));
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Closed,
+        });
+        await using var duplex = new PostDuplex();
+        await PostAsync(
+            duplex,
+            duplex.CreateSession(
+                NewQueue(),
+                CreateFilter(snapshot, new RecordingQuotaStore()),
+                postFilterEvidence: evidence),
+            "441 Posting failed");
+        Assert.Equal(1, evidence.Dropped);
+    }
+
+    [Fact]
+    public async Task TextOnlyCapability_RejectsYEncoded_WithoutPostFilter()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, CreateFilter(PostFilterPolicySnapshot.Disabled, new RecordingQuotaStore()));
+        session.ApplySuccessfulAuthentication(
+            "poster",
+            Poster,
+            new NntpAccountPolicy("poster", 0, 0, 0, 0, "c", ArticleTypeCapabilities.TextOnly));
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(YEncodedArticle() + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+        Assert.Equal(0, queue.Count);
+    }
+
+    [Fact]
+    public async Task TextOnlyCapability_AllowsDefaultText()
+    {
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, CreateFilter(PostFilterPolicySnapshot.Disabled, new RecordingQuotaStore()));
+        session.ApplySuccessfulAuthentication(
+            "poster",
+            Poster,
+            new NntpAccountPolicy("poster", 0, 0, 0, 0, "c", ArticleTypeCapabilities.TextOnly));
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(ValidArticle() + ".\r\n");
+        Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+        Assert.Equal(1, queue.Count);
     }
 
     [Fact]
@@ -567,6 +688,30 @@ public sealed class PostFilterPostCommandTests
         + "\r\n"
         + "body\r\n";
 
+    private static string YEncodedArticle() =>
+        "Date: " + PostRfcDate.Format(DateTimeOffset.UtcNow) + "\r\n"
+        + "From: poster@example.com\r\n"
+        + "Newsgroups: misc.test\r\n"
+        + "Subject: test\r\n"
+        + "Message-ID: <" + Guid.NewGuid().ToString("N") + "@example.com>\r\n"
+        + "\r\n"
+        + "=ybegin line=128 size=3 name=a.bin\r\n"
+        + "abc\r\n"
+        + "=yend size=3\r\n";
+
+    private static async Task<List<PostFilterRejectionEvidence>> DrainAsync(
+        PostFilterRejectionEvidenceQueue queue)
+    {
+        queue.Complete();
+        var rows = new List<PostFilterRejectionEvidence>();
+        while (await queue.DequeueAsync(CancellationToken.None) is { } row)
+        {
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
     private sealed class PostDuplex : IAsyncDisposable
     {
         private readonly Pipe _clientToServer = new(NntpPipeOptions.Create());
@@ -577,7 +722,8 @@ public sealed class PostFilterPostCommandTests
             IPostFilter filter,
             PostFilterMetrics? metrics = null,
             IHistoryDb? historyDb = null,
-            bool cancelConnectionAfterAccept = false)
+            bool cancelConnectionAfterAccept = false,
+            IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -597,7 +743,8 @@ public sealed class PostFilterPostCommandTests
                 postingTraceProtector: AesGcmPostingTraceProtector.Create(
                     new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey }),
                 postFilter: wired,
-                postFilterMetrics: metrics);
+                postFilterMetrics: metrics,
+                postFilterEvidence: postFilterEvidence);
         }
 
         public async Task WriteClientLineAsync(string line) =>

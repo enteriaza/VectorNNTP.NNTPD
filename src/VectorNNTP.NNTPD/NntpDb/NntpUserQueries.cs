@@ -16,9 +16,19 @@ public static class NntpUserQueries
         + "scram_salt, scram_iterations, scram_stored_key, scram_server_key, "
         + "allow_auth_plain, allow_auth_scram256, "
         + "account_rate_limit, account_byte_limit, account_session_limit, account_srcip_limit, "
-        + "is_enabled, customer_id "
+        + "is_enabled, customer_id, account_art_type "
         + "FROM nntpusers "
         + "WHERE account_name = MD5(@account_name)";
+
+    /// <summary>
+    /// Additive <c>nntpusers</c> extension from
+    /// <c>docs/nntpusers-account-art-type.sql</c>. Does not drop the table.
+    /// Default <c>65535</c> is <c>ArticleTypeCapabilities.All</c>.
+    /// </summary>
+    public const string AddAccountArtTypeColumn =
+        "ALTER TABLE nntpusers "
+        + "ADD COLUMN account_art_type INT UNSIGNED NOT NULL DEFAULT 65535 "
+        + "COMMENT 'ArticleType flags; 65535=ArticleTypeCapabilities.All (unrestricted)'";
 
     /// <summary>Locks one <c>nntpusers</c> row so a consume can read remaining atomically.</summary>
     public const string SelectByteQuotaForUpdate =

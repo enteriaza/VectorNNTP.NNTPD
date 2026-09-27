@@ -106,7 +106,8 @@ public sealed class NntpSession
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
         IPostFilter? postFilter = null,
-        PostFilterMetrics? postFilterMetrics = null)
+        PostFilterMetrics? postFilterMetrics = null,
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -176,6 +177,7 @@ public sealed class NntpSession
         ArticleWorkRpc = articleWorkRpc;
         PostFilter = postFilter ?? DisabledPostFilter.Instance;
         PostFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
+        PostFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -201,6 +203,9 @@ public sealed class NntpSession
 
     /// <summary>Gets process counters for PostFilter COMMIT outcomes.</summary>
     internal PostFilterMetrics PostFilterMetrics { get; }
+
+    /// <summary>Gets the bounded PostFilter rejection-evidence queue.</summary>
+    internal IPostFilterRejectionEvidenceQueue PostFilterEvidence { get; }
 
     /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
     public int MaxArticleSize { get; }

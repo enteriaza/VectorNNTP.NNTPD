@@ -22,7 +22,8 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
 
     public string? SkipReason { get; private set; }
 
-    public long RevisionBase { get; } = 9_000_000_000L + (Environment.TickCount64 % 1_000_000L) * 100L;
+    public long RevisionBase { get; private set; } =
+        9_000_000_000L + (Environment.TickCount64 % 1_000_000L) * 100L;
 
     public MySqlPostFilterPolicyRepository? Repository { get; private set; }
 
@@ -56,13 +57,30 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
                     await command.ExecuteNonQueryAsync();
                 }
             }
+            else
+            {
+                try
+                {
+                    await EnsureExtendedSchemaAsync(connection);
+                }
+                catch (MySqlException ex)
+                {
+                    SkipReason = FormatPrepareFailure(ex);
+                    return;
+                }
+            }
 
             _savedCurrentRevision = await ReadCurrentRevisionAsync(connection);
+            if (_savedCurrentRevision is { } saved && saved >= RevisionBase)
+            {
+                RevisionBase = saved + 1_000;
+            }
+
             IsConfigured = true;
         }
         catch (Exception ex) when (ex is not InvalidOperationException)
         {
-            SkipReason = "PostFilter MySQL schema could not be prepared: " + ex.GetType().Name;
+            SkipReason = FormatPrepareFailure(ex);
             return;
         }
 
@@ -127,6 +145,19 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
         return revision;
     }
 
+    /// <summary>
+    /// Allocates a revision that remains after dispose so a live validation
+    /// publish can stay current. Must be higher than <see cref="RevisionBase"/>.
+    /// </summary>
+    public long NextPersistentRevision() =>
+        RevisionBase + 90_000 + (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 1_000);
+
+    /// <summary>
+    /// Remembers a published revision so dispose restores the pointer here
+    /// instead of the pre-test value.
+    /// </summary>
+    public void RememberPublishedRevision(long revision) => _savedCurrentRevision = revision;
+
     public async Task InsertDisabledRevisionAsync(long revision, Action<MySqlCommand>? customize = null)
     {
         var connectionString = RequireConnectionString();
@@ -177,7 +208,9 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
             {
                 command.Parameters.AddWithValue("@revision", revision);
                 command.Parameters.AddWithValue("@kind", listKind);
-                command.Parameters.AddWithValue("@value", account);
+                command.Parameters.AddWithValue(
+                    "@value",
+                    PostFilterAccountIdentity.FromPolicyEntry(account));
             });
     }
 
@@ -334,6 +367,44 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
         await ExecuteAsync(sql, bind);
     }
 
+    public async Task<object?> ExecuteRawScalarAsync(string sql, Action<MySqlCommand>? bind = null)
+    {
+        var connectionString = RequireConnectionString();
+        await using var connection = MySqlNntpDbConnectionFactory.CreateConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        bind?.Invoke(command);
+        return await command.ExecuteScalarAsync();
+    }
+
+    public async Task<string> ShowCreateTableAsync(string table)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        var connectionString = RequireConnectionString();
+        await using var connection = MySqlNntpDbConnectionFactory.CreateConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SHOW CREATE TABLE `" + table.Replace("`", string.Empty, StringComparison.Ordinal) + "`";
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            throw new InvalidOperationException("SHOW CREATE TABLE returned no rows.");
+        }
+
+        return reader.GetString(1);
+    }
+
+    public async Task InsertRejectionAsync(PostFilterRejectionEvidence evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        var connectionString = RequireConnectionString();
+        await using var connection = MySqlNntpDbConnectionFactory.CreateConnection(connectionString);
+        await connection.OpenAsync();
+        await using var db = new MySqlNntpDbConnection(connection);
+        await db.InsertPostFilterRejectionAsync(evidence, CancellationToken.None);
+    }
+
     public async Task<HeldPostFilterWrite> BeginHeldWriteAsync()
     {
         var connection = MySqlNntpDbConnectionFactory.CreateConnection(RequireConnectionString());
@@ -357,6 +428,24 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
         NntpDbIntegration.TryGetConnectionString()
         ?? throw new InvalidOperationException(NntpDbIntegration.SkipReason);
 
+    private static string FormatPrepareFailure(Exception ex)
+    {
+        if (ex is MySqlException mysql)
+        {
+            return "PostFilter MySQL schema could not be prepared: MySqlException "
+                + mysql.Number.ToString(CultureInfo.InvariantCulture)
+                + " "
+                + (mysql.SqlState ?? "-")
+                + " "
+                + mysql.Message;
+        }
+
+        return "PostFilter MySQL schema could not be prepared: "
+            + ex.GetType().Name
+            + " "
+            + ex.Message;
+    }
+
     private static async Task<bool> HasTableAsync(MySqlConnection connection, string table)
     {
         await using var command = connection.CreateCommand();
@@ -366,6 +455,124 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
         command.Parameters.AddWithValue("@name", table);
         var count = Convert.ToInt64(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
         return count > 0;
+    }
+
+    private static async Task EnsureExtendedSchemaAsync(MySqlConnection connection)
+    {
+        if (!await HasTableAsync(connection, "nntppostfilterrejections"))
+        {
+            var create = PostFilterSchemaScript.ReadStatements()
+                .Single(statement => statement.StartsWith(
+                    "CREATE TABLE nntppostfilterrejections",
+                    StringComparison.Ordinal));
+            await using var command = connection.CreateCommand();
+            command.CommandText = create;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        if (await HasTableAsync(connection, "nntppostfilteraccounts")
+            && await ColumnTypeAsync(connection, "nntppostfilteraccounts", "account_name") is { } accountType
+            && !accountType.Contains("char(32)", StringComparison.OrdinalIgnoreCase))
+        {
+            await using var hash = connection.CreateCommand();
+            hash.CommandText =
+                """
+                UPDATE nntppostfilteraccounts
+                SET account_name = LOWER(MD5(account_name))
+                WHERE CHAR_LENGTH(account_name) <> 32
+                """;
+            await hash.ExecuteNonQueryAsync();
+            await using var alter = connection.CreateCommand();
+            alter.CommandText =
+                "ALTER TABLE nntppostfilteraccounts MODIFY account_name CHAR(32) NOT NULL";
+            await alter.ExecuteNonQueryAsync();
+            try
+            {
+                await using var check = connection.CreateCommand();
+                check.CommandText =
+                    "ALTER TABLE nntppostfilteraccounts ADD CONSTRAINT chk_nntppostfilteraccounts_name "
+                    + "CHECK (account_name REGEXP '^[0-9a-f]{32}$')";
+                await check.ExecuteNonQueryAsync();
+            }
+            catch (MySqlException)
+            {
+                // Constraint may already exist on a partially migrated schema.
+            }
+        }
+
+        if (await HasTableAsync(connection, "nntppostfilterarttypes")
+            && await ColumnTypeAsync(connection, "nntppostfilterarttypes", "art_type") is { } artType
+            && !artType.Contains("enum", StringComparison.OrdinalIgnoreCase))
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText =
+                """
+                ALTER TABLE nntppostfilterarttypes
+                MODIFY art_type ENUM(
+                  'Default','Control','Cancel','Mime','Binary','UuEncode','Base64','YEncoded',
+                  'BommaNews','UniData','Multipart','Html','PostScript','BinHex','Partial','PgpMessage'
+                ) NOT NULL
+                """;
+            await alter.ExecuteNonQueryAsync();
+        }
+
+        if (await HasTableAsync(connection, "nntppostfilterrejections")
+            && await ColumnTypeAsync(connection, "nntppostfilterrejections", "source_ip") is { } sourceIpType
+            && !sourceIpType.Contains("varbinary", StringComparison.OrdinalIgnoreCase))
+        {
+            await using var convert = connection.CreateCommand();
+            convert.CommandText =
+                """
+                ALTER TABLE nntppostfilterrejections
+                  ADD COLUMN source_ip_bin VARBINARY(16) NULL
+                """;
+            await convert.ExecuteNonQueryAsync();
+            await using var copy = connection.CreateCommand();
+            copy.CommandText =
+                """
+                UPDATE nntppostfilterrejections
+                SET source_ip_bin = INET6_ATON(CAST(source_ip AS CHAR))
+                """;
+            await copy.ExecuteNonQueryAsync();
+            await using var drop = connection.CreateCommand();
+            drop.CommandText = "ALTER TABLE nntppostfilterrejections DROP COLUMN source_ip";
+            await drop.ExecuteNonQueryAsync();
+            await using var rename = connection.CreateCommand();
+            rename.CommandText =
+                """
+                ALTER TABLE nntppostfilterrejections
+                  CHANGE source_ip_bin source_ip VARBINARY(16) NOT NULL
+                """;
+            await rename.ExecuteNonQueryAsync();
+        }
+
+        if (await HasTableAsync(connection, "nntpusers")
+            && !await HasColumnAsync(connection, "nntpusers", "account_art_type"))
+        {
+            try
+            {
+                await using var alter = connection.CreateCommand();
+                alter.CommandText = NntpUserQueries.AddAccountArtTypeColumn;
+                await alter.ExecuteNonQueryAsync();
+            }
+            catch (MySqlException)
+            {
+                // Account capability is additive on nntpusers. PostFilter
+                // schema tests must still run when this ALTER is denied.
+            }
+        }
+    }
+
+    private static async Task<string?> ColumnTypeAsync(MySqlConnection connection, string table, string column)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT COLUMN_TYPE FROM information_schema.columns "
+            + "WHERE table_schema = DATABASE() AND table_name = @table AND column_name = @column";
+        command.Parameters.AddWithValue("@table", table);
+        command.Parameters.AddWithValue("@column", column);
+        var value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
     }
 
     private static async Task<bool> HasColumnAsync(MySqlConnection connection, string table, string column)

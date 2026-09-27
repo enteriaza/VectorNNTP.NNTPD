@@ -69,6 +69,31 @@ public sealed class PostFilterPolicyCompilerTests
     }
 
     [Fact]
+    public void Compile_HashesAccountNamesToLowercaseMd5()
+    {
+        var snapshot = PostFilterPolicyCompiler.Compile(new PostFilterOptions
+        {
+            DeniedAccounts = ["poster"],
+            AllowlistedAccounts = ["  allowed  "],
+        });
+        Assert.Equal(PostFilterAccountIdentity.FromUsername("poster"), Assert.Single(snapshot.DeniedAccounts));
+        Assert.Equal(PostFilterAccountIdentity.FromUsername("allowed"), Assert.Single(snapshot.AllowlistedAccounts));
+        Assert.DoesNotContain("poster", snapshot.DeniedAccounts);
+        Assert.DoesNotContain("allowed", snapshot.AllowlistedAccounts);
+    }
+
+    [Fact]
+    public void Compile_AccountMatchIsOrdinal_AfterHash()
+    {
+        var snapshot = PostFilterPolicyCompiler.Compile(new PostFilterOptions
+        {
+            DeniedAccounts = ["Poster"],
+        });
+        Assert.Contains(PostFilterAccountIdentity.FromUsername("Poster"), snapshot.DeniedAccounts);
+        Assert.DoesNotContain(PostFilterAccountIdentity.FromUsername("poster"), snapshot.DeniedAccounts);
+    }
+
+    [Fact]
     public void Compile_UnknownArtType_FailsCompletely()
     {
         var ex = Assert.Throws<InvalidOperationException>(() =>

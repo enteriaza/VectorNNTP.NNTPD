@@ -68,14 +68,14 @@ CREATE TABLE nntppostfiltercurrent (
 CREATE TABLE nntppostfilteraccounts (
   revision BIGINT UNSIGNED NOT NULL,
   list_kind VARCHAR(8) NOT NULL,
-  account_name VARCHAR(255) NOT NULL,
+  account_name CHAR(32) NOT NULL,
   PRIMARY KEY (revision, list_kind, account_name),
   CONSTRAINT chk_nntppostfilteraccounts_kind CHECK (list_kind IN ('deny', 'allow')),
-  CONSTRAINT chk_nntppostfilteraccounts_name CHECK (CHAR_LENGTH(TRIM(account_name)) > 0),
+  CONSTRAINT chk_nntppostfilteraccounts_name CHECK (account_name REGEXP '^[0-9a-f]{32}$'),
   CONSTRAINT fk_nntppostfilteraccounts_revision
     FOREIGN KEY (revision) REFERENCES nntppostfilterpolicy (revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='PostFilter deny/allow AUTH usernames for one revision';
+  COMMENT='PostFilter deny/allow MD5(hex) AUTH identities; real usernames are not stored';
 
 CREATE TABLE nntppostfiltercidrs (
   revision BIGINT UNSIGNED NOT NULL,
@@ -92,14 +92,30 @@ CREATE TABLE nntppostfiltercidrs (
 CREATE TABLE nntppostfilterarttypes (
   revision BIGINT UNSIGNED NOT NULL,
   list_kind VARCHAR(16) NOT NULL,
-  art_type VARCHAR(32) NOT NULL,
+  art_type ENUM(
+    'Default',
+    'Control',
+    'Cancel',
+    'Mime',
+    'Binary',
+    'UuEncode',
+    'Base64',
+    'YEncoded',
+    'BommaNews',
+    'UniData',
+    'Multipart',
+    'Html',
+    'PostScript',
+    'BinHex',
+    'Partial',
+    'PgpMessage'
+  ) NOT NULL,
   PRIMARY KEY (revision, list_kind, art_type),
   CONSTRAINT chk_nntppostfilterarttypes_kind CHECK (list_kind IN ('reject', 'sa_exclude')),
-  CONSTRAINT chk_nntppostfilterarttypes_value CHECK (CHAR_LENGTH(TRIM(art_type)) > 0),
   CONSTRAINT fk_nntppostfilterarttypes_revision
     FOREIGN KEY (revision) REFERENCES nntppostfilterpolicy (revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='PostFilter reject and SpamAssassin-exclude ArtTypes for one revision';
+  COMMENT='PostFilter reject and SA-exclude ArtTypes; one classifier name per row';
 
 CREATE TABLE nntppostfiltersahosts (
   revision BIGINT UNSIGNED NOT NULL,
@@ -112,6 +128,34 @@ CREATE TABLE nntppostfiltersahosts (
     FOREIGN KEY (revision) REFERENCES nntppostfilterpolicy (revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='PostFilter SPAMD hosts in compiled order for one revision';
+
+CREATE TABLE nntppostfilterrejections (
+  rejection_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  rejected_utc DATETIME(3) NOT NULL,
+  revision BIGINT UNSIGNED NOT NULL,
+  account_name CHAR(32) NULL,
+  source_ip VARBINARY(16) NOT NULL,
+  art_type INT UNSIGNED NOT NULL,
+  message_id VARCHAR(250) NULL,
+  article_size INT UNSIGNED NOT NULL,
+  stage VARCHAR(32) NOT NULL,
+  reason VARCHAR(64) NOT NULL,
+  sa_status VARCHAR(16) NULL,
+  sa_score DECIMAL(8,3) NULL,
+  sa_threshold DECIMAL(8,3) NULL,
+  article_payload LONGBLOB NULL,
+  PRIMARY KEY (rejection_id),
+  KEY ix_nntppostfilterrejections_rejected_utc (rejected_utc),
+  KEY ix_nntppostfilterrejections_account (account_name),
+  KEY ix_nntppostfilterrejections_revision (revision),
+  CONSTRAINT chk_nntppostfilterrejections_source_ip CHECK (OCTET_LENGTH(source_ip) IN (4, 16)),
+  CONSTRAINT chk_nntppostfilterrejections_account CHECK (
+    account_name IS NULL OR account_name REGEXP '^[0-9a-f]{32}$'
+  ),
+  CONSTRAINT chk_nntppostfilterrejections_stage CHECK (CHAR_LENGTH(TRIM(stage)) > 0),
+  CONSTRAINT chk_nntppostfilterrejections_reason CHECK (CHAR_LENGTH(TRIM(reason)) > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='Append-only PostFilter rejection evidence; payload is unstuffed article bytes or NULL';
 
 DELIMITER $$
 CREATE TRIGGER trg_nntppostfiltercurrent_revision_forward
@@ -146,3 +190,11 @@ INSERT INTO nntppostfilterarttypes (revision, list_kind, art_type)
 VALUES (1, 'sa_exclude', 'YEncoded');
 
 INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1);
+
+-- nntppostfilterrejections is append-oriented evidence. This script does not
+-- delete rows. Retention is an explicit operator decision; NNTPD has no
+-- PostFilter evidence sweeper.
+--
+-- Authenticated account ArtType capability is not created here.
+-- Apply docs/nntpusers-account-art-type.sql to the existing account
+-- database before deploying the AUTHINFO SELECT that reads account_art_type.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using MySqlConnector;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
@@ -29,6 +30,11 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
         Assert.Contains("CREATE TABLE nntppostfiltercidrs", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE nntppostfilterarttypes", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE nntppostfiltersahosts", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE nntppostfilterrejections", sql, StringComparison.Ordinal);
+        Assert.Contains("source_ip VARBINARY(16) NOT NULL", sql, StringComparison.Ordinal);
+        Assert.Contains("account_name CHAR(32) NOT NULL", sql, StringComparison.Ordinal);
+        Assert.Contains("art_type ENUM(", sql, StringComparison.Ordinal);
+        Assert.Contains("'YEncoded'", sql, StringComparison.Ordinal);
         Assert.Contains("PRIMARY KEY (revision, list_kind, account_name)", sql, StringComparison.Ordinal);
         Assert.Contains("trg_nntppostfiltercurrent_revision_forward", sql, StringComparison.Ordinal);
         Assert.Contains("'Disabled'", sql, StringComparison.Ordinal);
@@ -42,8 +48,10 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
         Assert.Contains("DELIMITER ;", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("VECTORNNTP_STMT", sql, StringComparison.Ordinal);
         Assert.DoesNotContain(";;", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("ALTER TABLE nntpusers", sql, StringComparison.Ordinal);
+        Assert.Contains("nntpusers-account-art-type.sql", sql, StringComparison.Ordinal);
         var statements = PostFilterSchemaScript.ReadStatements();
-        Assert.Equal(10, statements.Count);
+        Assert.Equal(11, statements.Count);
         var trigger = Assert.Single(
             statements,
             statement => statement.StartsWith("CREATE TRIGGER trg_nntppostfiltercurrent_revision_forward", StringComparison.Ordinal));
@@ -232,8 +240,10 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
 
         var record = await _fixture.LoadAsync();
         Assert.Equal(second, record.Revision);
-        Assert.Equal(["new-poster"], record.Options.DeniedAccounts);
+        Assert.Equal([PostFilterAccountIdentity.FromUsername("new-poster")], record.Options.DeniedAccounts);
+        Assert.DoesNotContain("new-poster", record.Options.DeniedAccounts);
         Assert.DoesNotContain("old-poster", record.Options.DeniedAccounts);
+        Assert.DoesNotContain(PostFilterAccountIdentity.FromUsername("old-poster"), record.Options.DeniedAccounts);
         Assert.Equal(["198.51.100.0/24"], record.Options.AllowlistedCidrs);
         Assert.DoesNotContain("192.0.2.0/24", record.Options.DeniedCidrs);
         Assert.Equal(["YEncoded"], record.Options.SpamAssassin.ExcludeArtTypes);
@@ -340,12 +350,38 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
 
         var next = _fixture.NextRevision();
         await _fixture.InsertDisabledRevisionAsync(next);
-        await _fixture.InsertArtTypeAsync(next, NntpPostFilterQueries.ListKindReject, "NotAnArtType");
-        await _fixture.PublishAsync(next);
-        var art = await _fixture.LoadAsync();
-        var artType = Assert.Throws<InvalidOperationException>(() =>
-            PostFilterPolicyCompiler.Compile(art.Options, art.Revision));
-        Assert.Contains("ArtType", artType.Message, StringComparison.Ordinal);
+        var invalidArtType = await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.InsertArtTypeAsync(next, NntpPostFilterQueries.ListKindReject, "NotAnArtType"));
+        Assert.Contains("art_type", invalidArtType.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task ShowCreate_UsesMd5AccountAndArtTypeEnumAndEvidenceTable()
+    {
+        RequireReady();
+        var accounts = await _fixture.ShowCreateTableAsync("nntppostfilteraccounts");
+        Assert.Contains("char(32)", accounts, StringComparison.OrdinalIgnoreCase);
+        var artTypes = await _fixture.ShowCreateTableAsync("nntppostfilterarttypes");
+        Assert.Contains("enum(", artTypes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("YEncoded", artTypes, StringComparison.Ordinal);
+        var evidence = await _fixture.ShowCreateTableAsync("nntppostfilterrejections");
+        Assert.Contains("longblob", evidence, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("article_payload", evidence, StringComparison.Ordinal);
+        Assert.Contains("varbinary(16)", evidence, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task AccountInsert_RejectsPlaintextUsername()
+    {
+        RequireReady();
+        var revision = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(revision);
+        var error = await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.ExecuteRawAsync(
+                "INSERT INTO nntppostfilteraccounts (revision, list_kind, account_name) "
+                + "VALUES (" + revision.ToString(CultureInfo.InvariantCulture)
+                + ", 'deny', 'plaintext-user')"));
+        Assert.False(string.IsNullOrWhiteSpace(error.Message));
     }
 
     private void RequireReady()

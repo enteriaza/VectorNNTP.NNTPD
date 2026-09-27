@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Authentication;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
@@ -46,7 +47,8 @@ internal sealed class MemoryNntpUserRecordStore : INntpUserRecordStore
         int scramIterations = 0,
         ReadOnlyMemory<byte> scramStoredKey = default,
         ReadOnlyMemory<byte> scramServerKey = default,
-        string customerId = "11111111-1111-1111-1111-111111111111") =>
+        string customerId = "11111111-1111-1111-1111-111111111111",
+        ArticleType allowedArtTypes = ArticleTypeCapabilities.All) =>
         new(
             name,
             password,
@@ -61,5 +63,6 @@ internal sealed class MemoryNntpUserRecordStore : INntpUserRecordStore
             sessionLimit,
             srcIpLimit,
             enabled,
-            customerId);
+            customerId,
+            allowedArtTypes);
 }

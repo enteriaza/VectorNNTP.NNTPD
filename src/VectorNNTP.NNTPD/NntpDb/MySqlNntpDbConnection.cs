@@ -1,10 +1,12 @@
 using System.Data;
 using System.Globalization;
 using MySqlConnector;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.SessionState;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
@@ -215,6 +217,51 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     }
 
     /// <inheritdoc />
+    public async ValueTask InsertPostFilterRejectionAsync(
+        PostFilterRejectionEvidence evidence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        try
+        {
+            await using var command = _connection.CreateCommand();
+            command.CommandText = NntpPostFilterQueries.InsertRejection;
+            command.Parameters.AddWithValue("@rejected_utc", evidence.RejectedUtc.UtcDateTime);
+            command.Parameters.AddWithValue("@revision", evidence.PolicyRevision);
+            command.Parameters.AddWithValue(
+                "@account_name",
+                evidence.AccountName is null ? DBNull.Value : evidence.AccountName);
+            var sourceIp = command.Parameters.Add("@source_ip", MySqlDbType.VarBinary, 16);
+            sourceIp.Value = SourceAddressIdentity.ToNetworkBytes(evidence.SourceAddress);
+            command.Parameters.AddWithValue("@art_type", (uint)evidence.ArtType);
+            command.Parameters.AddWithValue(
+                "@message_id",
+                evidence.MessageId is null ? DBNull.Value : evidence.MessageId);
+            command.Parameters.AddWithValue("@article_size", evidence.ArticleSize);
+            command.Parameters.AddWithValue("@stage", evidence.Stage.ToString());
+            command.Parameters.AddWithValue("@reason", evidence.Reason);
+            command.Parameters.AddWithValue(
+                "@sa_status",
+                evidence.SpamAssassinStatus is { } saStatus ? saStatus.ToString() : DBNull.Value);
+            command.Parameters.AddWithValue(
+                "@sa_score",
+                evidence.SpamAssassinScore is { } score ? score : DBNull.Value);
+            command.Parameters.AddWithValue(
+                "@sa_threshold",
+                evidence.SpamAssassinThreshold is { } threshold ? threshold : DBNull.Value);
+            var payload = evidence.ArticlePayload;
+            command.Parameters.AddWithValue(
+                "@article_payload",
+                payload is { Length: > 0 } ? payload.Value.ToArray() : DBNull.Value);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
+        {
+            throw new NntpDbUnavailableException("MySQL nntppostfilterrejections insert failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
     public async ValueTask<AccountByteConsumeResult> ConsumeAccountBytesAsync(
         string accountName,
         long bytes,
@@ -325,7 +372,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     /// Flag columns are true only for <c>Y</c>. NULL rate/byte limits map to <c>0</c>.
     /// Ordinals: 0 pass, 1 salt, 2 iterations, 3 stored key, 4 server key, 5 plain,
     /// 6 scram256, 7 rate bps, 8 byte remaining, 9 session limit, 10 srcip limit,
-    /// 11 enabled, 12 customer.
+    /// 11 enabled, 12 customer, 13 account_art_type.
     /// </summary>
     internal static NntpUserRecord MapUserRecord(MySqlDataReader reader, string accountName)
     {
@@ -343,6 +390,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         var srcIpLimit = reader.IsDBNull(10) ? 0 : Convert.ToInt32(reader.GetValue(10));
         var isEnabled = IsYesFlag(reader, 11);
         var customerId = ReadCustomerId(reader, 12);
+        var allowedArtTypes = ReadAccountArtType(reader, 13);
         return new NntpUserRecord(
             accountName,
             password,
@@ -357,7 +405,8 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             sessionLimit,
             srcIpLimit,
             isEnabled,
-            customerId);
+            customerId,
+            allowedArtTypes);
     }
 
     private async ValueTask<ByteQuotaRow?> ReadByteQuotaAsync(
@@ -431,6 +480,22 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             string text => text,
             _ => Convert.ToString(value) ?? string.Empty,
         };
+    }
+
+    private static ArticleType ReadAccountArtType(MySqlDataReader reader, int ordinal)
+    {
+        if (ordinal >= reader.FieldCount)
+        {
+            throw new InvalidOperationException(
+                "nntpusers.account_art_type was not selected. Apply docs/nntpusers-account-art-type.sql.");
+        }
+
+        if (reader.IsDBNull(ordinal))
+        {
+            throw new InvalidOperationException("nntpusers.account_art_type is NULL.");
+        }
+
+        return (ArticleType)Convert.ToUInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
     }
 
     private static ReadOnlyMemory<byte> ReadBinaryColumn(MySqlDataReader reader, int ordinal)

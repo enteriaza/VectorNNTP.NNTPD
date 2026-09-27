@@ -51,6 +51,71 @@ public sealed class PostFilterEvaluatorTests
     }
 
     [Fact]
+    public async Task DeniedAccount_DoesNotMatchDifferentCase()
+    {
+        var quota = new RecordingQuotaStore();
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            DeniedAccounts = ["Poster"],
+        });
+        var result = await Create(snapshot, quota).EvaluateAsync(Request(account: "poster"));
+        Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        Assert.Equal(PostFilterStage.Complete, result.Stage);
+    }
+
+    [Fact]
+    public async Task DeniedAccount_DoesNotTrimRequestUsername()
+    {
+        var quota = new RecordingQuotaStore();
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            DeniedAccounts = ["poster"],
+        });
+        var result = await Create(snapshot, quota).EvaluateAsync(Request(account: " poster"));
+        Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        Assert.Equal(PostFilterStage.Complete, result.Stage);
+    }
+
+    [Fact]
+    public async Task AllowlistedAccount_MatchesHashedIdentity()
+    {
+        var quota = new RecordingQuotaStore();
+        var sa = new RecordingSpamAssassin();
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            AllowlistedAccounts = ["poster"],
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+            SpamAssassin = new PostFilterSpamAssassinOptions
+            {
+                Enabled = true,
+                OnFailure = PostFilterSpamOnFailure.Reject,
+                Hosts = ["127.0.0.1"],
+            },
+        });
+        var result = await Create(snapshot, quota, sa).EvaluateAsync(Request());
+        Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        Assert.Equal(0, sa.Calls);
+    }
+
+    [Fact]
+    public async Task DeniedAccount_DoesNotAffectOtherAccount()
+    {
+        var quota = new RecordingQuotaStore();
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            DeniedAccounts = ["poster"],
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+        });
+        var result = await Create(snapshot, quota).EvaluateAsync(Request(account: "other"));
+        Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        Assert.Equal(PostFilterStage.Complete, result.Stage);
+    }
+
+    [Fact]
     public async Task ArtTypePolicy_RejectsYenc()
     {
         var quota = new RecordingQuotaStore();

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.NNTPD.Authentication;
 
@@ -14,7 +15,9 @@ namespace VectorNNTP.NNTPD.Authentication;
 /// </remarks>
 internal static class NntpAccountCacheCodec
 {
-    internal const byte Version = 1;
+    internal const byte Version = 2;
+
+    internal const byte Version1 = 1;
 
     private const int MaxAccountNameBytes = 512;
     private const int MaxPasswordBytes = 4096;
@@ -55,7 +58,8 @@ internal static class NntpAccountCacheCodec
             + 4
             + 4
             + 1
-            + 4 + customerId.Length;
+            + 4 + customerId.Length
+            + 4;
         var buffer = new byte[length];
         var span = buffer.AsSpan();
         span[0] = Version;
@@ -79,6 +83,7 @@ internal static class NntpAccountCacheCodec
         offset += 4;
         span[offset++] = record.IsEnabled ? (byte)1 : (byte)0;
         WriteBytes(span, ref offset, customerId);
+        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset), (int)record.AllowedArtTypes);
         return buffer;
     }
 
@@ -90,11 +95,12 @@ internal static class NntpAccountCacheCodec
     public static bool TryDecode(ReadOnlySpan<byte> payload, string accountName, out NntpUserRecord? record)
     {
         record = null;
-        if (payload.Length < 2 || payload[0] != Version)
+        if (payload.Length < 2 || (payload[0] != Version && payload[0] != Version1))
         {
             return false;
         }
 
+        var version = payload[0];
         var offset = 1;
         if (!TryReadBytes(payload, ref offset, MaxAccountNameBytes, out var cachedName)
             || !TryReadBytes(payload, ref offset, MaxPasswordBytes, out var password)
@@ -113,8 +119,22 @@ internal static class NntpAccountCacheCodec
             || !TryReadInt32(payload, ref offset, out var srcIpLimit)
             || !TryReadByte(payload, ref offset, out var enabled)
             || enabled > 1
-            || !TryReadBytes(payload, ref offset, MaxCustomerIdBytes, out var customerId)
-            || offset != payload.Length)
+            || !TryReadBytes(payload, ref offset, MaxCustomerIdBytes, out var customerId))
+        {
+            return false;
+        }
+
+        var allowedArtTypes = ArticleTypeCapabilities.All;
+        if (version == Version)
+        {
+            if (!TryReadInt32(payload, ref offset, out var artTypeBits) || offset != payload.Length)
+            {
+                return false;
+            }
+
+            allowedArtTypes = (ArticleType)artTypeBits;
+        }
+        else if (offset != payload.Length)
         {
             return false;
         }
@@ -139,7 +159,8 @@ internal static class NntpAccountCacheCodec
             sessionLimit,
             srcIpLimit,
             enabled == 1,
-            Encoding.UTF8.GetString(customerId));
+            Encoding.UTF8.GetString(customerId),
+            allowedArtTypes);
         return true;
     }
 

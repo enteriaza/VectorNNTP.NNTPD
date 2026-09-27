@@ -63,6 +63,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IArticleWorkRpcClient? _articleWorkRpc;
     private readonly IPostFilter _postFilter;
     private readonly PostFilterMetrics _postFilterMetrics;
+    private readonly IPostFilterRejectionEvidenceQueue _postFilterEvidence;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -101,7 +102,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
         IPostFilter? postFilter = null,
-        PostFilterMetrics? postFilterMetrics = null)
+        PostFilterMetrics? postFilterMetrics = null,
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -135,6 +137,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _articleWorkRpc = articleWorkRpc;
         _postFilter = postFilter ?? DisabledPostFilter.Instance;
         _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
+        _postFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -383,7 +386,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 accountRates: _accountRates,
                 articleWorkRpc: _articleWorkRpc,
                 postFilter: _postFilter,
-                postFilterMetrics: _postFilterMetrics);
+                postFilterMetrics: _postFilterMetrics,
+                postFilterEvidence: _postFilterEvidence);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

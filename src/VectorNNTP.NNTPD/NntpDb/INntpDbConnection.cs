@@ -50,6 +50,13 @@ public interface INntpDbConnection : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Inserts one PostFilter rejection evidence row. Not used on the accept path.
+    /// </summary>
+    ValueTask InsertPostFilterRejectionAsync(
+        PostFilter.PostFilterRejectionEvidence evidence,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Atomically subtracts <paramref name="bytes"/> from
     /// <c>account_byte_limit</c>, clamping at zero. Remaining is never negative.
     /// </summary>

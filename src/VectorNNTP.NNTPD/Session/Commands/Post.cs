@@ -4,6 +4,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.PostFilter.Quota;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -171,21 +172,34 @@ internal static class Post
             return;
         }
 
+        if (!ArticleTypeAccessPolicy.CanPostArticleType(context.Session, created.Record.ArtType))
+        {
+            await RejectAsync(
+                    context,
+                    new PostingFailure(PostingFailureCategory.PolicyRejected, "arttype-capability"),
+                    read.MessageId,
+                    FormatGroups(read.Newsgroups),
+                    read.Wire.Length,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var filterRequest = new PostFilterRequest(
+            created.Record,
+            context.Session.Authentication.Username,
+            context.Session.ClientIdentity,
+            context.Session.AccountPolicy,
+            read.InjectionUtc,
+            read.Newsgroups,
+            context.Session.Time.GetUtcNow(),
+            context.Session.InjectionIdentity);
+
         PostFilterResult filter;
         try
         {
             filter = await context.Session.PostFilter
-                .EvaluateAsync(
-                    new PostFilterRequest(
-                        created.Record,
-                        context.Session.Authentication.Username,
-                        context.Session.ClientIdentity,
-                        context.Session.AccountPolicy,
-                        read.InjectionUtc,
-                        read.Newsgroups,
-                        context.Session.Time.GetUtcNow(),
-                        context.Session.InjectionIdentity),
-                    cancellationToken)
+                .EvaluateAsync(filterRequest, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
@@ -197,6 +211,12 @@ internal static class Post
 
         if (filter.Decision == PostFilterDecision.Reject)
         {
+            EnqueueRejectionEvidence(
+                context,
+                PostFilterRejectionEvidence.FromEvaluation(
+                    filterRequest,
+                    filter,
+                    context.Session.Time.GetUtcNow()));
             await RejectAsync(
                     context,
                     new PostingFailure(PostingFailureCategory.PolicyRejected, filter.Reason),
@@ -227,6 +247,13 @@ internal static class Post
         if (enqueue != ArticleEnqueueResult.Accepted)
         {
             await ReleaseLeaseAsync(context, lease).ConfigureAwait(false);
+            EnqueueRejectionEvidence(
+                context,
+                PostFilterRejectionEvidence.FromAdmissionFailure(
+                    filterRequest,
+                    filter,
+                    enqueue.ToString(),
+                    context.Session.Time.GetUtcNow()));
             await RejectAsync(
                     context,
                     new PostingFailure(PostingFailureCategory.PersistenceFailure, enqueue.ToString()),
@@ -255,6 +282,18 @@ internal static class Post
                 "accepted",
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static void EnqueueRejectionEvidence(
+        NntpCommandContext context,
+        PostFilterRejectionEvidence evidence)
+    {
+        if (context.Session.PostFilterEvidence.TryEnqueue(evidence))
+        {
+            return;
+        }
+
+        PostFilterLogMessages.EvidenceQueueFull(Logger, evidence.Stage, evidence.Reason);
     }
 
     private static async ValueTask ReleaseLeaseAsync(NntpCommandContext context, PostFilterLease? lease)

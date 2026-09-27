@@ -3,12 +3,16 @@ namespace VectorNNTP.NNTPD.Tests.Fixtures;
 /// <summary>Loads the operator DDL at <c>docs/postfilter.sql</c>.</summary>
 internal static class PostFilterSchemaScript
 {
-    public static string FindPath()
+    public static string FindPath() => FindDocsSql("postfilter.sql");
+
+    /// <summary>Finds a file under repository <c>docs/</c>.</summary>
+    public static string FindDocsSql(string fileName)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "docs", "postfilter.sql");
+            var candidate = Path.Combine(dir.FullName, "docs", fileName);
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -17,12 +21,16 @@ internal static class PostFilterSchemaScript
             dir = dir.Parent;
         }
 
-        throw new InvalidOperationException("docs/postfilter.sql was not found.");
+        throw new InvalidOperationException("docs/" + fileName + " was not found.");
     }
 
-    public static IReadOnlyList<string> ReadStatements()
+    public static IReadOnlyList<string> ReadStatements() => ReadStatements(FindPath());
+
+    /// <summary>Splits one operator SQL file using the same DELIMITER rules as <c>postfilter.sql</c>.</summary>
+    public static IReadOnlyList<string> ReadStatements(string path)
     {
-        var lines = File.ReadAllLines(FindPath());
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var lines = File.ReadAllLines(path);
         var statements = new List<string>();
         var buffer = new List<string>();
         var delimiter = ";";
