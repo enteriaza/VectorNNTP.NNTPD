@@ -7,7 +7,8 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// </summary>
 public sealed class NntpSessionPool : IAsyncDisposable
 {
-    private readonly BackFillerProviderDefinition _provider;
+    private BackFillerProviderDefinition _provider;
+    private readonly int _leaseCeiling;
     private readonly NntpSessionOptions _options;
     private readonly INntpTransportFactory _transport;
     private readonly ILogger _logger;
@@ -18,10 +19,16 @@ public sealed class NntpSessionPool : IAsyncDisposable
     private readonly ConcurrentQueue<NntpProviderSession> _idle = new();
     private readonly ConcurrentDictionary<NntpProviderSession, byte> _live = new();
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly SemaphoreSlim _fillGate = new(1, 1);
     private int _created;
     private int _activeLeases;
     private int _disposed;
+    private int _replenishStarted;
+    private Task? _replenishTask;
     private TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Delay between periodic deficit fills toward <see cref="BackFillerProviderDefinition.MaxSessions"/>.</summary>
+    internal static readonly TimeSpan ReplenishInterval = TimeSpan.FromSeconds(15);
 
     /// <summary>Creates a pool for <paramref name="provider"/>.</summary>
     public NntpSessionPool(
@@ -52,6 +59,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         _logger = logger;
         _time = timeProvider ?? TimeProvider.System;
         _shutdownGrace = shutdownGrace ?? TimeSpan.FromSeconds(2);
+        _leaseCeiling = provider.MaxSessions;
         _leases = new SemaphoreSlim(provider.MaxSessions, provider.MaxSessions);
         _drained.TrySetResult();
     }
@@ -65,17 +73,65 @@ public sealed class NntpSessionPool : IAsyncDisposable
     /// <summary>Gets the number of live session objects.</summary>
     public int LiveSessionCount => _live.Count;
 
+    /// <summary>
+    /// Gets the number of ACTIVE sessions: attached sessions that have completed connect
+    /// (<see cref="NntpSessionState.Ready"/> or <see cref="NntpSessionState.Busy"/>).
+    /// Connecting, failed, and retired sessions are not counted.
+    /// </summary>
+    public int ActiveSessionCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var session in _live.Keys)
+            {
+                var state = session.State;
+                if (state is NntpSessionState.Ready or NntpSessionState.Busy)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
     /// <summary>Gets the number of outstanding leases.</summary>
     public int ActiveLeaseCount => Volatile.Read(ref _activeLeases);
 
-    /// <summary>Connects <see cref="BackFillerProviderDefinition.MinSessions"/> sessions into the idle pool.</summary>
-    public async Task WarmupAsync(CancellationToken cancellationToken)
+    /// <summary>Raised after ACTIVE session count may have changed.</summary>
+    public event Action? ActiveSessionCountChanged;
+
+    /// <summary>
+    /// Eagerly establishes <see cref="BackFillerProviderDefinition.MaxSessions"/> NNTP sessions.
+    /// Partial connect failure is tolerated; a background loop restores the deficit.
+    /// </summary>
+    public Task WarmupAsync(CancellationToken cancellationToken) =>
+        EnsureDesiredSessionsAsync(cancellationToken);
+
+    /// <summary>
+    /// Connects the desired <see cref="BackFillerProviderDefinition.MaxSessions"/> slots.
+    /// Does not require Article Work. Failed attempts do not fail the call.
+    /// </summary>
+    public async Task EnsureDesiredSessionsAsync(CancellationToken cancellationToken)
     {
-        for (var i = 0; i < _provider.MinSessions; i++)
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        StartPeriodicReplenish();
+        var missing = Math.Max(0, _provider.MaxSessions - _live.Count);
+        if (missing == 0)
         {
-            var session = await CreateReadySessionAsync(cancellationToken).ConfigureAwait(false);
-            EnqueueIdle(session);
+            NotifyActiveSessionCountChanged();
+            return;
         }
+
+        var attempts = new Task[missing];
+        for (var i = 0; i < missing; i++)
+        {
+            attempts[i] = TryCreateIdleSessionAsync(cancellationToken);
+        }
+
+        await Task.WhenAll(attempts).ConfigureAwait(false);
+        NotifyActiveSessionCountChanged();
     }
 
     /// <summary>Acquires an exclusive session lease.</summary>
@@ -90,6 +146,11 @@ public sealed class NntpSessionPool : IAsyncDisposable
             while (_idle.TryDequeue(out var idle))
             {
                 StopKeepAlive(idle);
+                if (idle.State == NntpSessionState.Busy)
+                {
+                    await WaitUntilNotBusyAsync(idle, linked.Token).ConfigureAwait(false);
+                }
+
                 if (idle.IsReusable)
                 {
                     return Issue(idle);
@@ -98,8 +159,32 @@ public sealed class NntpSessionPool : IAsyncDisposable
                 await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
             }
 
-            var created = await CreateReadySessionAsync(linked.Token).ConfigureAwait(false);
-            return Issue(created);
+            await _fillGate.WaitAsync(linked.Token).ConfigureAwait(false);
+            try
+            {
+                while (_idle.TryDequeue(out var idle))
+                {
+                    StopKeepAlive(idle);
+                    if (idle.IsReusable)
+                    {
+                        return Issue(idle);
+                    }
+
+                    await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
+                }
+
+                if (Volatile.Read(ref _created) >= _provider.MaxSessions)
+                {
+                    throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
+                }
+
+                var created = await CreateReadySessionAsync(linked.Token).ConfigureAwait(false);
+                return Issue(created);
+            }
+            finally
+            {
+                _fillGate.Release();
+            }
         }
         catch
         {
@@ -119,7 +204,15 @@ public sealed class NntpSessionPool : IAsyncDisposable
             }
             else if (session.IsReusable)
             {
-                EnqueueIdle(session);
+                if (_live.Count > _provider.MaxSessions)
+                {
+                    await RetireSessionAsync(session, "max sessions shrink", replenish: false)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    EnqueueIdle(session);
+                }
             }
             else
             {
@@ -135,12 +228,67 @@ public sealed class NntpSessionPool : IAsyncDisposable
 
             try
             {
-                _leases.Release();
+                if (Volatile.Read(ref _activeLeases) < _provider.MaxSessions)
+                {
+                    _leases.Release();
+                }
             }
             catch (ObjectDisposedException)
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Updates the bound provider snapshot. Used when only <see cref="BackFillerProviderDefinition.MaxSessions"/> shrinks.
+    /// </summary>
+    /// <param name="provider">The new snapshot with the same connection identity.</param>
+    internal void BindProvider(BackFillerProviderDefinition provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        if (!provider.HasSameConnectionIdentity(_provider))
+        {
+            throw new ArgumentException("Provider connection identity does not match this pool.", nameof(provider));
+        }
+
+        if (provider.MaxSessions < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(provider), "MaxSessions must be at least 1.");
+        }
+
+        _provider = provider;
+    }
+
+    /// <summary>
+    /// Retires idle sessions above the bound <see cref="BackFillerProviderDefinition.MaxSessions"/>.
+    /// Leased sessions above the bound retire when returned. Does not reconnect retained sessions.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    internal async Task ShrinkToBoundAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        await _fillGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var bound = _provider.MaxSessions;
+            while (_live.Count > bound && _idle.TryDequeue(out var idle))
+            {
+                StopKeepAlive(idle);
+                await RetireSessionAsync(idle, "max sessions shrink", replenish: false).ConfigureAwait(false);
+            }
+
+            var permitHolders = _leaseCeiling - _leases.CurrentCount;
+            var desiredPermits = Math.Max(0, bound - permitHolders);
+            while (_leases.CurrentCount > desiredPermits && _leases.Wait(0))
+            {
+            }
+        }
+        finally
+        {
+            _fillGate.Release();
+        }
+
+        NotifyActiveSessionCountChanged();
     }
 
     /// <summary>
@@ -162,6 +310,18 @@ public sealed class NntpSessionPool : IAsyncDisposable
         }
 
         await _shutdown.CancelAsync().ConfigureAwait(false);
+        var replenish = _replenishTask;
+        if (replenish is not null)
+        {
+            try
+            {
+                await replenish.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         await AwaitKeepAlivesAsync().ConfigureAwait(false);
         try
         {
@@ -192,6 +352,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         }
 
         _leases.Dispose();
+        _fillGate.Dispose();
         _shutdown.Dispose();
     }
 
@@ -218,10 +379,12 @@ public sealed class NntpSessionPool : IAsyncDisposable
         var failure = await session.ConnectAsync(_transport, cancellationToken).ConfigureAwait(false);
         if (failure is null && session.State == NntpSessionState.Ready)
         {
+            NotifyActiveSessionCountChanged();
             return session;
         }
 
-        await RetireSessionAsync(session, failure?.Reason ?? "connect failed").ConfigureAwait(false);
+        await RetireSessionAsync(session, failure?.Reason ?? "connect failed", replenish: false)
+            .ConfigureAwait(false);
         throw new NntpProviderConnectException(
             failure?.Kind ?? ArticleRetrievalKind.ProviderFailure,
             failure?.StatusCode,
@@ -333,14 +496,133 @@ public sealed class NntpSessionPool : IAsyncDisposable
         }
     }
 
-    private async Task RetireSessionAsync(NntpProviderSession session, string reason)
+    private async Task RetireSessionAsync(NntpProviderSession session, string reason, bool replenish = true)
     {
         StopKeepAlive(session);
         if (_live.TryRemove(session, out _))
         {
             Interlocked.Decrement(ref _created);
             NntpLogMessages.SessionRetired(_logger, _provider.Backbone, reason);
+            NotifyActiveSessionCountChanged();
             await session.DisposeAsync().ConfigureAwait(false);
+            if (replenish)
+            {
+                RequestReplenish();
+            }
+        }
+    }
+
+    private void StartPeriodicReplenish()
+    {
+        if (Interlocked.Exchange(ref _replenishStarted, 1) == 1)
+        {
+            return;
+        }
+
+        _replenishTask = RunReplenishAsync(_shutdown.Token);
+    }
+
+    private void RequestReplenish()
+    {
+        if (Volatile.Read(ref _disposed) == 1 || _shutdown.IsCancellationRequested)
+        {
+            return;
+        }
+
+        StartPeriodicReplenish();
+        _ = FillDeficitObservedAsync(_shutdown.Token);
+    }
+
+    private async Task RunReplenishAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(ReplenishInterval, cancellationToken).ConfigureAwait(false);
+                await FillDeficitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task FillDeficitObservedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await FillDeficitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            NntpLogMessages.SessionReplenishFailed(_logger, _provider.Backbone, ex.Message);
+        }
+    }
+
+    private async Task FillDeficitAsync(CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return;
+        }
+
+        await _fillGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested
+                   && Volatile.Read(ref _disposed) == 0
+                   && _live.Count < _provider.MaxSessions)
+            {
+                if (!await TryCreateIdleSessionAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _fillGate.Release();
+        }
+    }
+
+    private async Task<bool> TryCreateIdleSessionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            var session = await CreateReadySessionAsync(cancellationToken).ConfigureAwait(false);
+            EnqueueIdle(session);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (NntpProviderConnectException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private void NotifyActiveSessionCountChanged()
+    {
+        ActiveSessionCountChanged?.Invoke();
+    }
+
+    private static async Task WaitUntilNotBusyAsync(NntpProviderSession session, CancellationToken cancellationToken)
+    {
+        while (session.State == NntpSessionState.Busy)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
         }
     }
 

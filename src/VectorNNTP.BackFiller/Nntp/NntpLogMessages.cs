@@ -20,4 +20,16 @@ internal static partial class NntpLogMessages
         Level = LogLevel.Warning,
         Message = "NNTP provider retrieval failed backbone={Backbone} kind={Kind} status={StatusCode} reason={Reason}")]
     public static partial void RetrievalFailed(ILogger logger, string Backbone, ArticleRetrievalKind Kind, int? StatusCode, string Reason);
+
+    [LoggerMessage(
+        EventId = 5403,
+        Level = LogLevel.Information,
+        Message = "NNTP usable capacity published backboneCount={BackboneCount}")]
+    public static partial void UsableCapacityPublished(ILogger logger, int BackboneCount);
+
+    [LoggerMessage(
+        EventId = 5404,
+        Level = LogLevel.Warning,
+        Message = "NNTP session replenish failed backbone={Backbone} reason={Reason}")]
+    public static partial void SessionReplenishFailed(ILogger logger, string Backbone, string Reason);
 }

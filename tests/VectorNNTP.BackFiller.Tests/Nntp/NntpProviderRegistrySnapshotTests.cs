@@ -84,6 +84,39 @@ public sealed class NntpProviderRegistrySnapshotTests
     }
 
     [Fact]
+    public async Task MaxSessions_shrink_keeps_the_same_pool_and_retires_excess_sessions()
+    {
+        var catalog = new ProviderConfigurationCatalog();
+        var transport = new ScriptedNntpTransportFactory();
+        NntpSessionPoolTests.EnqueueReadyServers(transport, count: 4);
+        await using var registry = CreateRegistry(catalog, transport);
+        var original = CreateDefinition() with { MaxSessions = 4 };
+        await registry.ApplySnapshotAsync([original], CancellationToken.None);
+        Assert.True(registry.TryGetPool("Giganews", out var pool));
+        var retained = new HashSet<NntpProviderSession>();
+        for (var i = 0; i < 4; i++)
+        {
+            await using var lease = await pool.AcquireAsync(CancellationToken.None);
+            retained.Add(lease.Session);
+            Assert.Equal(NntpSessionState.Ready, lease.Session.State);
+        }
+
+        var connectsBeforeShrink = transport.ConnectAttempts.Count;
+        await registry.ApplySnapshotAsync([original with { MaxSessions = 2 }], CancellationToken.None);
+
+        Assert.True(registry.TryGetPool("Giganews", out var after));
+        Assert.Same(pool, after);
+        Assert.Equal(2, after.Provider.MaxSessions);
+        Assert.Equal(2, after.LiveSessionCount);
+        Assert.Equal(2, after.ActiveSessionCount);
+        Assert.Equal(connectsBeforeShrink, transport.ConnectAttempts.Count);
+        await using var reused = await after.AcquireAsync(CancellationToken.None);
+        Assert.Contains(reused.Session, retained);
+        Assert.Equal(NntpSessionState.Ready, reused.Session.State);
+        await reused.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Min_and_max_session_changes_replace_only_that_pool()
     {
         var catalog = new ProviderConfigurationCatalog();
@@ -168,5 +201,5 @@ public sealed class NntpProviderRegistrySnapshotTests
     private static BackFillerProviderDefinition CreateDefinition(
         string backbone = "Giganews",
         string host = "news.example.test") =>
-        new(backbone, host, 563, true, "nntp-user", "p", 0, 4);
+        new(backbone, host, 563, true, "nntp-user", "p", 0, 1);
 }

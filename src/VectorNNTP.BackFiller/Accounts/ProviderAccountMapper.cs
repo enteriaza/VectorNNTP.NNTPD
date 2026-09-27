@@ -13,7 +13,7 @@ public static class ProviderAccountMapper
     /// Maps a query result. First valid row for a canonical backbone wins.
     /// <c>maxconnections</c> becomes <see cref="BackFillerProviderDefinition.MaxSessions"/>.
     /// <c>keepalive</c> becomes <see cref="BackFillerProviderDefinition.KeepAliveSeconds"/>.
-    /// <c>MinSessions</c> is 0 (lazy) because the table has no min-session column.
+    /// <c>MinSessions</c> is unused leftover (table has no min column). <c>MaxSessions</c> is the eager desired count.
     /// </summary>
     public static ProviderAccountMapResult Map(IReadOnlyList<ProviderAccountRow> rows)
     {

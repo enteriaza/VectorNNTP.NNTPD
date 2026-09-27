@@ -126,4 +126,10 @@ internal static partial class ArticleWorkLogMessages
         string RequestId,
         string CorrelationId,
         string Outcome);
+
+    [LoggerMessage(
+        EventId = 5318,
+        Level = LogLevel.Information,
+        Message = "Article Work consumer reconcile completed sessions={SessionCount}")]
+    public static partial void ConsumerReconcileCompleted(ILogger logger, int SessionCount);
 }

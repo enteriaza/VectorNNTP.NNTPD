@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
@@ -591,12 +592,20 @@ public sealed class ArticleWorkShutdownPolicyTests
         {
             Shutdown = new BackFillerShutdownRuntimeOptions(TimeSpan.FromSeconds(30), DrainQueuedWork: true, FinishActiveArticles: false),
         };
+        var catalog = new StaticBackFillerProviderCatalog(
+        [
+            new BackFillerProviderDefinition("Giganews", "127.0.0.1", 119, false, "nntp-user", "p", 0, 1),
+        ]);
+        var capacity = new BackboneUsableCapacityState();
+        capacity.PublishSnapshot(new Dictionary<string, int> { ["Giganews"] = 1 });
         var consumer = new ArticleWorkConsumerService(
             connections,
             runtime,
             handler,
             new RecordingArticleWorkResponsePublisher { CompletesSuccessPublication = true },
-            NullLogger<ArticleWorkConsumerService>.Instance);
+            NullLogger<ArticleWorkConsumerService>.Instance,
+            catalog,
+            capacity);
         await consumer.StartAsync(CancellationToken.None);
         var session = consumer.Sessions.Single(static item => item.Backbone == "Giganews");
         Assert.False(session.Shutdown.FinishActiveArticles);

@@ -7,6 +7,56 @@ namespace VectorNNTP.BackFiller.Tests.Nntp;
 public sealed class NntpSessionPoolTests
 {
     [Fact]
+    public async Task EnsureDesiredSessions_connects_max_sessions_before_any_lease()
+    {
+        var factory = new ScriptedNntpTransportFactory();
+        EnqueueReadyServers(factory, count: 3);
+        var pool = CreatePool(factory, max: 3);
+
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+
+        Assert.Equal(3, pool.ActiveSessionCount);
+        Assert.Equal(0, pool.ActiveLeaseCount);
+        Assert.Equal(3, factory.ConnectAttempts.Count);
+        await pool.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ShrinkToBound_retires_excess_idle_sessions_without_reconnect()
+    {
+        var factory = new ScriptedNntpTransportFactory();
+        EnqueueReadyServers(factory, count: 4);
+        var pool = CreatePool(factory, max: 4);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+        var seen = new HashSet<NntpProviderSession>();
+        for (var i = 0; i < 4; i++)
+        {
+            await using var lease = await pool.AcquireAsync(CancellationToken.None);
+            seen.Add(lease.Session);
+        }
+
+        pool.BindProvider(
+            new BackFillerProviderDefinition(
+                "Giganews",
+                "127.0.0.1",
+                119,
+                false,
+                null,
+                null,
+                0,
+                2));
+        await pool.ShrinkToBoundAsync(CancellationToken.None);
+
+        Assert.Equal(2, pool.LiveSessionCount);
+        Assert.Equal(2, pool.ActiveSessionCount);
+        Assert.Equal(4, factory.ConnectAttempts.Count);
+        await using var reused = await pool.AcquireAsync(CancellationToken.None);
+        Assert.Contains(reused.Session, seen);
+        await reused.DisposeAsync();
+        await pool.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Pool_reuses_a_healthy_session_and_does_not_exceed_max()
     {
         var factory = new ScriptedNntpTransportFactory();

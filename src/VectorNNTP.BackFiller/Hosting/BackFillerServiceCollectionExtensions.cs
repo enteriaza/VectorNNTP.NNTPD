@@ -41,8 +41,8 @@ public static class BackFillerServiceCollectionExtensions
     /// <see cref="CacheListenerService"/>), then
     /// <see cref="ArticleRetentionSweepService"/>, then
     /// <see cref="ArticleWorkResponsePublisher"/>,
-    /// then <see cref="ArticleWorkConsumerService"/>. Transit and
-    /// control-plane capacity remain deferred.
+    /// then <see cref="ArticleWorkConsumerService"/>. Article Work consume
+    /// is reconciled from usable NNTP capacity, not from the topology name list.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -130,11 +130,18 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
             provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>()));
         builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();
+        builder.Services.AddSingleton<BackboneUsableCapacityState>();
+        builder.Services.AddSingleton<IBackboneUsableCapacityProvider>(static provider =>
+            provider.GetRequiredService<BackboneUsableCapacityState>());
+        builder.Services.AddSingleton<IBackboneUsableCapacityStateWriter>(static provider =>
+            provider.GetRequiredService<BackboneUsableCapacityState>());
         builder.Services.AddSingleton(static provider => new NntpProviderRegistry(
             provider.GetRequiredService<IBackFillerProviderCatalog>(),
             provider.GetRequiredService<INntpTransportFactory>(),
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
-            provider.GetRequiredService<ILogger<NntpProviderRegistry>>()));
+            provider.GetRequiredService<ILogger<NntpProviderRegistry>>(),
+            provider.GetRequiredService<BackboneUsableCapacityState>(),
+            provider));
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ProviderAccountConfigurationService>());
         builder.Services.AddSingleton<IHostedService>(static provider =>
@@ -181,7 +188,11 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
             provider.GetRequiredService<IArticleWorkHandler>(),
             provider.GetRequiredService<IArticleWorkResponsePublisher>(),
-            provider.GetRequiredService<ILogger<ArticleWorkConsumerService>>()));
+            provider.GetRequiredService<ILogger<ArticleWorkConsumerService>>(),
+            provider.GetRequiredService<IBackFillerProviderCatalog>(),
+            provider.GetRequiredService<IBackboneUsableCapacityProvider>()));
+        builder.Services.AddSingleton<IArticleWorkConsumerReconciliation>(static provider =>
+            provider.GetRequiredService<ArticleWorkConsumerService>());
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleWorkConsumerService>());
 

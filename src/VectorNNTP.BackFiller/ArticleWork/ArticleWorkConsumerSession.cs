@@ -24,6 +24,8 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         FinishActiveArticles: true);
 
     private readonly string _backbone;
+    private readonly int _connectionNumber;
+    private readonly int _connectionLimit;
     private readonly string _queue;
     private readonly ushort _prefetch;
     private readonly ArticleWorkDeliveryPipeline _pipeline;
@@ -58,7 +60,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         ArticleWorkDeliveryPipeline pipeline,
         IBackFillerRabbitMqService connections,
         ILogger logger)
-        : this(backbone, prefetch, pipeline, connections, logger, DefaultShutdown)
+        : this(backbone, prefetch, pipeline, connections, logger, DefaultShutdown, connectionNumber: 1, connectionLimit: 1)
     {
     }
 
@@ -71,13 +73,17 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     /// <param name="connections">Process connection owner. Must not be used to open a second connection.</param>
     /// <param name="logger">Session logger.</param>
     /// <param name="shutdown">Immutable runtime shutdown policy. Must not be re-read from options.</param>
+    /// <param name="connectionNumber">One-based consume slot (old NNTP connection number).</param>
+    /// <param name="connectionLimit">Desired NNTP slot count for this backbone.</param>
     public ArticleWorkConsumerSession(
         string backbone,
         ushort prefetch,
         ArticleWorkDeliveryPipeline pipeline,
         IBackFillerRabbitMqService connections,
         ILogger logger,
-        BackFillerShutdownRuntimeOptions shutdown)
+        BackFillerShutdownRuntimeOptions shutdown,
+        int connectionNumber = 1,
+        int connectionLimit = 1)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
         ArgumentNullException.ThrowIfNull(pipeline);
@@ -89,7 +95,13 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(prefetch));
         }
 
+        ArgumentOutOfRangeException.ThrowIfLessThan(connectionNumber, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(connectionLimit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(connectionNumber, connectionLimit);
+
         _backbone = backbone;
+        _connectionNumber = connectionNumber;
+        _connectionLimit = connectionLimit;
         _queue = RabbitMq.BackFillerRabbitMqTopology.ComposeProviderEntity(backbone);
         _prefetch = prefetch;
         _pipeline = pipeline;
@@ -100,6 +112,19 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
 
     /// <summary>Gets the backbone context for this session.</summary>
     public string Backbone => _backbone;
+
+    /// <summary>Gets the one-based consume slot matching the old NNTP connection number.</summary>
+    public int ConnectionNumber => _connectionNumber;
+
+    /// <summary>Gets the desired NNTP slot count used as the consume-session limit.</summary>
+    public int ConnectionLimit => _connectionLimit;
+
+    /// <summary>Gets the reconcile key <c>backbone/connectionNumber</c>.</summary>
+    public string SessionKey => ComposeSessionKey(_backbone, _connectionNumber);
+
+    /// <summary>Composes the reconcile key for one consume slot.</summary>
+    public static string ComposeSessionKey(string backbone, int connectionNumber) =>
+        $"{backbone}/{connectionNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
     /// <summary>Gets the consume queue name.</summary>
     public string Queue => _queue;

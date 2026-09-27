@@ -89,7 +89,7 @@ public sealed class NntpDateKeepAliveTests
 
         time.Advance(TimeSpan.FromSeconds(2));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(() => pool.LiveSessionCount == 0);
+        await WaitUntilAsync(() => factory.ConnectAttempts.Count >= 2 && pool.ActiveSessionCount >= 1);
 
         await using var replacement = await pool.AcquireAsync(CancellationToken.None);
         Assert.Equal(2, factory.ConnectAttempts.Count);
@@ -143,7 +143,7 @@ public sealed class NntpDateKeepAliveTests
 
         time.Advance(TimeSpan.FromSeconds(1));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(() => pool.LiveSessionCount == 0);
+        await WaitUntilAsync(() => factory.ConnectAttempts.Count >= 2 && pool.ActiveSessionCount >= 1);
 
         await using var replacement = await pool.AcquireAsync(CancellationToken.None);
         Assert.Equal(2, factory.ConnectAttempts.Count);
@@ -253,7 +253,7 @@ public sealed class NntpDateKeepAliveTests
             "nntp-user",
             "p",
             0,
-            4,
+            1,
             KeepAliveSeconds: 5);
         await registry.ApplySnapshotAsync([original], CancellationToken.None);
         Assert.True(registry.TryGetPool("Giganews", out var oldPool));

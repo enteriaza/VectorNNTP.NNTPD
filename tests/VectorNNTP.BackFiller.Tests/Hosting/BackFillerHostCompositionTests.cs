@@ -109,8 +109,8 @@ public sealed class BackFillerHostCompositionTests
             Assert.True(rabbit.IsReady);
             Assert.Equal(1, rabbit.ConnectionGeneration);
             var consumer = host.Services.GetRequiredService<ArticleWorkConsumerService>();
-            Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, consumer.Sessions.Count);
-            Assert.Equal(BackFillerRabbitMqTopology.ProviderBackbones.Count, factory.LastConnection!.Channels.Count);
+            Assert.Empty(consumer.Sessions);
+            Assert.Empty(factory.LastConnection!.Channels);
             Assert.Single(factory.LastConnection.PublishChannels);
             Assert.Equal(1, factory.ConnectCount);
             Assert.Contains(
