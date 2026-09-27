@@ -11,7 +11,6 @@
 -- Conventions match existing NntpDB catalogues: InnoDB, snake_case,
 -- CHAR(1) Y/N, DATETIME(3), utf8mb4_unicode_ci.
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfilterpolicy (
   revision BIGINT UNSIGNED NOT NULL,
   updated_utc DATETIME(3) NOT NULL,
@@ -56,7 +55,6 @@ CREATE TABLE nntppostfilterpolicy (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Append-only PostFilter scalar revisions';
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfiltercurrent (
   policy_id TINYINT UNSIGNED NOT NULL,
   revision BIGINT UNSIGNED NOT NULL,
@@ -67,7 +65,6 @@ CREATE TABLE nntppostfiltercurrent (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='Singleton published PostFilter revision (policy_id=1)';
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfilteraccounts (
   revision BIGINT UNSIGNED NOT NULL,
   list_kind VARCHAR(8) NOT NULL,
@@ -80,7 +77,6 @@ CREATE TABLE nntppostfilteraccounts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='PostFilter deny/allow AUTH usernames for one revision';
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfiltercidrs (
   revision BIGINT UNSIGNED NOT NULL,
   list_kind VARCHAR(8) NOT NULL,
@@ -93,7 +89,6 @@ CREATE TABLE nntppostfiltercidrs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='PostFilter deny/allow client CIDRs for one revision';
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfilterarttypes (
   revision BIGINT UNSIGNED NOT NULL,
   list_kind VARCHAR(16) NOT NULL,
@@ -106,7 +101,6 @@ CREATE TABLE nntppostfilterarttypes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='PostFilter reject and SpamAssassin-exclude ArtTypes for one revision';
 
--- VECTORNNTP_STMT
 CREATE TABLE nntppostfiltersahosts (
   revision BIGINT UNSIGNED NOT NULL,
   host_order INT UNSIGNED NOT NULL,
@@ -119,7 +113,7 @@ CREATE TABLE nntppostfiltersahosts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='PostFilter SPAMD hosts in compiled order for one revision';
 
--- BEGIN TRIGGER
+DELIMITER $$
 CREATE TRIGGER trg_nntppostfiltercurrent_revision_forward
 BEFORE UPDATE ON nntppostfiltercurrent
 FOR EACH ROW
@@ -128,10 +122,9 @@ BEGIN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'nntppostfiltercurrent.revision must increase';
   END IF;
-END
--- END TRIGGER
+END$$
+DELIMITER ;
 
--- VECTORNNTP_STMT
 INSERT INTO nntppostfilterpolicy (
   revision, updated_utc, gate,
   long_window_ms, short_window_ms,
@@ -149,9 +142,7 @@ INSERT INTO nntppostfilterpolicy (
   5000, 30000
 );
 
--- VECTORNNTP_STMT
 INSERT INTO nntppostfilterarttypes (revision, list_kind, art_type)
 VALUES (1, 'sa_exclude', 'YEncoded');
 
--- VECTORNNTP_STMT
 INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1);

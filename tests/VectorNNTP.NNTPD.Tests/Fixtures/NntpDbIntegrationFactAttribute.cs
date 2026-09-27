@@ -15,3 +15,18 @@ public sealed class NntpDbIntegrationFactAttribute : FactAttribute
         }
     }
 }
+
+/// <summary>
+/// xUnit 2 theory skip unless <c>VECTORNNTP_NNTPDB_INTEGRATION</c> is set.
+/// </summary>
+public sealed class NntpDbIntegrationTheoryAttribute : TheoryAttribute
+{
+    /// <summary>Initializes the attribute and skips when the opt-in string is absent.</summary>
+    public NntpDbIntegrationTheoryAttribute()
+    {
+        if (NntpDbIntegration.TryGetConnectionString() is null)
+        {
+            Skip = NntpDbIntegration.SkipReason;
+        }
+    }
+}

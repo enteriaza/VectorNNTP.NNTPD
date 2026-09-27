@@ -25,42 +25,68 @@ internal static class PostFilterSchemaScript
         var lines = File.ReadAllLines(FindPath());
         var statements = new List<string>();
         var buffer = new List<string>();
-        var inTrigger = false;
+        var delimiter = ";";
         foreach (var line in lines)
         {
-            if (line.StartsWith("-- BEGIN TRIGGER", StringComparison.Ordinal))
+            var trimmed = line.Trim();
+            if (TryReadDelimiter(trimmed, out var nextDelimiter))
             {
-                Flush(buffer, statements);
-                inTrigger = true;
+                Flush(buffer, statements, delimiter);
+                delimiter = nextDelimiter;
                 continue;
             }
 
-            if (line.StartsWith("-- END TRIGGER", StringComparison.Ordinal))
+            if (trimmed.StartsWith("-- VECTORNNTP_STMT", StringComparison.Ordinal)
+                || trimmed.StartsWith("-- BEGIN TRIGGER", StringComparison.Ordinal)
+                || trimmed.StartsWith("-- END TRIGGER", StringComparison.Ordinal))
             {
-                Flush(buffer, statements);
-                inTrigger = false;
+                Flush(buffer, statements, delimiter);
                 continue;
             }
 
-            if (!inTrigger && line.StartsWith("-- VECTORNNTP_STMT", StringComparison.Ordinal))
-            {
-                Flush(buffer, statements);
-                continue;
-            }
-
-            if (line.StartsWith("--", StringComparison.Ordinal) && !inTrigger)
+            if (trimmed.StartsWith("--", StringComparison.Ordinal))
             {
                 continue;
             }
 
             buffer.Add(line);
+            if (BufferEndsWith(buffer, delimiter))
+            {
+                Flush(buffer, statements, delimiter);
+            }
         }
 
-        Flush(buffer, statements);
+        Flush(buffer, statements, delimiter);
         return statements;
     }
 
-    private static void Flush(List<string> buffer, List<string> statements)
+    private static bool TryReadDelimiter(string trimmed, out string delimiter)
+    {
+        delimiter = ";";
+        const string prefix = "DELIMITER";
+        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (trimmed.Length != prefix.Length
+            && !char.IsWhiteSpace(trimmed[prefix.Length]))
+        {
+            return false;
+        }
+
+        var value = trimmed[prefix.Length..].Trim();
+        delimiter = value.Length == 0 ? ";" : value;
+        return true;
+    }
+
+    private static bool BufferEndsWith(List<string> buffer, string delimiter)
+    {
+        var text = string.Join('\n', buffer).TrimEnd();
+        return text.EndsWith(delimiter, StringComparison.Ordinal);
+    }
+
+    private static void Flush(List<string> buffer, List<string> statements, string delimiter)
     {
         var text = string.Join('\n', buffer).Trim();
         buffer.Clear();
@@ -69,6 +95,17 @@ internal static class PostFilterSchemaScript
             return;
         }
 
-        statements.Add(text.TrimEnd(';').Trim());
+        if (text.EndsWith(delimiter, StringComparison.Ordinal))
+        {
+            text = text[..^delimiter.Length].TrimEnd();
+        }
+
+        text = text.TrimEnd(';').Trim();
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        statements.Add(text);
     }
 }

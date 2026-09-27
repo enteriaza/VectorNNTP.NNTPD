@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.PostFilter;
 
@@ -202,6 +203,113 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
                 command.Parameters.AddWithValue("@order", order);
                 command.Parameters.AddWithValue("@host", host);
             });
+    }
+
+    public async Task PublishOptionsAsync(long revision, PostFilterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(options.Quota);
+        ArgumentNullException.ThrowIfNull(options.SpamAssassin);
+        await InsertPolicyScalarsAsync(revision, options);
+        foreach (var account in options.DeniedAccounts)
+        {
+            await InsertAccountAsync(revision, NntpPostFilterQueries.ListKindDeny, account);
+        }
+
+        foreach (var account in options.AllowlistedAccounts)
+        {
+            await InsertAccountAsync(revision, NntpPostFilterQueries.ListKindAllow, account);
+        }
+
+        foreach (var cidr in options.DeniedCidrs)
+        {
+            await InsertCidrAsync(revision, NntpPostFilterQueries.ListKindDeny, cidr);
+        }
+
+        foreach (var cidr in options.AllowlistedCidrs)
+        {
+            await InsertCidrAsync(revision, NntpPostFilterQueries.ListKindAllow, cidr);
+        }
+
+        foreach (var artType in options.RejectArtTypes)
+        {
+            await InsertArtTypeAsync(revision, NntpPostFilterQueries.ListKindReject, artType);
+        }
+
+        foreach (var artType in options.SpamAssassin.ExcludeArtTypes)
+        {
+            await InsertArtTypeAsync(revision, NntpPostFilterQueries.ListKindSaExclude, artType);
+        }
+
+        for (var i = 0; i < options.SpamAssassin.Hosts.Length; i++)
+        {
+            await InsertHostAsync(revision, i + 1, options.SpamAssassin.Hosts[i]);
+        }
+
+        await PublishAsync(revision);
+    }
+
+    public async Task InsertPolicyScalarsAsync(long revision, PostFilterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(options.Quota);
+        ArgumentNullException.ThrowIfNull(options.SpamAssassin);
+        var connectionString = RequireConnectionString();
+        await using var connection = MySqlNntpDbConnectionFactory.CreateConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO nntppostfilterpolicy (
+              revision, updated_utc, gate,
+              long_window_ms, short_window_ms,
+              max_messages_long, max_bytes_long, max_identical_long,
+              max_messages_short, max_bytes_short, max_identical_short,
+              sa_enabled, sa_on_failure, sa_max_article_size, sa_port,
+              sa_protocol_version, sa_max_connections, sa_host_selection,
+              sa_connect_timeout_ms, sa_operation_timeout_ms
+            ) VALUES (
+              @revision, UTC_TIMESTAMP(3), @gate,
+              @long_window_ms, @short_window_ms,
+              @max_messages_long, @max_bytes_long, @max_identical_long,
+              @max_messages_short, @max_bytes_short, @max_identical_short,
+              @sa_enabled, @sa_on_failure, @sa_max_article_size, @sa_port,
+              @sa_protocol_version, @sa_max_connections, @sa_host_selection,
+              @sa_connect_timeout_ms, @sa_operation_timeout_ms
+            )
+            """;
+        command.Parameters.AddWithValue("@revision", revision);
+        command.Parameters.AddWithValue("@gate", options.Gate.ToString());
+        command.Parameters.AddWithValue(
+            "@long_window_ms",
+            checked((long)options.Quota.LongWindow.TotalMilliseconds));
+        command.Parameters.AddWithValue(
+            "@short_window_ms",
+            checked((long)options.Quota.ShortWindow.TotalMilliseconds));
+        command.Parameters.AddWithValue("@max_messages_long", options.Quota.MaxMessagesLong);
+        command.Parameters.AddWithValue("@max_bytes_long", options.Quota.MaxBytesLong);
+        command.Parameters.AddWithValue("@max_identical_long", options.Quota.MaxIdenticalLong);
+        command.Parameters.AddWithValue("@max_messages_short", options.Quota.MaxMessagesShort);
+        command.Parameters.AddWithValue("@max_bytes_short", options.Quota.MaxBytesShort);
+        command.Parameters.AddWithValue("@max_identical_short", options.Quota.MaxIdenticalShort);
+        command.Parameters.AddWithValue("@sa_enabled", options.SpamAssassin.Enabled ? "Y" : "N");
+        command.Parameters.AddWithValue(
+            "@sa_on_failure",
+            options.SpamAssassin.OnFailure is { } onFailure
+                ? onFailure.ToString()
+                : DBNull.Value);
+        command.Parameters.AddWithValue("@sa_max_article_size", options.SpamAssassin.MaxArticleSize);
+        command.Parameters.AddWithValue("@sa_port", options.SpamAssassin.Port);
+        command.Parameters.AddWithValue("@sa_protocol_version", options.SpamAssassin.ProtocolVersion);
+        command.Parameters.AddWithValue("@sa_max_connections", options.SpamAssassin.MaxConnections);
+        command.Parameters.AddWithValue("@sa_host_selection", options.SpamAssassin.HostSelection.ToString());
+        command.Parameters.AddWithValue(
+            "@sa_connect_timeout_ms",
+            checked((int)options.SpamAssassin.ConnectTimeout.TotalMilliseconds));
+        command.Parameters.AddWithValue(
+            "@sa_operation_timeout_ms",
+            checked((int)options.SpamAssassin.OperationTimeout.TotalMilliseconds));
+        await command.ExecuteNonQueryAsync();
     }
 
     public async Task PublishAsync(long revision)

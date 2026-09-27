@@ -37,7 +37,77 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
         Assert.Contains("(1, 'sa_exclude', 'YEncoded')", sql, StringComparison.Ordinal);
         Assert.Contains("INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1)", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("INSERT INTO nntppostfiltersahosts", sql, StringComparison.Ordinal);
-        Assert.Equal(10, PostFilterSchemaScript.ReadStatements().Count);
+        Assert.Contains("DELIMITER $$", sql, StringComparison.Ordinal);
+        Assert.Contains("END$$", sql, StringComparison.Ordinal);
+        Assert.Contains("DELIMITER ;", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain("VECTORNNTP_STMT", sql, StringComparison.Ordinal);
+        Assert.DoesNotContain(";;", sql, StringComparison.Ordinal);
+        var statements = PostFilterSchemaScript.ReadStatements();
+        Assert.Equal(10, statements.Count);
+        var trigger = Assert.Single(
+            statements,
+            statement => statement.StartsWith("CREATE TRIGGER trg_nntppostfiltercurrent_revision_forward", StringComparison.Ordinal));
+        Assert.DoesNotContain("DELIMITER", trigger, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("$$", trigger, StringComparison.Ordinal);
+        Assert.Contains("BEFORE UPDATE ON nntppostfiltercurrent", trigger, StringComparison.Ordinal);
+        Assert.Contains("NEW.revision <= OLD.revision", trigger, StringComparison.Ordinal);
+        Assert.Contains("SIGNAL SQLSTATE '45000'", trigger, StringComparison.Ordinal);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task OfficialSeedRevision1_LoadsExpectedScalars()
+    {
+        RequireReady();
+        await _fixture.ExecuteRawAsync("DELETE FROM nntppostfiltercurrent WHERE policy_id = 1");
+        await _fixture.ExecuteRawAsync("INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1)");
+        var record = await _fixture.LoadAsync();
+        Assert.Equal(1, record.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, record.Options.Gate);
+        Assert.Equal(TimeSpan.FromDays(1), record.Options.Quota.LongWindow);
+        Assert.Equal(TimeSpan.FromMinutes(10), record.Options.Quota.ShortWindow);
+        Assert.Equal(0, record.Options.Quota.MaxMessagesLong);
+        Assert.Equal(0, record.Options.Quota.MaxBytesLong);
+        Assert.Equal(0, record.Options.Quota.MaxIdenticalLong);
+        Assert.Equal(0, record.Options.Quota.MaxMessagesShort);
+        Assert.Equal(0, record.Options.Quota.MaxBytesShort);
+        Assert.Equal(0, record.Options.Quota.MaxIdenticalShort);
+        Assert.False(record.Options.SpamAssassin.Enabled);
+        Assert.Null(record.Options.SpamAssassin.OnFailure);
+        Assert.Equal(131072, record.Options.SpamAssassin.MaxArticleSize);
+        Assert.Equal(783, record.Options.SpamAssassin.Port);
+        Assert.Equal("1.5", record.Options.SpamAssassin.ProtocolVersion);
+        Assert.Equal(4, record.Options.SpamAssassin.MaxConnections);
+        Assert.Equal(PostFilterSpamAssassinHostSelection.RoundRobin, record.Options.SpamAssassin.HostSelection);
+        Assert.Equal(TimeSpan.FromMilliseconds(5000), record.Options.SpamAssassin.ConnectTimeout);
+        Assert.Equal(TimeSpan.FromMilliseconds(30000), record.Options.SpamAssassin.OperationTimeout);
+        Assert.Equal(["YEncoded"], record.Options.SpamAssassin.ExcludeArtTypes);
+        Assert.Empty(record.Options.SpamAssassin.Hosts);
+        Assert.Empty(record.Options.DeniedAccounts);
+        Assert.Empty(record.Options.AllowlistedAccounts);
+        Assert.Empty(record.Options.DeniedCidrs);
+        Assert.Empty(record.Options.AllowlistedCidrs);
+        Assert.Empty(record.Options.RejectArtTypes);
+        var snapshot = PostFilterPolicyCompiler.Compile(record.Options, record.Revision);
+        Assert.Equal(1, snapshot.Revision);
+        Assert.Equal(PostFilterGateState.Disabled, snapshot.Gate);
+    }
+
+    [NntpDbIntegrationFact]
+    public async Task UnpublishedCommittedRevision_IsNeverSelected()
+    {
+        RequireReady();
+        var published = _fixture.NextRevision();
+        var draft = _fixture.NextRevision();
+        await _fixture.InsertDisabledRevisionAsync(published);
+        await _fixture.InsertArtTypeAsync(published, NntpPostFilterQueries.ListKindSaExclude, "YEncoded");
+        await _fixture.PublishAsync(published);
+        await _fixture.InsertDisabledRevisionAsync(draft);
+        await _fixture.InsertAccountAsync(draft, NntpPostFilterQueries.ListKindDeny, "unpublished-poster");
+        await _fixture.InsertArtTypeAsync(draft, NntpPostFilterQueries.ListKindSaExclude, "YEncoded");
+
+        var record = await _fixture.LoadAsync();
+        Assert.Equal(published, record.Revision);
+        Assert.DoesNotContain("unpublished-poster", record.Options.DeniedAccounts);
     }
 
     [NntpDbIntegrationFact]
@@ -239,10 +309,19 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
         var second = _fixture.NextRevision();
         await _fixture.InsertDisabledRevisionAsync(first);
         await _fixture.PublishAsync(first);
+        var same = await Assert.ThrowsAsync<MySqlException>(() => _fixture.PublishAsync(first));
+        Assert.Contains("must increase", same.Message, StringComparison.OrdinalIgnoreCase);
+        var seedPointer = await Assert.ThrowsAsync<MySqlException>(() =>
+            _fixture.ExecuteRawAsync(
+                "UPDATE nntppostfiltercurrent SET revision = 1 WHERE policy_id = 1"));
+        Assert.Contains("must increase", seedPointer.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(first, (await _fixture.LoadAsync()).Revision);
+
         await _fixture.InsertDisabledRevisionAsync(second);
         await _fixture.PublishAsync(second);
-        var ex = await Assert.ThrowsAsync<MySqlException>(() => _fixture.PublishAsync(first));
-        Assert.Contains("must increase", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(second, (await _fixture.LoadAsync()).Revision);
+        var lower = await Assert.ThrowsAsync<MySqlException>(() => _fixture.PublishAsync(first));
+        Assert.Contains("must increase", lower.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(second, (await _fixture.LoadAsync()).Revision);
     }
 

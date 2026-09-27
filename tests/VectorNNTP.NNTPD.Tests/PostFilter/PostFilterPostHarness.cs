@@ -36,8 +36,19 @@ internal static class PostFilterPostHarness
         IPostFilterQuotaStore quota,
         IPostFilterSpamAssassin? sa = null,
         PostFilterReservationIdentity? identity = null) =>
-        new PostFilterEvaluator(
+        CreateFilter(
             new StaticPostFilterPolicySource(snapshot),
+            quota,
+            sa,
+            identity);
+
+    public static IPostFilter CreateFilter(
+        IPostFilterPolicySource source,
+        IPostFilterQuotaStore quota,
+        IPostFilterSpamAssassin? sa = null,
+        PostFilterReservationIdentity? identity = null) =>
+        new PostFilterEvaluator(
+            source,
             quota,
             identity ?? new PostFilterReservationIdentity("n1", "inc"),
             sa ?? new PolicyRecordingSpamAssassin(),
