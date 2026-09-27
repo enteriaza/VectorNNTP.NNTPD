@@ -62,4 +62,16 @@ internal static partial class NntpLogMessages
         Level = LogLevel.Debug,
         Message = "{Session}: Session retiring")]
     public static partial void WireRetiring(ILogger logger, string Session);
+
+    [LoggerMessage(
+        EventId = 5410,
+        Level = LogLevel.Debug,
+        Message = "{Session}: TLS handshake starting")]
+    public static partial void WireTlsHandshakeStarting(ILogger logger, string Session);
+
+    [LoggerMessage(
+        EventId = 5411,
+        Level = LogLevel.Debug,
+        Message = "{Session}: TLS handshake completed")]
+    public static partial void WireTlsHandshakeCompleted(ILogger logger, string Session);
 }

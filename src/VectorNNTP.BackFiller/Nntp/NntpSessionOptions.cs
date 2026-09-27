@@ -9,13 +9,18 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <param name="ConnectTimeout">TCP connect and TLS handshake budget.</param>
 /// <param name="CommandTimeout">Command write and single-line status read budget.</param>
 /// <param name="ReceiveTimeout">Multiline ARTICLE payload read budget.</param>
+/// <param name="ServerCertificateValidationCallback">
+/// Optional TLS certificate callback. <see langword="null"/> uses platform validation
+/// (production default). Tests may supply a callback; this is not a configuration setting.
+/// </param>
 public sealed record NntpSessionOptions(
     int ReceiveBufferBytes,
     int MaxStatusLineBytes,
     int MaxArticleBytes,
     TimeSpan ConnectTimeout,
     TimeSpan CommandTimeout,
-    TimeSpan ReceiveTimeout)
+    TimeSpan ReceiveTimeout,
+    System.Net.Security.RemoteCertificateValidationCallback? ServerCertificateValidationCallback = null)
 {
     /// <summary>
     /// Old-worker defaults: 64 KiB buffers, 16 KiB status lines, 5 MiB articles, 30 s connect/command, 2 min receive.

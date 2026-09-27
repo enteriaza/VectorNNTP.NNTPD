@@ -42,6 +42,8 @@ public sealed class NntpWireLoggingTests
         Assert.Contains(
             logger.Messages,
             static message => message.Contains("Connecting article acquisition session to 127.0.0.1:119 (SSL=false)", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, static message => message.Contains("TX: CAPABILITIES", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, static message => message.Contains("RX: 101 Capability list follows", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, static message => message.Contains("TX: AUTHINFO USER ***", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, static message => message.Contains("TX: AUTHINFO PASS ***", StringComparison.Ordinal));
         Assert.Contains(logger.Messages, static message => message.Contains("RX: 200 News.GigaNews.Com", StringComparison.Ordinal));

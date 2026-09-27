@@ -100,6 +100,27 @@ internal sealed class ScriptedNntpServer
     /// <summary>When set, the server closes after reading DATE without writing a status.</summary>
     public bool CompleteAfterDateWithoutResponse { get; set; }
 
+    /// <summary>When set, CAPABILITIES includes this label (default STARTTLS).</summary>
+    public string StartTlsCapabilityLabel { get; set; } = "STARTTLS";
+
+    /// <summary>When true, CAPABILITIES advertises STARTTLS.</summary>
+    public bool AdvertiseStartTls { get; set; }
+
+    /// <summary>When true, CAPABILITIES advertises COMPRESS. The client must not negotiate it.</summary>
+    public bool AdvertiseCompress { get; set; }
+
+    /// <summary>Full CAPABILITIES response override, including status and terminator when complete.</summary>
+    public string? CapabilitiesResponse { get; set; }
+
+    /// <summary>When set, the server closes after writing the CAPABILITIES response.</summary>
+    public bool CompleteAfterCapabilities { get; set; }
+
+    /// <summary>STARTTLS command response. Used only when the client issues STARTTLS.</summary>
+    public string StartTlsResponse { get; set; } = "382 Continue with TLS negotiation\r\n";
+
+    /// <summary>When set, the server closes after the STARTTLS status (handshake then fails).</summary>
+    public bool CompleteAfterStartTls { get; set; }
+
     public void Respond(Func<string, string> responder)
     {
         ArgumentNullException.ThrowIfNull(responder);
@@ -150,6 +171,35 @@ internal sealed class ScriptedNntpServer
                     break;
                 }
 
+                if (text.Equals("CAPABILITIES", StringComparison.OrdinalIgnoreCase))
+                {
+                    var capabilities = Encoding.ASCII.GetBytes(BuildCapabilitiesResponse());
+                    _toClient.Writer.Write(capabilities);
+                    var capabilitiesFlush = await _toClient.Writer.FlushAsync().ConfigureAwait(false);
+                    if (CompleteAfterCapabilities || capabilitiesFlush.IsCompleted)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (text.Equals("STARTTLS", StringComparison.OrdinalIgnoreCase))
+                {
+                    var startTls = Encoding.ASCII.GetBytes(
+                        StartTlsResponse.EndsWith("\r\n", StringComparison.Ordinal)
+                            ? StartTlsResponse
+                            : StartTlsResponse + "\r\n");
+                    _toClient.Writer.Write(startTls);
+                    var startTlsFlush = await _toClient.Writer.FlushAsync().ConfigureAwait(false);
+                    if (CompleteAfterStartTls || startTlsFlush.IsCompleted)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
                 if (text.StartsWith("ARTICLE", StringComparison.OrdinalIgnoreCase))
                 {
                     ArticleStarted?.TrySetResult();
@@ -188,6 +238,35 @@ internal sealed class ScriptedNntpServer
         {
             await _toClient.Writer.CompleteAsync().ConfigureAwait(false);
         }
+    }
+
+    private string BuildCapabilitiesResponse()
+    {
+        if (CapabilitiesResponse is not null)
+        {
+            return CapabilitiesResponse.EndsWith("\r\n", StringComparison.Ordinal)
+                   || CapabilitiesResponse.Length == 0
+                ? CapabilitiesResponse
+                : CapabilitiesResponse + "\r\n";
+        }
+
+        var body = new StringBuilder();
+        body.Append("101 Capability list follows\r\n");
+        body.Append("VERSION 2\r\n");
+        body.Append("READER\r\n");
+        if (AdvertiseStartTls)
+        {
+            body.Append(StartTlsCapabilityLabel);
+            body.Append("\r\n");
+        }
+
+        if (AdvertiseCompress)
+        {
+            body.Append("COMPRESS DEFLATE\r\n");
+        }
+
+        body.Append(".\r\n");
+        return body.ToString();
     }
 }
 

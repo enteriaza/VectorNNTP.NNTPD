@@ -86,8 +86,9 @@ public sealed class NntpProviderSessionTests
         var ok = CreateSession(user: "user", password: "secret");
         var fail = CreateSession(user: "user", password: "secret");
         Assert.Null(await ok.ConnectAsync(okFactory, CancellationToken.None));
-        Assert.Equal("AUTHINFO USER user", okServer.Commands[0]);
-        Assert.Equal("AUTHINFO PASS secret", okServer.Commands[1]);
+        Assert.Equal("CAPABILITIES", okServer.Commands[0]);
+        Assert.Equal("AUTHINFO USER user", okServer.Commands[1]);
+        Assert.Equal("AUTHINFO PASS secret", okServer.Commands[2]);
         var failed = await fail.ConnectAsync(failFactory, CancellationToken.None);
         Assert.Equal(ArticleRetrievalKind.AuthenticationFailure, failed!.Kind);
         Assert.DoesNotContain("secret", failed.Reason, StringComparison.Ordinal);
@@ -131,7 +132,9 @@ public sealed class NntpProviderSessionTests
         using var result = await session.DownloadArticleAsync(messageId, CancellationToken.None);
 
         Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
-        Assert.Equal($"ARTICLE {messageId}", Assert.Single(server.Commands));
+        Assert.Equal("CAPABILITIES", server.Commands[0]);
+        Assert.Equal($"ARTICLE {messageId}", server.Commands[1]);
+        Assert.Equal(2, server.Commands.Count);
         Assert.True(server.LastCommandUsedCrlf);
         var text = Encoding.ASCII.GetString(result.Article!.Memory.Span);
         Assert.Contains(".hidden", text, StringComparison.Ordinal);
@@ -355,10 +358,13 @@ public sealed class NntpProviderSessionTests
     [Fact]
     public void Tcp_factory_does_not_install_an_accept_all_certificate_callback()
     {
-        var source = File.ReadAllText(FindSource("TcpNntpTransportFactory.cs"));
-        Assert.DoesNotContain("RemoteCertificateValidationCallback", source, StringComparison.Ordinal);
-        Assert.Contains("SslProtocols.Tls12", source, StringComparison.Ordinal);
-        Assert.Contains("SslProtocols.Tls13", source, StringComparison.Ordinal);
+        var factorySource = File.ReadAllText(FindSource("TcpNntpTransportFactory.cs"));
+        var tlsSource = File.ReadAllText(FindSource("NntpTlsClient.cs"));
+        Assert.DoesNotContain("return true", tlsSource, StringComparison.Ordinal);
+        Assert.Contains("SslProtocols.Tls12", tlsSource, StringComparison.Ordinal);
+        Assert.Contains("SslProtocols.Tls13", tlsSource, StringComparison.Ordinal);
+        Assert.Contains("if (serverCertificateValidationCallback is not null)", tlsSource, StringComparison.Ordinal);
+        Assert.Contains("NntpTlsClient.AuthenticateAsClientAsync", factorySource, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -388,7 +394,7 @@ public sealed class NntpProviderSessionTests
 
     private static string FindSource(string fileName) => Path.Combine(FindSourceDirectory(), fileName);
 
-    private static string FindSourceDirectory()
+    internal static string FindSourceDirectory()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)

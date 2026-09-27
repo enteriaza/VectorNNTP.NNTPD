@@ -1,6 +1,4 @@
-using System.Net.Security;
 using System.Net.Sockets;
-using System.Security.Authentication;
 
 namespace VectorNNTP.BackFiller.Nntp;
 
@@ -35,26 +33,13 @@ public sealed class TcpNntpTransportFactory : INntpTransportFactory
                 return new TcpOwnedStream(client, stream);
             }
 
-            var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
-            try
-            {
-                using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                tlsCts.CancelAfter(options.ConnectTimeout);
-                await ssl.AuthenticateAsClientAsync(
-                        new SslClientAuthenticationOptions
-                        {
-                            TargetHost = provider.Host,
-                            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                        },
-                        tlsCts.Token)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                await ssl.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
-
+            var ssl = await NntpTlsClient.AuthenticateAsClientAsync(
+                    stream,
+                    provider.Host,
+                    options.ConnectTimeout,
+                    options.ServerCertificateValidationCallback,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return new TcpOwnedStream(client, ssl);
         }
         catch

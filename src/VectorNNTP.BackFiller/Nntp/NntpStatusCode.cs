@@ -2,10 +2,13 @@ namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>
 /// Named NNTP status codes used by provider retrieval.
-/// Values are from RFC 3977 and RFC 4643; do not scatter raw literals at call sites.
+/// Values are from RFC 3977, RFC 4642, and RFC 4643; do not scatter raw literals at call sites.
 /// </summary>
 public static class NntpStatusCode
 {
+    /// <summary>RFC 3977 CAPABILITIES success; multiline capability list follows.</summary>
+    public const int CapabilityListFollows = 101;
+
     /// <summary>RFC 3977 DATE success.</summary>
     public const int DateFollows = 111;
 
@@ -23,6 +26,9 @@ public static class NntpStatusCode
 
     /// <summary>RFC 4643 AUTHINFO USER: password required.</summary>
     public const int PasswordRequired = 381;
+
+    /// <summary>RFC 4642 STARTTLS: continue with TLS negotiation.</summary>
+    public const int ContinueWithTlsNegotiation = 382;
 
     /// <summary>RFC 3977: no newsgroup selected (ARTICLE by number).</summary>
     public const int NoNewsgroupSelected = 412;

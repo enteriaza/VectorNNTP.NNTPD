@@ -65,7 +65,8 @@ public sealed class NntpProviderSession : IAsyncDisposable
     public byte KeepAliveSeconds => _provider.KeepAliveSeconds;
 
     /// <summary>
-    /// Connects, validates the greeting, and authenticates when configured.
+    /// Connects, validates the greeting, issues CAPABILITIES, upgrades via STARTTLS
+    /// when advertised, and authenticates when configured.
     /// </summary>
     /// <returns><see langword="null"/> when the session is <see cref="NntpSessionState.Ready"/>.</returns>
     public async Task<ArticleRetrievalResult?> ConnectAsync(
@@ -103,6 +104,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
             if (!NntpStatusCode.IsServiceReadyGreeting(code))
             {
                 return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+            }
+
+            var startTls = await NegotiateCapabilitiesAndStartTlsAsync(cancellationToken).ConfigureAwait(false);
+            if (startTls is not null)
+            {
+                return startTls;
             }
 
             var auth = await AuthenticateIfConfiguredAsync(cancellationToken).ConfigureAwait(false);
@@ -394,6 +401,136 @@ public sealed class NntpProviderSession : IAsyncDisposable
 
         _busy.Dispose();
         State = NntpSessionState.Closed;
+    }
+
+    private async Task<ArticleRetrievalResult?> NegotiateCapabilitiesAndStartTlsAsync(
+        CancellationToken cancellationToken)
+    {
+        await WriteCommandAsync("CAPABILITIES", NntpProtocolIo.CapabilitiesCommand, cancellationToken)
+            .ConfigureAwait(false);
+        var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+        if (status is null || !NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+        {
+            return FailClosed(
+                ArticleRetrievalKind.ProviderFailure,
+                null,
+                "NNTP CAPABILITIES status was empty or malformed.",
+                reusable: false);
+        }
+
+        if (code != NntpStatusCode.CapabilityListFollows)
+        {
+            return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+        }
+
+        var startTlsAdvertised = false;
+        for (var i = 0; i < NntpProtocolIo.MaxCapabilityLines; i++)
+        {
+            var line = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                return FailClosed(
+                    ArticleRetrievalKind.ProviderFailure,
+                    code,
+                    "NNTP CAPABILITIES list ended before the terminator.",
+                    reusable: false);
+            }
+
+            if (NntpProtocolIo.IsMultilineTerminator(line))
+            {
+                return startTlsAdvertised && !_provider.UseTls
+                    ? await IssueStartTlsAndUpgradeAsync(cancellationToken).ConfigureAwait(false)
+                    : null;
+            }
+
+            var capability = NntpProtocolIo.DestuffDotLine(line);
+            if (NntpProtocolIo.CapabilityLabelEquals(capability, NntpProtocolIo.StartTlsCapability))
+            {
+                startTlsAdvertised = true;
+            }
+        }
+
+        return FailClosed(
+            ArticleRetrievalKind.ProviderFailure,
+            code,
+            "NNTP CAPABILITIES list exceeded the maximum number of lines.",
+            reusable: false);
+    }
+
+    private async Task<ArticleRetrievalResult?> IssueStartTlsAndUpgradeAsync(CancellationToken cancellationToken)
+    {
+        await WriteCommandAsync("STARTTLS", NntpProtocolIo.StartTlsCommand, cancellationToken)
+            .ConfigureAwait(false);
+        var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+        if (status is null || !NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+        {
+            return FailClosed(
+                ArticleRetrievalKind.ProviderFailure,
+                null,
+                "NNTP STARTTLS status was empty or malformed.",
+                reusable: false);
+        }
+
+        if (code != NntpStatusCode.ContinueWithTlsNegotiation)
+        {
+            return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+        }
+
+        if (_reader is not null && _reader.BufferedByteCount != 0)
+        {
+            return FailClosed(
+                ArticleRetrievalKind.ProviderFailure,
+                code,
+                "NNTP STARTTLS left unread bytes before TLS negotiation.",
+                reusable: false);
+        }
+
+        return await UpgradeExistingTransportToTlsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ArticleRetrievalResult?> UpgradeExistingTransportToTlsAsync(
+        CancellationToken cancellationToken)
+    {
+        if (_stream is null)
+        {
+            return FailClosed(
+                ArticleRetrievalKind.ProviderFailure,
+                null,
+                "NNTP stream is not open for STARTTLS.",
+                reusable: false);
+        }
+
+        NntpLogMessages.WireTlsHandshakeStarting(_logger, _wireIdentity);
+        try
+        {
+            var ssl = await NntpTlsClient.AuthenticateAsClientAsync(
+                    _stream,
+                    _provider.Host,
+                    _options.ConnectTimeout,
+                    _options.ServerCertificateValidationCallback,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            _stream = ssl;
+            _reader = new NntpStreamReader(_stream, _options.ReceiveBufferBytes);
+            NntpLogMessages.WireTlsHandshakeCompleted(_logger, _wireIdentity);
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            _stream = null;
+            _reader = null;
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _stream = null;
+            _reader = null;
+            return FailClosed(
+                ArticleRetrievalKind.ProviderFailure,
+                null,
+                $"TLS handshake failed ({ex.GetType().Name}).",
+                reusable: false);
+        }
     }
 
     private async Task<ArticleRetrievalResult?> AuthenticateIfConfiguredAsync(CancellationToken cancellationToken)

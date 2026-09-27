@@ -11,6 +11,12 @@ internal static class NntpProtocolIo
     internal static readonly byte[] ArticlePrefix = "ARTICLE "u8.ToArray();
     internal static readonly byte[] AuthInfoUserPrefix = "AUTHINFO USER "u8.ToArray();
     internal static readonly byte[] AuthInfoPassPrefix = "AUTHINFO PASS "u8.ToArray();
+    internal static readonly byte[] CapabilitiesCommand = "CAPABILITIES\r\n"u8.ToArray();
+    internal static readonly byte[] StartTlsCommand = "STARTTLS\r\n"u8.ToArray();
+    internal static readonly byte[] StartTlsCapability = "STARTTLS"u8.ToArray();
+
+    /// <summary>Upper bound on CAPABILITIES body lines (RFC 3977 §5.2) before the session fails.</summary>
+    internal const int MaxCapabilityLines = 256;
 
     internal static bool TryParseStatus(ReadOnlySpan<byte> line, out int code, out string text)
     {
@@ -57,6 +63,57 @@ internal static class NntpProtocolIo
         return true;
     }
 
+    /// <summary>
+    /// Returns whether the first capability token on <paramref name="line"/> equals
+    /// <paramref name="label"/> using ASCII case-insensitive comparison.
+    /// </summary>
+    internal static bool CapabilityLabelEquals(ReadOnlySpan<byte> line, ReadOnlySpan<byte> label)
+    {
+        var start = 0;
+        while (start < line.Length && line[start] == (byte)' ')
+        {
+            start++;
+        }
+
+        if (start >= line.Length)
+        {
+            return false;
+        }
+
+        var end = start;
+        while (end < line.Length && line[end] != (byte)' ')
+        {
+            end++;
+        }
+
+        var token = line[start..end];
+        if (token.Length != label.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < token.Length; i++)
+        {
+            if (ToAsciiUpper(token[i]) != ToAsciiUpper(label[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool IsMultilineTerminator(ReadOnlySpan<byte> line) =>
+        line.Length == 1 && line[0] == (byte)'.';
+
+    internal static ReadOnlySpan<byte> DestuffDotLine(ReadOnlySpan<byte> line) =>
+        line.Length >= 2 && line[0] == (byte)'.' && line[1] == (byte)'.'
+            ? line[1..]
+            : line;
+
+    private static byte ToAsciiUpper(byte value) =>
+        value is >= (byte)'a' and <= (byte)'z' ? (byte)(value - 32) : value;
+
     internal static bool HasHeaderBodySeparator(ReadOnlySpan<byte> article)
     {
         var crlfcrlf = "\r\n\r\n"u8;
@@ -80,6 +137,9 @@ internal sealed class NntpStreamReader
         _stream = stream;
         _buffer = new byte[Math.Max(1024, receiveBufferBytes)];
     }
+
+    /// <summary>Gets unread bytes already taken from the socket but not yet consumed as a line.</summary>
+    internal int BufferedByteCount => _count;
 
     internal async Task<byte[]?> ReadLineAsync(int maxBytes, TimeSpan timeout, CancellationToken cancellationToken)
     {
