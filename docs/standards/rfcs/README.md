@@ -46,6 +46,9 @@ PGPVERIFY  --(not an RFC)--> de-facto control-message authentication
                              See ../pgpverify/ (FORMAT + README).
                              VectorNNTP implements it for CANCEL interoperability.
                              Do not describe PGPVERIFY as RFC-compliant.
+SPAMD/SPAMC --(not an RFC)--> Apache SpamAssassin network protocol
+                             See ../spamd/ (PROTOCOL.md).
+                             Bundled reference for the SPAMC/SPAMD integration.
 RFC 4642  --(updated by)--> RFC 8143 (and RFC 8996)
 RFC 5538  defines news/nntp URI schemes (see also historical RFC 1738)
 RFC 8054  NNTP compression extension

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.PostFilter.Quota;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Redis;
@@ -98,6 +99,8 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
     internal TransitPeerStateEngine TransitPeerStateEngine { get; } = new();
 
     internal AccountByteEngine AccountByteEngine { get; } = new();
+
+    internal PostFilterQuotaEngine PostFilterQuotaEngine { get; } = new();
 
     public Task<TimeSpan> PingAsync(CancellationToken cancellationToken = default)
     {
@@ -239,6 +242,11 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
             return EvaluateRenewAndApply(keys, values);
         }
 
+        if (keys.Length == 2 && TryEvaluateQuota(script, keys, values, out var quotaResult))
+        {
+            return quotaResult;
+        }
+
         if (keys.Length < 2)
         {
             throw new InvalidOperationException("Admission EVAL requires KEYS[1] source and KEYS[2] session.");
@@ -298,6 +306,79 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         }
 
         throw new NotSupportedException("FakeRedis only evaluates cluster admission scripts.");
+    }
+
+    private bool TryEvaluateQuota(
+        string script,
+        ReadOnlyMemory<byte>[] keys,
+        ReadOnlyMemory<byte>[] values,
+        out long result)
+    {
+        result = 0;
+        var quotaKey = Encoding.UTF8.GetString(keys[0].Span);
+        var multipostKey = Encoding.UTF8.GetString(keys[1].Span);
+        if (script == PostFilterQuotaScripts.Reserve)
+        {
+            var reservation = ParseReservation(Utf8(values[2]), ParseLong(values[3]));
+            result = PostFilterQuotaEngine.Reserve(
+                quotaKey,
+                multipostKey,
+                reservation,
+                ParseLong(values[0]),
+                ParseLong(values[1]),
+                new PostFilterQuotaWindows(ParseLong(values[8]), ParseLong(values[9])),
+                new PostFilterQuotaCeilings(
+                    ParseLong(values[10]),
+                    ParseLong(values[11]),
+                    ParseLong(values[12]),
+                    ParseLong(values[13]),
+                    ParseLong(values[14]),
+                    ParseLong(values[15])),
+                ParseLong(values[4]),
+                ParseLong(values[5]),
+                ParseInt(values[6]),
+                Utf8(values[7]));
+            return true;
+        }
+
+        if (script == PostFilterQuotaScripts.Commit)
+        {
+            var reservation = ParseReservation(Utf8(values[1]), ParseLong(values[2]));
+            result = PostFilterQuotaEngine.Commit(
+                quotaKey,
+                multipostKey,
+                reservation,
+                ParseLong(values[0]),
+                new PostFilterQuotaWindows(ParseLong(values[3]), ParseLong(values[4])),
+                new PostFilterQuotaCeilings(
+                    ParseLong(values[5]),
+                    ParseLong(values[6]),
+                    ParseLong(values[7]),
+                    ParseLong(values[8]),
+                    ParseLong(values[9]),
+                    ParseLong(values[10])));
+            return true;
+        }
+
+        if (script == PostFilterQuotaScripts.Release)
+        {
+            var reservation = ParseReservation(Utf8(values[1]), ParseLong(values[2]));
+            result = PostFilterQuotaEngine.Release(
+                quotaKey,
+                multipostKey,
+                reservation,
+                ParseLong(values[0]));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static PostFilterReservationId ParseReservation(string token, long generation)
+    {
+        var last = token.LastIndexOf(':');
+        var mid = token.LastIndexOf(':', last - 1);
+        return new PostFilterReservationId(token[..mid], token[(mid + 1)..last], generation);
     }
 
     private long EvaluateRenewAndApply(ReadOnlyMemory<byte>[] keys, ReadOnlyMemory<byte>[] values)

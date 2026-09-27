@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -52,6 +53,28 @@ public sealed class IHaveCommandTests
         Assert.NotNull(interpreted.Structured);
         Assert.Equal(".body\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
         Assert.Equal(interpreted.Structured.Value.Size, interpreted.Payload.Length);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task ValidIhave_DoesNotEvaluatePostFilter()
+    {
+        var filter = new CountingPostFilter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, postFilter: filter);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <want-pf@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync("Subject: hi\r\n\r\n..body\r\n.\r\n");
+        Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, filter.EvaluateCalls);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -378,7 +401,10 @@ public sealed class IHaveCommandTests
 
         public static Task<IHaveDuplex> CreateAsync() => Task.FromResult(new IHaveDuplex());
 
-        public NntpSession CreateSession(IArticleIngestionQueue queue, IHistoryDb? history = null)
+        public NntpSession CreateSession(
+            IArticleIngestionQueue queue,
+            IHistoryDb? history = null,
+            IPostFilter? postFilter = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -388,7 +414,8 @@ public sealed class IHaveCommandTests
                 connection,
                 NullLogger<NntpSession>.Instance,
                 articleIngestion: queue,
-                historyDb: history);
+                historyDb: history,
+                postFilter: postFilter);
         }
 
         public async Task WriteClientLineAsync(string line)

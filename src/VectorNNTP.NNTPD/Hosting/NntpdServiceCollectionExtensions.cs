@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme;
@@ -25,6 +26,8 @@ using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.PostFilter.Quota;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Email;
@@ -310,6 +313,29 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, ModeratorCatalogueService>(static sp =>
                 sp.GetRequiredService<ModeratorCatalogueService>()));
+
+        services.TryAddSingleton<PostFilterMetrics>();
+        services.TryAddSingleton<PostFilterReservationIdentity>(static sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<NntpdOptions>>().Value;
+            var nodeId = options.ServerId is { } id
+                ? ApplicationFqdn.FormatHostLabel(NntpdOptions.ApplicationPrefix, id)
+                : NntpdOptions.ApplicationPrefix;
+            return new PostFilterReservationIdentity(nodeId);
+        });
+        services.TryAddSingleton<IPostFilterQuotaStore, RedisPostFilterQuotaStore>();
+        services.TryAddSingleton<SpamdTransportMetrics>();
+        services.TryAddSingleton<IPostFilterSpamAssassin>(static sp =>
+            new SpamdCheckClient(
+                sp.GetRequiredService<SpamdTransportMetrics>(),
+                sp.GetService<ILogger<SpamdCheckClient>>()));
+        services.TryAddSingleton<PostFilterPolicyService>();
+        services.TryAddSingleton<IPostFilterPolicySource>(static sp =>
+            sp.GetRequiredService<PostFilterPolicyService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, PostFilterPolicyService>(static sp =>
+                sp.GetRequiredService<PostFilterPolicyService>()));
+        services.TryAddSingleton<IPostFilter, PostFilterEvaluator>();
 
         services.TryAddSingleton<HistoryDb>();
         services.TryAddSingleton<IHistoryDb>(static sp => sp.GetRequiredService<HistoryDb>());

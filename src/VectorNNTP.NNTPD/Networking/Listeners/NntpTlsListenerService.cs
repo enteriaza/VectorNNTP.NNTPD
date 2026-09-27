@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -60,6 +61,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IAccountByteAccountant _accountBytes;
     private readonly IAccountRateAllocator _accountRates;
     private readonly IArticleWorkRpcClient? _articleWorkRpc;
+    private readonly IPostFilter _postFilter;
+    private readonly PostFilterMetrics _postFilterMetrics;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -96,7 +99,9 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         NntpSaslService? saslService = null,
         IAccountByteAccountant? accountBytes = null,
         IAccountRateAllocator? accountRates = null,
-        IArticleWorkRpcClient? articleWorkRpc = null)
+        IArticleWorkRpcClient? articleWorkRpc = null,
+        IPostFilter? postFilter = null,
+        PostFilterMetrics? postFilterMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -128,6 +133,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
         _articleWorkRpc = articleWorkRpc;
+        _postFilter = postFilter ?? DisabledPostFilter.Instance;
+        _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -374,7 +381,9 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 saslService: _saslService,
                 accountBytes: _accountBytes,
                 accountRates: _accountRates,
-                articleWorkRpc: _articleWorkRpc);
+                articleWorkRpc: _articleWorkRpc,
+                postFilter: _postFilter,
+                postFilterMetrics: _postFilterMetrics);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

@@ -138,16 +138,17 @@ public sealed class CloudflareDnsReconciliationServiceTests
         Assert.Equal(typeof(NntpDbService), services[5].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService), services[6].GetType());
         Assert.Equal(typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService), services[7].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[8].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[9].GetType());
-        Assert.Equal(typeof(IncomingSpoolWriterService), services[10].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[11].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[12].GetType());
-        Assert.Equal(typeof(SessionStateService), services[13].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService), services[14].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[15].GetType());
-        Assert.Equal(typeof(AcmeCertificateApplicationService), services[16].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[17].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.PostFilter.PostFilterPolicyService), services[8].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[9].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[10].GetType());
+        Assert.Equal(typeof(IncomingSpoolWriterService), services[11].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[12].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[13].GetType());
+        Assert.Equal(typeof(SessionStateService), services[14].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService), services[15].GetType());
+        Assert.Equal(typeof(NntpPlainListenerService), services[16].GetType());
+        Assert.Equal(typeof(AcmeCertificateApplicationService), services[17].GetType());
+        Assert.Equal(typeof(NntpTlsListenerService), services[18].GetType());
         Assert.DoesNotContain(services, static s => s.GetType().Name == "AccountByteService");
         Assert.Equal(1, services.Count(static s => s is SessionStateService));
 

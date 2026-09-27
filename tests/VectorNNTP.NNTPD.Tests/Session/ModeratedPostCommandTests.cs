@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -67,6 +68,23 @@ public sealed class ModeratedPostCommandTests
         Assert.DoesNotContain("Injection-Date:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("X-Trace:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Path: .POSTED", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task M_OrdinaryUser_DoesNotEvaluatePostFilter()
+    {
+        var filter = new CountingPostFilter();
+        var submission = new RecordingModerationSubmissionService();
+        var outcome = await PostAsync(
+            "group.a",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            submission: submission,
+            postFilter: filter);
+        Assert.Equal("240 Article received OK", outcome.Response);
+        Assert.Equal(0, filter.EvaluateCalls);
+        Assert.Equal(0, outcome.Queue.TryAdmitCalls);
+        Assert.Single(submission.Submissions);
     }
 
     [Fact]
@@ -1033,13 +1051,15 @@ public sealed class ModeratedPostCommandTests
         IModeratorAuthorization? authorization = null,
         string body = "body\r\n",
         string from = "poster@example.com",
-        string? messageId = "<ok@example.com>") =>
+        string? messageId = "<ok@example.com>",
+        IPostFilter? postFilter = null) =>
         await PostRawAsync(
             Article(newsgroups, extraHeaders, body, from, messageId) + ".\r\n",
             user,
             submission,
             snapshot,
-            authorization);
+            authorization,
+            postFilter: postFilter);
 
     private static async Task<PostOutcome> PostRawAsync(
         string stuffedArticle,
@@ -1047,7 +1067,8 @@ public sealed class ModeratedPostCommandTests
         IModerationSubmissionService? submission = null,
         NewsgroupSnapshot? snapshot = null,
         IModeratorAuthorization? authorization = null,
-        int? chunkSize = null)
+        int? chunkSize = null,
+        IPostFilter? postFilter = null)
     {
         var queue = new RecordingIngestionQueue(NewQueue());
         var history = new RecordingHistoryDb();
@@ -1058,7 +1079,8 @@ public sealed class ModeratedPostCommandTests
             new StaticNewsgroupCatalogue(snapshot ?? DefaultSnapshot()),
             authorization ?? StandardAuthorization(),
             submission ?? new RecordingModerationSubmissionService(ModerationSubmissionStatus.Unavailable, "unused"),
-            user is null ? null : MapNntpAuthenticationProvider.CreateStandard());
+            user is null ? null : MapNntpAuthenticationProvider.CreateStandard(),
+            postFilter: postFilter);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
         if (user is not null)
@@ -1275,7 +1297,8 @@ public sealed class ModeratedPostCommandTests
             IModeratorAuthorization authorization,
             IModerationSubmissionService submission,
             INntpAuthenticationProvider? authenticationProvider,
-            IModeratorCatalogue? moderatorCatalogue = null)
+            IModeratorCatalogue? moderatorCatalogue = null,
+            IPostFilter? postFilter = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -1292,7 +1315,8 @@ public sealed class ModeratedPostCommandTests
                 newsgroupCatalogue: catalogue,
                 moderatorCatalogue: moderatorCatalogue,
                 moderatorAuthorization: authorization,
-                moderationSubmission: submission);
+                moderationSubmission: submission,
+                postFilter: postFilter);
         }
 
         public async Task WriteClientLineAsync(string line) => await WriteClientAsync(line + "\r\n");

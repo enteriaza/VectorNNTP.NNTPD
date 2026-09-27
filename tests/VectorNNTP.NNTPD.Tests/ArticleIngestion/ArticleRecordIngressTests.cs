@@ -72,4 +72,28 @@ public sealed class ArticleRecordIngressTests
         Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
         Assert.Null(inbound.Structured);
     }
+
+    [Fact]
+    public void CreateQueued_RejectsNonCanonicalRecord()
+    {
+        var destuffed = Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<alias@example.test>"));
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(Parser, destuffed);
+        Assert.True(created.IsAccepted);
+        var invalid = new ArticleRecord(
+            created.Record.ArtId,
+            created.Record.ArtHash,
+            created.Record.ArtType,
+            created.Record.ArtLines,
+            created.Record.CanonicalUtc,
+            ArticleParseStatus.None,
+            created.Record.ArtData.ToArray(),
+            created.Record.Fields);
+        Assert.Throws<ArgumentException>(() =>
+            ArticleRecordIngress.CreateQueued(
+                "<alias@example.test>",
+                invalid,
+                ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
+                DateTimeOffset.UtcNow,
+                InboundArticleProducer.Post));
+    }
 }

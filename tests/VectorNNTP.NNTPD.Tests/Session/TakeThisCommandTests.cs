@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -16,6 +17,7 @@ using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -60,6 +62,28 @@ public sealed class TakeThisCommandTests
         Assert.True(article.Record.Fields.MessageId.IsPresent);
         Assert.True(article.Record.Fields.Newsgroups.IsPresent);
         Assert.True(article.Record.Fields.Date.IsPresent);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task TakeThis_ValidArticle_DoesNotEvaluatePostFilter()
+    {
+        var filter = new CountingPostFilter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, postFilter: filter);
+        session.SetAuthorization(TransitAuth);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<article-pf@example.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "body\r\n")));
+        Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, filter.EvaluateCalls);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -852,7 +876,8 @@ public sealed class TakeThisCommandTests
             IArticleIngestionQueue queue,
             ITransitPeerAuthorization? transitPeers = null,
             System.Net.IPAddress? clientAddress = null,
-            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null)
+            VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null,
+            IPostFilter? postFilter = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -864,7 +889,8 @@ public sealed class TakeThisCommandTests
                 NullLogger<NntpSession>.Instance,
                 articleIngestion: queue,
                 transitPeerAuthorization: transitPeers,
-                historyDb: historyDb);
+                historyDb: historyDb,
+                postFilter: postFilter);
         }
 
         public async Task WriteClientLineAsync(string line)

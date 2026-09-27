@@ -65,6 +65,12 @@ internal static class ArticleRecordIngress
     /// <param name="receivedAtUtc">Queue-admission timestamp.</param>
     /// <param name="producer">TAKETHIS or POST.</param>
     /// <returns>Queue item carrying <paramref name="record"/>.</returns>
+    /// <remarks>
+    /// Throws only when <paramref name="messageId"/> is empty or
+    /// <paramref name="record"/> is not CanonicalV1. POST calls this only after
+    /// <see cref="TryCreateFromDestuffed"/> accepted CanonicalV1 with a non-empty
+    /// Message-ID; those throws are unreachable on that path.
+    /// </remarks>
     public static InboundArticle CreateQueued(
         string messageId,
         in ArticleRecord record,

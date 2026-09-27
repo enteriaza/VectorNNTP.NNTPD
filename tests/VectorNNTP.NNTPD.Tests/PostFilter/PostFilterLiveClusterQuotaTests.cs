@@ -1,0 +1,90 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.PostFilter.Quota;
+using VectorNNTP.NNTPD.Tests.Fixtures;
+
+namespace VectorNNTP.NNTPD.Tests.PostFilter;
+
+/// <summary>
+/// Two reservation identities against one live Redis store, using the same
+/// authenticated account name that POST passes (<c>Authentication.Username</c>).
+/// </summary>
+public sealed class PostFilterLiveClusterQuotaTests : IClassFixture<PostFilterQuotaRedisIntegrationFixture>
+{
+    private readonly PostFilterQuotaRedisIntegrationFixture _redis;
+
+    public PostFilterLiveClusterQuotaTests(PostFilterQuotaRedisIntegrationFixture redis)
+    {
+        _redis = redis;
+    }
+
+    [SessionStateRedisIntegrationFact]
+    public async Task TwoNodes_SameAccountUsername_ShareLiveRedisCeiling()
+    {
+        var account = await _redis.CreateAccountAsync();
+        var snapshot = PostFilterPolicyCompiler.Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 1 },
+        });
+        var nodeA = new PostFilterEvaluator(
+            new StaticPostFilterPolicySource(snapshot),
+            _redis.Store,
+            new PostFilterReservationIdentity("n1", "incA"),
+            new NullPostFilterSpamAssassin(),
+            NullLogger<PostFilterEvaluator>.Instance);
+        var nodeB = new PostFilterEvaluator(
+            new StaticPostFilterPolicySource(snapshot),
+            _redis.Store,
+            new PostFilterReservationIdentity("n2", "incB"),
+            new NullPostFilterSpamAssassin(),
+            NullLogger<PostFilterEvaluator>.Instance);
+
+        var first = await nodeA.EvaluateAsync(Request(account));
+        Assert.Equal(PostFilterDecision.Accept, first.Decision);
+        Assert.NotNull(first.Lease);
+        Assert.Equal(account, first.Lease!.AccountName);
+        Assert.Equal(
+            PostFilterQuotaCommitStatus.Committed,
+            await first.Lease.CommitAsync(
+                DateTimeOffset.FromUnixTimeMilliseconds(5_000),
+                CancellationToken.None));
+
+        var second = await nodeB.EvaluateAsync(Request(account));
+        Assert.Equal(PostFilterDecision.Reject, second.Decision);
+        Assert.Equal(PostFilterQuotaReserveStatus.DeniedMessagesLong, second.QuotaStatus);
+    }
+
+    private static PostFilterRequest Request(string account) =>
+        PostFilterEvaluatorTestsRequest.Create(account);
+}
+
+/// <summary>Shares the evaluator test article constructor without coupling session duplex.</summary>
+internal static class PostFilterEvaluatorTestsRequest
+{
+    private static readonly DateTimeOffset Now = DateTimeOffset.FromUnixTimeMilliseconds(5_000);
+
+    public static PostFilterRequest Create(string account)
+    {
+        var bytes = "From: a@b\r\nNewsgroups: misc.test\r\nSubject: t\r\nMessage-ID: <h@example.com>\r\nDate: 1 Jan 2026 00:00:00 +0000\r\n\r\nbody\r\n"u8.ToArray();
+        var article = new VectorNNTP.Common.Articles.ArticleRecord(
+            VectorNNTP.Common.Articles.ArticleId.FromMessageId("<h@example.com>"u8),
+            artHash: 1,
+            artType: VectorNNTP.Common.Articles.ArticleType.Default,
+            artLines: 1,
+            canonicalUtc: Now.UtcDateTime,
+            parseStatus: VectorNNTP.Common.Articles.ArticleParseStatus.CanonicalV1,
+            artData: bytes,
+            fields: default);
+        return new PostFilterRequest(
+            article,
+            account,
+            VectorNNTP.NNTPD.Networking.Proxy.ConnectionClientIdentity.Direct(
+                new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+            accountPolicy: null,
+            Now,
+            ["misc.test"],
+            Now);
+    }
+}

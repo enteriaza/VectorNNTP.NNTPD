@@ -36,6 +36,7 @@ docs/
   systemd.md
   systemd-integration-verification.md
   standards/rfcs/               # RFC reference library
+  standards/spamd/              # Apache SpamAssassin SPAMC/SPAMD protocol
 ```
 
 ## Build and test

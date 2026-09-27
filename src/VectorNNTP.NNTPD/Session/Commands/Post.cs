@@ -4,6 +4,8 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.PostFilter.Quota;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -169,6 +171,51 @@ internal static class Post
             return;
         }
 
+        PostFilterResult filter;
+        try
+        {
+            filter = await context.Session.PostFilter
+                .EvaluateAsync(
+                    new PostFilterRequest(
+                        created.Record,
+                        context.Session.Authentication.Username,
+                        context.Session.ClientIdentity,
+                        context.Session.AccountPolicy,
+                        read.InjectionUtc,
+                        read.Newsgroups,
+                        context.Session.Time.GetUtcNow(),
+                        context.Session.InjectionIdentity),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            cancellationToken.IsCancellationRequested
+            || context.Connection.ConnectionClosed.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (filter.Decision == PostFilterDecision.Reject)
+        {
+            await RejectAsync(
+                    context,
+                    new PostingFailure(PostingFailureCategory.PolicyRejected, filter.Reason),
+                    read.MessageId,
+                    FormatGroups(read.Newsgroups),
+                    read.Wire.Length,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var lease = filter.Lease;
+        if (cancellationToken.IsCancellationRequested
+            || context.Connection.ConnectionClosed.IsCancellationRequested)
+        {
+            await ReleaseLeaseAsync(context, lease).ConfigureAwait(false);
+            return;
+        }
+
         var inbound = ArticleRecordIngress.CreateQueued(
             read.MessageId!,
             created.Record,
@@ -179,6 +226,7 @@ internal static class Post
         var enqueue = context.Session.ArticleIngestion.TryAdmit(inbound);
         if (enqueue != ArticleEnqueueResult.Accepted)
         {
+            await ReleaseLeaseAsync(context, lease).ConfigureAwait(false);
             await RejectAsync(
                     context,
                     new PostingFailure(PostingFailureCategory.PersistenceFailure, enqueue.ToString()),
@@ -189,6 +237,8 @@ internal static class Post
                 .ConfigureAwait(false);
             return;
         }
+
+        await CommitLeaseAsync(context, lease, read.MessageId!).ConfigureAwait(false);
 
         history?.Remember(messageIdBytes);
         PostLogMessages.Accepted(
@@ -205,6 +255,60 @@ internal static class Post
                 "accepted",
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static async ValueTask ReleaseLeaseAsync(NntpCommandContext context, PostFilterLease? lease)
+    {
+        if (lease is null)
+        {
+            return;
+        }
+
+        var status = await lease
+            .ReleaseAsync(context.Session.Time.GetUtcNow(), CancellationToken.None)
+            .ConfigureAwait(false);
+        PostFilterLogMessages.Released(
+            Logger,
+            status,
+            lease.AccountName,
+            lease.Token);
+    }
+
+    private static async ValueTask CommitLeaseAsync(
+        NntpCommandContext context,
+        PostFilterLease? lease,
+        string messageId)
+    {
+        if (lease is null)
+        {
+            return;
+        }
+
+        var status = await lease
+            .CommitAsync(context.Session.Time.GetUtcNow(), CancellationToken.None)
+            .ConfigureAwait(false);
+        if (status == PostFilterQuotaCommitStatus.Committed)
+        {
+            return;
+        }
+
+        if (status == PostFilterQuotaCommitStatus.Noop)
+        {
+            context.Session.PostFilterMetrics.RecordCommitNoop();
+            PostFilterLogMessages.CommitNoop(
+                Logger,
+                lease.AccountName,
+                lease.Token,
+                messageId);
+            return;
+        }
+
+        context.Session.PostFilterMetrics.RecordCommitUnavailable();
+        PostFilterLogMessages.CommitUnavailable(
+            Logger,
+            lease.AccountName,
+            lease.Token,
+            messageId);
     }
 
     private static async ValueTask SubmitForModerationAsync(

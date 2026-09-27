@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
@@ -103,7 +104,9 @@ public sealed class NntpSession
         ITransitPeerAuthenticator? transitAuthenticator = null,
         IAccountByteAccountant? accountBytes = null,
         IAccountRateAllocator? accountRates = null,
-        IArticleWorkRpcClient? articleWorkRpc = null)
+        IArticleWorkRpcClient? articleWorkRpc = null,
+        IPostFilter? postFilter = null,
+        PostFilterMetrics? postFilterMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -171,6 +174,8 @@ public sealed class NntpSession
         AccountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         AccountRates = accountRates ?? NullAccountRateAllocator.Instance;
         ArticleWorkRpc = articleWorkRpc;
+        PostFilter = postFilter ?? DisabledPostFilter.Instance;
+        PostFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -190,6 +195,12 @@ public sealed class NntpSession
     /// <see langword="null"/> when tests construct a session without RabbitMQ.
     /// </summary>
     internal IArticleWorkRpcClient? ArticleWorkRpc { get; }
+
+    /// <summary>Gets the POST-only PostFilter. IHAVE/TAKETHIS must not call this.</summary>
+    internal IPostFilter PostFilter { get; }
+
+    /// <summary>Gets process counters for PostFilter COMMIT outcomes.</summary>
+    internal PostFilterMetrics PostFilterMetrics { get; }
 
     /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
     public int MaxArticleSize { get; }

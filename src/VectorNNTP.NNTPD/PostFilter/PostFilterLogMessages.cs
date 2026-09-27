@@ -1,0 +1,53 @@
+using VectorNNTP.NNTPD.PostFilter.Quota;
+
+namespace VectorNNTP.NNTPD.PostFilter;
+
+/// <summary>Source-generated PostFilter logs. Reasons stay off the NNTP wire.</summary>
+internal static partial class PostFilterLogMessages
+{
+    [LoggerMessage(EventId = 2800, Level = LogLevel.Information, Message = "PostFilter rejected stage={Stage} reason={Reason} account={Account} artId={ArtId}")]
+    public static partial void Rejected(ILogger logger, PostFilterStage stage, string reason, string account, string artId);
+
+    [LoggerMessage(EventId = 2801, Level = LogLevel.Debug, Message = "PostFilter accepted stage={Stage} account={Account} artId={ArtId} reserved={Reserved}")]
+    public static partial void Accepted(ILogger logger, PostFilterStage stage, string account, string artId, bool reserved);
+
+    [LoggerMessage(EventId = 2802, Level = LogLevel.Warning, Message = "PostFilter COMMIT NOOP account={Account} token={Token} artId={ArtId}")]
+    public static partial void CommitNoop(ILogger logger, string account, string token, string artId);
+
+    [LoggerMessage(EventId = 2803, Level = LogLevel.Warning, Message = "PostFilter COMMIT unavailable after admit account={Account} token={Token} artId={ArtId}")]
+    public static partial void CommitUnavailable(ILogger logger, string account, string token, string artId);
+
+    [LoggerMessage(EventId = 2804, Level = LogLevel.Debug, Message = "PostFilter RELEASE status={Status} account={Account} token={Token}")]
+    public static partial void Released(ILogger logger, PostFilterQuotaReleaseStatus status, string account, string token);
+
+    [LoggerMessage(EventId = 2805, Level = LogLevel.Warning, Message = "PostFilter policy refresh failed; retaining last-known-good snapshot")]
+    public static partial void PolicyRefreshFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2806, Level = LogLevel.Warning, Message = "PostFilter SpamAssassin failure action={Action} detail={Detail} account={Account} artId={ArtId}")]
+    public static partial void SpamAssassinFailed(ILogger logger, string action, string detail, string account, string artId);
+
+    [LoggerMessage(
+        EventId = 2808,
+        Level = LogLevel.Information,
+        Message = "PostFilter policy published gate={Gate} spamAssassin={SpamAssassin} maxArticleSize={MaxArticleSize} excludeArtTypes={ExcludeArtTypes} hosts={Hosts} maxConnections={MaxConnections}")]
+    public static partial void PolicyPublished(
+        ILogger logger,
+        string gate,
+        bool spamAssassin,
+        int maxArticleSize,
+        string excludeArtTypes,
+        int hosts,
+        int maxConnections);
+
+    [LoggerMessage(
+        EventId = 2807,
+        Level = LogLevel.Information,
+        Message = "PostFilter SPAMD transport stopped connects={Connects} checks={Checks} reuses={Reuses} reconnects={Reconnects} evictions={Evictions}")]
+    public static partial void SpamAssassinTransportStopped(
+        ILogger logger,
+        long connects,
+        long checks,
+        long reuses,
+        long reconnects,
+        long evictions);
+}
