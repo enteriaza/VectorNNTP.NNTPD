@@ -94,6 +94,8 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
 
     public TaskCompletionSource? BlockScript { get; set; }
 
+    public TaskCompletionSource? ScriptStarted { get; set; }
+
     internal SessionStateEngine SessionStateEngine { get; } = new();
 
     internal TransitPeerStateEngine TransitPeerStateEngine { get; } = new();
@@ -204,6 +206,7 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         ArgumentException.ThrowIfNullOrEmpty(script);
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(values);
+        ScriptStarted?.TrySetResult();
         if (BlockScript is not null)
         {
             await BlockScript.Task.WaitAsync(cancellationToken).ConfigureAwait(false);

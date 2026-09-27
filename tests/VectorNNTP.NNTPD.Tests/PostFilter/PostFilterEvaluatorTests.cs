@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.PostFilter.Quota;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.PostFilter;
 
@@ -294,20 +295,121 @@ public sealed class PostFilterEvaluatorTests
         Assert.Equal(first.SpamAssassinHosts, sa.LastTarget.Hosts);
         Assert.Equal(first.SpamAssassinOperationTimeout, sa.LastTarget.OperationTimeout);
         Assert.Equal(1, sa.Calls);
+        Assert.Equal(
+            PostFilterQuotaCommitStatus.Committed,
+            await result.Lease.CommitAsync(Now, CancellationToken.None));
+        Assert.Equal(first.Windows, quota.LastCommitWindows);
+        Assert.Equal(first.Ceilings, quota.LastCommitCeilings);
     }
 
     [Fact]
-    public async Task EvaluateAsync_DoesNotMutateArticleRecordBytes()
+    public async Task ReserveCanceledAfterRedisWrite_Releases()
     {
-        var article = Article();
-        var before = Capture(article);
+        var redis = new FakeRedisService
+        {
+            Database =
+            {
+                ScriptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                BlockScript = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            },
+        };
+        var store = new RedisPostFilterQuotaStore(redis);
         var snapshot = Compile(new PostFilterOptions
         {
             Gate = PostFilterGateState.Active,
-            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 1 },
         });
-        var result = await Create(snapshot, new RecordingQuotaStore()).EvaluateAsync(Request(article));
-        Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        using var cts = new CancellationTokenSource();
+        var evaluate = Create(snapshot, store).EvaluateAsync(Request(), cts.Token).AsTask();
+        await redis.Database.ScriptStarted!.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cts.CancelAsync();
+        redis.Database.BlockScript!.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => evaluate);
+        Assert.Equal(
+            PostFilterQuotaReserveStatus.Accepted,
+            await store.ReserveAsync(
+                "poster",
+                new PostFilterReservationId("n2", "b", 1),
+                Now,
+                snapshot.Windows,
+                snapshot.Ceilings,
+                1,
+                1,
+                0,
+                null));
+    }
+
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("quota")]
+    [InlineData("sa-skip")]
+    [InlineData("sa-ham")]
+    [InlineData("sa-reject")]
+    public async Task EvaluateAsync_DoesNotMutateArticleRecordBytes(string path)
+    {
+        var article = Article();
+        var before = Capture(article);
+        var sa = new RecordingSpamAssassin();
+        PostFilterPolicySnapshot snapshot;
+        if (path == "disabled")
+        {
+            snapshot = PostFilterPolicySnapshot.Disabled;
+        }
+        else if (path == "sa-skip")
+        {
+            var options = new PostFilterOptions
+            {
+                Gate = PostFilterGateState.Active,
+                Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+                SpamAssassin = new PostFilterSpamAssassinOptions
+                {
+                    Enabled = true,
+                    OnFailure = PostFilterSpamOnFailure.Reject,
+                    Hosts = ["127.0.0.1"],
+                    MaxArticleSize = 1,
+                    ExcludeArtTypes = [],
+                },
+            };
+            snapshot = Compile(options);
+        }
+        else if (path is "sa-ham" or "sa-reject")
+        {
+            sa.Result = path == "sa-reject"
+                ? PostFilterSpamAssassinResult.Spam("spam")
+                : PostFilterSpamAssassinResult.Ham();
+            snapshot = Compile(new PostFilterOptions
+            {
+                Gate = PostFilterGateState.Active,
+                Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+                SpamAssassin = new PostFilterSpamAssassinOptions
+                {
+                    Enabled = true,
+                    OnFailure = PostFilterSpamOnFailure.Reject,
+                    Hosts = ["127.0.0.1"],
+                    MaxArticleSize = 0,
+                    ExcludeArtTypes = [],
+                },
+            });
+        }
+        else
+        {
+            snapshot = Compile(new PostFilterOptions
+            {
+                Gate = PostFilterGateState.Active,
+                Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+            });
+        }
+
+        var result = await Create(snapshot, new RecordingQuotaStore(), sa).EvaluateAsync(Request(article));
+        if (path == "sa-reject")
+        {
+            Assert.Equal(PostFilterDecision.Reject, result.Decision);
+        }
+        else
+        {
+            Assert.Equal(PostFilterDecision.Accept, result.Decision);
+        }
+
         AssertUnchanged(before, article);
     }
 
@@ -571,6 +673,10 @@ public sealed class PostFilterEvaluatorTests
 
         public PostFilterQuotaCeilings LastCeilings { get; private set; }
 
+        public PostFilterQuotaWindows LastCommitWindows { get; private set; }
+
+        public PostFilterQuotaCeilings LastCommitCeilings { get; private set; }
+
         public long LastReservationTtlMs { get; private set; }
 
         public ValueTask<PostFilterQuotaReserveStatus> ReserveAsync(
@@ -640,6 +746,8 @@ public sealed class PostFilterEvaluatorTests
             CancellationToken cancellationToken = default)
         {
             Operations.Add("commit");
+            LastCommitWindows = windows;
+            LastCommitCeilings = ceilings;
             return _inner.CommitAsync(accountName, reservation, now, windows, ceilings, cancellationToken);
         }
 

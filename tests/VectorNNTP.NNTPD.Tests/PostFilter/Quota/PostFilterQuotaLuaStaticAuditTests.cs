@@ -111,6 +111,53 @@ public sealed class PostFilterQuotaLuaStaticAuditTests
     }
 
     [Fact]
+    public async Task ReserveCanceledAfterRedisWrite_IsStillReleasable()
+    {
+        var redis = new FakeRedisService
+        {
+            Database =
+            {
+                ScriptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                BlockScript = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            },
+        };
+        var store = new RedisPostFilterQuotaStore(redis);
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(5_000);
+        var windows = new PostFilterQuotaWindows(10_000, 1_000);
+        var ceilings = new PostFilterQuotaCeilings(1, 0, 0, 0, 0, 0);
+        var id = new PostFilterReservationId("n1", "a", 1);
+        using var cts = new CancellationTokenSource();
+        var reserve = store.ReserveAsync(
+            "alice",
+            id,
+            now,
+            windows,
+            ceilings,
+            1,
+            1,
+            0,
+            null,
+            cts.Token).AsTask();
+        await redis.Database.ScriptStarted!.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cts.CancelAsync();
+        redis.Database.BlockScript!.SetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reserve);
+        Assert.Equal(PostFilterQuotaReleaseStatus.Released, await store.ReleaseAsync("alice", id, now));
+        Assert.Equal(
+            PostFilterQuotaReserveStatus.Accepted,
+            await store.ReserveAsync(
+                "alice",
+                new PostFilterReservationId("n2", "b", 1),
+                now,
+                windows,
+                ceilings,
+                1,
+                1,
+                0,
+                null));
+    }
+
+    [Fact]
     public async Task FakeRedis_DispatchesQuotaScriptsToEngine()
     {
         var redis = new FakeRedisService();

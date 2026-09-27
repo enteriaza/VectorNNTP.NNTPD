@@ -149,6 +149,27 @@ public sealed class SpamdTransportTests
         Assert.Equal("leftover", result.Detail);
     }
 
+    [Fact]
+    public async Task LeftoverBytes_DoNotPoisonTheNextCheck()
+    {
+        var leftover = "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\nSPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray();
+        var ham = "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray();
+        await using var server = await FakeSpamd.StartAsync(
+            keepOpen: true,
+            response: leftover,
+            subsequentResponse: ham);
+        var metrics = new SpamdTransportMetrics();
+        await using var client = new SpamdCheckClient(metrics);
+        var target = Target(server.Port, maxConnections: 1);
+        var first = await CheckAsync(client, target);
+        Assert.Equal(PostFilterSpamAssassinStatus.Failed, first.Status);
+        Assert.Equal("leftover", first.Detail);
+        var second = await CheckAsync(client, target);
+        Assert.Equal(PostFilterSpamAssassinStatus.Ham, second.Status);
+        Assert.Equal(2, server.Connections);
+        Assert.True(metrics.Evictions >= 1);
+    }
+
     private static ValueTask<PostFilterSpamAssassinResult> CheckAsync(
         SpamdCheckClient client,
         PostFilterSpamAssassinTarget target,
@@ -196,11 +217,17 @@ public sealed class SpamdTransportTests
         private int _inflight;
         private int _peak;
 
-        private FakeSpamd(TcpListener listener, bool keepOpen, bool hang, TimeSpan delay, byte[]? response)
+        private FakeSpamd(
+            TcpListener listener,
+            bool keepOpen,
+            bool hang,
+            TimeSpan delay,
+            byte[]? response,
+            byte[]? subsequentResponse)
         {
             _listener = listener;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            _accept = AcceptLoopAsync(keepOpen, hang, delay, response);
+            _accept = AcceptLoopAsync(keepOpen, hang, delay, response, subsequentResponse);
         }
 
         public int Port { get; }
@@ -217,11 +244,12 @@ public sealed class SpamdTransportTests
             bool keepOpen,
             bool hang = false,
             TimeSpan delay = default,
-            byte[]? response = null)
+            byte[]? response = null,
+            byte[]? subsequentResponse = null)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            var server = new FakeSpamd(listener, keepOpen, hang, delay, response);
+            var server = new FakeSpamd(listener, keepOpen, hang, delay, response, subsequentResponse);
             await Task.Yield();
             return server;
         }
@@ -241,7 +269,12 @@ public sealed class SpamdTransportTests
             _cts.Dispose();
         }
 
-        private async Task AcceptLoopAsync(bool keepOpen, bool hang, TimeSpan delay, byte[]? response)
+        private async Task AcceptLoopAsync(
+            bool keepOpen,
+            bool hang,
+            TimeSpan delay,
+            byte[]? response,
+            byte[]? subsequentResponse)
         {
             while (!_cts.IsCancellationRequested)
             {
@@ -257,11 +290,19 @@ public sealed class SpamdTransportTests
 
                 Interlocked.Increment(ref _connections);
                 _accepted.TrySetResult();
-                _ = Task.Run(() => ServeAsync(client, keepOpen, hang, delay, response), _cts.Token);
+                _ = Task.Run(
+                    () => ServeAsync(client, keepOpen, hang, delay, response, subsequentResponse),
+                    _cts.Token);
             }
         }
 
-        private async Task ServeAsync(TcpClient client, bool keepOpen, bool hang, TimeSpan delay, byte[]? response)
+        private async Task ServeAsync(
+            TcpClient client,
+            bool keepOpen,
+            bool hang,
+            TimeSpan delay,
+            byte[]? response,
+            byte[]? subsequentResponse)
         {
             var inflight = Interlocked.Increment(ref _inflight);
             UpdatePeak(inflight);
@@ -285,8 +326,10 @@ public sealed class SpamdTransportTests
                         await Task.Delay(delay, _cts.Token).ConfigureAwait(false);
                     }
 
-                    Interlocked.Increment(ref _checks);
-                    var bytes = response ?? "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray();
+                    var check = Interlocked.Increment(ref _checks);
+                    var bytes = check == 1 || subsequentResponse is null
+                        ? response ?? "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray()
+                        : subsequentResponse;
                     await stream.WriteAsync(bytes, _cts.Token).ConfigureAwait(false);
                     await stream.FlushAsync(_cts.Token).ConfigureAwait(false);
                 }

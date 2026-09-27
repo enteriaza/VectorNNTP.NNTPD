@@ -56,6 +56,41 @@ public sealed class PostFilterLiveClusterQuotaTests : IClassFixture<PostFilterQu
         Assert.Equal(PostFilterQuotaReserveStatus.DeniedMessagesLong, second.QuotaStatus);
     }
 
+    [SessionStateRedisIntegrationFact]
+    public async Task Scenario10_CrossNode_SameAccountSharesLiveRedisCeiling_AtPost()
+    {
+        var account = await _redis.CreateAccountAsync();
+        var snapshot = PostFilterPolicyCompiler.Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 1 },
+        });
+        var nodeA = PostFilterPostHarness.CreateFilter(
+            snapshot,
+            new PolicyRecordingQuotaStore(_redis.Store),
+            identity: new PostFilterReservationIdentity("n1", "incA"));
+        var nodeB = PostFilterPostHarness.CreateFilter(
+            snapshot,
+            new PolicyRecordingQuotaStore(_redis.Store),
+            identity: new PostFilterReservationIdentity("n2", "incB"));
+
+        await using var first = new PostFilterPostDuplex();
+        await PostFilterPostHarness.PostAsync(
+            first,
+            first.CreateSession(PostFilterPostHarness.NewQueue(), nodeA),
+            "240 Article received OK",
+            username: account);
+        await using var second = new PostFilterPostDuplex();
+        var queue = PostFilterPostHarness.NewQueue();
+        await PostFilterPostHarness.PostAsync(
+            second,
+            second.CreateSession(queue, nodeB),
+            "441 Posting failed",
+            username: account);
+        Assert.Equal(0, queue.Count);
+        await _redis.DeleteKeysAsync(account);
+    }
+
     private static PostFilterRequest Request(string account) =>
         PostFilterEvaluatorTestsRequest.Create(account);
 }

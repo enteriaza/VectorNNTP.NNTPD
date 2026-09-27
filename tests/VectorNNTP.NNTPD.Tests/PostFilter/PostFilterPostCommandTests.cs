@@ -361,6 +361,27 @@ public sealed class PostFilterPostCommandTests
     }
 
     [Fact]
+    public async Task HistoryPeekUnavailable_Returns441_WithoutReserve()
+    {
+        var snapshot = Compile(new PostFilterOptions
+        {
+            Gate = PostFilterGateState.Active,
+            Quota = new PostFilterQuotaOptions { MaxMessagesLong = 10 },
+        });
+        var quota = new RecordingQuotaStore();
+        var history = new RecordingHistoryDb { PeekResult = HistoryLookupResult.Unavailable };
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        await PostAsync(
+            duplex,
+            duplex.CreateSession(queue, CreateFilter(snapshot, quota), historyDb: history),
+            "441 Posting failed");
+        Assert.Equal(0, queue.Count);
+        Assert.Empty(quota.Operations);
+        Assert.Equal(0, history.RememberCalls);
+    }
+
+    [Fact]
     public async Task CancellationAfterReservation_Releases_AndDoesNotEnqueue()
     {
         var snapshot = Compile(new PostFilterOptions
@@ -882,6 +903,8 @@ public sealed class PostFilterPostCommandTests
 
         public bool ThrowOnRemember { get; set; }
 
+        public HistoryLookupResult PeekResult { get; set; } = HistoryLookupResult.Unseen;
+
         public ValueTask<HistoryLookupResult> LookupAsync(
             ReadOnlyMemory<byte> messageId,
             CancellationToken cancellationToken = default) =>
@@ -890,7 +913,7 @@ public sealed class PostFilterPostCommandTests
         public ValueTask<HistoryLookupResult> PeekAsync(
             ReadOnlyMemory<byte> messageId,
             CancellationToken cancellationToken = default) =>
-            new(HistoryLookupResult.Unseen);
+            new(PeekResult);
 
         public void Remember(ReadOnlyMemory<byte> messageId)
         {

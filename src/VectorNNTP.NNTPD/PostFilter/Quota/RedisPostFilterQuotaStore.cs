@@ -159,15 +159,18 @@ internal sealed class RedisPostFilterQuotaStore : IPostFilterQuotaStore
             return fallback;
         }
 
+        long result;
         try
         {
-            var result = await database.ScriptEvaluateAsync(
+            // Observe EVAL even if the caller cancelled. WaitAsync on the Redis
+            // task would otherwise abandon a completed Lua write and leak a
+            // reservation until TTL. After the result is known, propagate
+            // cancel so EvaluateAsync RELEASE can delete the row.
+            result = await database.ScriptEvaluateAsync(
                 script,
                 [PostFilterQuotaKeys.CreateQuota(accountName), PostFilterQuotaKeys.CreateMultipost(accountName)],
                 values,
-                cancellationToken).ConfigureAwait(false);
-            _redis.CompleteOperation(isRecoveryProbe, succeeded: true);
-            return map(result);
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -184,6 +187,10 @@ internal sealed class RedisPostFilterQuotaStore : IPostFilterQuotaStore
             _redis.CompleteOperation(isRecoveryProbe, succeeded: false, ex);
             return fallback;
         }
+
+        _redis.CompleteOperation(isRecoveryProbe, succeeded: true);
+        cancellationToken.ThrowIfCancellationRequested();
+        return map(result);
     }
 
     private static long ResolveReservationTtlMs(long reservationTtlMs) =>
