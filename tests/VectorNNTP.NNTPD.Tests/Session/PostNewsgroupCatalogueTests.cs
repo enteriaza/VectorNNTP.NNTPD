@@ -57,7 +57,7 @@ public sealed class PostNewsgroupCatalogueTests
         Assert.Equal(1, history.PeekCalls);
         Assert.NotNull(inbound);
         var text = Encoding.ASCII.GetString(inbound!.Payload.Span);
-        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.Contains(".POSTED", text, StringComparison.Ordinal);
         Assert.Contains("Injection-Info: nntpd01.usenet.ninja;", text, StringComparison.Ordinal);
         Assert.Contains("X-Trace: ", text, StringComparison.Ordinal);
     }

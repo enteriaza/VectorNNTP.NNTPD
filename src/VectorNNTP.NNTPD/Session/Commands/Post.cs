@@ -6,6 +6,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
+using VectorNNTP.NNTPD.Session.Framing;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -14,9 +15,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// Not pipelined. First-stage <c>440</c> does not consume an article. After <c>340</c>
-/// the article is streamed from the session PipeReader into one stuffed output
-/// buffer (client headers write-through, server-owned headers at the header/body
-/// boundary for ordinary injection, body copied with stuffing preserved). Unapproved
+/// the article is streamed from the session PipeReader into one destuffed output
+/// buffer (client headers destuffed write-through, server-owned headers at the
+/// header/body boundary for ordinary injection, body destuffed). Unapproved
 /// moderated proto-articles are submitted through <see cref="IModerationSubmissionService"/>
 /// without Injection-Info/Injection-Date and without History Peek / TryAdmit / Remember.
 /// Authorized moderator reinjection follows the ordinary injection path. History Peek,
@@ -152,10 +153,9 @@ internal static class Post
             return;
         }
 
-        var created = ArticleRecordIngress.TryCreateFromStuffedWire(
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(
             context.Session.ArticleParser,
-            read.Wire,
-            Math.Max(1, read.Wire.Length));
+            read.Wire);
         if (!created.IsAccepted)
         {
             await RejectAsync(
@@ -214,7 +214,7 @@ internal static class Post
     {
         var submission = new ModerationSubmission
         {
-            ProtoArticle = read.Wire,
+            ProtoArticle = ArticleWireReconstructor.RestuffArticle(read.Wire.Span, includeTerminator: false),
             MessageId = read.MessageId ?? string.Empty,
             Newsgroups = read.Newsgroups,
             TargetModeratedGroup = read.TargetModeratedGroup ?? string.Empty,

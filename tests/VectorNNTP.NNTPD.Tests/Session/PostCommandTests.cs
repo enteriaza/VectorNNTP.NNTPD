@@ -1,3 +1,4 @@
+using System.IO.Hashing;
 using System.IO.Pipelines;
 using System.Net;
 using System.Text;
@@ -283,6 +284,8 @@ public sealed class PostCommandTests
         Assert.True(inbound.Record.MessageId.SequenceEqual("<keep@example.com>"u8));
         Assert.True(inbound.Record.Fields.MessageId.IsPresent);
         Assert.True(inbound.Record.Fields.Newsgroups.IsPresent);
+        Assert.Equal(ArticleId.FromMessageId("<keep@example.com>"u8), inbound.Record.ArtId);
+        Assert.Equal(XxHash3.HashToUInt64(inbound.Record.ArtData.Span), inbound.Record.ArtHash);
         Assert.Contains("news.usenet.ninja!", text, StringComparison.Ordinal);
         Assert.Contains(".POSTED", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Path: client.path", text, StringComparison.Ordinal);

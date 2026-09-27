@@ -132,13 +132,29 @@ public sealed class StreamingPostArticleReaderTests
     }
 
     [Fact]
-    public async Task BodyDotVariants_AreCopiedStuffed()
+    public async Task BodyDotVariants_AreStoredDestuffed()
     {
         var stuffed = ClientArticle(body: "plain\r\n..\r\n...\r\n....\r\n");
         var result = await ReadStreamingAsync(stuffed);
         var text = Encoding.ASCII.GetString(result.Wire.Span);
         var body = text[(text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..];
-        Assert.Equal("plain\r\n..\r\n...\r\n....\r\n", body);
+        Assert.Equal("plain\r\n.\r\n..\r\n...\r\n", body);
+    }
+
+    [Theory]
+    [InlineData("hello\r\n", "hello\r\n")]
+    [InlineData("..hidden\r\n", ".hidden\r\n")]
+    [InlineData("...hidden\r\n", "..hidden\r\n")]
+    [InlineData("....hidden\r\n", "...hidden\r\n")]
+    public async Task Body_RemovesOneStuffingLayer(string stuffedBody, string destuffedBody)
+    {
+        var result = await ReadStreamingAsync(ClientArticle(body: stuffedBody));
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        var text = Encoding.ASCII.GetString(result.Wire.Span);
+        var body = text[(text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..];
+        Assert.Equal(destuffedBody, body);
+        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.False(result.Wire.Span.EndsWith(".\r\n"u8));
     }
 
     [Fact]
@@ -187,7 +203,8 @@ public sealed class StreamingPostArticleReaderTests
         var accepted = await ReadStreamingAsync(stuffed, CreateOptions(maxArticleSize: limit));
         Assert.Equal(StreamingPostReadStatus.Completed, accepted.Status);
         Assert.Equal(limit, accepted.DestuffedSize);
-        Assert.Contains("..hello\r\n", Encoding.ASCII.GetString(accepted.Wire.Span), StringComparison.Ordinal);
+        Assert.Contains(".hello\r\n", Encoding.ASCII.GetString(accepted.Wire.Span), StringComparison.Ordinal);
+        Assert.DoesNotContain("..hello\r\n", Encoding.ASCII.GetString(accepted.Wire.Span), StringComparison.Ordinal);
 
         var rejected = await ReadStreamingAsync(stuffed, CreateOptions(maxArticleSize: limit - 1));
         Assert.Equal(StreamingPostReadStatus.TooLarge, rejected.Status);
@@ -364,7 +381,7 @@ internal static class LegacyPostMaterialize
             options.ClientIdentity,
             options.MailComplaintsTo,
             options.TraceProtector!);
-        return ArticleWireReconstructor.RestuffArticle(normalized.Span, includeTerminator: false);
+        return normalized;
     }
 }
 

@@ -7,22 +7,22 @@ using VectorNNTP.NNTPD.Session.Framing;
 namespace VectorNNTP.NNTPD.Session.Commands.Posting;
 
 /// <summary>
-/// Streams a POST multiline article from a <see cref="PipeReader"/> into one stuffed
-/// output buffer suitable for <c>IArticleIngestionQueue.TryAdmit</c>.
+/// Streams a POST multiline article from a <see cref="PipeReader"/> into one destuffed
+/// output buffer for <see cref="VectorNNTP.NNTPD.ArticleIngestion.ArticleRecordIngress"/>.
 /// </summary>
 /// <remarks>
-/// Header lines are destuffed only for compact validation state. Accepted client
-/// header wire and the entire body are copied with stuffing preserved. Destuffed
-/// byte counting enforces <c>Nntpd:MaxArticleSize</c>. History Peek is not performed
-/// here; the caller peeks after the terminator is consumed.
+/// Header lines are destuffed for validation and written destuffed (client Path /
+/// injection metadata discarded). Body lines drop one NNTP stuffing layer
+/// (RFC 3977 §3.1.1). Destuffed byte counting enforces <c>Nntpd:MaxArticleSize</c>.
+/// History Peek is not performed here; the caller peeks after the terminator.
 /// </remarks>
 internal static class StreamingPostArticleReader
 {
-    /// <summary>Initial capacity of the single stuffed output buffer.</summary>
+    /// <summary>Initial capacity of the single destuffed output buffer.</summary>
     public const int InitialCapacity = 64 * 1024;
 
     /// <summary>
-    /// Reads one POST article from <paramref name="reader"/> into one owned stuffed buffer.
+    /// Reads one POST article from <paramref name="reader"/> into one owned destuffed buffer.
     /// </summary>
     public static async ValueTask<StreamingPostReadResult> ReadAsync(
         PipeReader reader,
@@ -117,8 +117,7 @@ internal static class StreamingPostArticleReader
             }
 
             _destuffedBytes += destuffedWithCrlf;
-            _output.Write(stuffedLine);
-            _output.Write(NntpDelimiterSearch.Crlf);
+            WriteDestuffedLine(_output, stuffedLine, destuffedLength);
             return false;
         }
 
@@ -156,7 +155,7 @@ internal static class StreamingPostArticleReader
                 var isFold = destuffed.Length > 0 && PostFieldSyntax.IsWsp(destuffed[0]);
                 if (isFold)
                 {
-                    return HandleFold(stuffedLine, destuffed);
+                    return HandleFold(destuffed);
                 }
 
                 if (_hasField && !FlushCurrentField())
@@ -178,7 +177,7 @@ internal static class StreamingPostArticleReader
                 _unfolded.Write(destuffed[(nameLength + 2)..]);
                 if (_writeCurrentField)
                 {
-                    _output.Write(stuffedLine);
+                    _output.Write(destuffed);
                     _output.Write(NntpDelimiterSearch.Crlf);
                 }
 
@@ -190,7 +189,7 @@ internal static class StreamingPostArticleReader
             }
         }
 
-        private bool HandleFold(ReadOnlySequence<byte> stuffedLine, ReadOnlySpan<byte> destuffed)
+        private bool HandleFold(ReadOnlySpan<byte> destuffed)
         {
             if (!_hasField)
             {
@@ -209,7 +208,7 @@ internal static class StreamingPostArticleReader
             _unfolded.Write(destuffed);
             if (_writeCurrentField)
             {
-                _output.Write(stuffedLine);
+                _output.Write(destuffed);
                 _output.Write(NntpDelimiterSearch.Crlf);
             }
 
@@ -543,7 +542,45 @@ internal static class StreamingPostArticleReader
         }
     }
 
-    /// <summary>One owned stuffed output buffer transferred to the queue on success.</summary>
+    /// <summary>
+    /// Writes one destuffed content line plus CRLF (one NNTP stuffing layer removed).
+    /// </summary>
+    private static void WriteDestuffedLine(
+        GrowingArticleBuffer output,
+        ReadOnlySequence<byte> stuffedLine,
+        int destuffedLength)
+    {
+        if (destuffedLength > 0)
+        {
+            if (stuffedLine.IsSingleSegment)
+            {
+                var src = stuffedLine.FirstSpan;
+                if (src.Length > 0 && src[0] == (byte)'.')
+                {
+                    src = src[1..];
+                }
+
+                output.Write(src);
+            }
+            else
+            {
+                var rented = ArrayPool<byte>.Shared.Rent(destuffedLength);
+                try
+                {
+                    CopyDestuffed(stuffedLine, rented.AsSpan(0, destuffedLength));
+                    output.Write(rented.AsSpan(0, destuffedLength));
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rented);
+                }
+            }
+        }
+
+        output.Write(NntpDelimiterSearch.Crlf);
+    }
+
+    /// <summary>One owned destuffed output buffer transferred to the caller on success.</summary>
     internal sealed class GrowingArticleBuffer : IBufferWriter<byte>
     {
         private byte[] _buffer;

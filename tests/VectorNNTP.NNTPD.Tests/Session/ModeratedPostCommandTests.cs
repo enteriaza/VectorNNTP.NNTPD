@@ -401,7 +401,11 @@ public sealed class ModeratedPostCommandTests
             submission: submission,
             body: "..dot\r\n");
         var recorded = Assert.Single(submission.Submissions);
-        Assert.Contains("..dot\r\n", Encoding.ASCII.GetString(recorded.ProtoArticle.Span), StringComparison.Ordinal);
+        var proto = Encoding.ASCII.GetString(recorded.ProtoArticle.Span);
+        Assert.Contains("..dot\r\n", proto, StringComparison.Ordinal);
+        var destuffed = Encoding.ASCII.GetString(
+            ModerationEmailComposer.DestuffProtoArticle(recorded.ProtoArticle.Span));
+        Assert.Contains(".dot\r\n", destuffed, StringComparison.Ordinal);
     }
 
     [Fact]

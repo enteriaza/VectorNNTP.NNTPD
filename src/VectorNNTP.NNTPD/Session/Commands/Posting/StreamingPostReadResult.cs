@@ -19,7 +19,7 @@ internal enum StreamingPostDisposition
 /// <summary>Outcome of one streaming POST article receive.</summary>
 internal enum StreamingPostReadStatus
 {
-    /// <summary>Terminator seen; stuffed wire is ready for the caller-selected disposition.</summary>
+    /// <summary>Terminator seen; destuffed article is ready for the caller-selected disposition.</summary>
     Completed = 0,
 
     /// <summary>Peer disconnected or cancelled before the terminating dot line.</summary>
@@ -32,7 +32,7 @@ internal enum StreamingPostReadStatus
     Rejected = 3,
 }
 
-/// <summary>Inputs required to stream one POST article into a stuffed queue payload.</summary>
+/// <summary>Inputs required to stream one POST article into a destuffed article buffer.</summary>
 internal sealed class StreamingPostReadOptions
 {
     /// <summary>Gets the destuffed POST size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
@@ -75,7 +75,7 @@ internal sealed class StreamingPostReadOptions
 /// <summary>Result of <see cref="StreamingPostArticleReader.ReadAsync"/>.</summary>
 /// <param name="Status">Receive / validation status.</param>
 /// <param name="Failure">Set when <paramref name="Status"/> is <see cref="StreamingPostReadStatus.Rejected"/> or TooLarge.</param>
-/// <param name="Wire">Stuffed queue payload (terminator omitted) when Completed; otherwise empty.</param>
+/// <param name="Wire">Destuffed article (terminator omitted) when Completed; otherwise empty.</param>
 /// <param name="MessageId">Article Message-ID when known.</param>
 /// <param name="Newsgroups">Validated newsgroup names when known.</param>
 /// <param name="DestuffedSize">Logical destuffed client article size (stuffing dots excluded).</param>
