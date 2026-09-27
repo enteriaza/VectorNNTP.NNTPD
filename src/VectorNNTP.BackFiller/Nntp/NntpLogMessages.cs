@@ -32,4 +32,34 @@ internal static partial class NntpLogMessages
         Level = LogLevel.Warning,
         Message = "NNTP session replenish failed backbone={Backbone} reason={Reason}")]
     public static partial void SessionReplenishFailed(ILogger logger, string Backbone, string Reason);
+
+    [LoggerMessage(
+        EventId = 5405,
+        Level = LogLevel.Debug,
+        Message = "{Session}: Connecting article acquisition session to {Host}:{Port} (SSL={UseTls})")]
+    public static partial void WireConnecting(ILogger logger, string Session, string Host, int Port, string UseTls);
+
+    [LoggerMessage(
+        EventId = 5406,
+        Level = LogLevel.Debug,
+        Message = "{Session}: TX: {Command}")]
+    public static partial void WireTx(ILogger logger, string Session, string Command);
+
+    [LoggerMessage(
+        EventId = 5407,
+        Level = LogLevel.Debug,
+        Message = "{Session}: RX: {Response}")]
+    public static partial void WireRx(ILogger logger, string Session, string Response);
+
+    [LoggerMessage(
+        EventId = 5408,
+        Level = LogLevel.Debug,
+        Message = "{Session}: RX: ARTICLE payload complete bytes={Bytes}")]
+    public static partial void WireArticlePayloadComplete(ILogger logger, string Session, int Bytes);
+
+    [LoggerMessage(
+        EventId = 5409,
+        Level = LogLevel.Debug,
+        Message = "{Session}: Session retiring")]
+    public static partial void WireRetiring(ILogger logger, string Session);
 }

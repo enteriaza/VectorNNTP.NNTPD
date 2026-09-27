@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Text;
 
 namespace VectorNNTP.BackFiller.Nntp;
 
@@ -12,6 +13,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
     private readonly BackFillerProviderDefinition _provider;
     private readonly NntpSessionOptions _options;
     private readonly ILogger _logger;
+    private readonly string _wireIdentity;
     private readonly SemaphoreSlim _busy = new(1, 1);
     private Stream? _stream;
     private NntpStreamReader? _reader;
@@ -19,19 +21,39 @@ public sealed class NntpProviderSession : IAsyncDisposable
     private bool _unhealthy;
 
     /// <summary>Initializes a session that is not yet connected.</summary>
+    /// <param name="provider">Upstream provider identity and capacity.</param>
+    /// <param name="options">Session I/O timeouts and article limits.</param>
+    /// <param name="logger">Session logger. Wire traces are Debug only.</param>
+    /// <param name="connectionNumber">
+    /// One-based slot in <see cref="BackFillerProviderDefinition.MaxSessions"/>.
+    /// Stable for this session's lifetime.
+    /// </param>
     public NntpProviderSession(
         BackFillerProviderDefinition provider,
         NntpSessionOptions options,
-        ILogger logger)
+        ILogger logger,
+        int connectionNumber = 1)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentOutOfRangeException.ThrowIfLessThan(connectionNumber, 1);
         _provider = provider;
         _options = options;
         _logger = logger;
+        ConnectionNumber = connectionNumber;
+        _wireIdentity = FormatWireIdentity(provider, connectionNumber);
         State = NntpSessionState.Created;
     }
+
+    /// <summary>Gets the one-based pool slot captured at construction.</summary>
+    public int ConnectionNumber { get; }
+
+    /// <summary>
+    /// Gets the stable Debug wire-log prefix
+    /// <c>{Backbone}/{Account}[{ConnectionNumber:000}/{MaxSessions}]</c>.
+    /// </summary>
+    public string WireLogIdentity => _wireIdentity;
 
     /// <summary>Gets the current local state.</summary>
     public NntpSessionState State { get; private set; }
@@ -53,6 +75,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(transport);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         State = NntpSessionState.Connecting;
+        NntpLogMessages.WireConnecting(
+            _logger,
+            _wireIdentity,
+            _provider.Host,
+            _provider.Port,
+            _provider.UseTls ? "true" : "false");
         try
         {
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -135,7 +163,10 @@ public sealed class NntpProviderSession : IAsyncDisposable
                 NntpProtocolIo.ArticlePrefix.CopyTo(command.AsSpan());
                 messageIdBytes.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length));
                 NntpProtocolIo.Crlf.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length));
-                await WriteAsync(command.AsMemory(0, commandLength), _options.CommandTimeout, cancellationToken)
+                await WriteCommandAsync(
+                        "ARTICLE " + messageId,
+                        command.AsMemory(0, commandLength),
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -162,6 +193,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
                     payload = await _reader
                         .ReadArticlePayloadAsync(_options.MaxArticleBytes, _options.ReceiveTimeout, cancellationToken)
                         .ConfigureAwait(false);
+                    NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, payload.Length);
                 }
                 catch (EndOfStreamException)
                 {
@@ -277,7 +309,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
         var wrote = false;
         try
         {
-            await WriteAsync(NntpProtocolIo.DateCommand, _options.CommandTimeout, cancellationToken)
+            await WriteCommandAsync("DATE", NntpProtocolIo.DateCommand, cancellationToken)
                 .ConfigureAwait(false);
             wrote = true;
             var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
@@ -343,10 +375,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
         }
 
         State = NntpSessionState.Retiring;
+        NntpLogMessages.WireRetiring(_logger, _wireIdentity);
         if (_stream is not null)
         {
             try
             {
+                NntpLogMessages.WireTx(_logger, _wireIdentity, "QUIT");
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await _stream.WriteAsync(QuitCommand, cts.Token).ConfigureAwait(false);
                 await _stream.FlushAsync(cts.Token).ConfigureAwait(false);
@@ -389,7 +423,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
         }
 
         State = NntpSessionState.Authenticating;
-        await WritePrefixedAsync(NntpProtocolIo.AuthInfoUserPrefix, userBytes, cancellationToken).ConfigureAwait(false);
+        await WritePrefixedAsync(
+                NntpProtocolIo.AuthInfoUserPrefix,
+                userBytes,
+                "AUTHINFO USER ***",
+                cancellationToken)
+            .ConfigureAwait(false);
         var userLine = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
         if (userLine is null || !NntpProtocolIo.TryParseStatus(userLine, out var userCode, out var userText))
         {
@@ -406,7 +445,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
             return ClassifyAuthFailure(userCode, userText);
         }
 
-        await WritePrefixedAsync(NntpProtocolIo.AuthInfoPassPrefix, passBytes, cancellationToken).ConfigureAwait(false);
+        await WritePrefixedAsync(
+                NntpProtocolIo.AuthInfoPassPrefix,
+                passBytes,
+                "AUTHINFO PASS ***",
+                cancellationToken)
+            .ConfigureAwait(false);
         var passLine = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
         if (passLine is null || !NntpProtocolIo.TryParseStatus(passLine, out var passCode, out var passText))
         {
@@ -435,9 +479,15 @@ public sealed class NntpProviderSession : IAsyncDisposable
 
         try
         {
-            return await _reader
+            var line = await _reader
                 .ReadLineAsync(_options.MaxStatusLineBytes, _options.CommandTimeout, cancellationToken)
                 .ConfigureAwait(false);
+            if (line is not null)
+            {
+                NntpLogMessages.WireRx(_logger, _wireIdentity, Encoding.ASCII.GetString(line));
+            }
+
+            return line;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -445,7 +495,11 @@ public sealed class NntpProviderSession : IAsyncDisposable
         }
     }
 
-    private async Task WritePrefixedAsync(byte[] prefix, byte[] argument, CancellationToken cancellationToken)
+    private async Task WritePrefixedAsync(
+        byte[] prefix,
+        byte[] argument,
+        string wireCommand,
+        CancellationToken cancellationToken)
     {
         var length = prefix.Length + argument.Length + NntpProtocolIo.Crlf.Length;
         var rented = ArrayPool<byte>.Shared.Rent(length);
@@ -454,12 +508,21 @@ public sealed class NntpProviderSession : IAsyncDisposable
             prefix.CopyTo(rented.AsSpan());
             argument.CopyTo(rented.AsSpan(prefix.Length));
             NntpProtocolIo.Crlf.CopyTo(rented.AsSpan(prefix.Length + argument.Length));
-            await WriteAsync(rented.AsMemory(0, length), _options.CommandTimeout, cancellationToken).ConfigureAwait(false);
+            await WriteCommandAsync(wireCommand, rented.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
+    }
+
+    private Task WriteCommandAsync(
+        string wireCommand,
+        ReadOnlyMemory<byte> bytes,
+        CancellationToken cancellationToken)
+    {
+        NntpLogMessages.WireTx(_logger, _wireIdentity, wireCommand);
+        return WriteAsync(bytes, _options.CommandTimeout, cancellationToken);
     }
 
     private async Task WriteAsync(ReadOnlyMemory<byte> bytes, TimeSpan timeout, CancellationToken cancellationToken)
@@ -487,5 +550,12 @@ public sealed class NntpProviderSession : IAsyncDisposable
         _unhealthy = !reusable;
         State = reusable ? NntpSessionState.Ready : NntpSessionState.Retiring;
         return ArticleRetrievalResult.Failed(kind, code, reason, reusable);
+    }
+
+    internal static string FormatWireIdentity(BackFillerProviderDefinition provider, int connectionNumber)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        var account = string.IsNullOrWhiteSpace(provider.Username) ? "-" : provider.Username.Trim();
+        return $"{provider.Backbone}/{account}[{connectionNumber:000}/{provider.MaxSessions}]";
     }
 }

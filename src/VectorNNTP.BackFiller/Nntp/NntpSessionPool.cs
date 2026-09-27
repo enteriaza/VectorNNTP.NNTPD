@@ -18,6 +18,8 @@ public sealed class NntpSessionPool : IAsyncDisposable
     private readonly ConcurrentDictionary<NntpProviderSession, KeepAliveRegistration> _keepAlives = new();
     private readonly ConcurrentQueue<NntpProviderSession> _idle = new();
     private readonly ConcurrentDictionary<NntpProviderSession, byte> _live = new();
+    private readonly HashSet<int> _usedSlots = [];
+    private readonly object _slotGate = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly SemaphoreSlim _fillGate = new(1, 1);
     private int _created;
@@ -374,7 +376,18 @@ public sealed class NntpSessionPool : IAsyncDisposable
             throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
         }
 
-        var session = new NntpProviderSession(_provider, _options, _logger);
+        int connectionNumber;
+        try
+        {
+            connectionNumber = AllocateConnectionNumber();
+        }
+        catch
+        {
+            Interlocked.Decrement(ref _created);
+            throw;
+        }
+
+        var session = new NntpProviderSession(_provider, _options, _logger, connectionNumber);
         _live[session] = 0;
         var failure = await session.ConnectAsync(_transport, cancellationToken).ConfigureAwait(false);
         if (failure is null && session.State == NntpSessionState.Ready)
@@ -502,6 +515,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
         if (_live.TryRemove(session, out _))
         {
             Interlocked.Decrement(ref _created);
+            ReleaseConnectionNumber(session.ConnectionNumber);
             NntpLogMessages.SessionRetired(_logger, _provider.Backbone, reason);
             NotifyActiveSessionCountChanged();
             await session.DisposeAsync().ConfigureAwait(false);
@@ -615,6 +629,31 @@ public sealed class NntpSessionPool : IAsyncDisposable
     private void NotifyActiveSessionCountChanged()
     {
         ActiveSessionCountChanged?.Invoke();
+    }
+
+    private int AllocateConnectionNumber()
+    {
+        lock (_slotGate)
+        {
+            var limit = _provider.MaxSessions;
+            for (var slot = 1; slot <= limit; slot++)
+            {
+                if (_usedSlots.Add(slot))
+                {
+                    return slot;
+                }
+            }
+        }
+
+        throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
+    }
+
+    private void ReleaseConnectionNumber(int connectionNumber)
+    {
+        lock (_slotGate)
+        {
+            _usedSlots.Remove(connectionNumber);
+        }
     }
 
     private static async Task WaitUntilNotBusyAsync(NntpProviderSession session, CancellationToken cancellationToken)

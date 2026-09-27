@@ -2,17 +2,30 @@ using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles;
 
+internal readonly record struct CollectedLog(LogLevel Level, EventId EventId, string Message);
+
 internal sealed class CollectingLogger<T> : ILogger<T>
 {
-    private readonly List<string> _messages = [];
+    private readonly List<CollectedLog> _entries = [];
 
     public IReadOnlyList<string> Messages
     {
         get
         {
-            lock (_messages)
+            lock (_entries)
             {
-                return [.. _messages];
+                return [.. _entries.Select(static entry => entry.Message)];
+            }
+        }
+    }
+
+    public IReadOnlyList<CollectedLog> Entries
+    {
+        get
+        {
+            lock (_entries)
+            {
+                return [.. _entries];
             }
         }
     }
@@ -31,12 +44,12 @@ internal sealed class CollectingLogger<T> : ILogger<T>
     {
         ArgumentNullException.ThrowIfNull(formatter);
         var message = formatter(state, exception);
-        lock (_messages)
+        lock (_entries)
         {
-            _messages.Add(message);
+            _entries.Add(new CollectedLog(logLevel, eventId, message));
             if (exception is not null)
             {
-                _messages.Add(exception.Message);
+                _entries.Add(new CollectedLog(logLevel, eventId, exception.Message));
             }
         }
     }
