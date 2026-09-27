@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 
 namespace VectorNNTP.NNTPD.Configuration;
@@ -51,7 +50,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateFeedDiagnostics(options, failures);
         ValidateXTraceKeys(options, failures);
         ValidateNewsmaster(options, failures);
-        ValidatePostFilter(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -551,18 +549,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         }
 
         return true;
-    }
-
-    private static void ValidatePostFilter(NntpdOptions options, List<string> failures)
-    {
-        try
-        {
-            PostFilterPolicyCompiler.Compile(options.PostFilter ?? new PostFilterOptions());
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
-        {
-            failures.Add(ex.Message);
-        }
     }
 
     private static bool IsDnsLabelChar(char ch) =>

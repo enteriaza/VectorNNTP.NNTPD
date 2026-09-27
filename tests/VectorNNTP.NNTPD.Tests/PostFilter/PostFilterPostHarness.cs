@@ -43,8 +43,15 @@ internal static class PostFilterPostHarness
             sa ?? new PolicyRecordingSpamAssassin(),
             NullLogger<PostFilterEvaluator>.Instance);
 
-    public static PostFilterPolicySnapshot Compile(PostFilterOptions options) =>
-        PostFilterPolicyCompiler.Compile(options);
+    public static PostFilterPolicySnapshot Compile(PostFilterOptions options, long revision = 1)
+    {
+        var repository = new InMemoryPostFilterPolicyRepository
+        {
+            Record = InMemoryPostFilterPolicyRepository.Create(options, revision),
+        };
+        var record = repository.LoadAsync().AsTask().GetAwaiter().GetResult();
+        return PostFilterPolicyCompiler.Compile(record.Options, record.Revision);
+    }
 
     public static PostFilterSpamAssassinOptions EnabledSpamAssassin(
         PostFilterSpamOnFailure onFailure = PostFilterSpamOnFailure.Reject,

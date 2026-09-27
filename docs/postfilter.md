@@ -1,21 +1,24 @@
 # PostFilter v1 — operator guide
 
-Authoritative operator reference for NNTPD PostFilter as implemented in `src/VectorNNTP.NNTPD/PostFilter/` and bound from `Nntpd:PostFilter`.
+Authoritative operator reference for NNTPD PostFilter as implemented in `src/VectorNNTP.NNTPD/PostFilter/`.
 
-This document describes the **current** implementation. It does not invent settings, filters, or integrations that are not present in `src/` and `tests/`. Setting names and defaults are taken from `PostFilterOptions` / `PostFilterSpamAssassinOptions`. Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFilter reasons are never sent on the NNTP wire.
+**NntpDB is the only authoritative cluster policy.** Every NNTPD instance loads `nntppostfilterpolicy` (and its collection tables), compiles an immutable local snapshot, and evaluates POST against that snapshot. There is no `Nntpd:PostFilter` options binding. A leftover `Nntpd:PostFilter` section fails startup. Redis holds quota **runtime state** only, never policy.
+
+Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFilter reasons are never sent on the NNTP wire.
 
 | Concern | Owner |
 |---|---|
-| Policy options | `src/VectorNNTP.NNTPD/Configuration/PostFilterOptions.cs` |
-| Snapshot / refresh | `PostFilterPolicyCompiler`, `PostFilterPolicyService` |
-| POST evaluation | `PostFilterEvaluator`, `Session/Commands/Post.cs` |
+| Authoritative policy | MySQL `nntppostfilterpolicy` + collection tables |
+| Repository | `MySqlPostFilterPolicyRepository` |
+| Snapshot / refresh | `PostFilterPolicyCompiler`, `PostFilterPolicyService` (60s) |
+| POST evaluation | `PostFilterEvaluator` (snapshot only; no SQL) |
 | Redis quota | `PostFilter/Quota/` |
 | SPAMD client | `SpamdCheckClient`, `SpamdScanArticleBuilder` |
 | Settings table | [configuration.md](configuration.md) |
 | POST protocol | [commands.md](commands.md) |
 | Validation matrix | `tests/VectorNNTP.NNTPD.Tests/PostFilter/PostFilterProductionPolicyMatrixTests.cs` |
 
-Production `appsettings.json` ships with `Nntpd:PostFilter:Gate` = `Disabled`. Enabling the feature is an explicit operator decision. Do not treat this document as a licence to turn the gate on in the default configuration.
+NNTPD does not create or migrate these tables. Apply the schema below once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators change the database.
 
 ---
 
@@ -60,7 +63,7 @@ POST
   → 240 Article received OK
 ```
 
-One POST captures `PostFilterPolicyService.Current` once. Mid-command option changes do not affect that evaluation.
+One POST captures `PostFilterPolicyService.Current` once. That snapshot is used for the entire request. POST never queries NntpDB. Mid-request database edits do not affect that evaluation.
 
 ---
 
@@ -90,106 +93,135 @@ Authorized moderator reinjection (`Approved:` + catalogue authorization) is ordi
 | `Active` | Evaluate deny, ArtType, quotas, and SpamAssassin. |
 | `Closed` | Reject every POST that reaches PostFilter (`441`). No Redis. No SPAMD. |
 
-`Disabled` is the compiled default and the value in production `appsettings.json`. Existing deployments keep current POST behaviour until an operator sets `Gate` to `Active` or `Closed`.
+`Disabled` is the recommended seed for `nntppostfilterpolicy.gate`. Existing POST behaviour continues until an operator updates NntpDB. There is no per-node Gate in appsettings.
 
 When `Gate` is `Active`, an unauthenticated session that passes deny/ArtType is rejected at the quota stage (`reason=unauthenticated`) without RESERVE. AUTHINFO is therefore required for any POST that reaches an `Active` filter.
 
 ---
 
-## 5. Configuration
+## 5. Authoritative NntpDB policy
 
-Section path: `Nntpd:PostFilter`. Bound into `PostFilterOptions` and compiled into an immutable `PostFilterPolicySnapshot`. POST does not parse JSON.
-
-Startup compile failure (validator + `PostFilterPolicyService`) prevents `RUNNING`. After a successful initial publish, the service recompiles `IOptionsMonitor<NntpdOptions>.CurrentValue` every **five minutes**. Refresh failure logs EventId 2805 and **retains last-known-good**. A successful refresh is silent.
-
-Generic Host reloads `appsettings.json` by default; the snapshot still changes only on the five-minute tick (or process restart). Change `Gate` and wait for the next publish, or restart, before assuming the new policy is live.
-
-Every setting below is compiled into the snapshot (including SpamAssassin host/pool/timeout fields used only when `SpamAssassin:Enabled` is true).
-
-### 5.1 Gate, deny, allow, ArtType
-
-| Key | Type | Default | Required? | Semantics |
-|-----|------|---------|-----------|-----------|
-| `Nntpd:PostFilter:Gate` | `Disabled` / `Active` / `Closed` | `Disabled` | no | Operational gate. See §4. |
-| `Nntpd:PostFilter:DeniedAccounts` | string array | `[]` | no | Exact AUTH usernames denied before quotas. Compared **ordinal** (case-sensitive) after trim. Empty/whitespace entries ignored. |
-| `Nntpd:PostFilter:DeniedCidrs` | string array | `[]` | no | Client CIDRs denied before quotas. Invalid CIDR fails compile/startup. |
-| `Nntpd:PostFilter:AllowlistedAccounts` | string array | `[]` | no | AUTH usernames that skip SpamAssassin **only**. Deny, ArtType, and quotas still run. Ordinal after trim. |
-| `Nntpd:PostFilter:AllowlistedCidrs` | string array | `[]` | no | Client CIDRs that skip SpamAssassin only. |
-| `Nntpd:PostFilter:RejectArtTypes` | string array | `[]` | no | `ArticleType` flag names rejected (for example `YEncoded`). Empty disables type policy. Parse is case-insensitive; `None` is invalid. |
-
-`ArticleType` names currently accepted: `Default`, `Control`, `Cancel`, `Mime`, `Binary`, `UuEncode`, `Base64`, `YEncoded`, `BommaNews`, `UniData`, `Multipart`, `Html`, `PostScript`, `BinHex`, `Partial`, `PgpMessage`.
-
-Deny and allow lists match **either** account **or** client address. Allowlist never bypasses deny.
-
-### 5.2 Quotas
-
-Windows must be positive. Ceilings must be `>= 0`. Negative ceilings fail startup. **Ceiling `0` disables that dimension.**
-
-| Key | Type | Default | Required? | Semantics |
-|-----|------|---------|-----------|-----------|
-| `Nntpd:PostFilter:Quota:LongWindow` | duration | `1.00:00:00` (1 day) | no | Sustained (L) fixed window. Must be `> 0`. |
-| `Nntpd:PostFilter:Quota:ShortWindow` | duration | `00:10:00` | no | Burst (S) fixed window. Must be `> 0`. |
-| `Nntpd:PostFilter:Quota:MaxMessagesLong` | long | `0` | no | L message ceiling. `0` disables. |
-| `Nntpd:PostFilter:Quota:MaxBytesLong` | long | `0` | no | L byte ceiling (`ArticleRecord.ArtSize`). `0` disables. |
-| `Nntpd:PostFilter:Quota:MaxIdenticalLong` | long | `0` | no | L identical-body ceiling. `0` disables. |
-| `Nntpd:PostFilter:Quota:MaxMessagesShort` | long | `0` | no | S message ceiling. `0` disables. |
-| `Nntpd:PostFilter:Quota:MaxBytesShort` | long | `0` | no | S byte ceiling. `0` disables. |
-| `Nntpd:PostFilter:Quota:MaxIdenticalShort` | long | `0` | no | S identical-body ceiling. `0` disables. |
-
-There is no configuration key for reservation TTL. See §7.
-
-Do not copy lab ceilings into production. Choose values for the local environment.
-
-### 5.3 SpamAssassin
-
-When `Enabled` is `false` (default), CHECK is never invoked. Hosts / `OnFailure` / protocol / pool ranges are validated only when enabled.
-
-| Key | Type | Default | Required? | Semantics |
-|-----|------|---------|-----------|-----------|
-| `Nntpd:PostFilter:SpamAssassin:Enabled` | bool | `false` | no | Invoke SPAMD CHECK for eligible, non-allowlisted articles. |
-| `Nntpd:PostFilter:SpamAssassin:OnFailure` | `Reject` / `Accept` | `null` | **yes when enabled** | Scanner-fault action (connect, protocol, timeout, leftover). Cancellation is not `OnFailure`. Spam findings always reject in v1 (`OnSpam` is not configurable). |
-| `Nntpd:PostFilter:SpamAssassin:MaxArticleSize` | int | `131072` | no | Exclusive `ArtSize` gate. `ArtSize >= MaxArticleSize` skips CHECK. `0` disables the size gate. Must be `>= 0`. |
-| `Nntpd:PostFilter:SpamAssassin:ExcludeArtTypes` | string array | `["YEncoded"]` | no | `ArticleType` flags excluded from CHECK. Empty disables type exclusion. |
-| `Nntpd:PostFilter:SpamAssassin:Hosts` | string array | `[]` | **yes when enabled** | SPAMD hosts (shared `Port`). Whitespace-only entries fail compile. |
-| `Nntpd:PostFilter:SpamAssassin:Port` | int | `783` | no | Shared port for every host (`1–65535` when enabled). |
-| `Nntpd:PostFilter:SpamAssassin:ProtocolVersion` | string | `1.5` | **yes when enabled** | Version on the request line (`CHECK SPAMC/1.5`). |
-| `Nntpd:PostFilter:SpamAssassin:MaxConnections` | int | `4` | **yes when enabled** | Persistent pool size (`1–32` when enabled). |
-| `Nntpd:PostFilter:SpamAssassin:HostSelection` | `RoundRobin` / `Failover` | `RoundRobin` | no | Deterministic first-host pick. Neither is random. |
-| `Nntpd:PostFilter:SpamAssassin:ConnectTimeout` | duration | `00:00:05` | no | Connect timeout. When enabled: must be `> 0` and `<= OperationTimeout`. |
-| `Nntpd:PostFilter:SpamAssassin:OperationTimeout` | duration | `00:00:30` | **yes when enabled** | Wall-clock CHECK budget including connect (`1s`–`2m` when enabled). |
-
-Example (does **not** change the production default file; `Gate` stays operator-chosen):
-
-```json
-"Nntpd": {
-  "PostFilter": {
-    "Gate": "Disabled",
-    "Quota": {
-      "LongWindow": "1.00:00:00",
-      "ShortWindow": "00:10:00",
-      "MaxMessagesLong": 0,
-      "MaxBytesLong": 0,
-      "MaxIdenticalLong": 0,
-      "MaxMessagesShort": 0,
-      "MaxBytesShort": 0,
-      "MaxIdenticalShort": 0
-    },
-    "SpamAssassin": {
-      "Enabled": false,
-      "OnFailure": "Reject",
-      "Hosts": [ "198.18.0.70" ],
-      "Port": 783,
-      "ProtocolVersion": "1.5",
-      "MaxConnections": 4,
-      "HostSelection": "RoundRobin",
-      "ConnectTimeout": "00:00:05",
-      "OperationTimeout": "00:00:30",
-      "MaxArticleSize": 131072,
-      "ExcludeArtTypes": [ "YEncoded" ]
-    }
-  }
-}
+```text
+NntpDB  (nntppostfilterpolicy + collections)
+    → MySqlPostFilterPolicyRepository
+    → PostFilterPolicyCompiler
+    → immutable PostFilterPolicySnapshot
+    → Volatile publish
+    → POST reads Current only
 ```
+
+NNTPD follows the same catalogue contract as `nntpgroups` / `nntpmoderators`:
+
+- Initial load during `PostFilterPolicyService.StartAsync`. Failure prevents `RUNNING`. There is **no** appsettings fallback.
+- Refresh every **60 seconds**. Success compiles a new snapshot and publishes it with `Volatile.Write`.
+- Refresh failure (MySQL down, missing row, compile error) keeps last-known-good. PostFilter is not disabled and does not revert to local JSON.
+- Empty/malformed/duplicate collection entries fail compile of that refresh (or startup).
+
+`revision` is an operator-incremented `BIGINT` on the singleton row. Logs emit `revision={Revision}`. Increment it when changing policy so every node can report which revision it is running. NNTPD still reloads row contents every 60s even if `revision` is unchanged.
+
+### 5.1 Schema (operator/DBA; NNTPD SELECTs only)
+
+```sql
+CREATE TABLE nntppostfilterpolicy (
+  policy_id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+  revision BIGINT UNSIGNED NOT NULL,
+  updated_utc DATETIME(3) NOT NULL,
+  gate VARCHAR(16) NOT NULL,
+  long_window_ms BIGINT UNSIGNED NOT NULL,
+  short_window_ms BIGINT UNSIGNED NOT NULL,
+  max_messages_long BIGINT UNSIGNED NOT NULL,
+  max_bytes_long BIGINT UNSIGNED NOT NULL,
+  max_identical_long BIGINT UNSIGNED NOT NULL,
+  max_messages_short BIGINT UNSIGNED NOT NULL,
+  max_bytes_short BIGINT UNSIGNED NOT NULL,
+  max_identical_short BIGINT UNSIGNED NOT NULL,
+  sa_enabled CHAR(1) NOT NULL,
+  sa_on_failure VARCHAR(16) NULL,
+  sa_max_article_size INT NOT NULL,
+  sa_port INT UNSIGNED NOT NULL,
+  sa_protocol_version VARCHAR(16) NOT NULL,
+  sa_max_connections INT UNSIGNED NOT NULL,
+  sa_host_selection VARCHAR(16) NOT NULL,
+  sa_connect_timeout_ms INT UNSIGNED NOT NULL,
+  sa_operation_timeout_ms INT UNSIGNED NOT NULL
+);
+
+CREATE TABLE nntppostfilteraccounts (
+  list_kind VARCHAR(8) NOT NULL,
+  account_name VARCHAR(255) NOT NULL,
+  PRIMARY KEY (list_kind, account_name)
+);
+
+CREATE TABLE nntppostfiltercidrs (
+  list_kind VARCHAR(8) NOT NULL,
+  cidr VARCHAR(64) NOT NULL,
+  PRIMARY KEY (list_kind, cidr)
+);
+
+CREATE TABLE nntppostfilterarttypes (
+  list_kind VARCHAR(16) NOT NULL,
+  art_type VARCHAR(32) NOT NULL,
+  PRIMARY KEY (list_kind, art_type)
+);
+
+CREATE TABLE nntppostfiltersahosts (
+  host_order INT UNSIGNED NOT NULL PRIMARY KEY,
+  host VARCHAR(255) NOT NULL
+);
+```
+
+`list_kind` values: accounts/CIDRs use `deny` or `allow`; ArtTypes use `reject` or `sa_exclude`. `sa_enabled` is `Y`/`N` (same convention as `nntpmoderators.is_enabled`).
+
+Seed (cluster-inert, matches the former local defaults):
+
+```sql
+INSERT INTO nntppostfilterpolicy (
+  policy_id, revision, updated_utc, gate,
+  long_window_ms, short_window_ms,
+  max_messages_long, max_bytes_long, max_identical_long,
+  max_messages_short, max_bytes_short, max_identical_short,
+  sa_enabled, sa_on_failure, sa_max_article_size, sa_port,
+  sa_protocol_version, sa_max_connections, sa_host_selection,
+  sa_connect_timeout_ms, sa_operation_timeout_ms
+) VALUES (
+  1, 1, UTC_TIMESTAMP(3), 'Disabled',
+  86400000, 600000,
+  0, 0, 0, 0, 0, 0,
+  'N', NULL, 131072, 783,
+  '1.5', 4, 'RoundRobin',
+  5000, 30000
+);
+
+INSERT INTO nntppostfilterarttypes (list_kind, art_type) VALUES ('sa_exclude', 'YEncoded');
+```
+
+Missing `policy_id = 1` prevents startup. NNTPD will not invent a Disabled policy.
+
+### 5.2 Former `Nntpd:PostFilter` mapping
+
+| Former key | NntpDB |
+|------------|--------|
+| `Gate` | `nntppostfilterpolicy.gate` |
+| `DeniedAccounts` / `AllowlistedAccounts` | `nntppostfilteraccounts` (`deny` / `allow`) |
+| `DeniedCidrs` / `AllowlistedCidrs` | `nntppostfiltercidrs` (`deny` / `allow`) |
+| `RejectArtTypes` | `nntppostfilterarttypes` (`reject`) |
+| `Quota:LongWindow` / `ShortWindow` | `long_window_ms` / `short_window_ms` |
+| `Quota:MaxMessages*` / `MaxBytes*` / `MaxIdentical*` | matching columns |
+| `SpamAssassin:Enabled` | `sa_enabled` (`Y`/`N`) |
+| `SpamAssassin:OnFailure` | `sa_on_failure` (`Reject`/`Accept`, NULL when disabled) |
+| `SpamAssassin:MaxArticleSize` | `sa_max_article_size` (exclusive; `0` disables) |
+| `SpamAssassin:ExcludeArtTypes` | `nntppostfilterarttypes` (`sa_exclude`) |
+| `SpamAssassin:Hosts` | `nntppostfiltersahosts` (`host_order`, `host`) |
+| `SpamAssassin:Port` / `ProtocolVersion` / `MaxConnections` / `HostSelection` | `sa_port`, `sa_protocol_version`, `sa_max_connections`, `sa_host_selection` |
+| `SpamAssassin:ConnectTimeout` / `OperationTimeout` | `sa_connect_timeout_ms` / `sa_operation_timeout_ms` |
+
+Do not automatically copy leftover appsettings values. Operators apply the seed, then edit NntpDB.
+
+SPAMD endpoints are **cluster policy** (same Hosts/Port on every node). Reservation identity still uses node-local `ServerId` (already NNTPD identity, not PostFilter policy). Redis connection settings remain the top-level `Redis` section.
+
+`ArticleType` names: `Default`, `Control`, `Cancel`, `Mime`, `Binary`, `UuEncode`, `Base64`, `YEncoded`, `BommaNews`, `UniData`, `Multipart`, `Html`, `PostScript`, `BinHex`, `Partial`, `PgpMessage`.
+
+Account names compare **ordinal** after trim. Empty or duplicate collection rows fail compile. Ceiling `0` disables that quota dimension. Reservation TTL is not a database column (see §7).
 
 ---
 
@@ -368,7 +400,10 @@ Filter reasons stay off the wire. Use logs.
 | 2805 | Warning | Policy refresh failed; last-good retained |
 | 2806 | Warning | SpamAssassin failure (`action`, `detail`) |
 | 2807 | Information | SPAMD transport stopped (connects/checks/reuses/reconnects/evictions) |
-| 2808 | Information | Initial policy publish (`gate`, SA flags, hosts, pool) |
+| 2808 | Information | Policy published (`revision`, gate, SA flags, hosts, pool) |
+| 2809 | Error | Initial NntpDB policy load failed |
+| 2810 | Information | Policy revision changed (`from` → `to`) |
+| 2811 | Error | Policy repository failed |
 
 `artId` in these logs is `ArticleRecord.ArtHash` hex, not the identical-body XXH3-64.
 
@@ -380,7 +415,7 @@ In-process counters (not a metrics HTTP endpoint):
 **Current limitations (do not add noisy logging solely to close these):**
 
 - EventIds 2800–2808 **overlap** RabbitMQ lifecycle EventIds. Filter on message text (`PostFilter …`) or logger category, not EventId alone.
-- Successful five-minute refresh is not logged (only the initial publish and refresh failures).
+- Successful 60s refresh with an unchanged revision is not separately logged (2808 still fires on every publish).
 - `RESERVE` Unavailable appears as EventId 2800 `stage=Quota reason=Unavailable`, not a dedicated Redis-down event.
 
 POST also emits existing `PostLogMessages` Accepted/Rejected lines (`441` category `PolicyRejected` plus the internal reason).
@@ -389,20 +424,20 @@ POST also emits existing `PostLogMessages` Accepted/Rejected lines (`441` catego
 
 ## 12. Safe deployment / activation
 
-1. Leave `Gate=Disabled` on first deploy. Confirm ordinary POST still returns `240`.
-2. Confirm NNTPD already has a working Redis topology (`Redis:Host` / startup PING). PostFilter uses the same multiplexer.
-3. If SpamAssassin will be used, confirm SPAMD accepts `CHECK` on the configured `Hosts`/`Port` from the NNTPD hosts. Do not enable SA until that works.
-4. Configure deny/allow/ArtType/quotas/`OnFailure` in `Nntpd:PostFilter`. Keep `Gate=Disabled` while editing.
-5. Start with **conservative** ceilings (or leave `0` to disable a dimension). There is no universal production number.
-6. Watch EventId 2808 at startup and file/journal logs for compile errors (bad CIDR, missing `OnFailure` when SA is enabled).
-7. Set `Gate=Active` and wait for the next snapshot (up to five minutes) or restart.
-8. POST a known HAM from an authenticated account that is not denied. Expect `240` and a Redis reservation that COMMITs.
-9. POST enough volume to hit a test ceiling. Expect `441` and EventId 2800 `stage=Quota`.
-10. If SA is enabled, POST an eligible HAM and an ineligible (large / excluded ArtType) article. Confirm CHECK vs skip.
-11. Confirm clients see only `240` / `441`, never internal reasons.
-12. Inspect Redis keys `nntpd:pf:q:*` / `nntpd:pf:m:*` for the account hash. Live fields are `r:…`; committed fields are `c:m:` / `c:b:`.
+1. Apply the schema and Disabled seed to NntpDB. Do not add `Nntpd:PostFilter` to appsettings.
+2. Confirm every NNTPD can `SELECT` `nntppostfilterpolicy` (initial load is required for RUNNING).
+3. Confirm Redis (`Redis:Host` / startup PING). PostFilter uses the same multiplexer for quota state.
+4. If SpamAssassin will be used, confirm SPAMD from every NNTPD host, then set `sa_enabled='Y'` and hosts in NntpDB.
+5. Edit deny/allow/ArtType/quotas in NntpDB. Keep `gate='Disabled'` while editing. Increment `revision`.
+6. Start with **conservative** ceilings (or `0` to disable a dimension). There is no universal production number.
+7. Watch EventId 2808 (`revision=`) on each node. Failed compile/refresh keeps last-good (2805 / 2809).
+8. Set `gate='Active'`, increment `revision`. Within 60s both nodes should log 2810 and the new revision.
+9. POST a known HAM from an authenticated account that is not denied. Expect `240` and a Redis COMMIT.
+10. POST enough volume to hit a test ceiling. Expect `441` and EventId 2800 `stage=Quota`.
+11. Confirm clients see only `240` / `441`. Confirm both nodes report the same revision.
+12. Inspect Redis keys `nntpd:pf:q:*` / `nntpd:pf:m:*` (runtime state, not policy).
 
-To disable quickly: set `Gate=Disabled` (or `Closed` to reject all POSTs that reach the filter) and wait for refresh or restart.
+To disable quickly: `UPDATE nntppostfilterpolicy SET gate='Disabled', revision = revision + 1` (or `Closed`) and wait up to 60s.
 
 ---
 

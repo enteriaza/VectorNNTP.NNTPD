@@ -220,14 +220,6 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     [Required]
     public SpeedTestOptions SpeedTest { get; set; } = new();
 
-    /// <summary>Gets or sets POST-only PostFilter policy.</summary>
-    /// <remarks>
-    /// Default gate is <see cref="PostFilterGateState.Disabled"/>. Compiled into an
-    /// immutable snapshot at startup and every five minutes. POST does not parse this object.
-    /// </remarks>
-    [Required]
-    public PostFilterOptions PostFilter { get; set; } = new();
-
     /// <summary>
     /// Gets or sets temporary real-feed observability.
     /// </summary>

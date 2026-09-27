@@ -38,6 +38,14 @@ public interface INntpDbConnection : IAsyncDisposable
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Loads the singleton PostFilter policy and its collection tables.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel the queries.</param>
+    /// <returns>The mapped policy, or <see langword="null"/> when <c>policy_id = 1</c> is missing.</returns>
+    ValueTask<PostFilter.PostFilterPolicyRecord?> QueryPostFilterPolicyAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Atomically subtracts <paramref name="bytes"/> from
     /// <c>account_byte_limit</c>, clamping at zero. Remaining is never negative.
     /// </summary>

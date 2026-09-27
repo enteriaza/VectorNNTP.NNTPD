@@ -127,7 +127,7 @@ _logger.LogInformation(
 
 Avoid string interpolation or concatenation as the log message. Never log secrets, tokens, or credentials.
 
-PostFilter operational EventIds (2800–2808) and reservation/COMMIT/SPAMD messages are listed in [postfilter.md](postfilter.md#11-observability). Those numeric IDs currently overlap RabbitMQ lifecycle EventIds; match on `PostFilter` message text.
+PostFilter operational EventIds (2800–2811) and reservation/COMMIT/SPAMD/policy-revision messages are listed in [postfilter.md](postfilter.md#11-observability). Those numeric IDs currently overlap RabbitMQ lifecycle EventIds; match on `PostFilter` message text.
 
 Logging is a human-readable boundary. The current `ILogger` / `LoggerMessageAttribute` APIs require `string` (or other supported structured types) for operational text. Protocol bytes may be converted to a string **once, locally**, at that boundary when human-readable output is required. Do not treat logging as a reason to change protocol representation in the data plane.
 

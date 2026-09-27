@@ -29,7 +29,8 @@ internal sealed class PostFilterPolicySnapshot
         PostFilterSpamAssassinHostSelection spamAssassinHostSelection,
         TimeSpan spamAssassinConnectTimeout,
         TimeSpan spamAssassinOperationTimeout,
-        long reservationTtlMs)
+        long reservationTtlMs,
+        long revision = 0)
     {
         Gate = gate;
         DeniedAccounts = deniedAccounts;
@@ -51,6 +52,7 @@ internal sealed class PostFilterPolicySnapshot
         SpamAssassinConnectTimeout = spamAssassinConnectTimeout;
         SpamAssassinOperationTimeout = spamAssassinOperationTimeout;
         ReservationTtlMs = reservationTtlMs;
+        Revision = revision;
     }
 
     /// <summary>Gets the operational gate.</summary>
@@ -120,6 +122,9 @@ internal sealed class PostFilterPolicySnapshot
     /// <see cref="SpamAssassinOperationTimeout"/> plus hold skew.
     /// </summary>
     public long ReservationTtlMs { get; }
+
+    /// <summary>Gets the NntpDB policy revision compiled into this snapshot.</summary>
+    public long Revision { get; }
 
     /// <summary>Gets the CHECK target captured with this snapshot.</summary>
     public PostFilterSpamAssassinTarget SpamAssassinTarget =>

@@ -29,15 +29,25 @@ internal static partial class PostFilterLogMessages
     [LoggerMessage(
         EventId = 2808,
         Level = LogLevel.Information,
-        Message = "PostFilter policy published gate={Gate} spamAssassin={SpamAssassin} maxArticleSize={MaxArticleSize} excludeArtTypes={ExcludeArtTypes} hosts={Hosts} maxConnections={MaxConnections}")]
+        Message = "PostFilter policy published revision={Revision} gate={Gate} spamAssassin={SpamAssassin} maxArticleSize={MaxArticleSize} excludeArtTypes={ExcludeArtTypes} hosts={Hosts} maxConnections={MaxConnections}")]
     public static partial void PolicyPublished(
         ILogger logger,
+        long revision,
         string gate,
         bool spamAssassin,
         int maxArticleSize,
         string excludeArtTypes,
         int hosts,
         int maxConnections);
+
+    [LoggerMessage(EventId = 2809, Level = LogLevel.Error, Message = "PostFilter initial policy load failed")]
+    public static partial void PolicyInitialLoadFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 2810, Level = LogLevel.Information, Message = "PostFilter policy revision changed from={FromRevision} to={ToRevision}")]
+    public static partial void PolicyRevisionChanged(ILogger logger, long fromRevision, long toRevision);
+
+    [LoggerMessage(EventId = 2811, Level = LogLevel.Error, Message = "PostFilter policy repository failed")]
+    public static partial void PolicyRepositoryFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(
         EventId = 2807,

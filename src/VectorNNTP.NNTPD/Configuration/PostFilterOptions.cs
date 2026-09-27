@@ -39,11 +39,10 @@ public enum PostFilterSpamAssassinHostSelection
     Failover = 1,
 }
 
-/// <summary>NNTPD POST PostFilter policy bound from <c>Nntpd:PostFilter</c>.</summary>
+/// <summary>In-memory PostFilter compile model produced from NntpDB.</summary>
 /// <remarks>
-/// Compiled into an immutable snapshot at startup and every five minutes.
-/// POST does not parse this object. Default gate is <see cref="PostFilterGateState.Disabled"/>
-/// so existing deployments keep current POST behaviour until operators enable the filter.
+/// Not bound from <c>Nntpd:PostFilter</c>. Cluster policy is <c>nntppostfilterpolicy</c>.
+/// POST does not parse this object. The compiler produces an immutable snapshot.
 /// </remarks>
 public sealed class PostFilterOptions
 {

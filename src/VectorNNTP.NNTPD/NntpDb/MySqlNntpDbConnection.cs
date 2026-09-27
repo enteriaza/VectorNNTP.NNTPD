@@ -1,6 +1,8 @@
 using MySqlConnector;
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
+using VectorNNTP.NNTPD.PostFilter;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
@@ -103,6 +105,78 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
         {
             throw new NntpDbUnavailableException("MySQL nntpmoderators catalogue query failed.", ex);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<PostFilterPolicyRecord?> QueryPostFilterPolicyAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            PostFilterPolicyRecord record;
+            await using (var policyCommand = _connection.CreateCommand())
+            {
+                policyCommand.CommandText = NntpPostFilterQueries.SelectPolicy;
+                await using var policyReader = await policyCommand
+                    .ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (!await policyReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                record = MapPolicyScalars(policyReader);
+            }
+
+            var deniedAccounts = new List<string>();
+            var allowlistedAccounts = new List<string>();
+            await ReadKeyedStringsAsync(
+                    NntpPostFilterQueries.SelectAccounts,
+                    NntpPostFilterQueries.ListKindDeny,
+                    NntpPostFilterQueries.ListKindAllow,
+                    deniedAccounts,
+                    allowlistedAccounts,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var deniedCidrs = new List<string>();
+            var allowlistedCidrs = new List<string>();
+            await ReadKeyedStringsAsync(
+                    NntpPostFilterQueries.SelectCidrs,
+                    NntpPostFilterQueries.ListKindDeny,
+                    NntpPostFilterQueries.ListKindAllow,
+                    deniedCidrs,
+                    allowlistedCidrs,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var rejectArtTypes = new List<string>();
+            var excludeArtTypes = new List<string>();
+            await ReadKeyedStringsAsync(
+                    NntpPostFilterQueries.SelectArtTypes,
+                    NntpPostFilterQueries.ListKindReject,
+                    NntpPostFilterQueries.ListKindSaExclude,
+                    rejectArtTypes,
+                    excludeArtTypes,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var hosts = await ReadHostsAsync(cancellationToken).ConfigureAwait(false);
+            record.Options.DeniedAccounts = [.. deniedAccounts];
+            record.Options.AllowlistedAccounts = [.. allowlistedAccounts];
+            record.Options.DeniedCidrs = [.. deniedCidrs];
+            record.Options.AllowlistedCidrs = [.. allowlistedCidrs];
+            record.Options.RejectArtTypes = [.. rejectArtTypes];
+            record.Options.SpamAssassin.ExcludeArtTypes = [.. excludeArtTypes];
+            record.Options.SpamAssassin.Hosts = [.. hosts];
+            return record;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+            and not NntpDbUnavailableException
+            and not InvalidOperationException)
+        {
+            throw new NntpDbUnavailableException("MySQL nntppostfilterpolicy query failed.", ex);
         }
     }
 
@@ -430,4 +504,149 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
             long longValue => checked((int)longValue),
             _ => throw new NntpDbUnavailableException("MySQL health query SELECT 1 returned an unexpected result."),
         };
+
+    private static PostFilterPolicyRecord MapPolicyScalars(MySqlDataReader reader)
+    {
+        var revision = Convert.ToInt64(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture);
+        var updated = reader.GetDateTime(1);
+        var updatedUtc = updated.Kind == DateTimeKind.Unspecified
+            ? new DateTimeOffset(DateTime.SpecifyKind(updated, DateTimeKind.Utc))
+            : new DateTimeOffset(updated.ToUniversalTime());
+        var gateText = reader.GetString(2).Trim();
+        if (!Enum.TryParse<PostFilterGateState>(gateText, ignoreCase: true, out var gate)
+            || !Enum.IsDefined(gate))
+        {
+            throw new InvalidOperationException($"PostFilter gate is not a defined value: '{gateText}'.");
+        }
+
+        var options = new PostFilterOptions
+        {
+            Gate = gate,
+            Quota = new PostFilterQuotaOptions
+            {
+                LongWindow = TimeSpan.FromMilliseconds(ReadInt64(reader, 3)),
+                ShortWindow = TimeSpan.FromMilliseconds(ReadInt64(reader, 4)),
+                MaxMessagesLong = ReadInt64(reader, 5),
+                MaxBytesLong = ReadInt64(reader, 6),
+                MaxIdenticalLong = ReadInt64(reader, 7),
+                MaxMessagesShort = ReadInt64(reader, 8),
+                MaxBytesShort = ReadInt64(reader, 9),
+                MaxIdenticalShort = ReadInt64(reader, 10),
+            },
+            SpamAssassin = new PostFilterSpamAssassinOptions
+            {
+                Enabled = IsYes(reader, 11),
+                OnFailure = ReadOnFailure(reader, 12),
+                MaxArticleSize = checked((int)ReadInt64(reader, 13)),
+                Port = checked((int)ReadInt64(reader, 14)),
+                ProtocolVersion = reader.IsDBNull(15) ? string.Empty : reader.GetString(15).Trim(),
+                MaxConnections = checked((int)ReadInt64(reader, 16)),
+                HostSelection = ReadHostSelection(reader, 17),
+                ConnectTimeout = TimeSpan.FromMilliseconds(ReadInt64(reader, 18)),
+                OperationTimeout = TimeSpan.FromMilliseconds(ReadInt64(reader, 19)),
+            },
+        };
+
+        return new PostFilterPolicyRecord(revision, updatedUtc, options);
+    }
+
+    private async Task ReadKeyedStringsAsync(
+        string commandText,
+        string firstKind,
+        string secondKind,
+        List<string> first,
+        List<string> second,
+        CancellationToken cancellationToken)
+    {
+        await using var command = _connection.CreateCommand();
+        command.CommandText = commandText;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var kind = reader.IsDBNull(0) ? string.Empty : reader.GetString(0).Trim();
+            var value = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            if (string.Equals(kind, firstKind, StringComparison.OrdinalIgnoreCase))
+            {
+                first.Add(value);
+            }
+            else if (string.Equals(kind, secondKind, StringComparison.OrdinalIgnoreCase))
+            {
+                second.Add(value);
+            }
+            else
+            {
+                throw new InvalidOperationException($"PostFilter collection list_kind is unknown: '{kind}'.");
+            }
+        }
+    }
+
+    private async Task<List<string>> ReadHostsAsync(CancellationToken cancellationToken)
+    {
+        await using var command = _connection.CreateCommand();
+        command.CommandText = NntpPostFilterQueries.SelectHosts;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var hosts = new List<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            hosts.Add(reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
+        }
+
+        return hosts;
+    }
+
+    private static long ReadInt64(MySqlDataReader reader, int ordinal) =>
+        Convert.ToInt64(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+
+    private static bool IsYes(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return false;
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            string text => text.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase),
+            char ch => ch is 'Y' or 'y',
+            byte b => b is (byte)'Y' or (byte)'y',
+            _ => false,
+        };
+    }
+
+    private static PostFilterSpamOnFailure? ReadOnFailure(MySqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        var text = reader.GetString(ordinal).Trim();
+        if (text.Length == 0)
+        {
+            return null;
+        }
+
+        if (!Enum.TryParse<PostFilterSpamOnFailure>(text, ignoreCase: true, out var parsed)
+            || !Enum.IsDefined(parsed))
+        {
+            throw new InvalidOperationException($"PostFilter SpamAssassin OnFailure is not a defined value: '{text}'.");
+        }
+
+        return parsed;
+    }
+
+    private static PostFilterSpamAssassinHostSelection ReadHostSelection(MySqlDataReader reader, int ordinal)
+    {
+        var text = reader.IsDBNull(ordinal)
+            ? PostFilterSpamAssassinHostSelection.RoundRobin.ToString()
+            : reader.GetString(ordinal).Trim();
+        if (!Enum.TryParse<PostFilterSpamAssassinHostSelection>(text, ignoreCase: true, out var parsed)
+            || !Enum.IsDefined(parsed))
+        {
+            throw new InvalidOperationException($"PostFilter SpamAssassin HostSelection is not a defined value: '{text}'.");
+        }
+
+        return parsed;
+    }
 }

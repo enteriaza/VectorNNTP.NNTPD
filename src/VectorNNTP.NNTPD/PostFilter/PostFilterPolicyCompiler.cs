@@ -9,11 +9,16 @@ namespace VectorNNTP.NNTPD.PostFilter;
 internal static class PostFilterPolicyCompiler
 {
     /// <summary>Builds a snapshot or throws when the options are not usable.</summary>
-    public static PostFilterPolicySnapshot Compile(PostFilterOptions options)
+    public static PostFilterPolicySnapshot Compile(PostFilterOptions options, long revision = 0)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(options.Quota);
         ArgumentNullException.ThrowIfNull(options.SpamAssassin);
+        ArgumentOutOfRangeException.ThrowIfNegative(revision);
+        if (!Enum.IsDefined(options.Gate))
+        {
+            throw new InvalidOperationException($"PostFilter Gate is not a defined value: '{options.Gate}'.");
+        }
 
         if (options.Quota.LongWindow <= TimeSpan.Zero || options.Quota.ShortWindow <= TimeSpan.Zero)
         {
@@ -31,57 +36,73 @@ internal static class PostFilterPolicyCompiler
             if (sa.OnFailure is null)
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:OnFailure is required when SpamAssassin is enabled.");
+                    "PostFilter SpamAssassin OnFailure is required when SpamAssassin is enabled.");
             }
 
-            if (sa.Hosts.Length == 0 || sa.Hosts.Any(static host => string.IsNullOrWhiteSpace(host)))
+            if (sa.Hosts.Length == 0)
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:Hosts is required when SpamAssassin is enabled.");
+                    "PostFilter SpamAssassin Hosts is required when SpamAssassin is enabled.");
+            }
+
+            var uniqueHosts = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var host in sa.Hosts)
+            {
+                if (string.IsNullOrWhiteSpace(host))
+                {
+                    throw new InvalidOperationException(
+                        "PostFilter SpamAssassin Hosts contains a malformed empty entry.");
+                }
+
+                if (!uniqueHosts.Add(host.Trim()))
+                {
+                    throw new InvalidOperationException(
+                        $"PostFilter SpamAssassin Hosts contains a duplicate entry: '{host.Trim()}'.");
+                }
             }
 
             if (sa.Port is < 1 or > 65535)
             {
-                throw new InvalidOperationException("Nntpd:PostFilter:SpamAssassin:Port must be 1–65535.");
+                throw new InvalidOperationException("PostFilter SpamAssassin Port must be 1–65535.");
             }
 
             if (sa.OperationTimeout < PostFilterSpamAssassinOptions.MinOperationTimeout
                 || sa.OperationTimeout > PostFilterSpamAssassinOptions.MaxOperationTimeout)
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:OperationTimeout must be between 1 second and 2 minutes when SpamAssassin is enabled.");
+                    "PostFilter SpamAssassin OperationTimeout must be between 1 second and 2 minutes when SpamAssassin is enabled.");
             }
 
             if (sa.ConnectTimeout <= TimeSpan.Zero || sa.ConnectTimeout > sa.OperationTimeout)
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:ConnectTimeout must be positive and must not exceed OperationTimeout.");
+                    "PostFilter SpamAssassin ConnectTimeout must be positive and must not exceed OperationTimeout.");
             }
 
             if (string.IsNullOrWhiteSpace(sa.ProtocolVersion))
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:ProtocolVersion is required when SpamAssassin is enabled.");
+                    "PostFilter SpamAssassin ProtocolVersion is required when SpamAssassin is enabled.");
             }
 
             if (sa.MaxConnections < PostFilterSpamAssassinOptions.MinMaxConnections
                 || sa.MaxConnections > PostFilterSpamAssassinOptions.MaxMaxConnections)
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:MaxConnections must be between 1 and 32 when SpamAssassin is enabled.");
+                    "PostFilter SpamAssassin MaxConnections must be between 1 and 32 when SpamAssassin is enabled.");
             }
 
             if (!Enum.IsDefined(sa.HostSelection))
             {
                 throw new InvalidOperationException(
-                    "Nntpd:PostFilter:SpamAssassin:HostSelection is not a defined strategy.");
+                    "PostFilter SpamAssassin HostSelection is not a defined strategy.");
             }
         }
 
         if (sa.MaxArticleSize < 0)
         {
             throw new InvalidOperationException(
-                "Nntpd:PostFilter:SpamAssassin:MaxArticleSize must be zero or positive.");
+                "PostFilter SpamAssassin MaxArticleSize must be zero or positive.");
         }
 
         var ceilings = new PostFilterQuotaCeilings(
@@ -95,9 +116,9 @@ internal static class PostFilterPolicyCompiler
 
         return new PostFilterPolicySnapshot(
             options.Gate,
-            ToSet(options.DeniedAccounts),
+            ToSet(options.DeniedAccounts, "DeniedAccounts"),
             ToNetworks(options.DeniedCidrs, "DeniedCidrs"),
-            ToSet(options.AllowlistedAccounts),
+            ToSet(options.AllowlistedAccounts, "AllowlistedAccounts"),
             ToNetworks(options.AllowlistedCidrs, "AllowlistedCidrs"),
             ParseArtTypes(options.RejectArtTypes, "RejectArtTypes"),
             windows,
@@ -115,17 +136,24 @@ internal static class PostFilterPolicyCompiler
             sa.HostSelection,
             sa.ConnectTimeout,
             sa.OperationTimeout,
-            PostFilterQuotaDefaults.HoldMilliseconds(sa.Enabled, sa.OperationTimeout));
+            PostFilterQuotaDefaults.HoldMilliseconds(sa.Enabled, sa.OperationTimeout),
+            revision);
     }
 
-    private static HashSet<string> ToSet(string[] values)
+    private static HashSet<string> ToSet(string[] values, string name)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
         foreach (var value in values)
         {
-            if (!string.IsNullOrWhiteSpace(value))
+            if (string.IsNullOrWhiteSpace(value))
             {
-                set.Add(value.Trim());
+                throw new InvalidOperationException($"PostFilter {name} contains a malformed empty entry.");
+            }
+
+            var trimmed = value.Trim();
+            if (!set.Add(trimmed))
+            {
+                throw new InvalidOperationException($"PostFilter {name} contains a duplicate entry: '{trimmed}'.");
             }
         }
 
@@ -135,14 +163,21 @@ internal static class PostFilterPolicyCompiler
     private static List<IPNetwork> ToNetworks(string[] values, string name)
     {
         var networks = new List<IPNetwork>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var value in values)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                continue;
+                throw new InvalidOperationException($"PostFilter {name} contains a malformed empty entry.");
             }
 
-            if (!IPNetwork.TryParse(value.Trim(), out var network))
+            var trimmed = value.Trim();
+            if (!seen.Add(trimmed))
+            {
+                throw new InvalidOperationException($"PostFilter {name} contains a duplicate entry: '{trimmed}'.");
+            }
+
+            if (!IPNetwork.TryParse(trimmed, out var network))
             {
                 throw new InvalidOperationException($"PostFilter {name} contains an invalid CIDR: '{value}'.");
             }
@@ -156,14 +191,21 @@ internal static class PostFilterPolicyCompiler
     private static ArticleType ParseArtTypes(string[] values, string name)
     {
         var mask = ArticleType.None;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var value in values)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                continue;
+                throw new InvalidOperationException($"PostFilter {name} contains a malformed empty entry.");
             }
 
-            if (!Enum.TryParse<ArticleType>(value.Trim(), ignoreCase: true, out var flag)
+            var trimmed = value.Trim();
+            if (!seen.Add(trimmed))
+            {
+                throw new InvalidOperationException($"PostFilter {name} contains a duplicate entry: '{trimmed}'.");
+            }
+
+            if (!Enum.TryParse<ArticleType>(trimmed, ignoreCase: true, out var flag)
                 || !Enum.IsDefined(flag)
                 || flag == ArticleType.None)
             {

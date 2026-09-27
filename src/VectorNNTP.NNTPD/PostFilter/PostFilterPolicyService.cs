@@ -1,23 +1,22 @@
-using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 
 namespace VectorNNTP.NNTPD.PostFilter;
 
 /// <summary>
-/// Loads PostFilter policy from <c>Nntpd:PostFilter</c>, publishes an immutable snapshot,
-/// and refreshes it every five minutes.
+/// Loads PostFilter policy from NntpDB, publishes an immutable snapshot,
+/// and refreshes it every 60 seconds.
 /// </summary>
 /// <remarks>
-/// Initial compile failure prevents <c>RUNNING</c>. Refresh failure retains last-known-good.
-/// POST observes <see cref="Current"/> via a volatile snapshot read.
+/// Initial load failure prevents <c>RUNNING</c>. Refresh failure retains last-known-good.
+/// POST observes <see cref="Current"/> via a volatile snapshot read and never queries MySQL.
+/// There is no appsettings fallback.
 /// </remarks>
 internal sealed class PostFilterPolicyService : IPostFilterPolicySource, IApplicationService, IAsyncDisposable
 {
     /// <summary>Refresh interval after a successful initial load.</summary>
-    public static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
 
-    private readonly IOptionsMonitor<NntpdOptions> _options;
+    private readonly IPostFilterPolicyRepository _repository;
     private readonly ILogger<PostFilterPolicyService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _interval;
@@ -30,24 +29,24 @@ internal sealed class PostFilterPolicyService : IPostFilterPolicySource, IApplic
 
     /// <summary>Initializes a production policy service.</summary>
     public PostFilterPolicyService(
-        IOptionsMonitor<NntpdOptions> options,
+        IPostFilterPolicyRepository repository,
         ILogger<PostFilterPolicyService> logger)
-        : this(options, logger, TimeProvider.System, RefreshInterval)
+        : this(repository, logger, TimeProvider.System, RefreshInterval)
     {
     }
 
     /// <summary>Initializes a service with an explicit clock and interval (tests).</summary>
     internal PostFilterPolicyService(
-        IOptionsMonitor<NntpdOptions> options,
+        IPostFilterPolicyRepository repository,
         ILogger<PostFilterPolicyService> logger,
         TimeProvider timeProvider,
         TimeSpan interval)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
-        _options = options;
+        _repository = repository;
         _logger = logger;
         _timeProvider = timeProvider;
         _interval = interval;
@@ -87,21 +86,18 @@ internal sealed class PostFilterPolicyService : IPostFilterPolicySource, IApplic
 
         try
         {
-            Publish(CompileCurrent());
-            var published = Current;
-            PostFilterLogMessages.PolicyPublished(
-                _logger,
-                published.Gate.ToString(),
-                published.SpamAssassinEnabled,
-                published.SpamAssassinMaxArticleSize,
-                published.SpamAssassinExcludeArtTypes.ToString(),
-                published.SpamAssassinHosts.Count,
-                published.SpamAssassinMaxConnections);
+            var snapshot = await LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            Publish(snapshot, previousRevision: null);
             _execution = RunAsync(_runCts.Token);
             await Task.CompletedTask.ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            if (ex is not OperationCanceledException)
+            {
+                PostFilterLogMessages.PolicyInitialLoadFailed(_logger, ex);
+            }
+
             Interlocked.Exchange(ref _started, 0);
             throw;
         }
@@ -137,35 +133,72 @@ internal sealed class PostFilterPolicyService : IPostFilterPolicySource, IApplic
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(_interval, _timeProvider);
-        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        try
         {
-            if (Interlocked.Exchange(ref _refreshing, 1) == 1)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                continue;
-            }
+                await Task.Delay(_interval, _timeProvider, cancellationToken).ConfigureAwait(false);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
 
-            try
-            {
-                Publish(CompileCurrent());
+                await TryRefreshAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                PostFilterLogMessages.PolicyRefreshFailed(_logger, ex);
-            }
-            finally
-            {
-                Volatile.Write(ref _refreshing, 0);
-            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 
-    private PostFilterPolicySnapshot CompileCurrent()
+    private async Task TryRefreshAsync(CancellationToken cancellationToken)
     {
-        var options = _options.CurrentValue.PostFilter ?? new PostFilterOptions();
-        return PostFilterPolicyCompiler.Compile(options);
+        if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var previous = Volatile.Read(ref _current);
+            var snapshot = await LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            Publish(snapshot, previous?.Revision);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            PostFilterLogMessages.PolicyRefreshFailed(_logger, ex);
+        }
+        finally
+        {
+            Volatile.Write(ref _refreshing, 0);
+        }
     }
 
-    private void Publish(PostFilterPolicySnapshot snapshot) =>
+    private async Task<PostFilterPolicySnapshot> LoadSnapshotAsync(CancellationToken cancellationToken)
+    {
+        var record = await _repository.LoadAsync(cancellationToken).ConfigureAwait(false);
+        return PostFilterPolicyCompiler.Compile(record.Options, record.Revision);
+    }
+
+    private void Publish(PostFilterPolicySnapshot snapshot, long? previousRevision)
+    {
         Volatile.Write(ref _current, snapshot);
+        PostFilterLogMessages.PolicyPublished(
+            _logger,
+            snapshot.Revision,
+            snapshot.Gate.ToString(),
+            snapshot.SpamAssassinEnabled,
+            snapshot.SpamAssassinMaxArticleSize,
+            snapshot.SpamAssassinExcludeArtTypes.ToString(),
+            snapshot.SpamAssassinHosts.Count,
+            snapshot.SpamAssassinMaxConnections);
+        if (previousRevision is { } prior && prior != snapshot.Revision)
+        {
+            PostFilterLogMessages.PolicyRevisionChanged(_logger, prior, snapshot.Revision);
+        }
+    }
 }

@@ -32,7 +32,7 @@ deploy/
 docs/
   architecture.md
   configuration.md
-  postfilter.md                 # POST PostFilter operator guide (default Gate=Disabled)
+  postfilter.md                 # POST PostFilter operator guide (NntpDB cluster policy)
   logging.md
   systemd.md
   systemd-integration-verification.md

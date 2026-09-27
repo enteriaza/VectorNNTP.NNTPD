@@ -167,6 +167,7 @@ public static class NntpdServiceCollectionExtensions
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
+        services.AddSingleton<IValidateOptions<NntpdOptions>, PostFilterLeftoverConfigurationValidator>();
         services.AddSingleton<IOptions<AcmeCloudflareOptions>>(static sp =>
             Options.Create<AcmeCloudflareOptions>(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
         services.AddAcmeCloudflareInfrastructure();
@@ -329,6 +330,7 @@ public static class NntpdServiceCollectionExtensions
             new SpamdCheckClient(
                 sp.GetRequiredService<SpamdTransportMetrics>(),
                 sp.GetService<ILogger<SpamdCheckClient>>()));
+        services.TryAddSingleton<IPostFilterPolicyRepository, MySqlPostFilterPolicyRepository>();
         services.TryAddSingleton<PostFilterPolicyService>();
         services.TryAddSingleton<IPostFilterPolicySource>(static sp =>
             sp.GetRequiredService<PostFilterPolicyService>());

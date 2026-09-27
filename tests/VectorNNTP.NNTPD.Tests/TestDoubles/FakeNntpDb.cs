@@ -1,6 +1,8 @@
 using VectorNNTP.NNTPD.Authentication;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.NNTPD.PostFilter;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -43,6 +45,11 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
     public IReadOnlyList<NntpModeratorRow> Moderators { get; set; } = [];
 
     public Exception? QueryModeratorsException { get; set; }
+
+    public PostFilterPolicyRecord? PostFilterPolicy { get; set; } =
+        new(1, DateTimeOffset.UtcNow, new PostFilterOptions());
+
+    public Exception? QueryPostFilterPolicyException { get; set; }
 
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
 
@@ -111,6 +118,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             ConsumeAccountBytesException = ConsumeAccountBytesException,
             Moderators = Moderators,
             QueryModeratorsException = QueryModeratorsException,
+            PostFilterPolicy = PostFilterPolicy,
+            QueryPostFilterPolicyException = QueryPostFilterPolicyException,
             BlockQueryNewsgroups = BlockQueryNewsgroups,
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
         };
@@ -158,6 +167,12 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
     public Exception? QueryModeratorsException { get; set; }
 
     public int QueryModeratorsCount { get; private set; }
+
+    public PostFilterPolicyRecord? PostFilterPolicy { get; set; }
+
+    public Exception? QueryPostFilterPolicyException { get; set; }
+
+    public int QueryPostFilterPolicyCount { get; private set; }
 
     public TaskCompletionSource? BlockQueryNewsgroups { get; set; }
 
@@ -283,6 +298,18 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
         }
 
         return ValueTask.FromResult(Moderators);
+    }
+
+    public ValueTask<PostFilterPolicyRecord?> QueryPostFilterPolicyAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        QueryPostFilterPolicyCount++;
+        if (QueryPostFilterPolicyException is not null)
+        {
+            throw QueryPostFilterPolicyException;
+        }
+
+        return ValueTask.FromResult(PostFilterPolicy);
     }
 
     public ValueTask DisposeAsync()
