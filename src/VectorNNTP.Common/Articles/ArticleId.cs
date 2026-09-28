@@ -13,8 +13,8 @@ namespace VectorNNTP.Common.Articles;
 /// converted to a string. This does not replace the Message-ID stored in ArtData / overview.
 /// </para>
 /// <para>
-/// The 32-byte layout matches NNTPD <c>HistoryDigest</c>. The value type itself allocates
-/// no heap storage.
+/// The 32-byte digest is the canonical Vector article identity. NNTPD
+/// <c>HistoryDigest</c> stores these same bytes; it does not hash independently.
 /// </para>
 /// </remarks>
 public readonly struct ArticleId : IEquatable<ArticleId>

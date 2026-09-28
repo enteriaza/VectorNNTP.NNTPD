@@ -1,5 +1,6 @@
 using System.Buffers;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles.OverviewDb;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;

@@ -1,10 +1,14 @@
-namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
+namespace VectorNNTP.Common.Articles.OverviewDb;
 
 /// <summary>
 /// Decoded OverviewDB ingest handoff. Production encoding writes this shape as
-/// protobuf; this type is the decoded view used by tests and consumers.
+/// protobuf; this type is the decoded view used by OverviewDB consumers and tests.
 /// </summary>
-internal sealed class OverviewArticleV1
+/// <remarks>
+/// This is the wire DTO. RabbitMQ publication, confirms, topology, and NNTP
+/// ingress remain application-owned.
+/// </remarks>
+public sealed class OverviewArticleV1
 {
     /// <summary>Current contract version encoded in every payload.</summary>
     public const uint CurrentSchemaVersion = 1;

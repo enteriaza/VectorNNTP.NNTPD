@@ -8,9 +8,12 @@ This document describes the **current** implementation. It does not invent APIs,
 |---|---|
 | Types, factory, parser, Date/Path, classifier, ArtHash | `src/VectorNNTP.Common/Articles/` |
 | Tests | `tests/VectorNNTP.Common.Tests/Articles/` |
-| History identity reuse | `src/VectorNNTP.NNTPD/History/HistoryDigest.cs` |
+| ArticleId hashing | `src/VectorNNTP.Common/Articles/ArticleId.cs` |
+| OverviewDB protobuf + codec | `src/VectorNNTP.Common/Articles/OverviewDb/` |
+| History identity reuse (same bytes, not a second hash) | `src/VectorNNTP.NNTPD/History/HistoryDigest.cs` |
+| OverviewDB RabbitMQ transport | `src/VectorNNTP.NNTPD/` (topology, confirms, expiration, AppId) |
 
-NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admission. The NNTPD ingestion worker publishes a compact protobuf OverviewDB handoff (`OverviewArticleV1`) to RabbitMQ `overviewdb.queue` from that record. ArticleRecord is **not** a serialization protocol of its own and is not wired into BackFiller ingestion, article-work RPC JSON, retention, storage, or transit.
+NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admission. The NNTPD ingestion worker encodes a compact protobuf OverviewDB handoff (`OverviewArticleV1` in `VectorNNTP.Common`) and publishes those bytes to RabbitMQ `overviewdb.queue`. RabbitMQ remains application-owned. ArticleRecord is **not** a serialization protocol of its own and is not wired into BackFiller ingestion, article-work RPC JSON, retention, storage, or transit.
 
 ---
 
@@ -38,7 +41,7 @@ Deliberately excluded today:
 - BackFiller `ProviderArticleWorkHandler` / retention
 - RabbitMQ Article Work payloads
 - Storage and transit protocols
-- A serialization/wire format for crossing process boundaries
+- A full serialized envelope of ArticleRecord / ArtData (OverviewDB protobuf is a metadata subset only)
 - A second-hop Path API on an existing `ArticleRecord`
 
 ---
@@ -586,7 +589,7 @@ ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** us
 - A serialized envelope of the full ArticleRecord / ArtData
 - Transit `MessageTypes` policy matching
 
-NNTPD ingestion publishes an OverviewDB protobuf subset (`OverviewArticleV1` on `overviewdb.queue`) from CanonicalV1 field ranges. That handoff does not serialize ArtData.
+NNTPD ingestion encodes the Common OverviewDB protobuf subset (`OverviewArticleV1`) from CanonicalV1 field ranges and publishes those bytes on `overviewdb.queue`. That handoff does not serialize ArtData. RabbitMQ transport stays in NNTPD.
 
 ### Future scope (not implemented)
 
@@ -604,6 +607,7 @@ NNTPD ingestion publishes an OverviewDB protobuf subset (`OverviewArticleV1` on 
 |---|---|---|
 | Record / factory | `Articles/ArticleRecord.cs`, `ArticleRecordFactory.cs` | `Articles/ArticleRecordTests.cs` |
 | ArtId | `Articles/ArticleId.cs` | `Articles/ArticleIdTests.cs`, NNTPD `History/HistoryDbTests.cs` |
+| OverviewDB protobuf | `Articles/OverviewDb/OverviewArticleV1.proto`, `OverviewArticleV1.cs`, `OverviewArticleV1Codec.cs` | `Articles/OverviewDb/OverviewArticleV1CodecTests.cs` |
 | ArtHash | `System.IO.Hashing.XxHash3` via factory | `Articles/ArticleRecordArtHashTests.cs` |
 | ArtType | `Articles/ArticleType.cs`, `ArticleTypeClassifier.cs` | `Articles/ArticleTypeClassifierTests.cs`, NNTPD classifier/IHAVE tests |
 | Parse / lines / References | `Articles/Parsing/NntpArticleParser.cs`, `NntpArticleParserContracts.cs` | `Articles/Parsing/NntpArticleParserTests.cs` |

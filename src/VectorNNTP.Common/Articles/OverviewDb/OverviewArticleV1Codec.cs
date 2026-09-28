@@ -1,7 +1,7 @@
 using System.Text;
 using VectorNNTP.Common.Articles;
 
-namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
+namespace VectorNNTP.Common.Articles.OverviewDb;
 
 /// <summary>
 /// Compact protobuf encoder/decoder for <see cref="OverviewArticleV1"/>.
@@ -11,9 +11,10 @@ namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 /// <see cref="ArticleRecord.ArtData"/> or reparsing the article. Text fields
 /// are the canonical header value bytes already stored in ArtData, written as
 /// protobuf UTF-8 strings. Newsgroups are tokenized from the Newsgroups value
-/// range only (comma-separated, SP/HTAB/CR/LF skipped).
+/// range only (comma-separated, SP/HTAB/CR/LF skipped). RabbitMQ transport is
+/// not this type's responsibility.
 /// </remarks>
-internal static class OverviewArticleV1Codec
+public static class OverviewArticleV1Codec
 {
     private const int WireVarint = 0;
     private const int WireLengthDelimited = 2;

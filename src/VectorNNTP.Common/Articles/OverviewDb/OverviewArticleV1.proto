@@ -2,11 +2,12 @@ syntax = "proto3";
 
 package vectornntp.overviewdb.v1;
 
-option csharp_namespace = "VectorNNTP.NNTPD.ArticleIngestion.OverviewDb";
+option csharp_namespace = "VectorNNTP.Common.Articles.OverviewDb";
 
 // One-way NNTPD → OverviewDB ingest handoff. The article body is never included.
 // SchemaVersion must be 1. ArticleId is VectorNNTP's 32-byte BLAKE3 ArtId, not
 // the clear-text Message-ID and not BackFiller's MD5 identity.
+// RabbitMQ transport (queue, confirms, expiration, AppId) is application-owned.
 message OverviewArticleV1 {
   uint32 schema_version = 1;
   bytes article_id = 2;

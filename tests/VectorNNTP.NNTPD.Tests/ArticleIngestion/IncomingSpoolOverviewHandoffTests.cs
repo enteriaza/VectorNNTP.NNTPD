@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles.OverviewDb;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
