@@ -26,7 +26,7 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.Equal("Aug 25 13:37:41.839 + ? <cancel.4066@foo.com>\n", writer.ToString());
+        Assert.Equal("Aug 25 13:37:41.839 + ? <cancel.4066@foo.com> 0 ?\n", writer.ToString());
         Assert.DoesNotContain("HACK", writer.ToString(), StringComparison.Ordinal);
     }
 
@@ -48,7 +48,7 @@ public sealed class InnNewsTextFormatterTests
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
         var line = writer.ToString();
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM>\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ?\n", line);
         Assert.DoesNotContain("newsgroup not carried", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" SITE", line, StringComparison.Ordinal);
     }
@@ -71,7 +71,7 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> peer-only: junk.local\n", writer.ToString());
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ? peer-only: junk.local\n", writer.ToString());
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> Poison newsgroup\n", writer.ToString());
+        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> 0 ? Poison newsgroup\n", writer.ToString());
         Assert.DoesNotContain("437", writer.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("HACK", writer.ToString(), StringComparison.Ordinal);
     }
@@ -116,7 +116,7 @@ public sealed class InnNewsTextFormatterTests
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
         var line = writer.ToString();
-        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com>\n", line);
+        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com> 0 ?\n", line);
         Assert.DoesNotContain(" + ", line, StringComparison.Ordinal);
         Assert.NotEqual('?', (char)NewsLogDisposition.Moderated);
     }
@@ -139,7 +139,32 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.EndsWith(id + "\n", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains(id, writer.ToString(), StringComparison.Ordinal);
+        Assert.EndsWith(id + " 0 ?\n", writer.ToString(), StringComparison.Ordinal);
         Assert.Equal(id, Encoding.ASCII.GetString(Encoding.ASCII.GetBytes(id)));
+    }
+
+    [Fact]
+    public void Format_NamedPeer_RoundTripsSizeAndOutboundPlaceholder_WithoutSession()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 27, 0, 4, 4, 293, TimeSpan.Zero);
+        var evt = new LogEvent(
+            timestamp,
+            LogEventLevel.Information,
+            exception: null,
+            new MessageTemplateParser().Parse("news"),
+            [
+                new LogEventProperty(NntpdNewsLogging.DispositionProperty, new ScalarValue('+')),
+                new LogEventProperty(NntpdNewsLogging.FeedProperty, new ScalarValue("BlueWorldHosting")),
+                new LogEventProperty(NntpdNewsLogging.MessageIdProperty, new ScalarValue("<bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid>")),
+                new LogEventProperty(NntpdNewsLogging.SizeProperty, new ScalarValue(1584)),
+                new LogEventProperty(NntpdNewsLogging.SitesProperty, new ScalarValue(string.Empty)),
+            ]);
+
+        using var writer = new StringWriter();
+        new InnNewsTextFormatter().Format(evt, writer);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 + BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ?\n",
+            writer.ToString());
     }
 }

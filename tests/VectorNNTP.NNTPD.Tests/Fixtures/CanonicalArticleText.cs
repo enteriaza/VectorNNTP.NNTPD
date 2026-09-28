@@ -51,7 +51,8 @@ internal static class CanonicalArticleText
         string messageId,
         InboundArticleProducer producer,
         string body = "body\r\n",
-        string newsgroups = "alt.test")
+        string newsgroups = "alt.test",
+        ReadOnlyMemory<byte> feed = default)
     {
         var created = ArticleRecordIngress.TryCreateFromDestuffed(
             new NntpArticleParser("nntpd01.usenet.ninja"),
@@ -66,6 +67,7 @@ internal static class CanonicalArticleText
             created.Record,
             ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
             DateTimeOffset.UtcNow,
-            producer);
+            producer,
+            feed);
     }
 }

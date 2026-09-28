@@ -43,6 +43,7 @@ public sealed class SerilogNewsLogWriter : INewsLogWriter, IDisposable
             .ForContext(NntpdNewsLogging.FeedProperty, feed)
             .ForContext(NntpdNewsLogging.MessageIdProperty, messageId)
             .ForContext(NntpdNewsLogging.SitesProperty, sites)
+            .ForContext(NntpdNewsLogging.SizeProperty, evt.Size)
             .ForContext(NntpdNewsLogging.ResponseCodeProperty, evt.ResponseCode)
             .ForContext(NntpdNewsLogging.ReasonProperty, reason)
             .Information("news");

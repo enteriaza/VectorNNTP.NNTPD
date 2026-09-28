@@ -155,10 +155,11 @@ internal static class IngressNewsDisposition
         evt = new NewsLogEvent(
             disposition,
             MessageIdMemory(article),
-            feed: default,
+            feed: article.Feed,
             sites: default,
             timestamp,
-            reason: Ascii(reason));
+            reason: Ascii(reason),
+            size: article.Payload.Length);
         return true;
     }
 

@@ -47,6 +47,9 @@ public static class NntpdNewsLogging
     /// <summary>Log event property for optional future SITE tokens.</summary>
     public const string SitesProperty = "NewsSites";
 
+    /// <summary>Log event property for the INN article size in bytes.</summary>
+    public const string SizeProperty = "NewsSize";
+
     /// <summary>Log event property for the NNTP rejection response code.</summary>
     public const string ResponseCodeProperty = "NewsResponseCode";
 

@@ -66,8 +66,31 @@ public sealed class SerilogNewsLogWriterTests
 
         var text = NewsTestConfiguration.ReadNewsFile(dir.Path);
         Assert.Contains("<dir@example.com>", text, StringComparison.Ordinal);
-        Assert.Contains(" + ? <dir@example.com>", text, StringComparison.Ordinal);
+        Assert.Contains(" + ? <dir@example.com> 0 ?", text, StringComparison.Ordinal);
         Assert.DoesNotContain("HACK", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Write_NamedPeer_EmitsInboundFeedSizeAndOutboundPlaceholder()
+    {
+        using var dir = new TempLogDir();
+        var configuration = NewsTestConfiguration.Create(dir.Path, rollingInterval: "Infinite");
+        using (var writer = new SerilogNewsLogWriter(configuration))
+        {
+            writer.Write(new NewsLogEvent(
+                NewsLogDisposition.Accepted,
+                Encoding.ASCII.GetBytes("<bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid>"),
+                Encoding.ASCII.GetBytes("BlueWorldHosting"),
+                size: 1584));
+            writer.Flush();
+        }
+
+        var text = NewsTestConfiguration.ReadNewsFile(dir.Path);
+        Assert.Contains(
+            " + BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ?",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(" + ? ", text, StringComparison.Ordinal);
     }
 
     [Fact]

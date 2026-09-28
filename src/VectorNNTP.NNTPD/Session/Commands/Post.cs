@@ -104,9 +104,7 @@ internal static class Post
                     failure,
                     read.MessageId,
                     FormatGroups(read.Newsgroups),
-                    read.Status == StreamingPostReadStatus.TooLarge
-                        ? context.Session.MaxArticleSize + 1
-                        : read.DestuffedSize,
+                    read.DestuffedSize,
                     cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -179,7 +177,7 @@ internal static class Post
                     new PostingFailure(PostingFailureCategory.PolicyRejected, "arttype-capability"),
                     read.MessageId,
                     FormatGroups(read.Newsgroups),
-                    read.Wire.Length,
+                    created.Record.ArtSize,
                     cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -222,7 +220,7 @@ internal static class Post
                     new PostingFailure(PostingFailureCategory.PolicyRejected, filter.Reason),
                     read.MessageId,
                     FormatGroups(read.Newsgroups),
-                    read.Wire.Length,
+                    created.Record.ArtSize,
                     cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -241,7 +239,8 @@ internal static class Post
             created.Record,
             context.Session.ClientIdentity,
             read.InjectionUtc,
-            InboundArticleProducer.Post);
+            InboundArticleProducer.Post,
+            IngressNewsEvents.SnapshotInboundFeed(context.Session));
 
         var enqueue = context.Session.ArticleIngestion.TryAdmit(inbound);
         if (enqueue != ArticleEnqueueResult.Accepted)
@@ -259,7 +258,7 @@ internal static class Post
                     new PostingFailure(PostingFailureCategory.PersistenceFailure, enqueue.ToString()),
                     read.MessageId,
                     FormatGroups(read.Newsgroups),
-                    read.Wire.Length,
+                    inbound.Payload.Length,
                     cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -407,7 +406,7 @@ internal static class Post
             context.Session.Authentication.Username ?? "-",
             read.DestuffedSize);
 
-        IngressNewsEvents.TryWriteModerated(context.Session, read.MessageId);
+        IngressNewsEvents.TryWriteModerated(context.Session, read.MessageId, read.DestuffedSize);
         await WriteStatusAsync(
                 context,
                 NntpResponses.ArticleReceivedOk,
@@ -437,7 +436,8 @@ internal static class Post
             context.Session,
             messageId ?? "-",
             441,
-            IngressNewsReasons.ForPostingFailure(failure));
+            IngressNewsReasons.ForPostingFailure(failure),
+            size);
         await WriteFailedAsync(context, cancellationToken).ConfigureAwait(false);
     }
 

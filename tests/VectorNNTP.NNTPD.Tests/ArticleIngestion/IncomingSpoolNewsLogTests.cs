@@ -33,6 +33,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.True(evt.MessageId.Span.SequenceEqual("<plus@example.com>"u8));
         Assert.True(evt.Feed.IsEmpty);
         Assert.True(evt.Sites.IsEmpty);
+        Assert.Equal(Assert.Single(captured).Payload.Length, evt.Size);
         Assert.Single(captured);
     }
 
@@ -70,6 +71,49 @@ public sealed class IncomingSpoolNewsLogTests
         var evt = Assert.Single(news.Events);
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.Equal(PeerOnlyReason("junk.local"), Encoding.ASCII.GetString(evt.Reason.Span));
+    }
+
+    [Fact]
+    public async Task NamedInboundFeed_IsCopiedOntoAcceptedEvent_AndFormattedWithoutSession()
+    {
+        var news = new RecordingNewsLogWriter();
+        var inbound = CanonicalArticleText.CreateQueued(
+            "<plus@example.com>",
+            InboundArticleProducer.TakeThis,
+            feed: "BlueWorldHosting"u8.ToArray());
+        await RunWorkerAsync(inbound, news, [], Catalogue("alt.test"));
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Accepted, evt.Disposition);
+        Assert.True(evt.Feed.Span.SequenceEqual("BlueWorldHosting"u8));
+        Assert.Equal(inbound.Payload.Length, evt.Size);
+        var line = FormatNews(in evt);
+        Assert.Contains(" + BlueWorldHosting <plus@example.com> " + evt.Size + " ?", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(" + ? ", line, StringComparison.Ordinal);
+        Assert.EndsWith(" ?\n", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NamedInboundFeed_Junk_KeepsPeerAndOutboundPlaceholder()
+    {
+        var news = new RecordingNewsLogWriter();
+        var inbound = CanonicalArticleText.CreateQueued(
+            "<junk@example.com>",
+            InboundArticleProducer.TakeThis,
+            newsgroups: "unknown.un.carried",
+            feed: "BlueWorldHosting"u8.ToArray());
+        await RunWorkerAsync(
+            inbound,
+            news,
+            [],
+            Catalogue("alt.test"),
+            wantTrash: true,
+            logTrash: true);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
+        Assert.True(evt.Feed.Span.SequenceEqual("BlueWorldHosting"u8));
+        var line = FormatNews(in evt);
+        Assert.Contains(" j BlueWorldHosting <junk@example.com> " + evt.Size + " ?", line, StringComparison.Ordinal);
+        Assert.Contains(" ? " + Uncarried("unknown.un.carried"), line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -463,7 +507,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.Equal(Uncarried("unknown.one", "unknown.two"), Encoding.ASCII.GetString(evt.Reason.Span));
         Assert.Equal(
-            "Jan  5 00:00:00.000 j ? <try-unknown@example.com> newsgroup not carried: unknown.one, unknown.two\n",
+            $"Jan  5 00:00:00.000 j ? <try-unknown@example.com> {evt.Size} ? newsgroup not carried: unknown.one, unknown.two\n",
             FormatNews(in evt));
     }
 
@@ -484,7 +528,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.Equal(PeerOnlyReason("junk.local"), Encoding.ASCII.GetString(evt.Reason.Span));
         Assert.Equal(
-            "Jan  5 00:00:00.000 j ? <try-peer@example.com> peer-only: junk.local\n",
+            $"Jan  5 00:00:00.000 j ? <try-peer@example.com> {evt.Size} ? peer-only: junk.local\n",
             FormatNews(in evt));
     }
 

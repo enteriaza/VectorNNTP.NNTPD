@@ -64,6 +64,7 @@ internal static class ArticleRecordIngress
     /// <param name="clientIdentity">Session client identity at admission.</param>
     /// <param name="receivedAtUtc">Queue-admission timestamp.</param>
     /// <param name="producer">TAKETHIS, POST, or IHAVE.</param>
+    /// <param name="feed">Inbound Transit identifier bytes captured from the session.</param>
     /// <returns>Queue item carrying <paramref name="record"/>.</returns>
     /// <remarks>
     /// Throws only when <paramref name="messageId"/> is empty or
@@ -76,7 +77,8 @@ internal static class ArticleRecordIngress
         in ArticleRecord record,
         ConnectionClientIdentity clientIdentity,
         DateTimeOffset receivedAtUtc,
-        InboundArticleProducer producer)
+        InboundArticleProducer producer,
+        ReadOnlyMemory<byte> feed = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         if (record.ParseStatus != ArticleParseStatus.CanonicalV1)
@@ -89,6 +91,7 @@ internal static class ArticleRecordIngress
             clientIdentity,
             receivedAtUtc,
             producer,
-            record);
+            record,
+            feed);
     }
 }

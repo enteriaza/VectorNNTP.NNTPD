@@ -578,6 +578,53 @@ public sealed class IHaveCommandTests
     }
 
     [Fact]
+    public async Task NamedPeer_YEncReject_NewsLineHasInboundPeerSizeAndOutboundPlaceholder()
+    {
+        const string commandId = "<yenc-peer@example.com>";
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(new NntpAuthorization(
+            isAuthenticated: true,
+            authorizedReader: false,
+            authorizedTransit: true,
+            postingPermitted: false,
+            streamingPermitted: true,
+            transitPeerName: "BlueWorldHosting"));
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE " + commandId);
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            CanonicalArticleText.Stuffed(
+                commandId,
+                "=ybegin line=128 size=1 name=t.bin\r\nk\r\n=yend size=1 crc32=00000000\r\n") + ".\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        var evt = Assert.Single(news.Events);
+        Assert.True(evt.Feed.Span.SequenceEqual("BlueWorldHosting"u8));
+        Assert.True(evt.Size > 0);
+        var rendered = FormatNews(in evt);
+        Assert.Equal(
+            FormatNews(new NewsLogEvent(
+                NewsLogDisposition.Rejected,
+                Encoding.ASCII.GetBytes(commandId),
+                "BlueWorldHosting"u8.ToArray(),
+                timestamp: evt.Timestamp,
+                responseCode: 437,
+                reason: "yEncoding invalid"u8.ToArray(),
+                size: evt.Size)),
+            rendered);
+        Assert.Contains("- BlueWorldHosting " + commandId + " " + evt.Size + " ? yEncoding invalid", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("- ? ", rendered, StringComparison.Ordinal);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
     public async Task CommandMessageIdNeedNotMatchArticleMessageId()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
@@ -639,7 +686,10 @@ public sealed class IHaveCommandTests
         Assert.Equal(437, evt.ResponseCode);
         Assert.Equal(IngressNewsReasons.YEncodingInvalid, Encoding.ASCII.GetString(evt.Reason.Span));
         var rendered = FormatNews(in evt);
-        Assert.EndsWith("- ? " + commandId + " yEncoding invalid\n", rendered, StringComparison.Ordinal);
+        Assert.EndsWith(
+            "- ? " + commandId + " " + evt.Size + " ? yEncoding invalid\n",
+            rendered,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("437", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("YEncDecodingFailed", rendered, StringComparison.Ordinal);
 

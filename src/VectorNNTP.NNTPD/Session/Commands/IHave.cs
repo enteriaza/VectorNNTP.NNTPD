@@ -111,7 +111,8 @@ internal static class IHave
                 context.Session,
                 CommandMessageId(messageId),
                 437,
-                IngressNewsReasons.ArticleTooLarge);
+                IngressNewsReasons.ArticleTooLarge,
+                read.Payload.Length);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
@@ -136,7 +137,8 @@ internal static class IHave
                 context.Session,
                 CommandMessageId(messageId),
                 437,
-                IngressNewsReasons.ForArticleRecord(in created));
+                IngressNewsReasons.ForArticleRecord(in created),
+                read.Payload.Length);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
@@ -154,7 +156,8 @@ internal static class IHave
             created.Record,
             context.Session.ClientIdentity,
             DateTimeOffset.UtcNow,
-            InboundArticleProducer.IHave);
+            InboundArticleProducer.IHave,
+            IngressNewsEvents.SnapshotInboundFeed(context.Session));
 
         if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
                 inbound,
@@ -166,7 +169,8 @@ internal static class IHave
                 context.Session,
                 messageIdText,
                 437,
-                uncarriedReason);
+                uncarriedReason,
+                inbound.Payload.Length);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
@@ -186,7 +190,8 @@ internal static class IHave
                 context.Session,
                 messageIdText,
                 437,
-                IngressNewsReasons.QueueCapacityExceeded);
+                IngressNewsReasons.QueueCapacityExceeded,
+                inbound.Payload.Length);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,

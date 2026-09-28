@@ -7,6 +7,88 @@ namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 public sealed class NewsLogLineFormatterTests
 {
     [Fact]
+    public void Write_Accepted_NamedPeer_UsesInboundFeed_Size_AndOutboundPlaceholder()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 27, 0, 4, 4, 293, TimeSpan.Zero);
+        var evt = new NewsLogEvent(
+            NewsLogDisposition.Accepted,
+            "<bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid>"u8.ToArray(),
+            "BlueWorldHosting"u8.ToArray(),
+            timestamp: timestamp,
+            size: 1584);
+        var line = Format(in evt, timestamp);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 + BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ?\n",
+            line);
+        Assert.DoesNotContain(" + ? ", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Write_Junk_NamedPeer_KeepsOutboundPlaceholder_ThenReason()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 27, 0, 4, 4, 293, TimeSpan.Zero);
+        var id = "<bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid>"u8.ToArray();
+        var withoutReason = new NewsLogEvent(
+            NewsLogDisposition.Junk,
+            id,
+            "BlueWorldHosting"u8.ToArray(),
+            timestamp: timestamp,
+            size: 1584);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 j BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ?\n",
+            Format(in withoutReason, timestamp));
+
+        var withReason = new NewsLogEvent(
+            NewsLogDisposition.Junk,
+            id,
+            "BlueWorldHosting"u8.ToArray(),
+            timestamp: timestamp,
+            reason: "newsgroup not carried: unknown.un.carried"u8.ToArray(),
+            size: 1584);
+        var line = Format(in withReason, timestamp);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 j BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ? newsgroup not carried: unknown.un.carried\n",
+            line);
+        var outbound = line.IndexOf(" 1584 ?", StringComparison.Ordinal);
+        var msgid = line.IndexOf("<bdp-backfill-", StringComparison.Ordinal);
+        Assert.True(outbound > msgid);
+    }
+
+    [Fact]
+    public void Write_Rejected_NamedPeer_PreservesPeerSizePlaceholder_ThenReason()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 27, 0, 4, 4, 293, TimeSpan.Zero);
+        var evt = new NewsLogEvent(
+            NewsLogDisposition.Rejected,
+            "<bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid>"u8.ToArray(),
+            "BlueWorldHosting"u8.ToArray(),
+            timestamp: timestamp,
+            responseCode: 439,
+            reason: "yEncoding invalid"u8.ToArray(),
+            size: 1584);
+        var line = Format(in evt, timestamp);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 - BlueWorldHosting <bdp-backfill-53301945c0f74ac3afc1edda885d2294@livingmemorybear.invalid> 1584 ? yEncoding invalid\n",
+            line);
+        Assert.DoesNotContain("439", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Write_IsSelfContained_DoesNotRequireSessionOrConnection()
+    {
+        var timestamp = new DateTimeOffset(2026, 9, 27, 0, 4, 4, 293, TimeSpan.Zero);
+        var evt = new NewsLogEvent(
+            NewsLogDisposition.Accepted,
+            "<id@example.com>"u8.ToArray(),
+            "BlueWorldHosting"u8.ToArray(),
+            timestamp: timestamp,
+            size: 1584);
+        Assert.Equal(
+            "Sep 27 00:04:04.293 + BlueWorldHosting <id@example.com> 1584 ?\n",
+            Format(in evt, timestamp));
+    }
+
+    [Fact]
     public void Write_Accepted_MatchesInnFieldOrder_FeedThenMessageId()
     {
         var timestamp = new DateTimeOffset(2024, 8, 25, 13, 37, 41, 839, TimeSpan.Zero);
@@ -16,7 +98,7 @@ public sealed class NewsLogLineFormatterTests
             "?"u8.ToArray(),
             timestamp: timestamp);
         var line = Format(in evt, timestamp);
-        Assert.Equal("Aug 25 13:37:41.839 + ? <cancel.4066@foo.com>\n", line);
+        Assert.Equal("Aug 25 13:37:41.839 + ? <cancel.4066@foo.com> 0 ?\n", line);
     }
 
     [Fact]
@@ -28,7 +110,7 @@ public sealed class NewsLogLineFormatterTests
             "<AbC@Example.COM>"u8.ToArray(),
             timestamp: timestamp);
         var line = Format(in evt, timestamp);
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM>\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ?\n", line);
         Assert.DoesNotContain("newsgroup not carried", line, StringComparison.Ordinal);
         Assert.DoesNotContain("peer-only", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" SITE", line, StringComparison.Ordinal);
@@ -44,7 +126,7 @@ public sealed class NewsLogLineFormatterTests
             timestamp: timestamp,
             reason: "newsgroup not carried: alt.example.foo"u8.ToArray());
         var line = Format(in evt, timestamp);
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> newsgroup not carried: alt.example.foo\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ? newsgroup not carried: alt.example.foo\n", line);
         Assert.DoesNotContain("437", line, StringComparison.Ordinal);
         Assert.DoesNotContain("439", line, StringComparison.Ordinal);
     }
@@ -59,7 +141,7 @@ public sealed class NewsLogLineFormatterTests
             timestamp: timestamp,
             reason: "peer-only: alt.example.foo"u8.ToArray());
         Assert.Equal(
-            "Jan  5 00:00:00.000 j ? <peer@example.com> peer-only: alt.example.foo\n",
+            "Jan  5 00:00:00.000 j ? <peer@example.com> 0 ? peer-only: alt.example.foo\n",
             Format(in evt, timestamp));
     }
 
@@ -73,7 +155,7 @@ public sealed class NewsLogLineFormatterTests
             timestamp: timestamp,
             reason: "newsgroup not carried: supplied.group"u8.ToArray());
         var line = Format(in evt, timestamp);
-        Assert.Equal("Jan  5 00:00:00.000 j ? <id@example.com> newsgroup not carried: supplied.group\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 j ? <id@example.com> 0 ? newsgroup not carried: supplied.group\n", line);
         Assert.DoesNotContain("Newsgroups", line, StringComparison.Ordinal);
     }
 
@@ -88,7 +170,7 @@ public sealed class NewsLogLineFormatterTests
             responseCode: 437,
             reason: "newsgroup not carried: alt.example.foo"u8.ToArray());
         var line = Format(in evt, timestamp);
-        Assert.Equal("Jan  5 00:00:00.000 - ? <id@example.com> newsgroup not carried: alt.example.foo\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 - ? <id@example.com> 0 ? newsgroup not carried: alt.example.foo\n", line);
         Assert.DoesNotContain("437", line, StringComparison.Ordinal);
     }
 
@@ -101,7 +183,7 @@ public sealed class NewsLogLineFormatterTests
             "<mod@example.com>"u8.ToArray(),
             timestamp: timestamp);
         var line = Format(in evt, timestamp);
-        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com>\n", line);
+        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com> 0 ?\n", line);
         Assert.DoesNotContain(" + ", line, StringComparison.Ordinal);
         Assert.Equal((byte)'m', (byte)NewsLogDisposition.Moderated);
         Assert.NotEqual((byte)'?', (byte)NewsLogDisposition.Moderated);
@@ -118,7 +200,7 @@ public sealed class NewsLogLineFormatterTests
             responseCode: 439,
             reason: "yEncoding invalid"u8.ToArray());
         var line = Format(in evt, timestamp);
-        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> yEncoding invalid\n", line);
+        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> 0 ? yEncoding invalid\n", line);
         Assert.DoesNotContain("439", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" SITE", line, StringComparison.Ordinal);
     }
@@ -134,7 +216,7 @@ public sealed class NewsLogLineFormatterTests
             responseCode: 437,
             reason: "article too large"u8.ToArray());
         var line = Format(in evt, timestamp);
-        Assert.Equal("Aug 25 13:37:54.638 - ? <id@example.com> article too large\n", line);
+        Assert.Equal("Aug 25 13:37:54.638 - ? <id@example.com> 0 ? article too large\n", line);
         Assert.DoesNotContain("437", line, StringComparison.Ordinal);
     }
 
@@ -150,7 +232,7 @@ public sealed class NewsLogLineFormatterTests
             timestamp);
         var line = Format(in evt, timestamp);
         Assert.Equal(
-            "Aug 25 13:37:41.839 + news.server.fr <id@example.com> a.peer other.server.org\n",
+            "Aug 25 13:37:41.839 + news.server.fr <id@example.com> 0 a.peer other.server.org\n",
             line);
     }
 

@@ -34,7 +34,8 @@ public sealed class InnNewsTextFormatter : ITextFormatter
             sites,
             logEvent.Timestamp,
             ReadResponseCode(logEvent),
-            reason);
+            reason,
+            ReadSize(logEvent));
         var required = NewsLogLineFormatter.RequiredLength(in evt);
         Span<byte> buffer = required <= 512 ? stackalloc byte[required] : new byte[required];
         var written = NewsLogLineFormatter.Write(buffer, in evt, logEvent.Timestamp);
@@ -71,6 +72,22 @@ public sealed class InnNewsTextFormatter : ITextFormatter
         {
             int code => code,
             long code => (int)code,
+            _ => 0,
+        };
+    }
+
+    private static int ReadSize(LogEvent logEvent)
+    {
+        if (!logEvent.Properties.TryGetValue(NntpdNewsLogging.SizeProperty, out var value)
+            || value is not ScalarValue scalar)
+        {
+            return 0;
+        }
+
+        return scalar.Value switch
+        {
+            int size => size,
+            long size => (int)size,
             _ => 0,
         };
     }

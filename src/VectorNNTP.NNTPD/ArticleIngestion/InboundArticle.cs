@@ -19,7 +19,8 @@ public sealed class InboundArticle
         ConnectionClientIdentity clientIdentity,
         DateTimeOffset receivedAtUtc,
         InboundArticleProducer producer,
-        ArticleRecord record)
+        ArticleRecord record,
+        ReadOnlyMemory<byte> feed = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentNullException.ThrowIfNull(clientIdentity);
@@ -34,6 +35,7 @@ public sealed class InboundArticle
         Producer = producer;
         Record = record;
         Payload = record.ArtData;
+        Feed = feed;
     }
 
     /// <summary>Gets the message-id supplied with the transfer command or POST.</summary>
@@ -50,6 +52,12 @@ public sealed class InboundArticle
 
     /// <summary>Gets which command produced this item.</summary>
     public InboundArticleProducer Producer { get; }
+
+    /// <summary>
+    /// Gets the inbound Transit identifier captured at queue admission, or empty
+    /// when the session was not a named peer.
+    /// </summary>
+    public ReadOnlyMemory<byte> Feed { get; }
 
     /// <summary>Gets the CanonicalV1 ingress record.</summary>
     public ArticleRecord Record { get; }

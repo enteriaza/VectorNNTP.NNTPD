@@ -50,7 +50,8 @@ internal sealed class RecordingNewsLogWriter : INewsLogWriter
                     evt.Sites.ToArray(),
                     evt.Timestamp,
                     evt.ResponseCode,
-                    evt.Reason.ToArray()));
+                    evt.Reason.ToArray(),
+                    evt.Size));
         }
     }
 

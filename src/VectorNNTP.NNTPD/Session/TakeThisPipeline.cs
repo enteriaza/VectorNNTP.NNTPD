@@ -586,7 +586,8 @@ internal sealed class TakeThisPipeline
                 _session,
                 SlotMessageId(slot),
                 439,
-                IngressNewsReasons.ArticleTooLarge);
+                IngressNewsReasons.ArticleTooLarge,
+                read.Payload.Length);
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
             WriteTxIfDebug(slot, tooLarge, TransferLogKind.Rejected);
@@ -637,7 +638,8 @@ internal sealed class TakeThisPipeline
                 _session,
                 messageIdText,
                 439,
-                IngressNewsReasons.ForExistingRejectDetail(process.RejectDetail));
+                IngressNewsReasons.ForExistingRejectDetail(process.RejectDetail),
+                process.Size);
             var rejectProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -657,7 +659,8 @@ internal sealed class TakeThisPipeline
                 _session,
                 messageIdText,
                 439,
-                process.UncarriedReason ?? IngressNewsEvents.NewsgroupNotCarried);
+                process.UncarriedReason ?? IngressNewsEvents.NewsgroupNotCarried,
+                process.Inbound?.Payload.Length ?? read.Payload.Length);
             var uncarriedProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var uncarriedStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -718,7 +721,8 @@ internal sealed class TakeThisPipeline
                 _session,
                 messageIdText,
                 439,
-                IngressNewsReasons.QueueCapacityExceeded);
+                IngressNewsReasons.QueueCapacityExceeded,
+                process.Inbound?.Payload.Length ?? read.Payload.Length);
             var rejectProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -923,12 +927,14 @@ internal sealed class TakeThisPipeline
                     stuffed: true,
                     messageIdText,
                     out var inbound,
-                    out var recordReject))
+                    out var recordReject,
+                    out var canonicalSize))
             {
                 return new ArticleProcessOutcome
                 {
                     RecordRejected = true,
                     RejectDetail = recordReject,
+                    Size = canonicalSize != 0 ? canonicalSize : read.Payload.Length,
                 };
             }
 
@@ -942,6 +948,7 @@ internal sealed class TakeThisPipeline
                 {
                     UncarriedRejected = true,
                     UncarriedReason = uncarriedReason,
+                    Inbound = inbound,
                 };
             }
 
@@ -1083,5 +1090,7 @@ internal sealed class TakeThisPipeline
         public string? UncarriedReason { get; init; }
 
         public InboundArticle? Inbound { get; init; }
+
+        public int Size { get; init; }
     }
 }

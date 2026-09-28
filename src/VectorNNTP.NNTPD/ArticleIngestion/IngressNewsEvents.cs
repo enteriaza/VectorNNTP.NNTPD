@@ -16,38 +16,55 @@ internal static class IngressNewsEvents
         NntpSession session,
         string? messageId,
         int responseCode,
-        string reason)
+        string reason,
+        int size = 0)
     {
         ArgumentNullException.ThrowIfNull(session);
         session.TryWriteNews(
             new NewsLogEvent(
                 NewsLogDisposition.Rejected,
                 Ascii(messageId),
+                feed: SnapshotInboundFeed(session),
                 timestamp: session.Time.GetLocalNow(),
                 responseCode: responseCode,
-                reason: Ascii(reason)));
+                reason: Ascii(reason),
+                size: size));
     }
 
     /// <summary>Writes an accepted news event for a path that never enters the queue.</summary>
-    public static void TryWriteAccepted(NntpSession session, string? messageId)
+    public static void TryWriteAccepted(NntpSession session, string? messageId, int size = 0)
     {
         ArgumentNullException.ThrowIfNull(session);
         session.TryWriteNews(
             new NewsLogEvent(
                 NewsLogDisposition.Accepted,
                 Ascii(messageId),
-                timestamp: session.Time.GetLocalNow()));
+                feed: SnapshotInboundFeed(session),
+                timestamp: session.Time.GetLocalNow(),
+                size: size));
     }
 
     /// <summary>Writes a moderated news event for a successful POST moderation submission.</summary>
-    public static void TryWriteModerated(NntpSession session, string? messageId)
+    public static void TryWriteModerated(NntpSession session, string? messageId, int size = 0)
     {
         ArgumentNullException.ThrowIfNull(session);
         session.TryWriteNews(
             new NewsLogEvent(
                 NewsLogDisposition.Moderated,
                 Ascii(messageId),
-                timestamp: session.Time.GetLocalNow()));
+                feed: SnapshotInboundFeed(session),
+                timestamp: session.Time.GetLocalNow(),
+                size: size));
+    }
+
+    /// <summary>
+    /// Copies the session's inbound Transit identifier for a self-contained news event.
+    /// </summary>
+    internal static ReadOnlyMemory<byte> SnapshotInboundFeed(NntpSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var name = session.Authorization.TransitPeerName;
+        return string.IsNullOrEmpty(name) ? default : Encoding.ASCII.GetBytes(name);
     }
 
     private static ReadOnlyMemory<byte> Ascii(string? value) =>

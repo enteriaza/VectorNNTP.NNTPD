@@ -174,7 +174,8 @@ internal static class TakeThis
                 context.Session,
                 System.Text.Encoding.ASCII.GetString(messageIdBytes),
                 439,
-                IngressNewsReasons.ArticleTooLarge);
+                IngressNewsReasons.ArticleTooLarge,
+                payload.Length);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = tooLarge;
@@ -212,13 +213,15 @@ internal static class TakeThis
                 stuffed,
                 messageId,
                 out var inbound,
-                out var recordReject))
+                out var recordReject,
+                out var canonicalSize))
         {
             IngressNewsEvents.TryWriteRejected(
                 context.Session,
                 messageId,
                 439,
-                IngressNewsReasons.ForExistingRejectDetail(recordReject));
+                IngressNewsReasons.ForExistingRejectDetail(recordReject),
+                canonicalSize != 0 ? canonicalSize : payload.Length);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = recordReject;
@@ -235,7 +238,8 @@ internal static class TakeThis
                 context.Session,
                 messageId,
                 439,
-                uncarriedReason);
+                uncarriedReason,
+                inbound.Payload.Length);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = IngressNewsEvents.NewsgroupNotCarried;
@@ -272,7 +276,8 @@ internal static class TakeThis
                 context.Session,
                 messageId,
                 439,
-                IngressNewsReasons.QueueCapacityExceeded);
+                IngressNewsReasons.QueueCapacityExceeded,
+                inbound.Payload.Length);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = budget;
@@ -323,10 +328,12 @@ internal static class TakeThis
         bool stuffed,
         string messageId,
         out InboundArticle inbound,
-        out string rejectDetail)
+        out string rejectDetail,
+        out int canonicalSize)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        canonicalSize = 0;
 
         var created = stuffed
             ? ArticleRecordIngress.TryCreateFromStuffedWire(
@@ -343,6 +350,7 @@ internal static class TakeThis
             return false;
         }
 
+        canonicalSize = created.Record.ArtSize;
         if (!ArticleTypeAccessPolicy.CanPostArticleType(session, created.Record.ArtType))
         {
             inbound = null!;
@@ -355,7 +363,8 @@ internal static class TakeThis
             created.Record,
             session.ClientIdentity,
             DateTimeOffset.UtcNow,
-            InboundArticleProducer.TakeThis);
+            InboundArticleProducer.TakeThis,
+            IngressNewsEvents.SnapshotInboundFeed(session));
         rejectDetail = string.Empty;
         return true;
     }
