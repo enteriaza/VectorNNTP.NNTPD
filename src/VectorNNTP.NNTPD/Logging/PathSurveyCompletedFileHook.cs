@@ -8,9 +8,9 @@ namespace VectorNNTP.NNTPD.Logging;
 /// </summary>
 /// <remarks>
 /// This hook does not gzip or delete the file. Chain it before
-/// <see cref="NntpdSerilogHooks.DailyGzipFastest"/> so the future ninpaths
-/// processor can read the uncompressed file, then gzip runs, then Serilog
-/// deletes the original. Handler failures are logged and do not skip gzip.
+/// <see cref="NntpdSerilogHooks.DailyGzipFastest"/> so ninpaths can open the
+/// uncompressed file, then gzip runs, then Serilog deletes the original.
+/// Handler failures are logged and do not skip gzip.
 /// </remarks>
 internal sealed class PathSurveyCompletedFileHook : FileLifecycleHooks
 {

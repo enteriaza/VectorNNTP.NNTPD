@@ -111,8 +111,8 @@ public static class NntpdPathSurveyLogging
     /// </summary>
     /// <param name="configuration">Application configuration containing <c>Serilog:Inpaths</c>.</param>
     /// <param name="completedFileHandler">
-    /// Invoked with the uncompressed rolled file before gzip. Production uses a
-    /// no-op until ninpaths is implemented.
+    /// Invoked with the uncompressed rolled file before gzip. Production
+    /// enqueues the file for background ninpaths processing.
     /// </param>
     /// <param name="hookLogger">Logger for completed-file handler failures; must not be the Path-survey logger.</param>
     public static Serilog.Core.Logger CreateLogger(

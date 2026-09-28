@@ -171,6 +171,51 @@ public sealed class NntpdOptionsValidatorTests
         Assert.True(CreateValidator().Validate(null, options).Succeeded);
     }
 
+    [Fact]
+    public void Validate_Succeeds_WhenTop1000IsMissingOrEmpty()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Empty(options.Top1000);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+        options.Top1000 = [];
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+        options.Top1000 = ["", "  ", "\t"];
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Succeeds_ForTop1000Mailboxes_IgnoringWhitespace()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.Top1000 = ["top1000@anthologeek.net", "  ", "ops@usenet.ninja"];
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Fails_ForInvalidTop1000Mailbox()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.Top1000 = ["not-a-mailbox"];
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures!, static f => f.Contains(nameof(NntpdOptions.Top1000), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursTop1000()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:Top1000:0"] = "top1000@anthologeek.net",
+                ["Nntpd:Top1000:1"] = "ops@usenet.ninja",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(["top1000@anthologeek.net", "ops@usenet.ninja"], options.Top1000);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -701,6 +746,17 @@ public sealed class NntpdConfigurationTests
         Assert.Equal(
             NntpdOptions.DefaultMailComplaintsTo,
             doc.RootElement.GetProperty("Nntpd").GetProperty("MailComplaintsTo").GetString());
+    }
+
+    [Fact]
+    public void ProductionAppsettings_DeclaresTop1000Recipients()
+    {
+        var path = FindProductionAppsettings();
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        var top = doc.RootElement.GetProperty("Nntpd").GetProperty("Top1000");
+        Assert.Equal(2, top.GetArrayLength());
+        Assert.Equal("top1000@anthologeek.net", top[0].GetString());
+        Assert.Equal("cknipe@opticnetworks.net", top[1].GetString());
     }
 
     [Fact]

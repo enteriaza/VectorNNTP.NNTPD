@@ -133,7 +133,7 @@ The value is the Path header bytes on the CanonicalV1 record. NNTPD does not rec
 
 `IncomingSpoolWriterService` writes the observation after a confirmed OverviewDB publish, from the same CanonicalV1 queued `ArticleRecord` used for news `+`/`j`. Articles that never become a CanonicalV1 queued record (protocol rejections, moderated POST that never enters the queue) are not surveyed. Path-survey writes are independent of news: junk with `LogTrash=false` still records Path; a news-log failure still records Path; a Path-survey failure still writes news and still persists.
 
-Observations are appended sequentially to disk. They are not aggregated into ninpaths statistics, not retained in an in-memory collection, and not a cache. Restarting NNTPD leaves previous Path observations on disk. Future ninpaths processing (not implemented in this change) will consume **completed** files after daily rotation.
+Observations are appended sequentially to disk. They are not aggregated into ninpaths statistics at write time, not retained in an in-memory collection, and not a cache. Restarting NNTPD leaves previous Path observations on disk. After daily rotation, a background ninpaths worker streams each **completed** uncompressed file when `Nntpd:Top1000` has at least one mailbox.
 
 The Path-survey line format is an application invariant implemented by `InnPathSurveyTextFormatter`. Operators cannot change the `Path: ` prefix, the Path bytes, or the terminator through `outputTemplate` or any other appsettings key. Operational file behaviour is the same Serilog File/Async contract as news and is configured under `Serilog:Inpaths`. `Nntpd:LogDir` still resolves the directory.
 
@@ -148,7 +148,10 @@ active inpaths log
       v
 completed uncompressed inpaths log
       |
-      +----> ICompletedPathSurveyFileHandler (future ninpaths; currently a no-op)
+      +----> ICompletedPathSurveyFileHandler (open + enqueue; does not parse)
+      |         |
+      |         v
+      |      NinpathsProcessingService (background stream → !!NINP → IEmailService)
       |
       +----> NntpdSerilogHooks.DailyGzipFastest
       |
@@ -157,7 +160,9 @@ Serilog deletes the uncompressed original
 historical {filename}.gz retained (this hook has no archive count limit)
 ```
 
-The handler sees the uncompressed completed file **before** gzip. The hook does not delete that file; Serilog does after gzip returns. Handler failure is logged and does not skip gzip or change ingestion. News continues to use `DailyGzipFastest` directly and is not part of this handoff. Ninpaths parsing, `!!NINP` / `!!NLREC` / `!!NLEND`, Top1000, email, and any background ninpaths worker are not implemented here.
+The handler sees the uncompressed completed file **before** gzip. It opens the file with share-read/write/delete so gzip and Serilog deletion can proceed while the worker still reads. The hook does not delete that file; Serilog does after gzip returns. Handler failure is logged and does not skip gzip or change ingestion. News continues to use `DailyGzipFastest` directly and is not part of this handoff.
+
+When `Nntpd:Top1000` is missing, null, or empty (or only whitespace), ninpaths is disabled and the completed file is not opened for reporting. When recipients remain, the worker streams the file with bounded memory (unique sites and relations only), formats the INN 3.1.1 compact dump (`!!NINP` / `!!NLREC` / `!!NLEND`), and sends one `IEmailService` message to every recipient. Subject is `inpaths {Fqdn}`. The source file is not attached. Ninpaths failures are logged and do not affect NNTP, article ingestion, RabbitMQ handoff, persistence, news logging, or gzip.
 
 A Path-survey I/O failure is reported through application diagnostics (`SpoolLogMessages.PathSurveyFailed`) and does not produce an NNTP response, reject an accepted article, stop RabbitMQ handoff, stop persistence, or affect the news log.
 

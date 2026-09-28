@@ -8,8 +8,9 @@ namespace VectorNNTP.NNTPD.Logging;
 /// rolled uncompressed file. The Path-survey archive chain calls this handler
 /// first, then gzip-archives the same path, then returns so Serilog can delete
 /// the uncompressed original.
-/// Production currently registers a no-op. Future ninpaths processing will
-/// implement this interface; it is not implemented here.
+/// Production registers <c>NinpathsCompletedFileHandler</c>, which opens the
+/// file and enqueues it for background ninpaths processing. The handler must
+/// return without parsing Path records.
 /// </remarks>
 public interface ICompletedPathSurveyFileHandler
 {

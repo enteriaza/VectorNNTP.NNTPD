@@ -2,7 +2,8 @@ namespace VectorNNTP.NNTPD.Logging;
 
 /// <summary>
 /// No-op completed-file handler. Path-survey files are still gzip-archived.
-/// Future ninpaths processing replaces this registration.
+/// Production DI registers <c>NinpathsCompletedFileHandler</c> instead; this
+/// type remains for tests that opt out of ninpaths mail.
 /// </summary>
 public sealed class NullCompletedPathSurveyFileHandler : ICompletedPathSurveyFileHandler
 {

@@ -34,6 +34,7 @@ using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Email.Smtp;
 using VectorNNTP.NNTPD.Logging;
+using VectorNNTP.NNTPD.Ninpaths;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.Common.Hosting;
@@ -268,6 +269,7 @@ public static class NntpdServiceCollectionExtensions
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
         // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
+        // ninpaths (completed inpaths; Top1000) →
         // Transit AllowFrom DNS refresh → SessionState lease renewal →
         // Transit inbound-ownership renewal →
         // plain NNTP listener → ACME → TLS NNTP listener →
@@ -368,7 +370,8 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton(IngestionPipelineMetrics.Shared);
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
         services.TryAddSingleton<INewsLogWriter, SerilogNewsLogWriter>();
-        services.TryAddSingleton<ICompletedPathSurveyFileHandler, NullCompletedPathSurveyFileHandler>();
+        services.TryAddSingleton<NinpathsProcessingService>();
+        services.TryAddSingleton<ICompletedPathSurveyFileHandler, NinpathsCompletedFileHandler>();
         services.TryAddSingleton<IPathSurveyWriter, SerilogPathSurveyWriter>();
         services.TryAddSingleton<OverviewDbHandoffPublisher>();
         services.TryAddSingleton<IOverviewDbHandoffPublisher>(static sp =>
@@ -382,6 +385,10 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, EmailDeliveryService>(static sp =>
                 sp.GetRequiredService<EmailDeliveryService>()));
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NinpathsProcessingService>(static sp =>
+                sp.GetRequiredService<NinpathsProcessingService>()));
 
         services.TryAddSingleton<TransitDnsRefreshService>();
         services.TryAddEnumerable(

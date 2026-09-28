@@ -35,7 +35,8 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <see cref="SpoolLogMessages.PathSurveyFailed"/> and does not re-admit,
 /// re-queue, or emit a second NNTP response. The article still proceeds to the
 /// persister after a successful OverviewDB handoff. Path observations are
-/// streamed to disk and are not retained in memory. The worker never calls
+/// streamed to disk and are not retained in memory. Completed daily files are
+/// handed to background ninpaths processing after rotation. The worker never calls
 /// OverviewDB over RPC, HTTP, gRPC, or a database connection.
 /// </para>
 /// </remarks>

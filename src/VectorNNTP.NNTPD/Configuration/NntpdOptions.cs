@@ -301,6 +301,16 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     public string MailComplaintsTo { get; set; } = DefaultMailComplaintsTo;
 
     /// <summary>
+    /// Gets or sets Path-survey (ninpaths) report recipient mailboxes.
+    /// </summary>
+    /// <remarks>
+    /// Missing, null, or empty disables internal ninpaths reporting. Whitespace-only
+    /// entries are ignored. There is no separate enable flag and no environment-variable
+    /// overlay. Reports are emailed through the existing <c>Email</c> subsystem.
+    /// </remarks>
+    public string[] Top1000 { get; set; } = [];
+
+    /// <summary>
     /// Gets or sets the persisted AES-256 key used to protect POST <c>X-Trace</c> values.
     /// </summary>
     /// <remarks>

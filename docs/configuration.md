@@ -38,6 +38,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `IdleTime` | int (seconds) | `300` | no | Disconnect an established NNTP session after this many seconds with no executed NNTP command (`1`–`86400`). `0` is invalid (not disabled). Resets when a command is accepted; in-flight CHECK/TAKETHIS/POST (including article receive and validation) keep the session non-idle. Not TCP/TLS/socket receive idle. |
 | `MaxArticleSize` | int | `5242880` (5 MiB) | no | Maximum destuffed POST article size in bytes (`1`–`104857600`). Enforced during streaming receive (headers + blank separator + body; terminator excluded; stuffing dots are not counted). Exceeding the limit ends reception and returns `441 Posting failed`. Distinct from `ArticleIngestion:MaxArticleBytes` (IHAVE/TAKETHIS). |
 | `MailComplaintsTo` | string | `abuse@usenet.ninja` | no | Mailbox emitted as `mail-complaints-to` on server-generated POST `Injection-Info`. Must be a plausible mailbox. Client `Injection-Info` is discarded. |
+| `Top1000` | string array | `[]` (empty) | no | Path-survey (ninpaths) report recipients. Missing, null, or empty disables internal ninpaths. Whitespace-only entries are ignored. Non-whitespace entries must be mailboxes. No separate enable flag and no environment-variable overlay. See below. |
 | `XTraceKey` | string | _(none)_ | **yes** (secret) | 32-byte AES-256 key that protects POST `X-Trace` (64 hex characters or Base64). Supply via `NNTPD__XTRACEKEY` or secrets. Never commit. |
 | `XTracePreviousKey` | string | _(none)_ | no (secret) | Optional previous AES-256 key retained for one-generation decrypt after rotation. Supply via `NNTPD__XTRACEPREVIOUSKEY`. |
 | `NewsmasterUser` | string | _(none)_ | no | AUTHINFO username that may POST a well-formed `Control: cancel <message-id>` article. When set, `NewsmasterPassword` is required. |
@@ -104,6 +105,30 @@ Example:
 ```json
 "Nntpd": {
   "MailComplaintsTo": "abuse@usenet.ninja"
+}
+```
+
+## Path-survey ninpaths (`Top1000`)
+
+`Nntpd:Top1000` is the enablement switch and recipient list for the internal ninpaths processor. There is no `EnableNinpaths` flag and no `Top1000` environment variable.
+
+- Missing, null, or empty array: ninpaths is disabled. Completed `inpaths-yyyyMMdd.log` files are still gzip-archived; they are not parsed for a report.
+- Whitespace-only entries are ignored.
+- One or more remaining mailboxes: after daily rotation, NNTPD streams the completed uncompressed file, aggregates INN ninpaths statistics, formats the compact `!!NINP` dump, and sends that dump once through `IEmailService` to every remaining address.
+- Non-whitespace entries that are not mailboxes fail startup validation.
+
+Processing is a background `IApplicationService`. The rotation hook opens the completed file (share-read/write/delete) and returns without parsing. Gzip proceeds independently. Raw Path records are not retained; memory is O(unique sites + relations). Failures are logged and do not affect NNTP, ingestion, news, or gzip.
+
+The email subject follows INN sendinpaths: `inpaths {Fqdn}`. The body is the compact dump, not the human-readable `-r` ZCZC report. From is `Email:DefaultFrom`. When `Email:Enabled` is `false`, the report is generated but not spooled.
+
+Example:
+
+```json
+"Nntpd": {
+  "Top1000": [
+    "top1000@anthologeek.net",
+    "cknipe@opticnetworks.net"
+  ]
 }
 ```
 

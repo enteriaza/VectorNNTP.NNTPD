@@ -35,6 +35,7 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
 
         ValidateApplicationName(options, failures);
         ValidateTimeouts(options, failures);
+        ValidateTop1000(options, failures);
         ValidateSystemd(options, failures);
         AcmeCloudflareOptionsValidator.CollectBindAddressFailures(options, _localIpAddressAssignee, failures);
         ValidateProxyHosts(options, failures);
@@ -222,6 +223,29 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add(
                 $"{nameof(NntpdOptions.MailComplaintsTo)} must be a valid mailbox address.");
+        }
+    }
+
+    private static void ValidateTop1000(NntpdOptions options, List<string> failures)
+    {
+        if (options.Top1000 is null || options.Top1000.Length == 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < options.Top1000.Length; i++)
+        {
+            var entry = options.Top1000[i];
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            if (!EmailOptionsValidator.TryValidateMailbox(entry, out _))
+            {
+                failures.Add(
+                    $"{nameof(NntpdOptions.Top1000)}[{i}] must be a mailbox address or whitespace.");
+            }
         }
     }
 
