@@ -47,4 +47,12 @@ public interface IRabbitMqConnection : IAsyncDisposable
     /// <param name="cancellationToken">Token used to cancel channel creation.</param>
     /// <returns>An RPC channel owned by the caller. The caller must not dispose the connection.</returns>
     Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a caller-owned confirm-enabled channel for one-way publications.
+    /// </summary>
+    /// <param name="generation">Connection generation the channel belongs to.</param>
+    /// <param name="cancellationToken">Token used to cancel channel creation.</param>
+    /// <returns>A publish channel owned by the caller. The caller must not dispose the connection.</returns>
+    Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken);
 }

@@ -31,4 +31,10 @@ internal static partial class RabbitMqTopologyLogMessages
         Level = LogLevel.Error,
         Message = "RabbitMQ connection is not ready for topology declaration")]
     public static partial void ConnectionNotReady(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 2824,
+        Level = LogLevel.Information,
+        Message = "Declared OverviewDB handoff queue {Queue} (generation={Generation})")]
+    public static partial void OverviewQueueDeclared(ILogger logger, string Queue, long Generation);
 }

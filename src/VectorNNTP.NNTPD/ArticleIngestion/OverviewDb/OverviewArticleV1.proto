@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package vectornntp.overviewdb.v1;
+
+option csharp_namespace = "VectorNNTP.NNTPD.ArticleIngestion.OverviewDb";
+
+// One-way NNTPD → OverviewDB ingest handoff. The article body is never included.
+// SchemaVersion must be 1. ArticleId is VectorNNTP's 32-byte BLAKE3 ArtId, not
+// the clear-text Message-ID and not BackFiller's MD5 identity.
+message OverviewArticleV1 {
+  uint32 schema_version = 1;
+  bytes article_id = 2;
+  string message_id = 3;
+  repeated string newsgroups = 4;
+  string subject = 5;
+  string from = 6;
+  string date = 7;
+  string references = 8;
+  uint32 bytes = 9;
+  uint32 lines = 10;
+}

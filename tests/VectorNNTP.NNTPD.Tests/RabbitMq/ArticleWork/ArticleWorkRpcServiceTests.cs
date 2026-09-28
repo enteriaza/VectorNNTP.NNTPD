@@ -38,7 +38,8 @@ public sealed class ArticleWorkRpcServiceTests
         Assert.True(queue.Exclusive);
         Assert.True(queue.AutoDelete);
         Assert.Equal(queue.Name, consume.ConsumedQueue);
-        Assert.StartsWith("nntpd.", queue.Name, StringComparison.Ordinal);
+        Assert.Matches("^nntpd\\.01\\.[0-9a-f]{32}\\.rpc$", queue.Name);
+        Assert.Null(queue.Arguments);
 
         await rpc.StopAsync(CancellationToken.None);
         Assert.Null(rpc.CurrentReplyTo);

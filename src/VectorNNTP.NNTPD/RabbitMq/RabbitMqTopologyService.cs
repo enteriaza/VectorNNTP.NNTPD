@@ -8,7 +8,8 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <remarks>
 /// <para>
 /// This service owns application topology declaration only: the twelve BackFiller
-/// <c>backfiller.*</c> provider endpoints and the internal <c>backfiller.storage</c> endpoint.
+/// <c>backfiller.*</c> provider endpoints, the internal <c>backfiller.storage</c>
+/// endpoint, and the one-way OverviewDB ingest queue <c>overviewdb.queue</c>.
 /// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
 /// topology service obtains the current generation through
 /// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel
@@ -17,7 +18,8 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
 /// entities are never deleted, purged, or mutated. An incompatible existing entity
-/// (including a classic queue where quorum is required) fails startup.
+/// (including a classic queue where quorum is required, or a quorum queue where
+/// classic is required) fails startup.
 /// </para>
 /// <para>
 /// Topology is established during <see cref="StartAsync"/> and is required before
@@ -78,7 +80,8 @@ public sealed class RabbitMqTopologyService : IApplicationService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Declares the twelve BackFiller endpoints and the internal <c>backfiller.storage</c> endpoint.
+    /// Declares the twelve BackFiller endpoints, the internal <c>backfiller.storage</c>
+    /// endpoint, and the OverviewDB <c>overviewdb.queue</c> classic queue.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     /// <exception cref="InvalidOperationException">
@@ -109,16 +112,20 @@ public sealed class RabbitMqTopologyService : IApplicationService
                 await DeclareEndpointAsync(channel, current, cancellationToken).ConfigureAwait(false);
             }
 
+            current = null;
+            await DeclareOverviewDbQueueAsync(channel, cancellationToken).ConfigureAwait(false);
+
             RabbitMqTopologyLogMessages.Established(_logger, definitions.Count, handle.Generation);
+            RabbitMqTopologyLogMessages.OverviewQueueDeclared(_logger, OverviewDbTopology.QueueName, handle.Generation);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             RabbitMqTopologyLogMessages.DeclarationFailed(
                 _logger,
                 ex,
-                current?.ExchangeName ?? "(none)",
-                current?.ExchangeName ?? "(none)",
-                current?.QueueName ?? "(none)");
+                current?.ExchangeName ?? OverviewDbTopology.QueueName,
+                current?.ExchangeName ?? OverviewDbTopology.DefaultExchange,
+                current?.QueueName ?? OverviewDbTopology.QueueName);
             throw;
         }
         finally
@@ -158,4 +165,15 @@ public sealed class RabbitMqTopologyService : IApplicationService
             arguments: null,
             cancellationToken).ConfigureAwait(false);
     }
+
+    private static Task DeclareOverviewDbQueueAsync(
+        IRabbitMqTopologyChannel channel,
+        CancellationToken cancellationToken) =>
+        channel.QueueDeclareAsync(
+            OverviewDbTopology.QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: null,
+            cancellationToken);
 }

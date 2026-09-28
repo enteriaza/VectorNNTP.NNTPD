@@ -1,0 +1,37 @@
+namespace VectorNNTP.NNTPD.RabbitMq;
+
+/// <summary>
+/// Caller-owned confirm-enabled RabbitMQ channel used for one-way publications.
+/// </summary>
+/// <remarks>
+/// <see cref="RabbitMqService"/> remains the sole TCP connection owner. Completing
+/// <see cref="PublishConfirmedAsync"/> means the broker confirmed. The channel does
+/// not retry onto another generation.
+/// </remarks>
+public interface IRabbitMqPublishChannel : IAsyncDisposable
+{
+    /// <summary>Gets the connection generation this channel was opened against.</summary>
+    long Generation { get; }
+
+    /// <summary>Gets whether the channel currently reports itself open.</summary>
+    bool IsOpen { get; }
+
+    /// <summary>
+    /// Publishes one persistent message and waits for a publisher confirmation.
+    /// </summary>
+    /// <param name="exchange">Destination exchange. Empty string is the default exchange.</param>
+    /// <param name="routingKey">Routing key used for the publication.</param>
+    /// <param name="messageId">Fresh AMQP MessageId for this publish attempt.</param>
+    /// <param name="appId">AMQP AppId; NNTPD uses the generated application FQDN.</param>
+    /// <param name="expiration">AMQP per-message expiration in milliseconds.</param>
+    /// <param name="body">Application payload bytes.</param>
+    /// <param name="cancellationToken">Token used to cancel the publish or confirm wait.</param>
+    Task PublishConfirmedAsync(
+        string exchange,
+        string routingKey,
+        string messageId,
+        string appId,
+        string expiration,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken);
+}

@@ -10,7 +10,7 @@ This document describes the **current** implementation. It does not invent APIs,
 | Tests | `tests/VectorNNTP.Common.Tests/Articles/` |
 | History identity reuse | `src/VectorNNTP.NNTPD/History/HistoryDigest.cs` |
 
-NNTPD TAKETHIS and POST construct an ArticleRecord before queue admission. NNTPD IHAVE remains raw stuffed-wire ingress (not ArticleRecord). ArticleRecord is **not** wired into BackFiller ingestion, RabbitMQ, retention, storage, transit, or process-boundary serialization.
+NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admission. The NNTPD ingestion worker publishes a compact protobuf OverviewDB handoff (`OverviewArticleV1`) to RabbitMQ `overviewdb.queue` from that record. ArticleRecord is **not** a serialization protocol of its own and is not wired into BackFiller ingestion, article-work RPC JSON, retention, storage, or transit.
 
 ---
 
@@ -582,16 +582,18 @@ ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** us
 - BackFiller retrieve / parse / materialize / retain (Phase 4 still retains a canonical `byte[]` and uses `NntpArticleIdentity.MatchesRequest` separately)
 - NNTPD IHAVE now constructs CanonicalV1 `ArticleRecord` before queue admission (same factory as TAKETHIS/POST). `IhaveArticleInterpreter.DestuffToArticle` remains a bench/classifier helper only.
 - RabbitMQ Article Work JSON / cache URIs
-- Retention, storage, overview databases, XOVER/XHDR
-- Process-boundary serialization
+- Retention, storage, XOVER/XHDR
+- A serialized envelope of the full ArticleRecord / ArtData
 - Transit `MessageTypes` policy matching
+
+NNTPD ingestion publishes an OverviewDB protobuf subset (`OverviewArticleV1` on `overviewdb.queue`) from CanonicalV1 field ranges. That handoff does not serialize ArtData.
 
 ### Future scope (not implemented)
 
-- Construct records at BackFiller / NNTPD ingest
+- Construct records at BackFiller retrieve/retain
 - Request Message-ID match as an orchestration step **after** or **beside** factory construction
 - Path prepend that produces a new record without a full reparse
-- Serialized envelope (scalars + ArtData + range table + ArtHash check)
+- Serialized envelope of the full record (scalars + ArtData + range table + ArtHash check)
 - Completing Diablo `classifyLineAsTypes` body confirmation
 
 ---

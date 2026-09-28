@@ -92,7 +92,7 @@ Sep 28 08:18:41.398 - giganews <rejected@example> 793311 yEncoding invalid
 Sep 28 08:18:41.398 m giganews <moderated@example> 123456
 ```
 
-Accepted (`+` / `j`) events are emitted by `IncomingSpoolWriterService` after dequeue. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
+Accepted (`+` / `j`) events are emitted by `IncomingSpoolWriterService` after a confirmed OverviewDB RabbitMQ publish. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
 
 The NNTP response code is not a news field and is not rendered. INN's `- feed <message-id> reason` template has no response-code column; a code that appears inside some INN filter reason strings is not used here.
 

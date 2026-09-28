@@ -149,8 +149,14 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>Gets every RPC channel created on this connection.</summary>
     public List<FakeRabbitMqRpcChannel> RpcChannels { get; } = [];
 
+    /// <summary>Gets every confirm-enabled publish channel created on this connection.</summary>
+    public List<FakeRabbitMqPublishChannel> PublishChannels { get; } = [];
+
     /// <summary>When set, <see cref="CreateRpcChannelAsync"/> throws this exception.</summary>
     public Exception? CreateRpcChannelException { get; set; }
+
+    /// <summary>When set, <see cref="CreatePublishChannelAsync"/> throws this exception.</summary>
+    public Exception? CreatePublishChannelException { get; set; }
 
     /// <summary>When set, <see cref="CreateTopologyChannelAsync"/> throws this exception.</summary>
     public Exception? CreateTopologyChannelException { get; set; }
@@ -205,6 +211,25 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
         var channel = new FakeRabbitMqRpcChannel(generation);
         RpcChannels.Add(channel);
         return Task.FromResult<IRabbitMqRpcChannel>(channel);
+    }
+
+    /// <inheritdoc />
+    public Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CreatePublishChannelException is not null)
+        {
+            throw CreatePublishChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for OverviewDB publication.");
+        }
+
+        var channel = new FakeRabbitMqPublishChannel(generation);
+        PublishChannels.Add(channel);
+        return Task.FromResult<IRabbitMqPublishChannel>(channel);
     }
 
     /// <summary>Raises <see cref="ConnectionLost"/> as a peer-initiated disconnect.</summary>
@@ -484,6 +509,111 @@ internal sealed class FakeRabbitMqRpcChannel : IRabbitMqRpcChannel
     }
 }
 
+/// <summary>In-memory confirm-enabled publish channel for OverviewDB handoff tests.</summary>
+internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
+{
+    /// <summary>Initializes a new fake publish channel.</summary>
+    public FakeRabbitMqPublishChannel(long generation)
+    {
+        Generation = generation;
+    }
+
+    /// <inheritdoc />
+    public long Generation { get; }
+
+    /// <inheritdoc />
+    public bool IsOpen { get; set; } = true;
+
+    /// <summary>Gets recorded publications.</summary>
+    public List<FakeRabbitMqConfirmedPublication> Publications { get; } = [];
+
+    /// <summary>Gets how many times the channel was disposed.</summary>
+    public int DisposeCount { get; private set; }
+
+    /// <summary>When set, <see cref="PublishConfirmedAsync"/> throws this exception.</summary>
+    public Exception? PublishException { get; set; }
+
+    /// <summary>
+    /// Remaining publications that throw <see cref="PublishException"/> or a default nack.
+    /// After the budget is exhausted, publications succeed unless <see cref="PublishException"/> stays set
+    /// and <see cref="RemainingPublishFailures"/> is zero with a sticky exception.
+    /// </summary>
+    public int RemainingPublishFailures { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, waits until <c>cancellationToken</c> is cancelled
+    /// instead of completing a confirm.
+    /// </summary>
+    public bool HoldUntilCancelled { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, marks the channel closed at the start of the next
+    /// publish so the not-open failure path is exercised after the channel was obtained.
+    /// </summary>
+    public bool CloseBeforePublish { get; set; }
+
+    /// <inheritdoc />
+    public async Task PublishConfirmedAsync(
+        string exchange,
+        string routingKey,
+        string messageId,
+        string appId,
+        string expiration,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (DisposeCount > 0)
+        {
+            throw new ObjectDisposedException(nameof(FakeRabbitMqPublishChannel));
+        }
+
+        if (CloseBeforePublish)
+        {
+            IsOpen = false;
+        }
+
+        if (HoldUntilCancelled)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ publish channel is not open.");
+        }
+
+        if (RemainingPublishFailures > 0)
+        {
+            RemainingPublishFailures--;
+            throw PublishException ?? new InvalidOperationException("RabbitMQ negatively acknowledged the OverviewDB handoff.");
+        }
+
+        if (PublishException is not null)
+        {
+            throw PublishException;
+        }
+
+        Publications.Add(new FakeRabbitMqConfirmedPublication(
+            exchange,
+            routingKey,
+            messageId,
+            appId,
+            expiration,
+            Persistent: true,
+            Mandatory: OverviewDbTopology.Mandatory,
+            body.ToArray()));
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        IsOpen = false;
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
+
 /// <summary>Recorded article-work RPC publication.</summary>
 internal sealed record FakeRabbitMqRpcPublication(
     string Exchange,
@@ -493,6 +623,17 @@ internal sealed record FakeRabbitMqRpcPublication(
     string ReplyTo,
     string ContentType,
     string Expiration,
+    byte[] Body);
+
+/// <summary>Recorded confirm-enabled OverviewDB publication.</summary>
+internal sealed record FakeRabbitMqConfirmedPublication(
+    string Exchange,
+    string RoutingKey,
+    string MessageId,
+    string AppId,
+    string Expiration,
+    bool Persistent,
+    bool Mandatory,
     byte[] Body);
 
 /// <summary>Recorded exchange declaration.</summary>

@@ -1,4 +1,6 @@
+using System.Buffers;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -12,18 +14,23 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// <para>
 /// The queue guarantee is a CanonicalV1 <c>ArticleRecord</c>. This worker does
-/// not destuff, parse, or construct records. After dequeue it classifies
-/// <c>+</c>/<c>j</c> and emits those events through <see cref="INewsLogWriter"/>
-/// (production: Serilog), then continues to the existing
-/// <see cref="IIncomingArticlePersister"/> (/dev/null no-op). Rejected articles
-/// never reach this worker; <c>-</c> is emitted at the protocol decision.
+/// not destuff, parse, or construct records. After dequeue it publishes a compact
+/// OverviewDB protobuf message to <c>overviewdb.queue</c> and waits for a RabbitMQ
+/// publisher confirmation. On confirm it classifies <c>+</c>/<c>j</c> and emits
+/// those events through <see cref="INewsLogWriter"/> (production: Serilog), then
+/// continues to the existing <see cref="IIncomingArticlePersister"/> (/dev/null
+/// no-op). A failed confirm or publish is treated as incomplete: the article is
+/// requeued through <see cref="IArticleIngestionQueue.EnqueueAsync"/>. Rejected
+/// articles never reach this worker; <c>-</c> is emitted at the protocol decision.
 /// Moderated POST (<c>m</c>) is emitted at the moderation-success decision and
 /// never enters the queue.
 /// </para>
 /// <para>
 /// A news-log failure is reported through
 /// <see cref="SpoolLogMessages.NewsLogFailed"/> and does not re-admit, re-queue,
-/// or emit a second NNTP response. The article still proceeds to the persister.
+/// or emit a second NNTP response. The article still proceeds to the persister
+/// after a successful OverviewDB handoff. The worker never calls OverviewDB
+/// over RPC, HTTP, gRPC, or a database connection.
 /// </para>
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
@@ -32,6 +39,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IIncomingArticlePersister _persister;
     private readonly INewsLogWriter _newsLog;
     private readonly INewsgroupCatalogue? _catalogue;
+    private readonly IOverviewDbHandoffPublisher _overviewHandoff;
     private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<IncomingSpoolWriterService> _logger;
     private readonly IFeedDiagnostics _feedDiagnostics;
@@ -49,7 +57,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IFeedDiagnostics? feedDiagnostics = null,
         INewsLogWriter? newsLog = null,
         INewsgroupCatalogue? catalogue = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOverviewDbHandoffPublisher? overviewHandoff = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -63,6 +72,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _newsLog = newsLog ?? NullNewsLogWriter.Instance;
         _catalogue = catalogue;
         _time = timeProvider ?? TimeProvider.System;
+        _overviewHandoff = overviewHandoff ?? NullOverviewDbHandoffPublisher.Instance;
     }
 
     /// <inheritdoc />
@@ -143,20 +153,35 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             }
 
             var persisted = false;
+            var overviewAccepted = false;
             _feedDiagnostics.BeginSpoolWork();
             try
             {
+                await PublishOverviewAsync(article, CancellationToken.None).ConfigureAwait(false);
+                overviewAccepted = true;
                 WriteNewsLog(article);
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
                 persisted = true;
             }
             catch (Exception ex)
             {
-                SpoolLogMessages.PersistFailed(
-                    _logger,
-                    ex,
-                    article.MessageId,
-                    article.Payload.Length);
+                if (!overviewAccepted)
+                {
+                    OverviewDbHandoffLogMessages.PublishFailed(
+                        _logger,
+                        ex,
+                        article.MessageId,
+                        article.Payload.Length);
+                    await RequeueAsync(article).ConfigureAwait(false);
+                }
+                else
+                {
+                    SpoolLogMessages.PersistFailed(
+                        _logger,
+                        ex,
+                        article.MessageId,
+                        article.Payload.Length);
+                }
             }
             finally
             {
@@ -197,5 +222,34 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             SpoolLogMessages.NewsLogFailed(_logger, ex, article.MessageId);
         }
+    }
+
+    private async Task PublishOverviewAsync(InboundArticle article, CancellationToken cancellationToken)
+    {
+        var max = OverviewArticleV1Codec.GetMaxEncodedSize(article.Record);
+        var rented = ArrayPool<byte>.Shared.Rent(Math.Max(max, 1));
+        try
+        {
+            var written = OverviewArticleV1Codec.Encode(article.Record, rented);
+            await _overviewHandoff
+                .PublishConfirmedAsync(rented.AsMemory(0, written), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private async Task RequeueAsync(InboundArticle article)
+    {
+        var result = await _queue.EnqueueAsync(article, CancellationToken.None).ConfigureAwait(false);
+        if (result == ArticleEnqueueResult.Accepted)
+        {
+            OverviewDbHandoffLogMessages.Requeued(_logger, article.MessageId);
+            return;
+        }
+
+        OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, article.MessageId);
     }
 }

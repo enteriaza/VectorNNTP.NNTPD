@@ -165,7 +165,7 @@ public sealed class RabbitMqOptions
     /// <summary>
     /// Maximum wait time, in seconds, for RabbitMQ publisher confirmations.
     /// </summary>
-    /// <remarks>Validated and projected. Publishers are not implemented in this phase.</remarks>
+    /// <remarks>Used by the OverviewDB ingest handoff publisher.</remarks>
     public int? PublishConfirmTimeoutSeconds { get; set; } = 10;
 
     /// <summary>

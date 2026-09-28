@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
@@ -365,6 +366,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
         services.TryAddSingleton<INewsLogWriter, SerilogNewsLogWriter>();
+        services.TryAddSingleton<OverviewDbHandoffPublisher>();
+        services.TryAddSingleton<IOverviewDbHandoffPublisher>(static sp =>
+            sp.GetRequiredService<OverviewDbHandoffPublisher>());
         services.TryAddSingleton<IncomingSpoolWriterService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, IncomingSpoolWriterService>(static sp =>

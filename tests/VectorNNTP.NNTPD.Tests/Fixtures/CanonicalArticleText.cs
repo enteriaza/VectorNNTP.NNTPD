@@ -22,18 +22,27 @@ internal static class CanonicalArticleText
     public static string Destuffed(
         string messageId,
         string body = "body\r\n",
-        string newsgroups = "alt.test")
+        string newsgroups = "alt.test",
+        string subject = "ingress-test",
+        string from = "user@example.test",
+        string? references = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         ArgumentNullException.ThrowIfNull(body);
         ArgumentException.ThrowIfNullOrWhiteSpace(newsgroups);
+        ArgumentNullException.ThrowIfNull(subject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(from);
+        var referencesHeader = string.IsNullOrEmpty(references)
+            ? string.Empty
+            : "References: " + references + "\r\n";
         return
             "Path: peer.example\r\n" +
             "Date: " + Date + "\r\n" +
             "Message-ID: " + messageId + "\r\n" +
             "Newsgroups: " + newsgroups + "\r\n" +
-            "From: user@example.test\r\n" +
-            "Subject: ingress-test\r\n" +
+            "From: " + from + "\r\n" +
+            "Subject: " + subject + "\r\n" +
+            referencesHeader +
             "\r\n" +
             body;
     }
@@ -52,11 +61,14 @@ internal static class CanonicalArticleText
         InboundArticleProducer producer,
         string body = "body\r\n",
         string newsgroups = "alt.test",
-        ReadOnlyMemory<byte> feed = default)
+        ReadOnlyMemory<byte> feed = default,
+        string subject = "ingress-test",
+        string from = "user@example.test",
+        string? references = null)
     {
         var created = ArticleRecordIngress.TryCreateFromDestuffed(
             new NntpArticleParser("nntpd01.usenet.ninja"),
-            Encoding.ASCII.GetBytes(Destuffed(messageId, body, newsgroups)));
+            Encoding.ASCII.GetBytes(Destuffed(messageId, body, newsgroups, subject, from, references)));
         if (!created.IsAccepted)
         {
             throw new InvalidOperationException("Test article must be CanonicalV1.");

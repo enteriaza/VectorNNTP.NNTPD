@@ -183,7 +183,7 @@ public sealed class RabbitMqTopologyServiceTests
         var definitions = ArticleRetrievalTopology.Required;
         Assert.Equal(13, definitions.Count);
         Assert.Equal(13 * expectedPasses, connection.ExchangeDeclarations.Count);
-        Assert.Equal(13 * expectedPasses, connection.QueueDeclarations.Count);
+        Assert.Equal(14 * expectedPasses, connection.QueueDeclarations.Count);
         Assert.Equal(13 * expectedPasses, connection.BindingDeclarations.Count);
         Assert.Equal("backfiller.abavia", definitions[0].ExchangeName);
         Assert.Equal("backfiller.storage", definitions[^1].ExchangeName);
@@ -200,11 +200,12 @@ public sealed class RabbitMqTopologyServiceTests
 
         for (var pass = 0; pass < expectedPasses; pass++)
         {
-            var offset = pass * definitions.Count;
+            var endpointOffset = pass * definitions.Count;
+            var queueOffset = pass * (definitions.Count + 1);
             for (var i = 0; i < definitions.Count; i++)
             {
                 var definition = definitions[i];
-                var exchange = connection.ExchangeDeclarations[offset + i];
+                var exchange = connection.ExchangeDeclarations[endpointOffset + i];
                 Assert.Equal(definition.ExchangeName, exchange.Name);
                 Assert.Equal(definition.ExchangeType, exchange.Type);
                 Assert.Equal("fanout", exchange.Type);
@@ -212,7 +213,7 @@ public sealed class RabbitMqTopologyServiceTests
                 Assert.False(exchange.AutoDelete);
                 Assert.Null(exchange.Arguments);
 
-                var queue = connection.QueueDeclarations[offset + i];
+                var queue = connection.QueueDeclarations[queueOffset + i];
                 Assert.Equal(definition.QueueName, queue.Name);
                 Assert.True(queue.Durable);
                 Assert.False(queue.Exclusive);
@@ -224,12 +225,36 @@ public sealed class RabbitMqTopologyServiceTests
                     out var queueType));
                 Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
 
-                var binding = connection.BindingDeclarations[offset + i];
+                var binding = connection.BindingDeclarations[endpointOffset + i];
                 Assert.Equal(definition.QueueName, binding.Queue);
                 Assert.Equal(definition.ExchangeName, binding.Exchange);
                 Assert.Equal(definition.RoutingKey, binding.RoutingKey);
                 Assert.Null(binding.Arguments);
             }
+
+            var overview = connection.QueueDeclarations[queueOffset + definitions.Count];
+            Assert.Equal(OverviewDbTopology.QueueName, overview.Name);
+            Assert.True(overview.Durable);
+            Assert.False(overview.Exclusive);
+            Assert.False(overview.AutoDelete);
+            AssertOverviewDbClassicQueueArguments(overview.Arguments);
+            Assert.DoesNotContain(
+                connection.BindingDeclarations.Skip(endpointOffset).Take(definitions.Count + 1),
+                static binding => binding.Queue == OverviewDbTopology.QueueName);
+            Assert.DoesNotContain(
+                connection.ExchangeDeclarations.Skip(endpointOffset).Take(definitions.Count),
+                static exchange => exchange.Name == OverviewDbTopology.QueueName);
         }
+    }
+
+    private static void AssertOverviewDbClassicQueueArguments(
+        IReadOnlyDictionary<string, object?>? arguments)
+    {
+        var effective = arguments ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+        Assert.False(effective.ContainsKey("x-queue-type"));
+        Assert.False(effective.ContainsKey(RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
+        Assert.False(effective.ContainsKey("x-message-ttl"));
+        Assert.False(effective.ContainsKey("x-expires"));
+        Assert.Empty(effective);
     }
 }
