@@ -21,6 +21,9 @@ public enum NntpArticleTxFrameKind
 
     /// <summary>BODY wire shape: <c>222 n|0 &lt;message-id&gt;\r\n</c> + body only + terminator.</summary>
     CustomerBody = 2,
+
+    /// <summary>HEAD wire shape: <c>221 n|0 &lt;message-id&gt;\r\n</c> + headers only + terminator.</summary>
+    CustomerHead = 3,
 }
 
 /// <summary>Framing parameters for shared article TX via <see cref="NntpResponseWriter"/>.</summary>
@@ -59,6 +62,10 @@ public readonly struct NntpArticleTxFraming
     public static NntpArticleTxFraming CustomerBody(string messageId, long articleNumber = 0) =>
         new(NntpArticleTxFrameKind.CustomerBody, messageId, articleNumber);
 
+    /// <summary>Creates HEAD-style framing (<c>221 n mid</c>).</summary>
+    public static NntpArticleTxFraming CustomerHead(string messageId, long articleNumber = 0) =>
+        new(NntpArticleTxFrameKind.CustomerHead, messageId, articleNumber);
+
     /// <summary>Creates TAKETHIS-style framing (<c>TAKETHIS mid</c>).</summary>
     public static NntpArticleTxFraming PeerTakeThis(string messageId) =>
         new(NntpArticleTxFrameKind.PeerTakeThis, messageId);
@@ -71,6 +78,8 @@ public readonly struct NntpArticleTxFraming
         {
             NntpArticleTxFrameKind.CustomerArticle =>
                 Encoding.ASCII.GetBytes("220 " + number + " " + MessageId + "\r\n"),
+            NntpArticleTxFrameKind.CustomerHead =>
+                Encoding.ASCII.GetBytes("221 " + number + " " + MessageId + "\r\n"),
             NntpArticleTxFrameKind.CustomerBody =>
                 Encoding.ASCII.GetBytes("222 " + number + " " + MessageId + "\r\n"),
             NntpArticleTxFrameKind.PeerTakeThis =>

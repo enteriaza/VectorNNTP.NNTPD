@@ -21,6 +21,7 @@ using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Session;
 
@@ -105,6 +106,7 @@ public sealed class NntpSession
         IAccountByteAccountant? accountBytes = null,
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
+        IVatpArticleClient? vatpArticleClient = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
@@ -177,6 +179,7 @@ public sealed class NntpSession
         AccountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         AccountRates = accountRates ?? NullAccountRateAllocator.Instance;
         ArticleWorkRpc = articleWorkRpc;
+        VatpArticleClient = vatpArticleClient;
         PostFilter = postFilter ?? DisabledPostFilter.Instance;
         PostFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         PostFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
@@ -197,10 +200,16 @@ public sealed class NntpSession
     public IArticleIngestionQueue ArticleIngestion { get; }
 
     /// <summary>
-    /// Gets the article-work RPC client used by ARTICLE message-id lookup, or
+    /// Gets the article-work RPC client used by ARTICLE/HEAD/BODY/STAT message-id lookup, or
     /// <see langword="null"/> when tests construct a session without RabbitMQ.
     /// </summary>
     internal IArticleWorkRpcClient? ArticleWorkRpc { get; }
+
+    /// <summary>
+    /// Gets the VATP article client used after ArticleWork Success, or
+    /// <see langword="null"/> when tests construct a session without VATP.
+    /// </summary>
+    internal IVatpArticleClient? VatpArticleClient { get; }
 
     /// <summary>Gets the POST-only PostFilter. IHAVE/TAKETHIS must not call this.</summary>
     internal IPostFilter PostFilter { get; }

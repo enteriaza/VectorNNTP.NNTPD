@@ -11,7 +11,8 @@ using VectorNNTP.NNTPD.Tests.TestDoubles;
 namespace VectorNNTP.NNTPD.Tests.Session;
 
 /// <summary>
-/// ARTICLE/HEAD/BODY/STAT return RFC 3977 lookup-failure codes. No article store exists.
+/// ARTICLE/HEAD/BODY/STAT argument-form failure codes and message-id RPC/VATP wiring prerequisites.
+/// Successful message-id retrieval is covered by <see cref="ArticleRetrievalVatpCommandTests"/>.
 /// </summary>
 public sealed class ArticleRetrievalCommandTests
 {
@@ -32,32 +33,27 @@ public sealed class ArticleRetrievalCommandTests
         };
 
     [Fact]
-    public async Task ArticleMessageId_InvokesRpc_ThenStillReturns430()
+    public async Task ArticleMessageId_InvokesRpc_WithoutVatp_Returns400()
     {
         await using var duplex = await ArticleDuplex.CreateAsync();
         var rpc = new RecordingArticleWorkRpcClient();
         var session = duplex.CreateSession(articleWorkRpc: rpc);
         await DispatchLineAsync(duplex, session, "ARTICLE <12345@example.invalid>");
-        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
         var messageId = Assert.Single(rpc.Lookups);
         Assert.Equal("<12345@example.invalid>"u8.ToArray(), messageId.ToArray());
     }
 
     [Theory]
     [MemberData(nameof(RetrievalVerbs))]
-    public async Task HeadBodyStat_MessageId_DoesNotInvokeRpc(string verb)
+    public async Task MessageId_WithRpcOnly_InvokesRpc_Returns400(string verb)
     {
-        if (verb == "ARTICLE")
-        {
-            return;
-        }
-
         await using var duplex = await ArticleDuplex.CreateAsync();
         var rpc = new RecordingArticleWorkRpcClient();
         var session = duplex.CreateSession(articleWorkRpc: rpc);
         await DispatchLineAsync(duplex, session, $"{verb} <12345@example.invalid>");
-        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
-        Assert.Empty(rpc.Lookups);
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Single(rpc.Lookups);
     }
 
     [Theory]

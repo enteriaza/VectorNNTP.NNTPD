@@ -39,6 +39,20 @@ public sealed class NntpArticleBodyTxIntegrationTests
     }
 
     [Fact]
+    public async Task Head_Success_HeadersOnly()
+    {
+        await using var harness = await TxHarness.CreateAsync();
+        var stored = Encoding.ASCII.GetBytes("Subject: t\r\nFrom: a@b\r\n\r\nbody-line\r\n");
+        Assert.True(ArticleWireReconstructor.TrySplitHeadersAndBody(stored, out var headers, out _));
+        await harness.Writer.WriteCustomerHeadAsync(headers.ToArray(), "<head@id>");
+        var text = Encoding.ASCII.GetString(await harness.DrainAllAsync());
+        Assert.StartsWith("221 0 <head@id>\r\n", text, StringComparison.Ordinal);
+        Assert.Contains("Subject: t\r\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("body-line", text, StringComparison.Ordinal);
+        Assert.EndsWith(".\r\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Body_Success_BodyOnly_NoHeaders()
     {
         await using var harness = await TxHarness.CreateAsync();
@@ -221,7 +235,7 @@ public sealed class NntpArticleBodyTxIntegrationTests
     }
 
     [Fact]
-    public void ArticleHandlers_ReturnLookupFailures_WithoutInventingStorage()
+    public void ArticleHandlers_WireMessageIdThroughWriterHelpers()
     {
         var src = File.ReadAllText(
             Path.Combine(
@@ -236,9 +250,12 @@ public sealed class NntpArticleBodyTxIntegrationTests
         Assert.Contains("NoArticleWithNumber", src, StringComparison.Ordinal);
         Assert.Contains("NoNewsgroupSelected", src, StringComparison.Ordinal);
         Assert.Contains("CurrentArticleNumberInvalid", src, StringComparison.Ordinal);
-        Assert.DoesNotContain("WriteCustomerArticleAsync", src, StringComparison.Ordinal);
-        Assert.DoesNotContain("WriteCustomerBodyAsync", src, StringComparison.Ordinal);
-        Assert.DoesNotContain("WriteArticleAsync", src, StringComparison.Ordinal);
+        Assert.Contains("WriteCustomerArticleAsync", src, StringComparison.Ordinal);
+        Assert.Contains("WriteCustomerHeadAsync", src, StringComparison.Ordinal);
+        Assert.Contains("WriteCustomerBodyFromBodyAsync", src, StringComparison.Ordinal);
+        Assert.Contains("WriteCustomerStatAsync", src, StringComparison.Ordinal);
+        Assert.Contains("IVatpArticleClient", src, StringComparison.Ordinal);
+        Assert.Contains("InboundArticleProducer.BackFiller", src, StringComparison.Ordinal);
     }
 
     [Fact]

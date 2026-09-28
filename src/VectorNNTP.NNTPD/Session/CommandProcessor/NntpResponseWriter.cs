@@ -392,6 +392,41 @@ public sealed class NntpResponseWriter : IAsyncDisposable
             NntpArticleTxFraming.CustomerBody(messageId, articleNumber),
             cancellationToken);
 
+    /// <summary>
+    /// Convenience: HEAD-style (221) response from destuffed header bytes (including blank-line separator when present).
+    /// </summary>
+    /// <param name="storedDestuffedHeaders">Header block only; no body; no terminator.</param>
+    /// <param name="messageId">Message-id for the 221 status line.</param>
+    /// <param name="articleNumber">Article number for the status line, or 0 when mid-selected.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public ValueTask WriteCustomerHeadAsync(
+        ReadOnlyMemory<byte> storedDestuffedHeaders,
+        string messageId,
+        long articleNumber = 0,
+        CancellationToken cancellationToken = default) =>
+        WriteArticleAsync(
+            storedDestuffedHeaders,
+            NntpArticleTxFraming.CustomerHead(messageId, articleNumber),
+            cancellationToken);
+
+    /// <summary>
+    /// Convenience: STAT-style (223) single-line response (no multiline body).
+    /// </summary>
+    /// <param name="messageIdBytes">Message-id octets including angle brackets.</param>
+    /// <param name="articleNumber">Article number, or 0 when mid-selected.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public ValueTask WriteCustomerStatAsync(
+        ReadOnlySpan<byte> messageIdBytes,
+        long articleNumber = 0,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(articleNumber);
+        var number = articleNumber.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var prefix = System.Text.Encoding.ASCII.GetBytes("223 " + number + " ");
+        var owned = NntpResponseCompose.Concat(prefix, messageIdBytes, NntpResponses.Crlf.Span);
+        return WriteLineAsync(owned, cancellationToken);
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {

@@ -31,4 +31,13 @@ public static class NntpArticleIdentity
 
         return true;
     }
+
+    /// <summary>
+    /// Compares a parsed article Message-ID to requested Message-ID octets without allocating.
+    /// </summary>
+    /// <param name="articleMessageId">Message-ID header value bytes from the parsed article.</param>
+    /// <param name="requestedMessageId">Message-ID requested by the caller (wire octets).</param>
+    /// <returns><see langword="true"/> when both spans are identical.</returns>
+    public static bool MatchesRequest(ReadOnlySpan<byte> articleMessageId, ReadOnlySpan<byte> requestedMessageId) =>
+        articleMessageId.SequenceEqual(requestedMessageId);
 }

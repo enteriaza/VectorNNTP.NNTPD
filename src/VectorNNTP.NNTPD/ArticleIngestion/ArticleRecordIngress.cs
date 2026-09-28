@@ -63,7 +63,7 @@ internal static class ArticleRecordIngress
     /// <param name="record">Accepted CanonicalV1 record.</param>
     /// <param name="clientIdentity">Session client identity at admission.</param>
     /// <param name="receivedAtUtc">Queue-admission timestamp.</param>
-    /// <param name="producer">TAKETHIS, POST, or IHAVE.</param>
+    /// <param name="producer">TAKETHIS, POST, IHAVE, or BackFiller.</param>
     /// <param name="feed">Inbound Transit identifier bytes captured from the session.</param>
     /// <returns>Queue item carrying <paramref name="record"/>.</returns>
     /// <remarks>

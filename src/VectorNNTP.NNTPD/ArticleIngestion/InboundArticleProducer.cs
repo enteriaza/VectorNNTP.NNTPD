@@ -22,4 +22,10 @@ public enum InboundArticleProducer
     /// <see cref="InboundArticle.Payload"/> aliases canonical ArtData.
     /// </summary>
     Post = 2,
+
+    /// <summary>
+    /// BackFiller VATP retrieval. The CanonicalV1 <see cref="VectorNNTP.Common.Articles.ArticleRecord"/>
+    /// is already validated; <see cref="InboundArticle.Payload"/> aliases ArtData with no destuff/parse.
+    /// </summary>
+    BackFiller = 3,
 }

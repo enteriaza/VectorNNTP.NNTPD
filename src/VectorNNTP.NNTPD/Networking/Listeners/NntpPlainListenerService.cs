@@ -23,6 +23,7 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -59,6 +60,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IAccountByteAccountant _accountBytes;
     private readonly IAccountRateAllocator _accountRates;
     private readonly IArticleWorkRpcClient? _articleWorkRpc;
+    private readonly IVatpArticleClient? _vatpArticleClient;
     private readonly IPostFilter _postFilter;
     private readonly PostFilterMetrics _postFilterMetrics;
     private readonly IPostFilterRejectionEvidenceQueue _postFilterEvidence;
@@ -100,6 +102,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IAccountByteAccountant? accountBytes = null,
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
+        IVatpArticleClient? vatpArticleClient = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
@@ -135,6 +138,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _accountBytes = accountBytes ?? NullAccountByteAccountant.Instance;
         _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
         _articleWorkRpc = articleWorkRpc;
+        _vatpArticleClient = vatpArticleClient;
         _postFilter = postFilter ?? DisabledPostFilter.Instance;
         _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         _postFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
@@ -369,6 +373,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 accountBytes: _accountBytes,
                 accountRates: _accountRates,
                 articleWorkRpc: _articleWorkRpc,
+                vatpArticleClient: _vatpArticleClient,
                 postFilter: _postFilter,
                 postFilterMetrics: _postFilterMetrics,
                 postFilterEvidence: _postFilterEvidence,

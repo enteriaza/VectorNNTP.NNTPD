@@ -1,5 +1,11 @@
+using System.Text;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Processing;
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -8,54 +14,55 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Article storage and retrieval are not implemented. Every syntactically valid lookup
-/// therefore returns the RFC 3977 failure code for that argument form:
-/// message-id → <c>430</c>, article number → <c>412</c>/<c>423</c>, omitted current
-/// article → <c>412</c>/<c>420</c>. Successful retrieval codes remain
-/// ARTICLE <c>220</c>, HEAD <c>221</c>, BODY <c>222</c>, STAT <c>223</c> and are not
-/// emitted. Error replies are single-line; no multiline terminator is sent.
+/// Message-id form resolves through ArticleWork RPC then VATP
+/// (<see cref="IVatpArticleClient"/>). A validated CanonicalV1
+/// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
+/// reply. Local ingest admission is independent of serving the requesting client.
 /// </para>
 /// <para>
-/// ARTICLE <c>&lt;message-id&gt;</c> invokes article-work RPC when an
-/// <see cref="IArticleWorkRpcClient"/> is present. This phase maps every RPC result,
-/// including success, to the existing <c>430</c> reply because article bytes are not
-/// retrieved yet. HEAD, BODY, and STAT do not invoke RPC in this phase.
-/// ARTICLE with an article number still cannot resolve a Message-ID (OverDB is absent)
-/// and keeps the existing number-lookup failure codes.
+/// Numeric article lookup and omitted current-article forms are unchanged:
+/// message-id unavailable → <c>430</c>, article number → <c>412</c>/<c>423</c>,
+/// omitted current article → <c>412</c>/<c>420</c>. Temporary transfer failures use
+/// <c>400</c> without closing the connection. Error replies are single-line.
 /// </para>
 /// <para>
-/// GROUP selection does not invent a current article number from catalogue water marks.
 /// An unsuccessful lookup MUST NOT change the selected group or current article
 /// (RFC 3977 §6.2.1.2). There is no current-article pointer yet, so the omitted form
-/// after a successful GROUP is <c>420</c> (invalid current article), not <c>423</c>
-/// (a previously valid number whose article is gone).
-/// </para>
-/// <para>
-/// TAKETHIS → spool ingestion is an ingress / application boundary — not an article
-/// repository for these commands.
+/// after a successful GROUP is <c>420</c>.
 /// </para>
 /// </remarks>
 internal static class Article
 {
     private static ILogger Logger => NntpCommandLoggers.For(typeof(Article));
 
-    /// <summary>Handles <c>ARTICLE</c> (RFC 3977, Section 6.2.1). Future success code is <c>220</c>.</summary>
+    private enum RetrievalKind
+    {
+        Article,
+        Head,
+        Body,
+        Stat,
+    }
+
+    /// <summary>Handles <c>ARTICLE</c> (RFC 3977, Section 6.2.1).</summary>
     public static ValueTask HandleArticleAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(Logger, context, "ARTICLE", ExecuteArticleAsync, cancellationToken);
+        NntpCommandExecution.RunAsync(Logger, context, "ARTICLE", static (c, ct) => ExecuteAsync(c, RetrievalKind.Article, ct), cancellationToken);
 
-    /// <summary>Handles <c>HEAD</c> (RFC 3977, Section 6.2.2). Future success code is <c>221</c>.</summary>
+    /// <summary>Handles <c>HEAD</c> (RFC 3977, Section 6.2.2).</summary>
     public static ValueTask HandleHeadAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(Logger, context, "HEAD", ExecuteAsync, cancellationToken);
+        NntpCommandExecution.RunAsync(Logger, context, "HEAD", static (c, ct) => ExecuteAsync(c, RetrievalKind.Head, ct), cancellationToken);
 
-    /// <summary>Handles <c>BODY</c> (RFC 3977, Section 6.2.3). Future success code is <c>222</c>.</summary>
+    /// <summary>Handles <c>BODY</c> (RFC 3977, Section 6.2.3).</summary>
     public static ValueTask HandleBodyAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(Logger, context, "BODY", ExecuteAsync, cancellationToken);
+        NntpCommandExecution.RunAsync(Logger, context, "BODY", static (c, ct) => ExecuteAsync(c, RetrievalKind.Body, ct), cancellationToken);
 
-    /// <summary>Handles <c>STAT</c> (RFC 3977, Section 6.2.4). Future success code is <c>223</c>.</summary>
+    /// <summary>Handles <c>STAT</c> (RFC 3977, Section 6.2.4).</summary>
     public static ValueTask HandleStatAsync(NntpCommandContext context, CancellationToken cancellationToken) =>
-        NntpCommandExecution.RunAsync(Logger, context, "STAT", ExecuteAsync, cancellationToken);
+        NntpCommandExecution.RunAsync(Logger, context, "STAT", static (c, ct) => ExecuteAsync(c, RetrievalKind.Stat, ct), cancellationToken);
 
-    private static async ValueTask ExecuteArticleAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static async ValueTask ExecuteAsync(
+        NntpCommandContext context,
+        RetrievalKind kind,
+        CancellationToken cancellationToken)
     {
         var argument = context.ArgumentSpan;
         if (argument.IsEmpty)
@@ -66,52 +73,120 @@ internal static class Article
 
         if (argument[0] == (byte)'<')
         {
-            await LookupMessageIdAsync(context, cancellationToken).ConfigureAwait(false);
-            await NntpCommandReply.WriteAsync(
-                context,
-                Logger,
-                NntpResponses.NoArticleWithMessageId,
-                NntpResponseStatus.NoArticleWithMessageId,
-                cancellationToken).ConfigureAwait(false);
+            await ExecuteMessageIdAsync(context, kind, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         await WriteNumberLookupFailureAsync(context, cancellationToken).ConfigureAwait(false);
     }
 
-    private static ValueTask ExecuteAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static async ValueTask ExecuteMessageIdAsync(
+        NntpCommandContext context,
+        RetrievalKind kind,
+        CancellationToken cancellationToken)
     {
-        var argument = context.ArgumentSpan;
-        if (argument.IsEmpty)
+        var resolved = await ResolveByMessageIdAsync(context, cancellationToken).ConfigureAwait(false);
+        switch (resolved.Kind)
         {
-            return WriteCurrentArticleFailureAsync(context, cancellationToken);
+            case ResolveKind.NotFound:
+                await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.NoArticleWithMessageId,
+                    NntpResponseStatus.NoArticleWithMessageId,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            case ResolveKind.TemporaryFailure:
+                await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ServiceTemporarilyUnavailable,
+                    NntpResponseStatus.ServiceTemporarilyUnavailable,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            case ResolveKind.Success:
+                break;
+            default:
+                await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ServiceTemporarilyUnavailable,
+                    NntpResponseStatus.ServiceTemporarilyUnavailable,
+                    cancellationToken).ConfigureAwait(false);
+                return;
         }
 
-        if (argument[0] == (byte)'<')
-        {
-            return NntpCommandReply.WriteAsync(
-                context,
-                Logger,
-                NntpResponses.NoArticleWithMessageId,
-                NntpResponseStatus.NoArticleWithMessageId,
-                cancellationToken);
-        }
+        var record = resolved.Record;
+        TryAdmitBackFiller(context, in record);
 
-        return WriteNumberLookupFailureAsync(context, cancellationToken);
+        var messageIdText = Encoding.ASCII.GetString(record.MessageId);
+        switch (kind)
+        {
+            case RetrievalKind.Article:
+                await context.Response.WriteCustomerArticleAsync(
+                    record.ArtData,
+                    messageIdText,
+                    articleNumber: 0,
+                    cancellationToken).ConfigureAwait(false);
+                NntpCommandReply.TryNote(context, Logger, "220 0 " + messageIdText);
+                return;
+            case RetrievalKind.Head:
+                if (!ArticleWireReconstructor.TrySplitHeadersAndBody(record.ArtData.Span, out var headersSpan, out _))
+                {
+                    headersSpan = record.ArtData.Span;
+                }
+
+                var headers = record.ArtData.Slice(0, headersSpan.Length);
+                await context.Response.WriteCustomerHeadAsync(
+                    headers,
+                    messageIdText,
+                    articleNumber: 0,
+                    cancellationToken).ConfigureAwait(false);
+                NntpCommandReply.TryNote(context, Logger, "221 0 " + messageIdText);
+                return;
+            case RetrievalKind.Body:
+                _ = ArticleWireReconstructor.TrySplitHeadersAndBody(record.ArtData.Span, out var headerSpan, out var bodySpan);
+                var body = bodySpan.IsEmpty
+                    ? ReadOnlyMemory<byte>.Empty
+                    : record.ArtData.Slice(headerSpan.Length, bodySpan.Length);
+                await context.Response.WriteCustomerBodyFromBodyAsync(
+                    body,
+                    messageIdText,
+                    articleNumber: 0,
+                    cancellationToken).ConfigureAwait(false);
+                NntpCommandReply.TryNote(context, Logger, "222 0 " + messageIdText);
+                return;
+            case RetrievalKind.Stat:
+                await context.Response.WriteCustomerStatAsync(record.MessageId, articleNumber: 0, cancellationToken)
+                    .ConfigureAwait(false);
+                NntpCommandReply.TryNote(context, Logger, "223 0 " + messageIdText);
+                return;
+            default:
+                await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.ServiceTemporarilyUnavailable,
+                    NntpResponseStatus.ServiceTemporarilyUnavailable,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+        }
     }
 
-    private static async ValueTask LookupMessageIdAsync(NntpCommandContext context, CancellationToken cancellationToken)
+    private static async ValueTask<ResolveResult> ResolveByMessageIdAsync(
+        NntpCommandContext context,
+        CancellationToken cancellationToken)
     {
         var rpc = context.Session.ArticleWorkRpc;
         if (rpc is null)
         {
-            return;
+            return ResolveResult.NotFound();
         }
 
         var messageId = context.ArgumentMemory;
+        ArticleWorkRpcResult lookup;
         try
         {
-            _ = await rpc.LookupByMessageIdAsync(messageId, cancellationToken).ConfigureAwait(false);
+            lookup = await rpc.LookupByMessageIdAsync(messageId, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -122,7 +197,122 @@ internal static class Article
             ArticleWorkRpcLogMessages.ArticleLookupFailed(
                 Logger,
                 ex,
-                System.Text.Encoding.ASCII.GetString(messageId.Span));
+                Encoding.ASCII.GetString(messageId.Span));
+            return ResolveResult.Temporary();
+        }
+
+        if (lookup.Outcome is ArticleWorkOutcome.ArticleNotFound or ArticleWorkOutcome.InvalidArticle)
+        {
+            return ResolveResult.NotFound();
+        }
+
+        if (lookup.Outcome != ArticleWorkOutcome.Success
+            || string.IsNullOrWhiteSpace(lookup.Uri)
+            || lookup.ArticleId is not { } expectedArtId)
+        {
+            ArticleRetrievalLogMessages.TransferUnavailable(
+                Logger,
+                lookup.Outcome.ToString(),
+                lookup.Error);
+            return ResolveResult.Temporary();
+        }
+
+        var vatp = context.Session.VatpArticleClient;
+        if (vatp is null)
+        {
+            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", lookup.Uri);
+            return ResolveResult.Temporary();
+        }
+
+        VatpFetchResult fetch;
+        try
+        {
+            fetch = await vatp.FetchArticleAsync(
+                lookup.Uri,
+                lookup.RequestId,
+                expectedArtId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, lookup.Uri, lookup.RequestId);
+            return ResolveResult.Temporary();
+        }
+
+        return MapFetch(fetch, messageId.Span, expectedArtId);
+    }
+
+    private static ResolveResult MapFetch(
+        VatpFetchResult fetch,
+        ReadOnlySpan<byte> requestedMessageId,
+        ArticleId expectedArtId)
+    {
+        switch (fetch.Kind)
+        {
+            case VatpFetchKind.Success:
+                break;
+            case VatpFetchKind.Cancelled:
+                throw new OperationCanceledException();
+            default:
+                ArticleRetrievalLogMessages.VatpFetchUnsuccessful(
+                    Logger,
+                    fetch.Kind.ToString(),
+                    fetch.Error,
+                    fetch.ErrorCode?.ToString());
+                return ResolveResult.Temporary();
+        }
+
+        var record = fetch.Record;
+        if (record.ParseStatus != ArticleParseStatus.CanonicalV1 || record.ArtSize <= 0)
+        {
+            ArticleRetrievalLogMessages.VatpFetchUnsuccessful(
+                Logger,
+                "IncompleteOrMalformedArticle",
+                fetch.Error,
+                fetch.ErrorCode?.ToString());
+            return ResolveResult.Temporary();
+        }
+
+        if (!record.ArtId.Equals(expectedArtId)
+            || !NntpArticleIdentity.MatchesRequest(record.MessageId, requestedMessageId))
+        {
+            ArticleRetrievalLogMessages.IdentityMismatch(Logger, fetch.Error);
+            return ResolveResult.NotFound();
+        }
+
+        return ResolveResult.Success(record);
+    }
+
+    private static void TryAdmitBackFiller(NntpCommandContext context, in ArticleRecord record)
+    {
+        try
+        {
+            var messageIdText = Encoding.ASCII.GetString(record.MessageId);
+            var inbound = ArticleRecordIngress.CreateQueued(
+                messageIdText,
+                in record,
+                context.Session.ClientIdentity,
+                DateTimeOffset.UtcNow,
+                InboundArticleProducer.BackFiller);
+
+            var enqueue = context.Session.ArticleIngestion.TryAdmit(inbound);
+            if (enqueue == ArticleEnqueueResult.Accepted)
+            {
+                // Copy Message-ID octets once for History; do not invent a second History path.
+                var midBytes = record.MessageId.ToArray();
+                context.Session.HistoryDb?.Remember(midBytes);
+                return;
+            }
+
+            ArticleRetrievalLogMessages.IngestNotAdmitted(Logger, enqueue.ToString(), messageIdText);
+        }
+        catch (Exception ex)
+        {
+            ArticleRetrievalLogMessages.IngestFailed(Logger, ex);
         }
     }
 
@@ -168,5 +358,31 @@ internal static class Article
             NntpResponses.CurrentArticleNumberInvalid,
             NntpResponseStatus.CurrentArticleNumberInvalid,
             cancellationToken);
+    }
+
+    private enum ResolveKind
+    {
+        NotFound,
+        TemporaryFailure,
+        Success,
+    }
+
+    private readonly struct ResolveResult
+    {
+        private ResolveResult(ResolveKind kind, ArticleRecord record)
+        {
+            Kind = kind;
+            Record = record;
+        }
+
+        public ResolveKind Kind { get; }
+
+        public ArticleRecord Record { get; }
+
+        public static ResolveResult NotFound() => new(ResolveKind.NotFound, default);
+
+        public static ResolveResult Temporary() => new(ResolveKind.TemporaryFailure, default);
+
+        public static ResolveResult Success(ArticleRecord record) => new(ResolveKind.Success, record);
     }
 }

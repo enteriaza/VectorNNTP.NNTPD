@@ -1,8 +1,9 @@
 # Vector Article Transfer Protocol (VATP)
 
-Status: Phase 1 Common foundation, Phase 2 BackFiller VATP **server**, and
-Phase 3A NNTPD VATP **client foundation** + RabbitMQ Success `articleId` are
-implemented. ARTICLE/HEAD/BODY/STAT command integration is **not** wired yet.
+Status: Phase 1 Common foundation, Phase 2 BackFiller VATP **server**,
+Phase 3A NNTPD VATP **client** + RabbitMQ Success `articleId`, and
+Phase 3B message-id **ARTICLE/HEAD/BODY/STAT** wiring are implemented.
+Numeric article lookup / OverviewDB retrieval remain deferred.
 
 Owner: `VectorNNTP.Common` (`VectorNNTP.Common.Transport.ArticleTransfer`).
 BackFiller adapter: `VectorNNTP.BackFiller.Listener.VatpListenerSession` on the
@@ -159,11 +160,35 @@ default maxFramePayload. Not frozen as immutable protocol constants.
 `ArticleTransferStreamTable` bounds active StreamIds, rejects duplicates and StreamId 0,
 and requires removal after terminalization before reuse.
 
-## Not implemented yet (Phase 4+)
+## Not implemented yet (later phases)
 
-- ARTICLE/HEAD/BODY/STAT command wiring
-- Ingest / History integration
-- Storage consumers
+- Numeric ARTICLE/HEAD/BODY/STAT (article-number / current-article forms)
+- OverviewDB article-number resolution
+- Storage VATP consumers
+- Outbound VATP server-to-server transfers
+
+## NNTP message-id retrieval (Phase 3B)
+
+```text
+ARTICLE|HEAD|BODY|STAT <message-id>
+        ↓
+ArticleWork RPC (control plane)
+        ↓ Success → URI + RequestId + ArticleId
+IVatpArticleClient.FetchArticleAsync
+        ↓ ArtSize + FIN + END + CanonicalV1
+ArticleRecord
+        ├── NNTP 220/221/222/223 response (writer + restuff)
+        └── TryAdmit(InboundArticleProducer.BackFiller)  [best-effort]
+```
+
+Serving the requesting client does **not** depend on local ingest admission.
+Queue full / unavailable still returns the successful NNTP response.
+History `Remember` runs only when `TryAdmit` accepts, using the existing
+ingestion Remember path (HistoryWriteService remains the Redis drain).
+
+ArticleWork not-found / invalid → `430`. VATP connection/remote/incomplete
+failures → `400 Service temporarily unavailable` (connection left open).
+Fetched Message-ID / ArticleId mismatch → `430` (never served).
 
 ## BackFiller Phase 2 server
 
@@ -198,5 +223,5 @@ bypass. Clients send WINDOW updates to replenish server send credit. CANCEL is
 sent for caller cancellation when the connection remains usable.
 
 ArticleWork Success must include `articleId` (validated on parse). Failure
-responses must not include `uri` or `articleId`. NNTP ARTICLE/HEAD/BODY/STAT
-handlers are not yet consumers of `IVatpArticleClient`.
+responses must not include `uri` or `articleId`. Message-id ARTICLE/HEAD/BODY/STAT
+handlers consume `IVatpArticleClient` after ArticleWork Success.
