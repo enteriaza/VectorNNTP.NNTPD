@@ -427,7 +427,8 @@ public sealed class ArticleWorkResponsePublicationTests
             ArticleWorkTestDeliveries.CanonicalCorrelationId,
             ArticleWorkTestDeliveries.CanonicalReplyTo,
             Error: null,
-            ArticleWorkTestDeliveries.CanonicalCacheUri);
+            ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleWorkTestDeliveries.CanonicalArticleIdHex);
         var consumer = new FakeBackFillerRabbitMqChannel(1);
 
         await context.Publisher.PublishAsync(intent, CancellationToken.None);
@@ -538,6 +539,8 @@ public sealed class ArticleWorkResponsePublicationTests
         {
             Outcome = ArticleWorkOutcome.Success,
             CacheUri = ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleId = VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(
+                ArticleWorkTestDeliveries.CanonicalArticleIdHex),
         };
 
     private static string FindSourceDirectory(string folder)

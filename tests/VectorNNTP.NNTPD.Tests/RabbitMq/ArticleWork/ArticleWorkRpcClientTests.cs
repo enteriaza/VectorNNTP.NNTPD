@@ -14,6 +14,7 @@ public sealed class ArticleWorkRpcClientTests
     private static readonly byte[] MessageIdBytes = "<12345@example.invalid>"u8.ToArray();
     private const string MessageId = "<12345@example.invalid>";
     private const string SuccessUri = "cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160";
+    private const string SuccessArticleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Fact]
     public async Task StorageSuccess_At50ms_CompletesImmediately_DoesNotFanOut()
@@ -27,6 +28,9 @@ public sealed class ArticleWorkRpcClientTests
 
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
         Assert.Equal(SuccessUri, result.Uri);
+        Assert.Equal(
+            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(SuccessArticleIdHex),
+            result.ArticleId);
         Assert.Equal("backfiller.storage", result.SourceExchange);
         Assert.Equal(50, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
         Assert.Single(harness.Publisher.Publications);
@@ -528,7 +532,7 @@ public sealed class ArticleWorkRpcClientTests
     private static byte[] SuccessBody(Guid requestId, string backbone = "Storage")
     {
         return Encoding.UTF8.GetBytes(
-            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"Success","uri":"{{SuccessUri}}"}""");
+            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"Success","uri":"{{SuccessUri}}","articleId":"{{SuccessArticleIdHex}}"}""");
     }
 
     private static byte[] FailureBody(Guid requestId, ArticleWorkOutcome outcome, string error, string backbone = "Storage")

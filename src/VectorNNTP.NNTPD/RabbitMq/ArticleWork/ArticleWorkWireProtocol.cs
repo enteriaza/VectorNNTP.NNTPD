@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
@@ -11,7 +12,7 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// </summary>
 /// <remarks>
 /// Property names are <c>version</c>, <c>requestId</c>, <c>messageId</c>, <c>backbone</c>,
-/// and on responses <c>outcome</c>, <c>uri</c>, and <c>error</c>. AMQP <c>CorrelationId</c>,
+/// and on responses <c>outcome</c>, <c>uri</c>, <c>articleId</c>, and <c>error</c>. AMQP <c>CorrelationId</c>,
 /// <c>ReplyTo</c>, and <c>Expiration</c> are never JSON fields. JSON <c>requestId</c> must
 /// match the AMQP <c>RequestId</c> property. Serialization writes compact UTF-8 with no indentation.
 /// </remarks>
@@ -147,8 +148,10 @@ internal static partial class ArticleWorkWireProtocol
 
             var hasUri = root.TryGetProperty("uri", out var uriElement);
             var hasError = root.TryGetProperty("error", out var errorElement);
+            var hasArticleId = root.TryGetProperty("articleId", out var articleIdElement);
             string? uri = null;
             string? error = null;
+            ArticleId? articleId = null;
             if (hasUri && !TryReadStringValue(uriElement, "uri", out uri, out reason))
             {
                 return false;
@@ -159,6 +162,25 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
+            if (hasArticleId)
+            {
+                if (!TryReadStringValue(articleIdElement, "articleId", out var articleIdText, out reason))
+                {
+                    return false;
+                }
+
+                if (articleIdText is not null)
+                {
+                    if (!ArticleId.TryParseLowerHex(articleIdText, out var parsedArticleId))
+                    {
+                        reason = "Response payload property 'articleId' is not a 64-character lowercase hexadecimal ArticleId.";
+                        return false;
+                    }
+
+                    articleId = parsedArticleId;
+                }
+            }
+
             if (!TryValidateOutcomeContract(
                     outcome,
                     requestId,
@@ -166,6 +188,8 @@ internal static partial class ArticleWorkWireProtocol
                     backbone,
                     hasUri,
                     uri,
+                    hasArticleId,
+                    articleId,
                     hasError,
                     error,
                     out reason))
@@ -173,7 +197,15 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            response = new ArticleWorkResponse(version, requestId, messageId, backbone, outcome, uri, error);
+            response = new ArticleWorkResponse(
+                version,
+                requestId,
+                messageId,
+                backbone,
+                outcome,
+                uri,
+                articleId,
+                error);
             reason = string.Empty;
             return true;
         }
@@ -191,6 +223,8 @@ internal static partial class ArticleWorkWireProtocol
         string? backbone,
         bool hasUri,
         string? uri,
+        bool hasArticleId,
+        ArticleId? articleId,
         bool hasError,
         string? error,
         out string reason)
@@ -219,6 +253,12 @@ internal static partial class ArticleWorkWireProtocol
             if (!hasUri || string.IsNullOrWhiteSpace(uri) || !CanonicalCacheUriRegex().IsMatch(uri))
             {
                 reason = "Success response payload requires a canonical non-empty 'uri'.";
+                return false;
+            }
+
+            if (!hasArticleId || articleId is null)
+            {
+                reason = "Success response payload requires a concrete 'articleId'.";
                 return false;
             }
 
@@ -257,6 +297,12 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
+            if (hasArticleId)
+            {
+                reason = "Terminal failure response payload must not include 'articleId'.";
+                return false;
+            }
+
             if (!hasError || string.IsNullOrWhiteSpace(error))
             {
                 reason = "Terminal failure response payload requires a non-empty 'error'.";
@@ -287,6 +333,12 @@ internal static partial class ArticleWorkWireProtocol
         if (hasUri)
         {
             reason = "InvalidRequest payload must not include 'uri'.";
+            return false;
+        }
+
+        if (hasArticleId)
+        {
+            reason = "InvalidRequest payload must not include 'articleId'.";
             return false;
         }
 

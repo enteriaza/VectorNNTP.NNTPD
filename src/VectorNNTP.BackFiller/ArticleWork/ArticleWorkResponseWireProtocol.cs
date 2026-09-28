@@ -2,12 +2,13 @@ using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
 /// Compact UTF-8 JSON contract for Article Work v1 responses.
-/// Property names are exact: version, requestId, messageId, backbone, outcome, uri, error.
+/// Property names are exact: version, requestId, messageId, backbone, outcome, uri, articleId, error.
 /// </summary>
 public static class ArticleWorkResponseWireProtocol
 {
@@ -75,6 +76,7 @@ public static class ArticleWorkResponseWireProtocol
         if (intent.Outcome == ArticleWorkOutcome.Success)
         {
             json.WriteString("uri", intent.Uri);
+            json.WriteString("articleId", intent.ArticleIdHex);
         }
         else
         {
@@ -115,6 +117,13 @@ public static class ArticleWorkResponseWireProtocol
                     throw new InvalidOperationException("Success uri must be the retention cache URI for the exact Message-ID.");
                 }
 
+                if (string.IsNullOrWhiteSpace(intent.ArticleIdHex)
+                    || !ArticleId.TryParseLowerHex(intent.ArticleIdHex, out _))
+                {
+                    throw new InvalidOperationException(
+                        "Success response requires a 64-character lowercase hexadecimal articleId.");
+                }
+
                 if (intent.Error is not null)
                 {
                     throw new InvalidOperationException("Success response must not include error.");
@@ -128,6 +137,11 @@ public static class ArticleWorkResponseWireProtocol
                 if (intent.Uri is not null)
                 {
                     throw new InvalidOperationException("Terminal failure response must not include uri.");
+                }
+
+                if (intent.ArticleIdHex is not null)
+                {
+                    throw new InvalidOperationException("Terminal failure response must not include articleId.");
                 }
 
                 if (string.IsNullOrWhiteSpace(intent.Error))
@@ -146,6 +160,11 @@ public static class ArticleWorkResponseWireProtocol
                 if (intent.Uri is not null)
                 {
                     throw new InvalidOperationException("InvalidRequest must not include uri.");
+                }
+
+                if (intent.ArticleIdHex is not null)
+                {
+                    throw new InvalidOperationException("InvalidRequest must not include articleId.");
                 }
 
                 if (string.IsNullOrWhiteSpace(intent.Error))

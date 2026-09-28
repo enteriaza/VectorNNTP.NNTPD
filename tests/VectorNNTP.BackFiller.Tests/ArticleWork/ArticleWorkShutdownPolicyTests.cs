@@ -18,8 +18,8 @@ public sealed class ArticleWorkShutdownPolicyTests
         var firstGate = NewSource();
         var secondStarted = NewSource();
         var handler = SuccessHandler();
-        handler.Stages.Enqueue(new ArticleWorkControlStage(firstStarted, firstGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri));
-        handler.Stages.Enqueue(new ArticleWorkControlStage(secondStarted, Gate: null, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri));
+        handler.Stages.Enqueue(new ArticleWorkControlStage(firstStarted, firstGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri, ArticleId: CanonicalArtId()));
+        handler.Stages.Enqueue(new ArticleWorkControlStage(secondStarted, Gate: null, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri, ArticleId: CanonicalArtId()));
         await using var context = await ShutdownContext.StartAsync(handler, drainQueued: true, finishActive: true, prefetch: 2);
         var first = context.Deliver(7);
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -416,8 +416,8 @@ public sealed class ArticleWorkShutdownPolicyTests
         var secondStarted = NewSource();
         var secondGate = NewSource();
         var handler = SuccessHandler();
-        handler.Stages.Enqueue(new ArticleWorkControlStage(firstStarted, firstGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri));
-        handler.Stages.Enqueue(new ArticleWorkControlStage(secondStarted, secondGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri));
+        handler.Stages.Enqueue(new ArticleWorkControlStage(firstStarted, firstGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri, ArticleId: CanonicalArtId()));
+        handler.Stages.Enqueue(new ArticleWorkControlStage(secondStarted, secondGate, ArticleWorkOutcome.Success, CacheUri: ArticleWorkTestDeliveries.CanonicalCacheUri, ArticleId: CanonicalArtId()));
         await using var context = await ShutdownContext.StartAsync(handler, drainQueued: true, finishActive: true, prefetch: 2);
         var first = context.Deliver(7);
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -641,7 +641,11 @@ public sealed class ArticleWorkShutdownPolicyTests
         {
             Outcome = ArticleWorkOutcome.Success,
             CacheUri = ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleId = CanonicalArtId(),
         };
+
+    private static VectorNNTP.Common.Articles.ArticleId CanonicalArtId() =>
+        VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 
     private static TaskCompletionSource NewSource() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

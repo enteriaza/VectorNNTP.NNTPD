@@ -80,6 +80,7 @@ public sealed class ArticleWorkDeliveryPipeline
                     delivery.ReplyTo,
                     failure.Reason,
                     cacheUri: null,
+                    articleIdHex: null,
                     cancellationToken)
                 .ConfigureAwait(false);
             return await CompleteAfterPublishAttemptAsync(
@@ -102,6 +103,7 @@ public sealed class ArticleWorkDeliveryPipeline
         ArticleWorkOutcome outcome;
         string? error;
         string? cacheUri = null;
+        string? articleIdHex = null;
         try
         {
             if (cancellationToken.IsCancellationRequested)
@@ -117,6 +119,7 @@ public sealed class ArticleWorkDeliveryPipeline
                     : result.Outcome;
                 error = result.Error;
                 cacheUri = result.CacheUri;
+                articleIdHex = result.ArticleId?.ToLowerHexString();
                 result.Article?.Dispose();
             }
         }
@@ -165,6 +168,7 @@ public sealed class ArticleWorkDeliveryPipeline
                     item.ReplyTo,
                     error,
                     cacheUri,
+                    articleIdHex,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -228,6 +232,7 @@ public sealed class ArticleWorkDeliveryPipeline
         string? replyTo,
         string? error,
         string? cacheUri,
+        string? articleIdHex,
         CancellationToken cancellationToken)
     {
         if (!disposition.PublishResponse)
@@ -246,7 +251,8 @@ public sealed class ArticleWorkDeliveryPipeline
                         correlationId,
                         replyTo,
                         error,
-                        outcome == ArticleWorkOutcome.Success ? cacheUri : null),
+                        outcome == ArticleWorkOutcome.Success ? cacheUri : null,
+                        outcome == ArticleWorkOutcome.Success ? articleIdHex : null),
                     cancellationToken)
                 .ConfigureAwait(false);
             return ArticleWorkPublishAttempt.Confirmed;

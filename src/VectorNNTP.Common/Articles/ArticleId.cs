@@ -62,9 +62,75 @@ public readonly struct ArticleId : IEquatable<ArticleId>
             BinaryPrimitives.ReadUInt64LittleEndian(digest[24..]));
     }
 
-    /// <summary>Copies the digest bytes into <paramref name="destination"/>.</summary>
-    /// <param name="destination">Destination that must be at least <see cref="Length"/> bytes.</param>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="destination"/> is too short.</exception>
+    /// <summary>Lowercase hexadecimal encoding length (<see cref="Length"/> × 2).</summary>
+    public const int HexLength = Length * 2;
+
+    /// <summary>
+    /// Formats the digest as 64 lowercase hexadecimal characters (no separators).
+    /// Used by RabbitMQ ArticleWork Success <c>articleId</c>.
+    /// </summary>
+    public string ToLowerHexString()
+    {
+        Span<byte> digest = stackalloc byte[Length];
+        CopyTo(digest);
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Attempts to parse a 64-character lowercase hexadecimal digest into an <see cref="ArticleId"/>.
+    /// </summary>
+    /// <param name="hex">Exactly <see cref="HexLength"/> lowercase hex digits.</param>
+    /// <param name="articleId">Parsed identity when the method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when <paramref name="hex"/> is valid lowercase hex of length 64.</returns>
+    public static bool TryParseLowerHex(ReadOnlySpan<char> hex, out ArticleId articleId)
+    {
+        articleId = default;
+        if (hex.Length != HexLength)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < hex.Length; i++)
+        {
+            var c = hex[i];
+            if (c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        Span<byte> digest = stackalloc byte[Length];
+        for (var i = 0; i < Length; i++)
+        {
+            var hi = HexValue(hex[i * 2]);
+            var lo = HexValue(hex[(i * 2) + 1]);
+            if (hi < 0 || lo < 0)
+            {
+                return false;
+            }
+
+            digest[i] = (byte)((hi << 4) | lo);
+        }
+
+        articleId = FromSpan(digest);
+        return true;
+    }
+
+    /// <summary>Parses a 64-character lowercase hexadecimal digest.</summary>
+    /// <exception cref="FormatException">Thrown when the input is not valid lowercase hex of length 64.</exception>
+    public static ArticleId ParseLowerHex(ReadOnlySpan<char> hex)
+    {
+        if (!TryParseLowerHex(hex, out var articleId))
+        {
+            throw new FormatException($"ArticleId hex must be exactly {HexLength} lowercase hexadecimal characters.");
+        }
+
+        return articleId;
+    }
+
+    /// <summary>Copies the 32-byte digest into <paramref name="destination"/>.</summary>
     public void CopyTo(Span<byte> destination)
     {
         if (destination.Length < Length)
@@ -93,4 +159,12 @@ public readonly struct ArticleId : IEquatable<ArticleId>
 
     /// <summary>Inequality operator.</summary>
     public static bool operator !=(ArticleId left, ArticleId right) => !left.Equals(right);
+
+    private static int HexValue(char c) =>
+        c switch
+        {
+            >= '0' and <= '9' => c - '0',
+            >= 'a' and <= 'f' => c - 'a' + 10,
+            _ => -1,
+        };
 }

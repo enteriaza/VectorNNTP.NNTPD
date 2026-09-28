@@ -38,6 +38,7 @@ using VectorNNTP.NNTPD.Ninpaths;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.Common.Hosting;
+using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Hosting;
 
@@ -296,6 +297,9 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqTopologyService>(static sp =>
                 sp.GetRequiredService<RabbitMqTopologyService>()));
+
+        services.TryAddSingleton<VatpConnectionPool>();
+        services.TryAddSingleton<IVatpArticleClient, VatpArticleClient>();
 
         services.TryAddSingleton<ArticleWorkRpcService>();
         services.TryAddSingleton<IArticleWorkRpcClient>(

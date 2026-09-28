@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using VectorNNTP.BackFiller.ArticleWork;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles;
 
@@ -10,6 +11,8 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
     public string? Error { get; set; }
 
     public string? CacheUri { get; set; }
+
+    public ArticleId? ArticleId { get; set; }
 
     public Exception? Throw { get; set; }
 
@@ -44,7 +47,11 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
                 throw stage.Throw;
             }
 
-            return new ArticleWorkHandlerResult(stage.Outcome, stage.Error, CacheUri: stage.CacheUri);
+            return new ArticleWorkHandlerResult(
+                stage.Outcome,
+                stage.Error,
+                CacheUri: stage.CacheUri,
+                ArticleId: stage.ArticleId);
         }
 
         Started?.TrySetResult();
@@ -59,7 +66,7 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
             throw Throw;
         }
 
-        return new ArticleWorkHandlerResult(Outcome, Error, CacheUri: CacheUri);
+        return new ArticleWorkHandlerResult(Outcome, Error, CacheUri: CacheUri, ArticleId: ArticleId);
     }
 }
 
@@ -69,4 +76,5 @@ internal sealed record ArticleWorkControlStage(
     ArticleWorkOutcome Outcome,
     string? Error = null,
     string? CacheUri = null,
-    Exception? Throw = null);
+    Exception? Throw = null,
+    ArticleId? ArticleId = null);

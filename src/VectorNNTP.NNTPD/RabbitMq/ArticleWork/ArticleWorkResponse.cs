@@ -7,6 +7,7 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// <param name="Backbone">Request backbone when the responder could establish it.</param>
 /// <param name="Outcome">Terminal response outcome.</param>
 /// <param name="Uri">Success-only cache URI. Absent for non-success outcomes.</param>
+/// <param name="ArticleId">Success-only CanonicalV1 ArtId. Absent for non-success outcomes.</param>
 /// <param name="Error">Terminal-failure detail. Absent for success.</param>
 internal sealed record ArticleWorkResponse(
     int Version,
@@ -15,4 +16,5 @@ internal sealed record ArticleWorkResponse(
     string? Backbone,
     ArticleWorkOutcome Outcome,
     string? Uri,
+    VectorNNTP.Common.Articles.ArticleId? ArticleId,
     string? Error);

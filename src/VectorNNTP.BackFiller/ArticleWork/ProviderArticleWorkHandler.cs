@@ -141,14 +141,16 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
                     ArticleWorkOutcome.Success,
                     null,
                     Article: null,
-                    CacheUri: retained.CacheUri);
+                    CacheUri: retained.CacheUri,
+                    ArticleId: record.ArtId);
             }
 
             return new ArticleWorkHandlerResult(
                 ArticleWorkOutcome.RetentionRejected,
                 retained.Kind.ToString(),
                 Article: null,
-                CacheUri: null);
+                CacheUri: null,
+                ArticleId: null);
         }
     }
 

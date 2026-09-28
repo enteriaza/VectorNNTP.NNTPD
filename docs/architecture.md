@@ -696,12 +696,12 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 ## Vector Article Transfer Protocol (VATP)
 
 Common owns the multiplexed binary article data-plane under
-`VectorNNTP.Common.Transport.ArticleTransfer` (framing, META, canonical transfer
-factory, stream/window/ready-ring primitives). BackFiller Phase 2 serves VATP on
-the existing TLS cache listener via first-frame demux (`HELLO` → VATP, else legacy
-MD5 cache protocol); see [vatp.md](vatp.md). NNTPD VATP client, RabbitMQ
-extensions, and ARTICLE/HEAD/BODY/STAT retrieval wiring are not implemented yet.
-Historical design notes: `.artifacts/article-data-plane-design.md`.
+`VectorNNTP.Common.Transport.ArticleTransfer`. BackFiller serves VATP on the
+existing TLS cache listener (first-frame demux). NNTPD consumes VATP via
+`IVatpArticleClient` and a bounded connection pool; ArticleWork Success carries
+`articleId` for OPEN. ARTICLE/HEAD/BODY/STAT retrieval wiring is not implemented
+yet. Protocol contract: [vatp.md](vatp.md). Historical design notes:
+`.artifacts/article-data-plane-design.md`.
 
 ## Testing strategy
 

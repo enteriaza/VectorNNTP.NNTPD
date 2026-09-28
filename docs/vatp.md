@@ -1,20 +1,32 @@
 # Vector Article Transfer Protocol (VATP)
 
-Status: Phase 1 Common foundation + Phase 2 BackFiller VATP **server** are
-implemented. The NNTPD VATP client, RabbitMQ `articleId` extensions, and
-ARTICLE/HEAD/BODY/STAT integration are **not** implemented yet.
+Status: Phase 1 Common foundation, Phase 2 BackFiller VATP **server**, and
+Phase 3A NNTPD VATP **client foundation** + RabbitMQ Success `articleId` are
+implemented. ARTICLE/HEAD/BODY/STAT command integration is **not** wired yet.
 
 Owner: `VectorNNTP.Common` (`VectorNNTP.Common.Transport.ArticleTransfer`).
 BackFiller adapter: `VectorNNTP.BackFiller.Listener.VatpListenerSession` on the
 existing TLS `CacheListenerService` (`BackFiller:BindPortTls`).
-Consumers: `VectorNNTP.NNTPD`, `VectorNNTP.BackFiller`, and future Storage. Common
-does not reference any of those applications.
+NNTPD adapter: `VectorNNTP.NNTPD.Transport.Vatp` (`IVatpArticleClient`,
+connection pool). Common does not reference application hosts.
 
 ## Purpose
 
 VATP is a byte-oriented, multiplexed TCP framing protocol for transferring one
 CanonicalV1 `ArticleRecord` per stream. RabbitMQ remains the control plane.
 Article bytes do not travel over RabbitMQ, JSON, XML, or protobuf.
+
+### Control plane vs data plane
+
+| Plane | Transport | Carries |
+|-------|-----------|---------|
+| Control | RabbitMQ ArticleWork RPC | RequestId, Message-ID, backbone, outcome, `uri`, `articleId` |
+| Data | VATP over TLS TCP | META + ArtData (`ArticleRecord`) |
+
+Success JSON `uri` is `cache://{fqdn}:{BindPortTls}/{md5}` (routing endpoint).
+Success JSON `articleId` is the 64-character lowercase hexadecimal BLAKE3
+`ArticleId`. VATP OPEN uses **RequestId + ArticleId** together; the MD5 path
+segment is not a VATP identity.
 
 ## Byte order and header
 
@@ -147,10 +159,8 @@ default maxFramePayload. Not frozen as immutable protocol constants.
 `ArticleTransferStreamTable` bounds active StreamIds, rejects duplicates and StreamId 0,
 and requires removal after terminalization before reuse.
 
-## Not implemented yet (Phase 3+)
+## Not implemented yet (Phase 4+)
 
-- NNTPD outbound TLS client / connection pool
-- RabbitMQ `articleId` response field
 - ARTICLE/HEAD/BODY/STAT command wiring
 - Ingest / History integration
 - Storage consumers
@@ -170,3 +180,23 @@ Canonical articles enter retention via `IArticleRetentionAuthority.RetainCanonic
 (RequestId + `ArticleRecord`). VATP OPEN resolves RequestId, verifies ArticleId,
 acquires a transfer lease, then streams META / DATA / END under per-stream WINDOW
 credit and round-robin DATA scheduling.
+
+## NNTPD Phase 3 client
+
+`IVatpArticleClient.FetchArticleAsync(cacheUri, requestId, articleId, ct)`:
+
+1. Parses `cache://` host/port for the TLS dial target (`TargetHost` / SNI = FQDN).
+2. Acquires a pooled multiplexed VATP connection (keyed by host+port; bounded).
+3. Client HELLO → server HELLO.
+4. OPEN(RequestId, ArticleId) on a client-assigned StreamId ≠ 0.
+5. Receives META / DATA* / DATA(FIN) / END via Common `ArticleTransferReceiveStream`.
+6. Returns a consumable CanonicalV1 `ArticleRecord` only after ArtSize + FIN + END
+   and successful `TryCreateFromCanonicalTransfer`.
+
+TLS is mandatory (1.2/1.3). There is no plaintext fallback and no certificate
+bypass. Clients send WINDOW updates to replenish server send credit. CANCEL is
+sent for caller cancellation when the connection remains usable.
+
+ArticleWork Success must include `articleId` (validated on parse). Failure
+responses must not include `uri` or `articleId`. NNTP ARTICLE/HEAD/BODY/STAT
+handlers are not yet consumers of `IVatpArticleClient`.

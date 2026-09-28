@@ -7,11 +7,13 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="Error">Optional diagnostic reason. Never a secret.</param>
 /// <param name="Article">Owned retrieved payload when not transferred into retention. Caller/pipeline must dispose it.</param>
 /// <param name="CacheUri">Success <c>cache://</c> URI when retention admitted or already held the article.</param>
+/// <param name="ArticleId">Success CanonicalV1 ArtId when retention admitted or already held the article.</param>
 public readonly record struct ArticleWorkHandlerResult(
     ArticleWorkOutcome Outcome,
     string? Error,
     Nntp.RetrievedArticle? Article = null,
-    string? CacheUri = null);
+    string? CacheUri = null,
+    VectorNNTP.Common.Articles.ArticleId? ArticleId = null);
 
 /// <summary>
 /// Processes admitted Article Work. Retrieval and retention happen here; publication and ACK do not.

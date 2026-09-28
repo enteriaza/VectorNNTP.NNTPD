@@ -16,6 +16,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="ReplyTo">AMQP reply destination.</param>
 /// <param name="Error">Failure reason for terminal non-success outcomes.</param>
 /// <param name="Uri">Retention cache URI for Success. Must be absent otherwise.</param>
+/// <param name="ArticleIdHex">64-char lowercase BLAKE3 ArtId hex for Success. Must be absent otherwise.</param>
 public sealed record ArticleWorkResponseIntent(
     ArticleWorkOutcome Outcome,
     Guid? RequestId,
@@ -24,7 +25,8 @@ public sealed record ArticleWorkResponseIntent(
     string? CorrelationId,
     string? ReplyTo,
     string? Error,
-    string? Uri = null);
+    string? Uri = null,
+    string? ArticleIdHex = null);
 
 /// <summary>
 /// Response-publish seam. Does not own the consumer channel or connection.

@@ -22,8 +22,8 @@ public sealed class ArticleWorkResponseWireProtocolTests
         Assert.Equal("Giganews", root.GetProperty("backbone").GetString());
         Assert.Equal("Success", root.GetProperty("outcome").GetString());
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalCacheUri, root.GetProperty("uri").GetString());
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, root.GetProperty("articleId").GetString());
         Assert.False(root.TryGetProperty("error", out _));
-        Assert.DoesNotContain("article", Encoding.UTF8.GetString(json), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("payload", Encoding.UTF8.GetString(json), StringComparison.OrdinalIgnoreCase);
     }
 
@@ -42,6 +42,7 @@ public sealed class ArticleWorkResponseWireProtocolTests
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalNotFoundResponseJson, Encoding.UTF8.GetString(json));
         using var document = JsonDocument.Parse(json);
         Assert.False(document.RootElement.TryGetProperty("uri", out _));
+        Assert.False(document.RootElement.TryGetProperty("articleId", out _));
         Assert.Equal("No article with that message-id", document.RootElement.GetProperty("error").GetString());
     }
 
@@ -72,7 +73,7 @@ public sealed class ArticleWorkResponseWireProtocolTests
     {
         using var document = JsonDocument.Parse(ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent()));
         var names = document.RootElement.EnumerateObject().Select(static property => property.Name).ToArray();
-        Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "uri"], names);
+        Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "uri", "articleId"], names);
     }
 
     [Fact]
@@ -84,6 +85,26 @@ public sealed class ArticleWorkResponseWireProtocolTests
         };
 
         Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+    }
+
+    [Fact]
+    public void Success_rejects_missing_article_id()
+    {
+        var intent = SuccessIntent() with { ArticleIdHex = null };
+        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+    }
+
+    [Fact]
+    public void Success_article_id_round_trips_exactly()
+    {
+        var json = ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent());
+        using var document = JsonDocument.Parse(json);
+        var hex = document.RootElement.GetProperty("articleId").GetString();
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, hex);
+        Assert.True(VectorNNTP.Common.Articles.ArticleId.TryParseLowerHex(hex, out var parsed));
+        Assert.Equal(
+            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex),
+            parsed);
     }
 
     [Theory]
@@ -114,5 +135,6 @@ public sealed class ArticleWorkResponseWireProtocolTests
             ArticleWorkTestDeliveries.CanonicalCorrelationId,
             ArticleWorkTestDeliveries.CanonicalReplyTo,
             Error: null,
-            ArticleWorkTestDeliveries.CanonicalCacheUri);
+            ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 }

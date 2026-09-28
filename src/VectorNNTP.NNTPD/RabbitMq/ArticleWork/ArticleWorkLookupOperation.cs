@@ -64,6 +64,7 @@ internal sealed class ArticleWorkLookupOperation
             MessageId,
             response.Backbone,
             response.Uri,
+            response.ArticleId,
             response.Error,
             exchange));
     }
