@@ -36,6 +36,15 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
 
     internal TransferMode Mode { get; set; } = TransferMode.Complete;
 
+    /// <summary>OPEN StreamIds observed on this listener (client-assigned).</summary>
+    public ConcurrentBag<uint> ObservedOpenStreamIds { get; } = new();
+
+    /// <summary>
+    /// When set, after a stream terminalizes (END or CANCEL) the server emits late/spurious
+    /// frames for the finished StreamId and for a never-allocated StreamId.
+    /// </summary>
+    public bool EmitSpuriousFramesAfterTerminal { get; set; }
+
     public static VatpLoopbackTestServer Start(X509Certificate2? certificate = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -47,9 +56,13 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
         return server;
     }
 
-    public void Register(ArticleRecord record, NntpArticleHeaderName selectedDateHeaderName)
+    public void Register(
+        ArticleRecord record,
+        NntpArticleHeaderName selectedDateHeaderName,
+        TransferMode? modeOverride = null,
+        TaskCompletionSource? heldStarted = null)
     {
-        _articles[record.ArtId] = new RegisteredArticle(record, selectedDateHeaderName);
+        _articles[record.ArtId] = new RegisteredArticle(record, selectedDateHeaderName, modeOverride, heldStarted);
     }
 
     public string CreateCacheUri(string md5Hex = "30edc94157aa16fe644a45a1f1ffe160") =>
@@ -106,7 +119,13 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                     EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                 },
                 cancellationToken).ConfigureAwait(false);
-            var session = new Session(ssl, _articles, () => Mode, cancellationToken);
+            var session = new Session(
+                ssl,
+                _articles,
+                () => Mode,
+                ObservedOpenStreamIds,
+                () => EmitSpuriousFramesAfterTerminal,
+                cancellationToken);
             await session.RunAsync().ConfigureAwait(false);
             await ssl.DisposeAsync().ConfigureAwait(false);
         }
@@ -147,20 +166,40 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
         /// maxFramePayload (must be rejected by the client).
         /// </summary>
         OversizedDataFrame,
+
+        /// <summary>
+        /// Sends META + one DATA chunk, then holds the stream open until CANCEL/disconnect
+        /// so concurrent-cancellation tests can cancel mid-transfer deterministically.
+        /// </summary>
+        HoldAfterFirstData,
+
+        /// <summary>
+        /// After accepting OPEN, writes a META frame on StreamId 0 (parser must reject).
+        /// </summary>
+        MetaOnConnectionStreamId,
     }
 
-    private readonly record struct RegisteredArticle(ArticleRecord Record, NntpArticleHeaderName SelectedDateHeaderName);
+    private readonly record struct RegisteredArticle(
+        ArticleRecord Record,
+        NntpArticleHeaderName SelectedDateHeaderName,
+        TransferMode? ModeOverride,
+        TaskCompletionSource? HeldStarted);
 
     private sealed class Session(
         SslStream stream,
         ConcurrentDictionary<ArticleId, RegisteredArticle> articles,
         Func<TransferMode> mode,
+        ConcurrentBag<uint> observedOpenStreamIds,
+        Func<bool> emitSpuriousAfterTerminal,
         CancellationToken cancellationToken)
     {
         private readonly Dictionary<uint, SendStream> _streams = new();
         private readonly ArticleTransferLimits _limits = ArticleTransferLimits.Default;
         private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
         private bool _clientHelloComplete;
+
+        // Never allocated by monotonic NNTPD client ids starting at 1.
+        private const uint NeverAllocatedStreamId = 0x7FFFFFFEu;
 
         public async Task RunAsync()
         {
@@ -225,6 +264,11 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                     await HandleWindowAsync(frame).ConfigureAwait(false);
                     return true;
                 case VatpFrameType.Cancel:
+                    if (emitSpuriousAfterTerminal())
+                    {
+                        await WriteSpuriousAfterTerminalAsync(frame.Header.StreamId).ConfigureAwait(false);
+                    }
+
                     _streams.Remove(frame.Header.StreamId);
                     return true;
                 default:
@@ -267,7 +311,23 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
             var record = registered.Record;
             var meta = ArticleCanonicalTransferMeta.FromRecord(in record, registered.SelectedDateHeaderName);
             var metaBytes = VatpMetaCodec.Encode(in meta);
-            var transferMode = mode();
+            var transferMode = registered.ModeOverride ?? mode();
+            observedOpenStreamIds.Add(frame.Header.StreamId);
+
+            if (transferMode == TransferMode.MetaOnConnectionStreamId)
+            {
+                var header = new byte[VatpProtocol.HeaderLengthBytes];
+                VatpFrameHeader.Create(
+                        VatpFrameType.Meta,
+                        VatpProtocol.ConnectionStreamId,
+                        (uint)metaBytes.Length,
+                        flags: 0)
+                    .WriteTo(header);
+                await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(metaBytes, cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+
             if (transferMode == TransferMode.DisconnectMidMeta)
             {
                 var metaFrame = VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes);
@@ -295,6 +355,29 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
             if (transferMode is TransferMode.CoalesceOutboundFrames or TransferMode.TinyOutboundWrites)
             {
                 await WriteTransferBatchAsync(send, metaBytes).ConfigureAwait(false);
+                return true;
+            }
+
+            if (transferMode == TransferMode.HoldAfterFirstData)
+            {
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes))
+                    .ConfigureAwait(false);
+                var firstChunk = (int)Math.Min(
+                    Math.Min(send.SendWindow.Credit, _maxFramePayload),
+                    send.ArtData.Length);
+                if (firstChunk <= 0 || !send.SendWindow.TryConsume(firstChunk))
+                {
+                    return true;
+                }
+
+                send.SentBytes = firstChunk;
+                await WriteFrameAsync(
+                        VatpFrameEncoder.EncodeData(
+                            frame.Header.StreamId,
+                            send.ArtData.AsMemory(0, firstChunk),
+                            fin: false))
+                    .ConfigureAwait(false);
+                registered.HeldStarted?.TrySetResult();
                 return true;
             }
 
@@ -387,6 +470,11 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
 
         private async Task PumpStreamAsync(SendStream sendStream)
         {
+            if (sendStream.TransferMode == TransferMode.HoldAfterFirstData)
+            {
+                return;
+            }
+
             while (sendStream.SentBytes < sendStream.ArtData.Length && sendStream.SendWindow.Credit > 0)
             {
                 if (sendStream.TransferMode == TransferMode.DisconnectMidData && sendStream.SentBytes > 0)
@@ -427,8 +515,36 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                 {
                     await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(sendStream.StreamId)).ConfigureAwait(false);
                     _streams.Remove(sendStream.StreamId);
+                    if (emitSpuriousAfterTerminal())
+                    {
+                        await WriteSpuriousAfterTerminalAsync(sendStream.StreamId).ConfigureAwait(false);
+                    }
                 }
             }
+        }
+
+        private async Task WriteSpuriousAfterTerminalAsync(uint terminalStreamId)
+        {
+            // Late frames for a stream the client already (or will imminently) remove.
+            await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(terminalStreamId)).ConfigureAwait(false);
+            await WriteFrameAsync(
+                    VatpFrameEncoder.EncodeFail(terminalStreamId, VatpErrorCode.UnknownStream))
+                .ConfigureAwait(false);
+            await WriteFrameAsync(
+                    VatpFrameEncoder.EncodeFail(terminalStreamId, VatpErrorCode.OpenRejected))
+                .ConfigureAwait(false);
+
+            // Completely unallocated StreamId: must not create client stream state.
+            var junkMeta = new byte[VatpProtocol.MetaPayloadLength];
+            await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(NeverAllocatedStreamId, junkMeta))
+                .ConfigureAwait(false);
+            await WriteFrameAsync(
+                    VatpFrameEncoder.EncodeData(NeverAllocatedStreamId, new byte[] { 0x41 }, fin: true))
+                .ConfigureAwait(false);
+            await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(NeverAllocatedStreamId)).ConfigureAwait(false);
+            await WriteFrameAsync(
+                    VatpFrameEncoder.EncodeFail(NeverAllocatedStreamId, VatpErrorCode.UnknownStream))
+                .ConfigureAwait(false);
         }
 
         private async Task WriteFrameAsync(VatpFrameEncoder.EncodedFrame frame)

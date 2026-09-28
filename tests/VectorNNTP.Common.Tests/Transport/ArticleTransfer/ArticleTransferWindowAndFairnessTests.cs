@@ -69,6 +69,60 @@ public sealed class ArticleTransferWindowAndFairnessTests
     }
 
     [Fact]
+    public void ReceiveStream_MultipleWindowReplenishments_ReachExactArtSize()
+    {
+        // Mirror DefaultInitialStreamWindowBytes pacing with a tiny window so several
+        // replenishments are required before ArtSize is complete.
+        const int initialWindow = 8;
+        const int chunk = 8;
+        var limits = new ArticleTransferLimits
+        {
+            InitialStreamWindowBytes = initialWindow,
+            MaxStreamCreditBytes = 1024,
+        };
+        var body = new string('x', 40) + "\r\n";
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical("<multi-window@example.test>", body);
+        Assert.True(artData.Length > initialWindow * 2);
+
+        var stream = new ArticleTransferReceiveStream(3, Guid.NewGuid(), record.ArtId, limits);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+
+        var offset = 0;
+        var replenishments = 0;
+        while (offset < artData.Length)
+        {
+            var length = Math.Min(chunk, artData.Length - offset);
+            var fin = offset + length >= artData.Length;
+            Assert.True(stream.TryAcceptData(artData.AsSpan(offset, length), fin).Success);
+            Assert.True(stream.TryAcceptWindow((uint)length).Success);
+            replenishments++;
+            offset += length;
+            Assert.True(stream.ReceiveCredit <= limits.MaxStreamCreditBytes);
+            Assert.True(stream.ReceiveCredit >= 0);
+        }
+
+        Assert.True(replenishments >= 3);
+        Assert.Equal(artData.Length, stream.ReceivedBytes);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        Assert.True(stream.TryAcceptEnd().Success);
+        Assert.True(stream.HasConsumableRecord);
+    }
+
+    [Fact]
+    public void ReceiveStream_Cancel_DoesNotAcceptFurtherWindow()
+    {
+        var limits = new ArticleTransferLimits { InitialStreamWindowBytes = 16, MaxStreamCreditBytes = 1024 };
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(4, Guid.NewGuid(), record.ArtId, limits);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData.AsSpan(0, 4), fin: false).Success);
+        Assert.True(stream.TryCancel().Success);
+        Assert.False(stream.TryAcceptWindow(4).Success);
+        Assert.Equal(VatpErrorCode.UnknownStream, stream.TryAcceptWindow(4).Error);
+        Assert.Equal(ArticleTransferPhase.Cancelled, stream.Phase);
+    }
+
+    [Fact]
     public void ReadyRing_RoundRobinsAndSkipsRemoved()
     {
         var ring = new ArticleTransferReadyRing();

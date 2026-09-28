@@ -261,7 +261,15 @@ public sealed class ArticleTransferReceiveStream
         return FailStream(VatpErrorCode.IncompleteTransfer);
     }
 
-    /// <summary>Applies WINDOW credit. Unknown/terminal streams fail.</summary>
+    /// <summary>
+    /// Replenishes receive WINDOW credit after accepted DATA bytes, matching the amount
+    /// advertised in an outbound WINDOW frame to the peer.
+    /// </summary>
+    /// <remarks>
+    /// Call only after a successful DATA accept for the same byte count.
+    /// Does not double-count: DATA acceptance consumes credit; this restores it
+    /// once those bytes are buffered in the stream. Unknown/terminal streams fail.
+    /// </remarks>
     public ArticleTransferApplyResult TryAcceptWindow(uint addCredit)
     {
         if (IsTerminal || Phase == ArticleTransferPhase.AwaitingMeta)

@@ -55,6 +55,124 @@ public sealed class VatpArticleClientTests
     }
 
     [Fact]
+    public async Task Article_larger_than_initial_window_completes_with_window_pacing()
+    {
+        // Phase 3D live defect: ~740 KiB > InitialStreamWindowBytes (256 KiB) produced
+        // FlowControlViolation because local receive credit was never replenished.
+        await using var server = VatpLoopbackTestServer.Start();
+        var prepared = CreateArticle("<window-740k@example.test>", body: BuildLargeBody(740 * 1024));
+        Assert.True(prepared.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtId, result.Record.ArtId);
+        Assert.Equal(prepared.Record.ArtSize, result.Record.ArtSize);
+        Assert.Equal(prepared.Record.ArtHash, result.Record.ArtHash);
+        Assert.True(result.Record.ArtData.ToArray().AsSpan()
+            .SequenceEqual(prepared.Record.ArtData.ToArray()));
+    }
+
+    [Fact]
+    public async Task Eight_concurrent_large_articles_share_connection_with_independent_windows()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var articles = new PreparedArticle[8];
+        for (var i = 0; i < articles.Length; i++)
+        {
+            var bodyBytes = i % 2 == 0 ? 740 * 1024 : 64 * 1024;
+            articles[i] = CreateArticle($"<mux-large-{i}@example.test>", body: BuildLargeBody(bodyBytes));
+            server.Register(articles[i].Record, articles[i].SelectedDateHeaderName);
+        }
+
+        Assert.Contains(
+            articles,
+            a => a.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
+
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+        var tasks = articles.Select(a =>
+            client.FetchArticleAsync(server.CreateCacheUri(), a.RequestId, a.Record.ArtId, CancellationToken.None))
+            .ToArray();
+        var results = await Task.WhenAll(tasks);
+
+        Assert.All(results, r => Assert.Equal(VatpFetchKind.Success, r.Kind));
+        for (var i = 0; i < articles.Length; i++)
+        {
+            Assert.Equal(articles[i].Record.ArtId, results[i].Record.ArtId);
+            Assert.Equal(articles[i].Record.ArtSize, results[i].Record.ArtSize);
+            Assert.Equal(articles[i].Record.ArtHash, results[i].Record.ArtHash);
+        }
+
+        Assert.Equal(1, pool.ConnectionCountForTest(server.Host, server.Port));
+    }
+
+    [Fact]
+    public async Task Cancel_one_large_stream_does_not_fail_sibling_large_stream()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var keep = CreateArticle("<keep-large@example.test>", body: BuildLargeBody(740 * 1024));
+        var cancel = CreateArticle("<cancel-large@example.test>", body: BuildLargeBody(740 * 1024));
+        Assert.True(keep.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
+        Assert.True(cancel.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
+        var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.Register(keep.Record, keep.SelectedDateHeaderName);
+        server.Register(
+            cancel.Record,
+            cancel.SelectedDateHeaderName,
+            VatpLoopbackTestServer.TransferMode.HoldAfterFirstData,
+            heldStarted);
+
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+        using var cts = new CancellationTokenSource();
+
+        var keepTask = client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            keep.RequestId,
+            keep.Record.ArtId,
+            CancellationToken.None);
+        var cancelTask = client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            cancel.RequestId,
+            cancel.Record.ArtId,
+            cts.Token);
+
+        await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cts.CancelAsync();
+
+        var keepResult = await keepTask;
+        var cancelResult = await cancelTask;
+        Assert.Equal(VatpFetchKind.Success, keepResult.Kind);
+        Assert.Equal(keep.Record.ArtId, keepResult.Record.ArtId);
+        Assert.Equal(keep.Record.ArtSize, keepResult.Record.ArtSize);
+        Assert.True(
+            cancelResult.Kind is VatpFetchKind.Cancelled
+                or VatpFetchKind.ConnectionFailure
+                or VatpFetchKind.IncompleteOrMalformedArticle,
+            cancelResult.Kind.ToString());
+        Assert.NotEqual(VatpFetchKind.Success, cancelResult.Kind);
+        Assert.Equal(default, cancelResult.Record);
+
+        // Connection must remain usable for a subsequent large transfer.
+        var retry = CreateArticle("<post-cancel-large@example.test>", body: BuildLargeBody(740 * 1024));
+        server.Register(retry.Record, retry.SelectedDateHeaderName);
+        var retryResult = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            retry.RequestId,
+            retry.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.Success, retryResult.Kind);
+        Assert.Equal(retry.Record.ArtSize, retryResult.Record.ArtSize);
+    }
+
+    [Fact]
     public async Task Tiny_writes_reconstruct_partial_frames_across_reads()
     {
         await using var server = VatpLoopbackTestServer.Start();
@@ -341,6 +459,179 @@ public sealed class VatpArticleClientTests
             CancellationToken.None);
         Assert.Equal(VatpFetchKind.Success, retry.Kind);
         Assert.Equal(prepared.Record.ArtId, retry.Record.ArtId);
+    }
+
+    [Fact]
+    public async Task Late_and_never_allocated_stream_frames_do_not_poison_connection()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.EmitSpuriousFramesAfterTerminal = true;
+        var first = CreateArticle("<stream-lifecycle-1@example.test>");
+        var second = CreateArticle("<stream-lifecycle-2@example.test>");
+        server.Register(first.Record, first.SelectedDateHeaderName);
+        server.Register(second.Record, second.SelectedDateHeaderName);
+
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+
+        var r1 = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            first.RequestId,
+            first.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.Success, r1.Kind);
+        Assert.Equal(first.Record.ArtId, r1.Record.ArtId);
+
+        // Spurious late END/FAIL for stream 1 and META/DATA/END for 0x7FFFFFFE must not
+        // inject state or kill the pooled connection.
+        var r2 = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            second.RequestId,
+            second.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.Success, r2.Kind);
+        Assert.Equal(second.Record.ArtId, r2.Record.ArtId);
+        Assert.Equal(second.Record.ArtSize, r2.Record.ArtSize);
+        Assert.Equal(1, pool.AliveConnectionCount(server.Host, server.Port));
+
+        var openIds = server.ObservedOpenStreamIds.OrderBy(static id => id).ToArray();
+        Assert.Equal(new uint[] { 1, 2 }, openIds);
+        Assert.DoesNotContain(0x7FFFFFFEu, openIds);
+    }
+
+    [Fact]
+    public async Task Stream_ids_are_monotonic_and_not_reused_on_same_connection()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+
+        for (var i = 0; i < 4; i++)
+        {
+            var prepared = CreateArticle($"<stream-mono-{i}@example.test>");
+            server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+            var result = await client.FetchArticleAsync(
+                server.CreateCacheUri(),
+                prepared.RequestId,
+                prepared.Record.ArtId,
+                CancellationToken.None);
+            Assert.Equal(VatpFetchKind.Success, result.Kind);
+        }
+
+        var ids = server.ObservedOpenStreamIds.OrderBy(static id => id).ToArray();
+        Assert.Equal(new uint[] { 1, 2, 3, 4 }, ids);
+        Assert.Equal(1, pool.ConnectionCountForTest(server.Host, server.Port));
+    }
+
+    [Fact]
+    public async Task Active_stream_id_is_not_reused_while_sibling_is_held()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var held = CreateArticle("<held-active-id@example.test>", body: BuildLargeBody(64 * 1024));
+        var other = CreateArticle("<other-while-held@example.test>");
+        var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.Register(
+            held.Record,
+            held.SelectedDateHeaderName,
+            VatpLoopbackTestServer.TransferMode.HoldAfterFirstData,
+            heldStarted);
+        server.Register(other.Record, other.SelectedDateHeaderName);
+
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+        using var cts = new CancellationTokenSource();
+
+        var heldTask = client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            held.RequestId,
+            held.Record.ArtId,
+            cts.Token);
+        await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var otherResult = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            other.RequestId,
+            other.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.Success, otherResult.Kind);
+
+        await cts.CancelAsync();
+        var heldResult = await heldTask;
+        Assert.NotEqual(VatpFetchKind.Success, heldResult.Kind);
+
+        var ids = server.ObservedOpenStreamIds.ToArray();
+        Assert.Equal(2, ids.Length);
+        Assert.Contains(1u, ids);
+        Assert.Contains(2u, ids);
+        Assert.Equal(2, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public async Task Cancelled_stream_spurious_frames_do_not_fail_sibling()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.EmitSpuriousFramesAfterTerminal = true;
+        var keep = CreateArticle("<keep-after-cancel-spurious@example.test>", body: BuildLargeBody(128 * 1024));
+        var cancel = CreateArticle("<cancel-spurious@example.test>", body: BuildLargeBody(128 * 1024));
+        var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.Register(keep.Record, keep.SelectedDateHeaderName);
+        server.Register(
+            cancel.Record,
+            cancel.SelectedDateHeaderName,
+            VatpLoopbackTestServer.TransferMode.HoldAfterFirstData,
+            heldStarted);
+
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+        using var cts = new CancellationTokenSource();
+
+        var keepTask = client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            keep.RequestId,
+            keep.Record.ArtId,
+            CancellationToken.None);
+        var cancelTask = client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            cancel.RequestId,
+            cancel.Record.ArtId,
+            cts.Token);
+
+        await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cts.CancelAsync();
+
+        var keepResult = await keepTask;
+        var cancelResult = await cancelTask;
+        Assert.Equal(VatpFetchKind.Success, keepResult.Kind);
+        Assert.Equal(keep.Record.ArtId, keepResult.Record.ArtId);
+        Assert.NotEqual(VatpFetchKind.Success, cancelResult.Kind);
+        Assert.Equal(1, pool.AliveConnectionCount(server.Host, server.Port));
+    }
+
+    [Fact]
+    public async Task Meta_on_connection_stream_id_marks_connection_dead()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.MetaOnConnectionStreamId;
+        var prepared = CreateArticle("<stream0-meta@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var pool = CreatePool(server);
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
+        await WaitUntilAsync(() => pool.AliveConnectionCount(server.Host, server.Port) == 0, TimeSpan.FromSeconds(3));
+
+        server.Mode = VatpLoopbackTestServer.TransferMode.Complete;
+        var retry = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.Success, retry.Kind);
     }
 
     private static VatpArticleClient CreateClient(VatpLoopbackTestServer server) =>

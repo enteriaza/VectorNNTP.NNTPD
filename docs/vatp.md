@@ -134,6 +134,10 @@ ArtSize+FIN, duplicate END, etc.) are deterministic protocol errors.
 (`ArticleTransferLimits`) — policy, not a wire constant. WINDOW adds credit (saturating).
 Insufficient credit is a flow-control violation. Zero credit pauses only that stream.
 
+The initial window is **outstanding-byte credit**, not an article-size ceiling. Receivers
+consume credit on accepted DATA and replenish the same amount locally when advertising
+outbound WINDOW so transfers larger than the initial window can complete under pacing.
+
 WINDOW on an unknown or terminal stream is `UnknownStream`.
 
 ## Fairness (scheduling model)

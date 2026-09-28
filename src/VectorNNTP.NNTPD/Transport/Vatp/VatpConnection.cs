@@ -22,7 +22,6 @@ internal sealed class VatpConnection : IAsyncDisposable
     private readonly object _gate = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly Channel<VatpFrameEncoder.EncodedFrame> _outbound;
-    private readonly Queue<uint> _freeStreamIds = new();
     private uint _nextStreamId = 1;
     private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
     private Task? _runTask;
@@ -444,13 +443,14 @@ internal sealed class VatpConnection : IAsyncDisposable
         {
             if (!_pending.TryGetValue(frame.Header.StreamId, out pending))
             {
+                // Late META/DATA/END after local stream cleanup (e.g. fetch already
+                // completed while WINDOW/FAIL races drained) must not kill the connection.
                 VatpClientLogMessages.ProtocolViolation(
                     _logger,
                     _host,
                     _port,
-                    $"Unexpected StreamId {frame.Header.StreamId}.");
-                MarkDead("Unexpected stream frame.");
-                return false;
+                    $"Ignoring frame for inactive StreamId {frame.Header.StreamId}.");
+                return !IsDead;
             }
 
             receive = pending.ReceiveStream;
@@ -474,16 +474,32 @@ internal sealed class VatpConnection : IAsyncDisposable
                 break;
             case VatpFrameType.Data:
                 {
+                    // Receive credit is consumed on accept. Replenish locally and advertise
+                    // the same amount via WINDOW so ArtSize may exceed InitialStreamWindowBytes
+                    // without treating the initial window as an article-size ceiling.
                     var apply = receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
+                    if (!apply.Success)
+                    {
+                        CompletePending(
+                            frame.Header.StreamId,
+                            ToFetchFailure(receive, "DATA rejected."));
+                        break;
+                    }
+
                     var payloadLength = checked((uint)frame.Payload.Length);
                     if (payloadLength > 0)
                     {
-                        await EnqueueFrameAsync(
-                            VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, payloadLength),
-                            cancellationToken).ConfigureAwait(false);
+                        // Pair outbound WINDOW with local credit restore. Skip both when the
+                        // stream was cancelled between accept and replenish (no cross-stream credit).
+                        if (receive.TryAcceptWindow(payloadLength).Success)
+                        {
+                            await EnqueueFrameAsync(
+                                VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, payloadLength),
+                                cancellationToken).ConfigureAwait(false);
+                        }
                     }
 
-                    if (!apply.Success || receive.IsTerminal)
+                    if (receive.IsTerminal)
                     {
                         CompletePending(
                             frame.Header.StreamId,
@@ -553,6 +569,14 @@ internal sealed class VatpConnection : IAsyncDisposable
         {
             MarkDead(reasonText ?? errorCode.ToString());
             return false;
+        }
+
+        // Server may emit UnknownStream for WINDOW/CANCEL that arrive after it already
+        // removed a finished stream (common when ArtSize fits in the initial window).
+        // That race must not fail an in-flight or just-completed transfer, nor poison siblings.
+        if (errorCode == VatpErrorCode.UnknownStream)
+        {
+            return !IsDead;
         }
 
         lock (_gate)
@@ -732,9 +756,12 @@ internal sealed class VatpConnection : IAsyncDisposable
 
     private uint AllocateStreamIdLocked()
     {
-        if (_freeStreamIds.Count > 0)
+        // Do not reuse StreamIds on a live connection. Late WINDOW/END/FAIL for a just-
+        // finished stream must not be applied to a successor transfer that recycled the id.
+        // Concurrent capacity remains bounded by MaxStreamsPerConnection via the stream table.
+        if (_nextStreamId == 0)
         {
-            return _freeStreamIds.Dequeue();
+            _nextStreamId = 1;
         }
 
         return _nextStreamId++;
@@ -742,10 +769,9 @@ internal sealed class VatpConnection : IAsyncDisposable
 
     private void RecycleStreamIdLocked(uint streamId)
     {
-        if (streamId < _nextStreamId)
-        {
-            _freeStreamIds.Enqueue(streamId);
-        }
+        // Intentionally unused for wire StreamId values; retained as a call-site hook so
+        // stream-table removal stays paired with allocation cleanup.
+        _ = streamId;
     }
 
     private static void EnsureParseCapacity(ref byte[] parseBuffer, int required)
