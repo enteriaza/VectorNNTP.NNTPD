@@ -87,6 +87,7 @@ internal static class NntpdFileLogging
 
         configuration.AddInMemoryCollection(new Dictionary<string, string?> { [pathKey] = path });
         NntpdNewsLogging.BindResolvedNewsPath(configuration, applicationBaseDirectory);
+        NntpdPathSurveyLogging.BindResolvedPathSurveyPath(configuration, applicationBaseDirectory);
     }
 
     private static string? FindConfiguredFilePathKey(IConfiguration configuration)

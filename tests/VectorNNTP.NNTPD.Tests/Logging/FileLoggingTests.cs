@@ -72,6 +72,8 @@ public sealed class FileLoggingTests
 
             var expected = NntpdFileLogging.RollingFilePath(logDir, "VectorNNTP.NNTPD");
             Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
+            Assert.Equal(NntpdNewsLogging.NewsRollingFilePath(logDir), configuration["Serilog:News:path"]);
+            Assert.Equal(NntpdPathSurveyLogging.PathSurveyRollingFilePath(logDir), configuration["Serilog:Inpaths:path"]);
             Assert.True(Directory.Exists(logDir));
         }
         finally

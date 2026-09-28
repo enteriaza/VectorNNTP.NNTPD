@@ -33,6 +33,7 @@ using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Email.Smtp;
+using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.Common.Hosting;
@@ -367,6 +368,8 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton(IngestionPipelineMetrics.Shared);
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
         services.TryAddSingleton<INewsLogWriter, SerilogNewsLogWriter>();
+        services.TryAddSingleton<ICompletedPathSurveyFileHandler, NullCompletedPathSurveyFileHandler>();
+        services.TryAddSingleton<IPathSurveyWriter, SerilogPathSurveyWriter>();
         services.TryAddSingleton<OverviewDbHandoffPublisher>();
         services.TryAddSingleton<IOverviewDbHandoffPublisher>(static sp =>
             sp.GetRequiredService<OverviewDbHandoffPublisher>());

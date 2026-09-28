@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using Serilog.Sinks.File;
 using Serilog.Sinks.File.Archive;
 
 namespace VectorNNTP.NNTPD.Logging;
@@ -20,4 +21,23 @@ public static class NntpdSerilogHooks
     /// uncompressed original after this hook returns.
     /// </summary>
     public static ArchiveHooks DailyGzipFastest { get; } = new(CompressionLevel.Fastest);
+
+    /// <summary>
+    /// Chains a Path-survey completed-file handler before <see cref="DailyGzipFastest"/>.
+    /// </summary>
+    /// <param name="completedFileHandler">Receives the uncompressed rolled Path-survey file.</param>
+    /// <param name="hookLogger">Logger for handler failures; gzip still runs after a failure.</param>
+    /// <returns>
+    /// A File lifecycle chain: completed-file handler, then gzip. Serilog deletes the
+    /// uncompressed file after the chain returns. News logging continues to use
+    /// <see cref="DailyGzipFastest"/> directly.
+    /// </returns>
+    public static FileLifecycleHooks CreatePathSurveyHooks(
+        ICompletedPathSurveyFileHandler completedFileHandler,
+        Microsoft.Extensions.Logging.ILogger hookLogger)
+    {
+        ArgumentNullException.ThrowIfNull(completedFileHandler);
+        ArgumentNullException.ThrowIfNull(hookLogger);
+        return new PathSurveyCompletedFileHook(completedFileHandler, hookLogger).Then(DailyGzipFastest);
+    }
 }

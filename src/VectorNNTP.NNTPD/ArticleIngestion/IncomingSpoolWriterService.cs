@@ -18,20 +18,25 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// not destuff, parse, or construct records. After dequeue it publishes a compact
 /// OverviewDB protobuf message to <c>overviewdb.queue</c> and waits for a RabbitMQ
 /// publisher confirmation. On confirm it classifies <c>+</c>/<c>j</c> and emits
-/// those events through <see cref="INewsLogWriter"/> (production: Serilog), then
-/// continues to the existing <see cref="IIncomingArticlePersister"/> (/dev/null
-/// no-op). A failed confirm or publish is treated as incomplete: the article is
-/// requeued through <see cref="IArticleIngestionQueue.EnqueueAsync"/>. Rejected
-/// articles never reach this worker; <c>-</c> is emitted at the protocol decision.
-/// Moderated POST (<c>m</c>) is emitted at the moderation-success decision and
-/// never enters the queue.
+/// those events through <see cref="INewsLogWriter"/> (production: Serilog), writes
+/// the canonical <c>ArticleRecord.Path</c> to the dedicated Path-survey stream
+/// (<see cref="IPathSurveyWriter"/>), then continues to the existing
+/// <see cref="IIncomingArticlePersister"/> (/dev/null no-op). A failed confirm or
+/// publish is treated as incomplete: the article is requeued through
+/// <see cref="IArticleIngestionQueue.EnqueueAsync"/>. Rejected articles never
+/// reach this worker; <c>-</c> is emitted at the protocol decision. Moderated
+/// POST (<c>m</c>) is emitted at the moderation-success decision and never enters
+/// the queue. Path-survey observations are not written for articles that never
+/// become a CanonicalV1 queued record.
 /// </para>
 /// <para>
-/// A news-log failure is reported through
-/// <see cref="SpoolLogMessages.NewsLogFailed"/> and does not re-admit, re-queue,
-/// or emit a second NNTP response. The article still proceeds to the persister
-/// after a successful OverviewDB handoff. The worker never calls OverviewDB
-/// over RPC, HTTP, gRPC, or a database connection.
+/// A news-log or Path-survey failure is reported through
+/// <see cref="SpoolLogMessages.NewsLogFailed"/> /
+/// <see cref="SpoolLogMessages.PathSurveyFailed"/> and does not re-admit,
+/// re-queue, or emit a second NNTP response. The article still proceeds to the
+/// persister after a successful OverviewDB handoff. Path observations are
+/// streamed to disk and are not retained in memory. The worker never calls
+/// OverviewDB over RPC, HTTP, gRPC, or a database connection.
 /// </para>
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
@@ -39,6 +44,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IArticleIngestionQueue _queue;
     private readonly IIncomingArticlePersister _persister;
     private readonly INewsLogWriter _newsLog;
+    private readonly IPathSurveyWriter _pathSurvey;
     private readonly INewsgroupCatalogue? _catalogue;
     private readonly IOverviewDbHandoffPublisher _overviewHandoff;
     private readonly IOptions<NntpdOptions> _options;
@@ -61,7 +67,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         INewsgroupCatalogue? catalogue = null,
         TimeProvider? timeProvider = null,
         IOverviewDbHandoffPublisher? overviewHandoff = null,
-        IngestionPipelineMetrics? pipelineMetrics = null)
+        IngestionPipelineMetrics? pipelineMetrics = null,
+        IPathSurveyWriter? pathSurvey = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -73,6 +80,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _logger = logger;
         _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
         _newsLog = newsLog ?? NullNewsLogWriter.Instance;
+        _pathSurvey = pathSurvey ?? NullPathSurveyWriter.Instance;
         _catalogue = catalogue;
         _time = timeProvider ?? TimeProvider.System;
         _overviewHandoff = overviewHandoff ?? NullOverviewDbHandoffPublisher.Instance;
@@ -128,6 +136,15 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             SpoolLogMessages.NewsLogFlushFailed(_logger, ex);
         }
+
+        try
+        {
+            _pathSurvey.Flush();
+        }
+        catch (Exception ex)
+        {
+            SpoolLogMessages.PathSurveyFlushFailed(_logger, ex);
+        }
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -174,6 +191,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 var newsStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 WriteNewsLog(article);
                 _pipeline?.RecordNews(newsStart);
+                WritePathSurvey(article);
                 var persistStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
                 _pipeline?.RecordPersist(persistStart);
@@ -239,6 +257,22 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         catch (Exception ex)
         {
             SpoolLogMessages.NewsLogFailed(_logger, ex, article.MessageId);
+        }
+    }
+
+    /// <summary>
+    /// Writes the canonical Path-survey observation. Failures are logged and
+    /// swallowed so the already-accepted article still reaches the persister.
+    /// </summary>
+    private void WritePathSurvey(InboundArticle article)
+    {
+        try
+        {
+            _pathSurvey.Write(article.Record.Path);
+        }
+        catch (Exception ex)
+        {
+            SpoolLogMessages.PathSurveyFailed(_logger, ex, article.MessageId);
         }
     }
 

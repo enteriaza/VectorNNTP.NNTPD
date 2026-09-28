@@ -112,6 +112,55 @@ A news-log I/O failure is reported through application diagnostics and does not 
 
 High-volume writes use `Serilog.Sinks.Async` (`bufferSize: 50000`, `blockWhenFull: true`) wrapping a buffered File sink. Events are **not dropped**: if the file writer cannot keep up, logging calls block until the queue has space. `Program` still calls `Log.CloseAndFlushAsync()` on shutdown so the application async buffer is flushed. The news logger is disposed with the host / `INewsLogWriter`.
 
+## Path-survey (`inpaths`) log
+
+`news` is an INN `ARTlog`-compatible disposition journal. It does **not** contain Path headers and is not Path-survey input. That is intentional: the news line contract is unchanged.
+
+The Path-survey stream is a separate durable file, analogous to an INN `WP` Path feed, written beside news:
+
+```text
+{LogDir}/news-yyyyMMdd.log
+{LogDir}/inpaths-yyyyMMdd.log
+```
+
+Each observation is one line produced from the canonical `ArticleRecord.Path` already materialized by the existing ingestion pipeline:
+
+```text
+Path: <canonical-path>
+```
+
+The value is the Path header bytes on the CanonicalV1 record. NNTPD does not reconstruct Path from the inbound peer, Message-ID, Newsgroups, FQDN, or any other metadata, and does not invent hops such as `giganews!nntpd01!not-for-mail`. Empty or missing `ArticleRecord.Path` follows the existing field-table semantics (empty span) and still writes `Path: ` plus the line terminator. Message-ID, Newsgroups, article size, timestamp, inbound peer, disposition, news reason, and ArticleId are not Path-survey fields.
+
+`IncomingSpoolWriterService` writes the observation after a confirmed OverviewDB publish, from the same CanonicalV1 queued `ArticleRecord` used for news `+`/`j`. Articles that never become a CanonicalV1 queued record (protocol rejections, moderated POST that never enters the queue) are not surveyed. Path-survey writes are independent of news: junk with `LogTrash=false` still records Path; a news-log failure still records Path; a Path-survey failure still writes news and still persists.
+
+Observations are appended sequentially to disk. They are not aggregated into ninpaths statistics, not retained in an in-memory collection, and not a cache. Restarting NNTPD leaves previous Path observations on disk. Future ninpaths processing (not implemented in this change) will consume **completed** files after daily rotation.
+
+The Path-survey line format is an application invariant implemented by `InnPathSurveyTextFormatter`. Operators cannot change the `Path: ` prefix, the Path bytes, or the terminator through `outputTemplate` or any other appsettings key. Operational file behaviour is the same Serilog File/Async contract as news and is configured under `Serilog:Inpaths`. `Nntpd:LogDir` still resolves the directory.
+
+High-volume writes use `Serilog.Sinks.Async` (`bufferSize: 50000`, `blockWhenFull: true`) wrapping a buffered File sink. Events are not dropped: if the file writer cannot keep up, logging calls block until the queue has space. The dedicated Path-survey logger has source context `VectorNNTP.NNTPD.Inpaths` and is not written to Console, the application File sink, or the news file.
+
+`Serilog:Inpaths:retainedFileCountLimit` is **1 uncompressed file** (the active day) so Serilog's delete callback runs at daily rotation. That callback is the completed-file handoff:
+
+```text
+active inpaths log
+      |
+      | daily rotation
+      v
+completed uncompressed inpaths log
+      |
+      +----> ICompletedPathSurveyFileHandler (future ninpaths; currently a no-op)
+      |
+      +----> NntpdSerilogHooks.DailyGzipFastest
+      |
+      v
+Serilog deletes the uncompressed original
+historical {filename}.gz retained (this hook has no archive count limit)
+```
+
+The handler sees the uncompressed completed file **before** gzip. The hook does not delete that file; Serilog does after gzip returns. Handler failure is logged and does not skip gzip or change ingestion. News continues to use `DailyGzipFastest` directly and is not part of this handoff. Ninpaths parsing, `!!NINP` / `!!NLREC` / `!!NLEND`, Top1000, email, and any background ninpaths worker are not implemented here.
+
+A Path-survey I/O failure is reported through application diagnostics (`SpoolLogMessages.PathSurveyFailed`) and does not produce an NNTP response, reject an accepted article, stop RabbitMQ handoff, stop persistence, or affect the news log.
+
 ### Change minimum level
 
 ```json
