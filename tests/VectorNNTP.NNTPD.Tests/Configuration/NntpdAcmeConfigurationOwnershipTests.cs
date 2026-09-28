@@ -218,6 +218,27 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
 
     private static IHost CreateHost(string? contentRootPath = null)
     {
+        // VECTOR__ACMEACCOUNT overlays in-memory ACMEACCOUNT. Isolate from the
+        // operator environment so these tests prove the shared-account contract.
+        var previousAccount = Environment.GetEnvironmentVariable(
+            AcmeCloudflareOptions.AcmeAccountEnvironmentVariable);
+        Environment.SetEnvironmentVariable(
+            AcmeCloudflareOptions.AcmeAccountEnvironmentVariable,
+            SharedAcmeAccount);
+        try
+        {
+            return BuildHost(contentRootPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                AcmeCloudflareOptions.AcmeAccountEnvironmentVariable,
+                previousAccount);
+        }
+    }
+
+    private static IHost BuildHost(string? contentRootPath)
+    {
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
         {
             ApplicationName = "VectorNNTP.NNTPD.Tests",

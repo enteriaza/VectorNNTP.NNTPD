@@ -1,6 +1,6 @@
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 
-/// <summary>Loads <c>docs/nntpusers-account-art-type.sql</c>.</summary>
+/// <summary>Loads <c>docs/schema/nntpusers-account-art-type.sql</c>.</summary>
 internal static class NntpUsersArtTypeMigrationScript
 {
     public static string FindPath() => PostFilterSchemaScript.FindDocsSql("nntpusers-account-art-type.sql");

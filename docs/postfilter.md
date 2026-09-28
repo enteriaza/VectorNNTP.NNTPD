@@ -18,9 +18,9 @@ Protocol replies stay `240 Article received OK` or `441 Posting failed`; PostFil
 | POST protocol | [commands.md](commands.md) |
 | Validation matrix | `tests/VectorNNTP.NNTPD.Tests/PostFilter/PostFilterProductionPolicyMatrixTests.cs` |
 
-NNTPD does not create or migrate these tables. Apply the canonical provisioning script [`docs/postfilter.sql`](postfilter.sql) once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators publish a new revision.
+NNTPD does not create or migrate these tables. Apply the canonical provisioning script [`docs/schema/postfilter.sql`](schema/postfilter.sql) once per NntpDB. Seed `Gate=Disabled` so the cluster stays inert until operators publish a new revision.
 
-Account ArtType capability is a separate additive change on existing `nntpusers`. Apply [`docs/nntpusers-account-art-type.sql`](nntpusers-account-art-type.sql) to the account database **before** deploying an NNTPD that `SELECT`s `account_art_type`. A missing column is AUTHINFO `503`, not `481` and not unrestricted access.
+Account ArtType capability is a separate additive change on existing `nntpusers`. Apply [`docs/schema/nntpusers-account-art-type.sql`](schema/nntpusers-account-art-type.sql) to the account database **before** deploying an NNTPD that `SELECT`s `account_art_type`. A missing column is AUTHINFO `503`, not `481` and not unrestricted access.
 
 ---
 
@@ -134,7 +134,7 @@ NNTPD follows the same catalogue contract as `nntpgroups` / `nntpmoderators`:
 
 Existing NntpDB tables (`nntpgroups`, `nntpusers`, `nntpmoderators`) have no checked-in `CREATE TABLE`. NNTPD only `SELECT`s them. PostFilter is the first NntpDB surface with product DDL.
 
-**Canonical provisioning script:** [`docs/postfilter.sql`](postfilter.sql)
+**Canonical provisioning script:** [`docs/schema/postfilter.sql`](schema/postfilter.sql)
 
 Apply that script once per NntpDB. NNTPD does not create or migrate tables. If an earlier singleton (`nntppostfilterpolicy.policy_id = 1` without revision-keyed collections) was applied, drop those objects and apply this script; there is no automated migrator.
 
@@ -153,7 +153,7 @@ InnoDB + `utf8mb4` / `utf8mb4_unicode_ci` match typical MySQL 8 NntpDB deploymen
 | `nntppostfilterrejections` | Append-only PostFilter rejection evidence (not SA-specific). |
 | `trg_nntppostfiltercurrent_revision_forward` | Published revision must increase. |
 
-`nntpusers.account_art_type` is **not** created by `postfilter.sql`. Apply [`nntpusers-account-art-type.sql`](nntpusers-account-art-type.sql) on the existing account table (`INT UNSIGNED NOT NULL DEFAULT 65535` = `ArticleTypeCapabilities.All`). That is the AUTHINFO session capability, not a PostFilter policy ENUM.
+`nntpusers.account_art_type` is **not** created by `postfilter.sql`. Apply [`nntpusers-account-art-type.sql`](schema/nntpusers-account-art-type.sql) on the existing account table (`INT UNSIGNED NOT NULL DEFAULT 65535` = `ArticleTypeCapabilities.All`). That is the AUTHINFO session capability, not a PostFilter policy ENUM.
 
 Three related but different ArtType representations:
 
@@ -211,7 +211,7 @@ Maximum cluster propagation delay after `COMMIT` is one refresh interval: **60 s
 
 Before NNTPD can start, these objects and rows must exist:
 
-1. The six tables and the forward-revision trigger from [`docs/postfilter.sql`](postfilter.sql).
+1. The six tables and the forward-revision trigger from [`docs/schema/postfilter.sql`](schema/postfilter.sql).
 2. Policy revision `1` (Disabled, 1 day / 10 minutes, all ceilings `0`, SA disabled, no invented SPAMD host).
 3. `nntppostfilterarttypes (1, 'sa_exclude', 'YEncoded')`.
 4. `nntppostfiltercurrent (1, 1)`.
@@ -506,7 +506,7 @@ POST also emits existing `PostLogMessages` Accepted/Rejected lines (`441` catego
 
 ## 13. Safe deployment / activation
 
-1. Apply [`docs/postfilter.sql`](postfilter.sql) (tables, trigger, Disabled seed). Do not add `Nntpd:PostFilter` to appsettings.
+1. Apply [`docs/schema/postfilter.sql`](schema/postfilter.sql) (tables, trigger, Disabled seed). Do not add `Nntpd:PostFilter` to appsettings.
 2. Confirm `nntppostfiltercurrent.policy_id = 1` exists. Initial load is required for RUNNING.
 3. Confirm Redis (`Redis:Host` / startup PING). PostFilter uses the same multiplexer for quota state.
 4. If SpamAssassin will be used, confirm SPAMD from every NNTPD host, then publish a new revision with `sa_enabled='Y'` and host rows.

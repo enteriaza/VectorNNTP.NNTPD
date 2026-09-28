@@ -22,7 +22,7 @@ public static class NntpUserQueries
 
     /// <summary>
     /// Additive <c>nntpusers</c> extension from
-    /// <c>docs/nntpusers-account-art-type.sql</c>. Does not drop the table.
+    /// <c>docs/schema/nntpusers-account-art-type.sql</c>. Does not drop the table.
     /// Default <c>65535</c> is <c>ArticleTypeCapabilities.All</c>.
     /// </summary>
     public const string AddAccountArtTypeColumn =

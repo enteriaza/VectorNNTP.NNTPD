@@ -33,8 +33,8 @@ docs/
   architecture.md
   configuration.md
   postfilter.md                 # POST PostFilter operator guide (NntpDB cluster policy)
-  postfilter.sql                # PostFilter NntpDB DDL
-  nntpusers-account-art-type.sql # Additive nntpusers.account_art_type ALTER
+  schema/postfilter.sql         # PostFilter NntpDB DDL
+  schema/nntpusers-account-art-type.sql # Additive nntpusers.account_art_type ALTER
   logging.md
   systemd.md
   systemd-integration-verification.md

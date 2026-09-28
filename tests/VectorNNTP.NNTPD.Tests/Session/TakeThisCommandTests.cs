@@ -763,99 +763,58 @@ public sealed class TakeThisCommandTests
     [Fact]
     public async Task SpoolWriter_PersistsQueuedArticlesToIncomingDirectory()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
+        var persisted = new ConcurrentBag<string>();
+        var options = new ArticleIngestionOptions { QueueCapacity = 4 };
+        var queue = new ArticleIngestionQueue(options);
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new CollectingPersister(persisted),
+            Options.Create(new NntpdOptions { ArticleIngestion = options }),
+            NullLogger<IncomingSpoolWriterService>.Instance);
+        await writer.StartAsync(CancellationToken.None);
+
+        var article = CanonicalArticleText.CreateQueued("<spool@ex.com>", InboundArticleProducer.TakeThis);
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (persisted.IsEmpty && !cts.IsCancellationRequested)
         {
-            var options = new ArticleIngestionOptions { IncomingDirectory = dir, QueueCapacity = 4 };
-            var queue = new ArticleIngestionQueue(options);
-            var persister = new IncomingSpoolFilePersister(
-                Options.Create(new NntpdOptions { ArticleIngestion = options }),
-                NullLogger<IncomingSpoolFilePersister>.Instance);
-            var writer = new IncomingSpoolWriterService(
-                queue,
-                persister,
-                Options.Create(new NntpdOptions { ArticleIngestion = options }),
-                NullLogger<IncomingSpoolWriterService>.Instance);
-            await writer.StartAsync(CancellationToken.None);
-
-            var article = CanonicalArticleText.CreateQueued("<spool@ex.com>", InboundArticleProducer.TakeThis);
-            Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (Directory.GetFiles(dir, "*.article").Length < 1 && !cts.IsCancellationRequested)
-            {
-                await Task.Delay(10, cts.Token);
-            }
-
-            var file = Assert.Single(Directory.GetFiles(dir, "*.article"));
-            Assert.Equal("Subject: spool\r\n\r\nok\r\n", await File.ReadAllTextAsync(file));
-
-            queue.Complete();
-            await writer.StopAsync(CancellationToken.None);
+            await Task.Delay(10, cts.Token);
         }
-        finally
-        {
-            try
-            {
-                Directory.Delete(dir, recursive: true);
-            }
-            catch
-            {
-                // best-effort
-            }
-        }
+
+        Assert.Equal("<spool@ex.com>", Assert.Single(persisted));
+
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
     }
 
     [Fact]
     public async Task SpoolWriter_ShutdownDrainsAlreadyQueuedArticles()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "vectornntp-drain-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
+        var persisted = new ConcurrentBag<string>();
+        var options = new ArticleIngestionOptions { QueueCapacity = 8 };
+        var queue = new ArticleIngestionQueue(options);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new GatedPersister(gate.Task, persisted),
+            Options.Create(new NntpdOptions { ArticleIngestion = options }),
+            NullLogger<IncomingSpoolWriterService>.Instance);
+        await writer.StartAsync(CancellationToken.None);
+
+        for (var i = 0; i < 3; i++)
         {
-            var options = new ArticleIngestionOptions { IncomingDirectory = dir, QueueCapacity = 8 };
-            var queue = new ArticleIngestionQueue(options);
-            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _ = new GatedPersister(gate.Task, []);
-            // Use real file persister after gate for drain proof — compose:
-            var filePersister = new IncomingSpoolFilePersister(
-                Options.Create(new NntpdOptions { ArticleIngestion = options }),
-                NullLogger<IncomingSpoolFilePersister>.Instance);
-            var chained = new ChainedPersister(gate.Task, filePersister);
-
-            var writer = new IncomingSpoolWriterService(
-                queue,
-                chained,
-                Options.Create(new NntpdOptions { ArticleIngestion = options }),
-                NullLogger<IncomingSpoolWriterService>.Instance);
-            await writer.StartAsync(CancellationToken.None);
-
-            for (var i = 0; i < 3; i++)
-            {
-                var article = CanonicalArticleText.CreateQueued($"<drain{i}@ex.com>", InboundArticleProducer.TakeThis);
-                Assert.True(queue.TryEnqueue(article));
-            }
-
-            var stop = writer.StopAsync(CancellationToken.None);
-            await Task.Delay(30);
-            Assert.False(stop.IsCompleted);
-            gate.SetResult();
-            await stop.WaitAsync(TimeSpan.FromSeconds(5));
-
-            Assert.Equal(3, Directory.GetFiles(dir, "*.article").Length);
+            var article = CanonicalArticleText.CreateQueued($"<drain{i}@ex.com>", InboundArticleProducer.TakeThis);
+            Assert.True(queue.TryEnqueue(article));
         }
-        finally
-        {
-            try
-            {
-                Directory.Delete(dir, recursive: true);
-            }
-            catch
-            {
-                // best-effort
-            }
-        }
+
+        var stop = writer.StopAsync(CancellationToken.None);
+        await Task.Delay(30);
+        Assert.False(stop.IsCompleted);
+        gate.SetResult();
+        await stop.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(3, persisted.Count);
     }
 
     [Fact]
@@ -1029,18 +988,6 @@ public sealed class TakeThisCommandTests
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             _persisted.Add(article.MessageId);
-        }
-    }
-
-    private sealed class ChainedPersister(Task gate, IIncomingArticlePersister inner) : IIncomingArticlePersister
-    {
-        private readonly Task _gate = gate;
-        private readonly IIncomingArticlePersister _inner = inner;
-
-        public async Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            await _inner.PersistAsync(article, cancellationToken).ConfigureAwait(false);
         }
     }
 

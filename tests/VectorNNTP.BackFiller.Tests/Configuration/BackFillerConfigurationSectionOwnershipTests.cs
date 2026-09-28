@@ -49,7 +49,17 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         Assert.False(root.TryGetProperty("BindPort", out _));
         Assert.False(root.TryGetProperty("BindPortTls", out _));
         Assert.False(section.TryGetProperty("BindPort", out _));
-        Assert.Equal("*", section.GetProperty("BindAddress")[0].GetString());
+        var bindAddress = section.GetProperty("BindAddress");
+        Assert.True(bindAddress.GetArrayLength() >= 1, "BackFiller:BindAddress must declare at least one listen address.");
+        foreach (var entry in bindAddress.EnumerateArray())
+        {
+            var value = entry.GetString();
+            Assert.False(string.IsNullOrWhiteSpace(value));
+            Assert.True(
+                value is "*" or "+" || System.Net.IPAddress.TryParse(value, out _),
+                "BackFiller:BindAddress entries must be wildcards or IP addresses.");
+        }
+
         Assert.Equal(1190, section.GetProperty("BindPortTls").GetInt32());
         Assert.False(root.TryGetProperty("CloudFlareZoneId", out _));
         Assert.False(root.TryGetProperty("DnsSuffix", out _));
@@ -315,7 +325,12 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
 
     private static IHost CreateHost(Dictionary<string, string?> pairs)
     {
-        var builder = Host.CreateApplicationBuilder([]);
+        var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            ApplicationName = "VectorNNTP.BackFiller.Tests",
+            ContentRootPath = AppContext.BaseDirectory,
+            EnvironmentName = Environments.Development,
+        });
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(

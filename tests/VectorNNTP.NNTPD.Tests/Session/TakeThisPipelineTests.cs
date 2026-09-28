@@ -711,9 +711,10 @@ public sealed class TakeThisPipelineTests
             BuildTakeThis("<one-c@ex.com>", CanonicalArticleText.Destuffed("<one-c@ex.com>", "3\r\n")));
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        await WaitUntilAsync(() => session.TakeThisWindow is { Occupied: 3 }, safety.Token);
+        await WaitUntilAsync(
+            () => session.TakeThisWindow is { Occupied: 3, ActiveArticleReads: 0 },
+            safety.Token);
         Assert.Equal(1, session.TakeThisWindow!.MaxActiveArticleReads);
-        Assert.Equal(0, session.TakeThisWindow.ActiveArticleReads);
 
         history.Release.TrySetResult(HistoryLookupResult.Unseen);
         Assert.Equal("239 <one-a@ex.com>", await duplex.ReadClientLineAsync());

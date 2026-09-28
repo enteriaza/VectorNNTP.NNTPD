@@ -196,5 +196,5 @@ INSERT INTO nntppostfiltercurrent (policy_id, revision) VALUES (1, 1);
 -- PostFilter evidence sweeper.
 --
 -- Authenticated account ArtType capability is not created here.
--- Apply docs/nntpusers-account-art-type.sql to the existing account
+-- Apply docs/schema/nntpusers-account-art-type.sql to the existing account
 -- database before deploying the AUTHINFO SELECT that reads account_art_type.

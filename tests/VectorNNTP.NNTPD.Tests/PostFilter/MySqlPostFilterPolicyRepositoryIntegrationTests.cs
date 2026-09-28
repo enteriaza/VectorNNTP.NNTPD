@@ -22,7 +22,7 @@ public sealed class MySqlPostFilterPolicyRepositoryIntegrationTests
     public void OfficialSchemaScript_ContainsRevisionKeyedTables()
     {
         var path = PostFilterSchemaScript.FindPath();
-        Assert.EndsWith(Path.Combine("docs", "postfilter.sql"), path, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith(Path.Combine("docs", "schema", "postfilter.sql"), path, StringComparison.OrdinalIgnoreCase);
         var sql = File.ReadAllText(path);
         Assert.Contains("CREATE TABLE nntppostfilterpolicy", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE nntppostfiltercurrent", sql, StringComparison.Ordinal);

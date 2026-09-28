@@ -420,8 +420,10 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     /// Builds a per-attempt token cancelled when the operation cancels or the request timeout elapses.
     /// </summary>
     /// <remarks>
-    /// Timeout is <see cref="PerRequestTimeout"/> capped by remaining <see cref="CloudflareOperationBudget"/>
-    /// so a short remaining budget cannot be extended by the full per-request allowance.
+    /// When remaining <see cref="CloudflareOperationBudget"/> is at least <see cref="PerRequestTimeout"/>,
+    /// this token independently times out after <see cref="PerRequestTimeout"/>. When remaining budget is
+    /// shorter, it only links the operation token so budget expiry surfaces as operation cancellation
+    /// rather than a per-request timeout (which would wrap List into <see cref="CloudflareDnsException"/>).
     /// </remarks>
     internal static CancellationTokenSource CreateRequestTimeoutCts(
         CancellationToken operationToken,
@@ -430,7 +432,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
         operationToken.ThrowIfCancellationRequested();
         CloudflareOperationBudget.Current?.ThrowIfExpired(operationToken);
 
-        var limit = PerRequestTimeout;
+        var applyPerRequestTimeout = true;
         if (CloudflareOperationBudget.Current is { } budget)
         {
             var remaining = budget.Remaining;
@@ -441,14 +443,18 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                     operationToken);
             }
 
-            if (remaining < limit)
+            if (remaining < PerRequestTimeout)
             {
-                limit = remaining;
+                applyPerRequestTimeout = false;
             }
         }
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
-        cts.CancelAfter(limit);
+        if (applyPerRequestTimeout)
+        {
+            cts.CancelAfter(PerRequestTimeout);
+        }
+
         sendToken = cts.Token;
         return cts;
     }

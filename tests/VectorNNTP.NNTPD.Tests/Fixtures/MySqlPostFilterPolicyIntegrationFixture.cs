@@ -44,7 +44,7 @@ public sealed class MySqlPostFilterPolicyIntegrationFixture : IAsyncLifetime
                 && !await HasTableAsync(connection, "nntppostfiltercurrent"))
             {
                 SkipReason =
-                    "NntpDB still has the pre-revision PostFilter singleton. Apply docs/postfilter.sql.";
+                    "NntpDB still has the pre-revision PostFilter singleton. Apply docs/schema/postfilter.sql.";
                 return;
             }
 

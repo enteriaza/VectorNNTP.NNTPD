@@ -487,7 +487,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         if (ordinal >= reader.FieldCount)
         {
             throw new InvalidOperationException(
-                "nntpusers.account_art_type was not selected. Apply docs/nntpusers-account-art-type.sql.");
+                "nntpusers.account_art_type was not selected. Apply docs/schema/nntpusers-account-art-type.sql.");
         }
 
         if (reader.IsDBNull(ordinal))

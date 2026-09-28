@@ -154,7 +154,7 @@ public sealed class BackFillerSerilogLoggingTests
         var file = async.GetProperty("Args").GetProperty("configure")[0];
         Assert.Equal("File", file.GetProperty("Name").GetString());
         var args = file.GetProperty("Args");
-        Assert.Equal("Verbose", args.GetProperty("restrictedToMinimumLevel").GetString());
+        Assert.Equal("Debug", args.GetProperty("restrictedToMinimumLevel").GetString());
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
         Assert.Equal(1, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.True(args.GetProperty("buffered").GetBoolean());
@@ -213,7 +213,7 @@ public sealed class BackFillerSerilogLoggingTests
     }
 
     [Fact]
-    public void ConsoleReceivesDebug_FileReceivesVerbose()
+    public void ConsoleReceivesDebug_FileReceivesDebugNotTrace()
     {
         var logDir = CreateTempLogDir();
         var captured = new StringWriter();
@@ -256,7 +256,7 @@ public sealed class BackFillerSerilogLoggingTests
         var fileText = File.ReadAllText(daily);
         Assert.Contains("backfiller-console-info-marker", fileText, StringComparison.Ordinal);
         Assert.Contains("backfiller-console-debug-marker", fileText, StringComparison.Ordinal);
-        Assert.Contains("backfiller-file-trace-marker", fileText, StringComparison.Ordinal);
+        Assert.DoesNotContain("backfiller-file-trace-marker", fileText, StringComparison.Ordinal);
         TryDelete(logDir);
     }
 

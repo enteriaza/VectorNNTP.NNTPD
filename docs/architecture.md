@@ -185,7 +185,7 @@ temporary `436` / pre-article `435` → no news event
 
 ### POST PostFilter
 
-PostFilter is POST-only accept-path policy after `ArticleRecord` creation and History Peek, before `CreateQueued` / `TryAdmit`. Authoritative policy is NntpDB. Each NNTPD reads one published revision (`nntppostfiltercurrent` → `nntppostfilterpolicy` + revision-keyed collections), compiles an immutable local snapshot, and refreshes it every 60 seconds. Initial load failure prevents RUNNING. Refresh failure retains last-known-good. POST never queries MySQL. Redis holds distributed quota reservations (`nntpd:pf:q:` / `nntpd:pf:m:`), not policy. It does not run for IHAVE, TAKETHIS, BackFiller, queue workers, or unapproved catalogue `m` submission. The filter reads immutable `ArticleRecord` data and does not mutate it. SPAMD `CHECK` receives a disposable email-like scan, not `ArtData`. Operator contract and DDL: [postfilter.md](postfilter.md), [postfilter.sql](postfilter.sql).
+PostFilter is POST-only accept-path policy after `ArticleRecord` creation and History Peek, before `CreateQueued` / `TryAdmit`. Authoritative policy is NntpDB. Each NNTPD reads one published revision (`nntppostfiltercurrent` → `nntppostfilterpolicy` + revision-keyed collections), compiles an immutable local snapshot, and refreshes it every 60 seconds. Initial load failure prevents RUNNING. Refresh failure retains last-known-good. POST never queries MySQL. Redis holds distributed quota reservations (`nntpd:pf:q:` / `nntpd:pf:m:`), not policy. It does not run for IHAVE, TAKETHIS, BackFiller, queue workers, or unapproved catalogue `m` submission. The filter reads immutable `ArticleRecord` data and does not mutate it. SPAMD `CHECK` receives a disposable email-like scan, not `ArtData`. Operator contract and DDL: [postfilter.md](postfilter.md), [postfilter.sql](schema/postfilter.sql).
 
 ```text
 NntpDB nntppostfiltercurrent.revision
@@ -258,7 +258,7 @@ AUTHINFO PASS password
     → MODE READER / unspecified: INntpAuthenticationProvider (newsmaster, then nntpusers).
       Reader `nntpusers` lookup is `INntpUserRecordStore` and also selects
       `account_art_type` (INT flags; default 65535 = `ArticleTypeCapabilities.All`).
-      Operators must apply `docs/nntpusers-account-art-type.sql` first; a missing
+      Operators must apply `docs/schema/nntpusers-account-art-type.sql` first; a missing
       column is `503`, not unrestricted. The mask is copied onto
       `NntpAccountPolicy` for the session lifetime:
 

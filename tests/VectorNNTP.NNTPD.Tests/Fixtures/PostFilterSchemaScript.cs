@@ -1,21 +1,27 @@
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 
-/// <summary>Loads the operator DDL at <c>docs/postfilter.sql</c>.</summary>
+/// <summary>Loads the operator DDL at <c>docs/schema/postfilter.sql</c>.</summary>
 internal static class PostFilterSchemaScript
 {
     public static string FindPath() => FindDocsSql("postfilter.sql");
 
-    /// <summary>Finds a file under repository <c>docs/</c>.</summary>
+    /// <summary>Finds a file under repository <c>docs/</c> or <c>docs/schema/</c>.</summary>
     public static string FindDocsSql(string fileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "docs", fileName);
-            if (File.Exists(candidate))
+            var schemaCandidate = Path.Combine(dir.FullName, "docs", "schema", fileName);
+            if (File.Exists(schemaCandidate))
             {
-                return candidate;
+                return schemaCandidate;
+            }
+
+            var docsCandidate = Path.Combine(dir.FullName, "docs", fileName);
+            if (File.Exists(docsCandidate))
+            {
+                return docsCandidate;
             }
 
             dir = dir.Parent;

@@ -909,6 +909,8 @@ public sealed class PostCommandTests
 
         await duplex.WriteClientAsync(ValidArticle(date: PostRfcDate.Format(clock.GetUtcNow())) + ".\r\n");
         Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
+        await WaitUntilAsync(() => session.CommandWorkForTests == 0, Safety);
+        await WaitUntilAsync(() => clock.HasScheduledTimers, Safety);
 
         clock.Advance(Idle);
         await run.WaitAsync(Safety);
@@ -924,6 +926,7 @@ public sealed class PostCommandTests
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
         await session.IdleWatchArmed.WaitAsync(Safety);
+        await WaitUntilAsync(() => clock.HasScheduledTimers, Safety);
 
         clock.Advance(Idle);
         await run.WaitAsync(Safety);
@@ -938,6 +941,16 @@ public sealed class PostCommandTests
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
         await run;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        while (!condition())
+        {
+            cts.Token.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
     }
 
     private static async Task AuthenticateAsync(PostDuplex duplex, string username, string password)

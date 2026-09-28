@@ -21,7 +21,7 @@ public sealed class NntpUsersAccountArtTypeMigrationTests
     {
         var path = NntpUsersArtTypeMigrationScript.FindPath();
         Assert.EndsWith(
-            Path.Combine("docs", "nntpusers-account-art-type.sql"),
+            Path.Combine("docs", "schema", "nntpusers-account-art-type.sql"),
             path,
             StringComparison.OrdinalIgnoreCase);
         var sql = File.ReadAllText(path);

@@ -3,7 +3,7 @@ namespace VectorNNTP.NNTPD.NntpDb;
 /// <summary>Authoritative NntpDB queries for the cluster PostFilter policy.</summary>
 /// <remarks>
 /// NNTPD only <c>SELECT</c>s one published revision. Schema DDL is
-/// <c>docs/postfilter.sql</c>. There is no application migration runner.
+/// <c>docs/schema/postfilter.sql</c>. There is no application migration runner.
 /// </remarks>
 public static class NntpPostFilterQueries
 {

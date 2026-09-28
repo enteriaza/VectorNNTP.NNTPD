@@ -117,7 +117,7 @@ internal static class BackFillerFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "logs/VectorNNTP.BackFiller-.log",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Verbose",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:fileSizeLimitBytes"] = null,

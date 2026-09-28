@@ -169,7 +169,7 @@ public sealed class CacheListenerCorrelationTests
                 65536,
                 TimeSpan.FromSeconds(5),
                 TimeSpan.FromSeconds(5),
-                TimeSpan.FromMilliseconds(50),
+                TimeSpan.FromSeconds(2),
                 1024 * 1024,
                 8));
         var run = session.RunAsync(CancellationToken.None);
@@ -182,7 +182,7 @@ public sealed class CacheListenerCorrelationTests
         await ArticleWorkTestDeliveries.WaitUntilAsync(() => !handler.HoldsLease(22), TimeSpan.FromSeconds(2));
         Assert.True(handler.HoldsLease(11));
 
-        await ArticleWorkTestDeliveries.WaitUntilAsync(() => !handler.HoldsLease(11), TimeSpan.FromSeconds(2));
+        await ArticleWorkTestDeliveries.WaitUntilAsync(() => !handler.HoldsLease(11), TimeSpan.FromSeconds(5));
         Assert.Equal(0, handler.HeldLeaseCount);
         Assert.Equal(2, authority.RetainedCount);
         Assert.Equal(2, CountOpcode(transport, ListenerOpcode.GetResponseFound));

@@ -18,6 +18,17 @@ public sealed class IhaveCommandPathTests
 
     private static readonly byte[] StuffedArticle = "Subject: stuffed\r\n\r\n..leading-dot\r\n.\r\n"u8.ToArray();
 
+    private static readonly byte[] CanonicalStuffedArticle = Encoding.ASCII.GetBytes(
+        "Path: peer.example\r\n" +
+        "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n" +
+        "Message-ID: <ihave-bench@example.test>\r\n" +
+        "Newsgroups: alt.test\r\n" +
+        "From: user@example.test\r\n" +
+        "Subject: stuffed\r\n" +
+        "\r\n" +
+        "..leading-dot\r\n" +
+        ".\r\n");
+
     [Fact]
     public async Task Accepts_Count235_AndByteAccounting()
     {
@@ -114,7 +125,7 @@ public sealed class IhaveCommandPathTests
     {
         var redis = new CheckDelayedRedis();
         await using var host = await IhaveProductionHost.StartAsync(redis);
-        var articles = IhavePreparedArticles.FromWireArticles(StuffedArticle);
+        var articles = IhavePreparedArticles.FromWireArticles(CanonicalStuffedArticle);
         var worker = CreateWorker(host.Port, articles, TimeSpan.FromSeconds(0.4));
         await RunWorkerAsync(worker);
 
@@ -129,7 +140,7 @@ public sealed class IhaveCommandPathTests
     {
         var redis = new CheckDelayedRedis();
         await using var host = await IhaveProductionHost.StartAsync(redis);
-        var articles = IhavePreparedArticles.FromWireArticles(StuffedArticle);
+        var articles = IhavePreparedArticles.FromWireArticles(CanonicalStuffedArticle);
         var worker = new IhaveConnection(
             id: 0,
             host: "127.0.0.1",
