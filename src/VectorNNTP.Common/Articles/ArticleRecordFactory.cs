@@ -1,11 +1,14 @@
 using System.IO.Hashing;
+using VectorNNTP.Common.Articles.DateParser;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 
 namespace VectorNNTP.Common.Articles;
 
 /// <summary>
-/// Builds an <see cref="ArticleRecord"/> from destuffed article bytes.
+/// Builds an <see cref="ArticleRecord"/> from destuffed article bytes or from a validated
+/// canonical transfer (META + ArtData).
 /// </summary>
 /// <remarks>
 /// Uses the existing Common parser, Diablo <see cref="ArticleTypeClassifier"/>, and
@@ -18,7 +21,8 @@ namespace VectorNNTP.Common.Articles;
 /// This factory has no request Message-ID parameter and does not match an IHAVE/ARTICLE
 /// request. Request matching remains an ingestion/orchestration responsibility.
 /// NNTPD TAKETHIS and POST construct the record before queue admission.
-/// IHAVE and BackFiller ingestion are not wired through this factory.
+/// <see cref="TryCreateFromCanonicalTransfer"/> reconstructs a CanonicalV1 record from
+/// transferred META + ArtData without destuff, parse, or rematerialization.
 /// </remarks>
 public static class ArticleRecordFactory
 {
@@ -62,6 +66,168 @@ public static class ArticleRecordFactory
             fields);
         return ArticleRecordCreateResult.Accepted(record);
     }
+
+    /// <summary>
+    /// Reconstructs a CanonicalV1 <see cref="ArticleRecord"/> from transferred META and ArtData
+    /// without destuffing, reparsing, or rematerializing.
+    /// </summary>
+    /// <param name="artData">Receiver-owned ArtData buffer assembled from DATA frames. Not copied.</param>
+    /// <param name="meta">Decoded META describing <paramref name="artData"/>.</param>
+    /// <param name="expectedArtId">ArticleId from OPEN (not from META).</param>
+    /// <returns>
+    /// Accepted CanonicalV1 record referencing <paramref name="artData"/>, or a transfer
+    /// rejection via <see cref="ArticleRecordCreateResult.MaterializeFailure"/>.
+    /// </returns>
+    /// <remarks>
+    /// Validates ArtSize, FieldTable bounds, Message-ID → ArtId binding, ArtHash, Locate
+    /// equality, CanonicalUtc from the Date range, and ArtLines sanity. Recomputes ArtType
+    /// via <see cref="ArticleTypeClassifier"/> (header + ≤8 KiB body prefix). Does not
+    /// recount body lines.
+    /// </remarks>
+    public static ArticleRecordCreateResult TryCreateFromCanonicalTransfer(
+        byte[] artData,
+        in ArticleCanonicalTransferMeta meta,
+        in ArticleId expectedArtId)
+    {
+        if (artData is null || artData.Length == 0)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferNullArtData);
+        }
+
+        if (meta.ArtSize != artData.Length
+            || meta.ArtSize < 1
+            || meta.ArtSize > ArticleResourceLimits.MaxArticleBytes)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferArtSizeMismatch);
+        }
+
+        if (!TryValidateFieldTable(meta.Fields, meta.ArtSize))
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferInvalidFieldRange);
+        }
+
+        if (!meta.Fields.MessageId.IsPresent || meta.Fields.MessageId.Length == 0)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferMissingMessageId);
+        }
+
+        var artId = ArticleId.FromMessageId(meta.Fields.MessageId.Slice(artData));
+        if (artId != expectedArtId)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferArticleIdMismatch);
+        }
+
+        var artHash = XxHash3.HashToUInt64(artData);
+        if (artHash != meta.ArtHash)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferArtHashMismatch);
+        }
+
+        if (!IsDateFamilyHeader(meta.SelectedDateHeaderName))
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferInvalidSelectedDateHeader);
+        }
+
+        var located = ArticleFieldTable.Locate(artData, meta.SelectedDateHeaderName);
+        if (located != meta.Fields)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferFieldTableMismatch);
+        }
+
+        if (!meta.Fields.Date.IsPresent || meta.Fields.Date.Length == 0)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferInvalidDate);
+        }
+
+        if (!NewsDateParser.TryGetCanonicalUtc(meta.Fields.Date.Slice(artData), out var canonicalUtc, out _)
+            || canonicalUtc == default
+            || canonicalUtc.Kind != DateTimeKind.Utc)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferInvalidDate);
+        }
+
+        if (meta.ArtLines < 0 || meta.ArtLines > meta.ArtSize)
+        {
+            return ArticleRecordCreateResult.RejectedMaterialize(
+                NntpArticleCanonicalFailureCode.TransferInvalidArtLines);
+        }
+
+        SplitHeadersAndBody(artData, out var headers, out var body);
+        var artType = ArticleTypeClassifier.Classify(headers, body);
+
+        var record = new ArticleRecord(
+            artId,
+            artHash,
+            artType,
+            meta.ArtLines,
+            canonicalUtc,
+            ArticleParseStatus.CanonicalV1,
+            artData,
+            meta.Fields);
+        return ArticleRecordCreateResult.Accepted(record);
+    }
+
+    private static bool IsDateFamilyHeader(NntpArticleHeaderName name) =>
+        name is NntpArticleHeaderName.Date
+            or NntpArticleHeaderName.InjectionDate
+            or NntpArticleHeaderName.NntpPostingDate
+            or NntpArticleHeaderName.Posted
+            or NntpArticleHeaderName.XDate
+            or NntpArticleHeaderName.DeliveryDate;
+
+    private static bool TryValidateFieldTable(in ArticleFieldTable fields, int artSize)
+    {
+        return TryValidateRange(fields.MessageId, artSize)
+            && TryValidateRange(fields.Newsgroups, artSize)
+            && TryValidateRange(fields.Subject, artSize)
+            && TryValidateRange(fields.From, artSize)
+            && TryValidateRange(fields.Date, artSize)
+            && TryValidateRange(fields.References, artSize)
+            && TryValidateRange(fields.Path, artSize);
+    }
+
+    private static bool TryValidateRange(ArticleByteRange range, int artSize)
+    {
+        if (!range.IsPresent)
+        {
+            return range.Offset == -1 && range.Length == 0;
+        }
+
+        if (range.Offset < 0 || range.Length < 0)
+        {
+            return false;
+        }
+
+        return (long)range.Offset + range.Length <= artSize;
+    }
+
+    private static void SplitHeadersAndBody(
+        ReadOnlySpan<byte> artData,
+        out ReadOnlySpan<byte> headers,
+        out ReadOnlySpan<byte> body)
+    {
+        var separator = "\r\n\r\n"u8;
+        var at = artData.IndexOf(separator);
+        if (at < 0)
+        {
+            headers = artData;
+            body = ReadOnlySpan<byte>.Empty;
+            return;
+        }
+
+        headers = artData[..(at + separator.Length)];
+        body = artData[(at + separator.Length)..];
+    }
 }
 
 /// <summary>
@@ -90,7 +256,7 @@ public readonly struct ArticleRecordCreateResult
     /// <summary>Gets the parser failure when construction stopped at parse.</summary>
     public NntpArticleParseFailureCode ParseFailure { get; }
 
-    /// <summary>Gets the materializer failure when construction stopped at materialize.</summary>
+    /// <summary>Gets the materializer or transfer failure when construction stopped after parse.</summary>
     public NntpArticleCanonicalFailureCode MaterializeFailure { get; }
 
     /// <summary>Creates an accepted result that carries <paramref name="record"/> (no ArtData copy).</summary>

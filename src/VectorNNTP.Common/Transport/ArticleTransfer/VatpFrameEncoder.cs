@@ -1,0 +1,148 @@
+using System.Buffers.Binary;
+
+namespace VectorNNTP.Common.Transport.ArticleTransfer;
+
+/// <summary>
+/// Deterministic encoders for VATP v1 frames. Payload-bearing frames keep header and
+/// payload as separate memories so transports can gather-write without copying.
+/// </summary>
+public static class VatpFrameEncoder
+{
+    /// <summary>Header plus optional payload memories (no frame-sized concat).</summary>
+    public readonly record struct EncodedFrame(ReadOnlyMemory<byte> Header, ReadOnlyMemory<byte> Payload);
+
+    /// <summary>Encodes a HELLO header+payload into caller buffers or returns owned memories.</summary>
+    public static EncodedFrame EncodeHello(uint maxFramePayload)
+    {
+        if (maxFramePayload == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxFramePayload));
+        }
+
+        var payload = new byte[VatpProtocol.HelloPayloadLength];
+        VatpProtocol.HelloMagic.CopyTo(payload);
+        BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(8, 4), maxFramePayload);
+        return Encode(VatpFrameType.Hello, VatpProtocol.ConnectionStreamId, payload, flags: 0);
+    }
+
+    /// <summary>Encodes OPEN with RequestId GUID and 32-byte ArticleId.</summary>
+    public static EncodedFrame EncodeOpen(uint streamId, Guid requestId, ReadOnlySpan<byte> articleId)
+    {
+        ThrowIfConnectionStream(streamId);
+        if (articleId.Length != VatpProtocol.ArticleIdLength)
+        {
+            throw new ArgumentException($"ArticleId must be {VatpProtocol.ArticleIdLength} bytes.", nameof(articleId));
+        }
+
+        var payload = new byte[VatpProtocol.OpenPayloadLength];
+        if (!requestId.TryWriteBytes(payload.AsSpan(0, VatpProtocol.RequestIdLength)))
+        {
+            throw new InvalidOperationException("Failed to write RequestId GUID bytes.");
+        }
+
+        articleId.CopyTo(payload.AsSpan(VatpProtocol.RequestIdLength, VatpProtocol.ArticleIdLength));
+        return Encode(VatpFrameType.Open, streamId, payload, flags: 0);
+    }
+
+    /// <summary>Encodes META from a prebuilt 76-byte payload.</summary>
+    public static EncodedFrame EncodeMeta(uint streamId, ReadOnlyMemory<byte> metaPayload)
+    {
+        ThrowIfConnectionStream(streamId);
+        if (metaPayload.Length != VatpProtocol.MetaPayloadLength)
+        {
+            throw new ArgumentException($"META payload must be {VatpProtocol.MetaPayloadLength} bytes.", nameof(metaPayload));
+        }
+
+        return Encode(VatpFrameType.Meta, streamId, metaPayload, flags: 0);
+    }
+
+    /// <summary>Encodes DATA with optional FIN. Payload memory is not copied.</summary>
+    public static EncodedFrame EncodeData(uint streamId, ReadOnlyMemory<byte> payload, bool fin = false)
+    {
+        ThrowIfConnectionStream(streamId);
+        if (payload.Length > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(payload));
+        }
+
+        var flags = fin ? VatpProtocol.FlagFin : 0u;
+        return Encode(VatpFrameType.Data, streamId, payload, flags);
+    }
+
+    /// <summary>Encodes an empty END frame.</summary>
+    public static EncodedFrame EncodeEnd(uint streamId)
+    {
+        ThrowIfConnectionStream(streamId);
+        return Encode(VatpFrameType.End, streamId, ReadOnlyMemory<byte>.Empty, flags: 0);
+    }
+
+    /// <summary>Encodes CANCEL.</summary>
+    public static EncodedFrame EncodeCancel(uint streamId)
+    {
+        ThrowIfConnectionStream(streamId);
+        return Encode(VatpFrameType.Cancel, streamId, ReadOnlyMemory<byte>.Empty, flags: 0);
+    }
+
+    /// <summary>Encodes WINDOW credit add.</summary>
+    public static EncodedFrame EncodeWindow(uint streamId, uint addCredit)
+    {
+        ThrowIfConnectionStream(streamId);
+        var payload = new byte[VatpProtocol.WindowPayloadLength];
+        BinaryPrimitives.WriteUInt32BigEndian(payload, addCredit);
+        return Encode(VatpFrameType.Window, streamId, payload, flags: 0);
+    }
+
+    /// <summary>Encodes FAIL with error code and optional ASCII reason.</summary>
+    public static EncodedFrame EncodeFail(uint streamId, VatpErrorCode errorCode, ReadOnlySpan<byte> asciiReason = default)
+    {
+        if (asciiReason.Length > VatpProtocol.FailMaxReasonLength)
+        {
+            throw new ArgumentException(
+                $"FAIL reason must be at most {VatpProtocol.FailMaxReasonLength} bytes.",
+                nameof(asciiReason));
+        }
+
+        var payload = new byte[VatpProtocol.FailMinPayloadLength + asciiReason.Length];
+        BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(0, 2), (ushort)errorCode);
+        asciiReason.CopyTo(payload.AsSpan(2));
+        return Encode(VatpFrameType.Fail, streamId, payload, flags: 0);
+    }
+
+    /// <summary>Writes only the 16-byte header into <paramref name="destination"/>.</summary>
+    public static void WriteHeader(
+        Span<byte> destination,
+        VatpFrameType type,
+        uint streamId,
+        uint payloadLength,
+        uint flags = 0) =>
+        VatpFrameHeader.Create(type, streamId, payloadLength, flags).WriteTo(destination);
+
+    /// <summary>Encodes header + payload as separate memories.</summary>
+    public static EncodedFrame Encode(
+        VatpFrameType type,
+        uint streamId,
+        ReadOnlyMemory<byte> payload,
+        uint flags)
+    {
+        var header = new byte[VatpProtocol.HeaderLengthBytes];
+        VatpFrameHeader.Create(type, streamId, checked((uint)payload.Length), flags).WriteTo(header);
+        return new EncodedFrame(header, payload);
+    }
+
+    /// <summary>Concatenates header and payload into one owned buffer (tests / small frames).</summary>
+    public static byte[] ToSingleBuffer(in EncodedFrame frame)
+    {
+        var result = new byte[frame.Header.Length + frame.Payload.Length];
+        frame.Header.Span.CopyTo(result);
+        frame.Payload.Span.CopyTo(result.AsSpan(frame.Header.Length));
+        return result;
+    }
+
+    private static void ThrowIfConnectionStream(uint streamId)
+    {
+        if (streamId == VatpProtocol.ConnectionStreamId)
+        {
+            throw new ArgumentOutOfRangeException(nameof(streamId), "Transfer frames require StreamId != 0.");
+        }
+    }
+}

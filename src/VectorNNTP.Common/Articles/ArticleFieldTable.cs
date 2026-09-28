@@ -11,7 +11,7 @@ namespace VectorNNTP.Common.Articles;
 /// answered later by tokenizing <see cref="Newsgroups"/> against peer patterns.
 /// <see cref="Date"/> is the winning Date-family header value after canonical rewrite.
 /// </remarks>
-public readonly struct ArticleFieldTable
+public readonly struct ArticleFieldTable : IEquatable<ArticleFieldTable>
 {
     /// <summary>
     /// Initializes a field table.
@@ -61,6 +61,29 @@ public readonly struct ArticleFieldTable
 
     /// <summary>Gets the Path header value range.</summary>
     public ArticleByteRange Path { get; }
+
+    /// <inheritdoc />
+    public bool Equals(ArticleFieldTable other) =>
+        MessageId == other.MessageId
+        && Newsgroups == other.Newsgroups
+        && Subject == other.Subject
+        && From == other.From
+        && Date == other.Date
+        && References == other.References
+        && Path == other.Path;
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => obj is ArticleFieldTable other && Equals(other);
+
+    /// <inheritdoc />
+    public override int GetHashCode() =>
+        HashCode.Combine(MessageId, Newsgroups, Subject, From, Date, References, Path);
+
+    /// <summary>Equality operator.</summary>
+    public static bool operator ==(ArticleFieldTable left, ArticleFieldTable right) => left.Equals(right);
+
+    /// <summary>Inequality operator.</summary>
+    public static bool operator !=(ArticleFieldTable left, ArticleFieldTable right) => !left.Equals(right);
 
     /// <summary>
     /// Locates overview/routing fields in canonical ArtData without allocating strings.

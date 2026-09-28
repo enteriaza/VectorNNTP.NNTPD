@@ -40,6 +40,36 @@ public enum NntpArticleCanonicalFailureCode
 
     /// <summary>The planned write length did not match bytes written, or rewrite ranges overlapped.</summary>
     WriteMismatch = 10,
+
+    /// <summary>Canonical transfer: ArtData was null or empty.</summary>
+    TransferNullArtData = 100,
+
+    /// <summary>Canonical transfer: ArtSize does not match ArtData.Length or exceeds limits.</summary>
+    TransferArtSizeMismatch = 101,
+
+    /// <summary>Canonical transfer: a FieldTable range is invalid or out of bounds.</summary>
+    TransferInvalidFieldRange = 102,
+
+    /// <summary>Canonical transfer: Message-ID range is absent or empty.</summary>
+    TransferMissingMessageId = 103,
+
+    /// <summary>Canonical transfer: Message-ID-derived ArtId does not match expected OPEN ArtId.</summary>
+    TransferArticleIdMismatch = 104,
+
+    /// <summary>Canonical transfer: recomputed ArtHash does not match META.</summary>
+    TransferArtHashMismatch = 105,
+
+    /// <summary>Canonical transfer: SelectedDateHeaderName is not a Date-family value.</summary>
+    TransferInvalidSelectedDateHeader = 106,
+
+    /// <summary>Canonical transfer: Locate(ArtData) does not equal transferred FieldTable.</summary>
+    TransferFieldTableMismatch = 107,
+
+    /// <summary>Canonical transfer: Date range cannot be parsed to CanonicalUtc.</summary>
+    TransferInvalidDate = 108,
+
+    /// <summary>Canonical transfer: ArtLines is negative or greater than ArtSize.</summary>
+    TransferInvalidArtLines = 109,
 }
 
 /// <summary>

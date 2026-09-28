@@ -693,6 +693,15 @@ Generated methods use stable component-scoped EventId ranges. Do not mechanicall
 
 Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`, `CloudFlareZoneId`, `ServerId` (`1–99`, no default), `Redis:Host`, and `RabbitMQ:Hosts`. Validation runs via `ValidateOnStart` / `IValidateOptions` before the host enters the running state. Validation does not bind sockets or call Cloudflare. After validation, `CloudflareDnsReconciliationService` reconciles and verifies A/AAAA for the generated FQDN against resolved bind addresses, then `RedisService` connects and PINGs, then `RabbitMqService` establishes a usable broker connection, then `RabbitMqTopologyService` declares the thirteen `backfiller.*` article-retrieval endpoints (twelve providers plus internal `backfiller.storage`) and the OverviewDB durable classic queue `overviewdb.queue`, then `ArticleWorkRpcService` attaches the article-work RPC reply consumer; any of those failures prevent `Running`. Details: [configuration.md](configuration.md). Serilog is configured under the `Serilog` section.
 
+## Vector Article Transfer Protocol (VATP)
+
+Common owns a multiplexed binary article data-plane foundation under
+`VectorNNTP.Common.Transport.ArticleTransfer` (Phase 1: framing, META, canonical
+transfer factory, stream/window primitives). Application adapters (NNTPD TLS
+client, BackFiller listener), RabbitMQ extensions, and ARTICLE/HEAD/BODY/STAT
+retrieval wiring are not implemented yet. Protocol contract: [vatp.md](vatp.md).
+Historical design notes: `.artifacts/article-data-plane-design.md`.
+
 ## Testing strategy
 
 - Offline tests live under `tests/VectorNNTP.NNTPD.Tests/`, grouped by production subsystem (`Cloudflare/`, `Core/`, `Hosting/Systemd/`, `Configuration/`, `Networking/`, `Logging/`), with shared `Fixtures/` and `TestDoubles/`.
