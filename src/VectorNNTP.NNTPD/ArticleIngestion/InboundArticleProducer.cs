@@ -10,8 +10,9 @@ public enum InboundArticleProducer
     TakeThis = 0,
 
     /// <summary>
-    /// IHAVE. <see cref="InboundArticle.Payload"/> is NNTP wire format (dot-stuffing
-    /// preserved, terminator omitted). Workers destuff exactly once.
+    /// IHAVE. Ingress destuffs stuffed wire and builds
+    /// <see cref="VectorNNTP.Common.Articles.ArticleRecord"/> before admission.
+    /// <see cref="InboundArticle.Payload"/> aliases canonical ArtData.
     /// </summary>
     IHave = 1,
 

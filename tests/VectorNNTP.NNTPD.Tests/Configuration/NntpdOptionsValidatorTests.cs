@@ -474,6 +474,17 @@ public sealed class NntpdOptionsValidatorTests
             result.Failures!,
             f => f.Contains("StreamOutstandingArticleDepth", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Transit_WantTrashAndLogTrash_DefaultTrue()
+    {
+        var transit = new TransitOptions();
+        Assert.True(transit.WantTrash);
+        Assert.True(transit.LogTrash);
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.True(options.Transit.WantTrash);
+        Assert.True(options.Transit.LogTrash);
+    }
 }
 
 public sealed class NntpdConfigurationTests
@@ -529,6 +540,29 @@ public sealed class NntpdConfigurationTests
         Assert.Equal(1199, options.BindPort);
         Assert.Equal(0, options.BindPortTls);
         Assert.False(options.IsTlsListenerEnabled);
+    }
+
+    [Fact]
+    public void Bind_NntpdTransit_WantTrashAndLogTrash()
+    {
+        var json = """
+                   {
+                     "Nntpd": {
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "ServerId": 1,
+                       "Transit": {
+                         "LogTrash": false,
+                         "WantTrash": true
+                       }
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.True(options.Transit.WantTrash);
+        Assert.False(options.Transit.LogTrash);
     }
 
     [Fact]

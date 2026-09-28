@@ -44,6 +44,32 @@ public sealed class PostFilterPostCommandTests
     }
 
     [Fact]
+    public async Task ClosedGate_WritesRejectedNewsWithPostFilterReason()
+    {
+        var news = new RecordingNewsLogWriter();
+        var quota = new RecordingQuotaStore();
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        await PostAsync(
+            duplex,
+            duplex.CreateSession(queue, CreateFilter(Closed(), quota), newsLog: news),
+            "441 Posting failed");
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(441, evt.ResponseCode);
+        Assert.Equal("closed", Encoding.ASCII.GetString(evt.Reason.Span));
+        var timestamp = evt.Timestamp == default
+            ? new DateTimeOffset(2024, 8, 25, 13, 37, 54, 638, TimeSpan.Zero)
+            : evt.Timestamp;
+        var buffer = new byte[NewsLogLineFormatter.RequiredLength(in evt) + 16];
+        var written = NewsLogLineFormatter.Write(buffer, in evt, timestamp);
+        var line = Encoding.ASCII.GetString(buffer.AsSpan(0, written));
+        Assert.EndsWith(" closed\n", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("441", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DisabledGate_AcceptsAndEnqueues()
     {
         var quota = new RecordingQuotaStore();
@@ -723,7 +749,8 @@ public sealed class PostFilterPostCommandTests
             PostFilterMetrics? metrics = null,
             IHistoryDb? historyDb = null,
             bool cancelConnectionAfterAccept = false,
-            IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
+            IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
+            INewsLogWriter? newsLog = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -744,7 +771,8 @@ public sealed class PostFilterPostCommandTests
                     new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey }),
                 postFilter: wired,
                 postFilterMetrics: metrics,
-                postFilterEvidence: postFilterEvidence);
+                postFilterEvidence: postFilterEvidence,
+                newsLog: newsLog);
         }
 
         public async Task WriteClientLineAsync(string line) =>

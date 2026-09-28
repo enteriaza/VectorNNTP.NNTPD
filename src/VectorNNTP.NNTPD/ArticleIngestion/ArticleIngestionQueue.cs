@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
@@ -12,9 +13,9 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// The admission bound is <see cref="MemoryLimitBytes"/>
 /// (<c>Nntpd:TransitQueueMemoryLimit</c>, default 1 GiB). Accounting uses each
 /// article's owned payload length (<see cref="InboundArticle.Payload"/>.Length):
-/// complete NNTP article bytes as queued (IHAVE: stuffed wire minus the
-/// terminating <c>CRLF . CRLF</c>). Object overhead is not counted. This is not
-/// a process-wide memory cap.
+/// canonical <see cref="InboundArticle.Payload"/> / ArtData length. Every queued
+/// item is a CanonicalV1 <c>ArticleRecord</c>. Object overhead is not counted.
+/// This is not a process-wide memory cap.
 /// </para>
 /// <para>
 /// Producers reserve payload bytes atomically before the article is visible
@@ -139,6 +140,7 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(article);
+        EnsureCanonical(article);
 
         var bytes = article.Payload.Length;
         if (bytes > _memoryLimit)
@@ -182,6 +184,7 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
     public ArticleEnqueueResult TryAdmit(InboundArticle article)
     {
         ArgumentNullException.ThrowIfNull(article);
+        EnsureCanonical(article);
 
         var bytes = article.Payload.Length;
         if (bytes > _memoryLimit)
@@ -341,6 +344,16 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         if (_queuedBytes > _peakQueuedBytes)
         {
             _peakQueuedBytes = _queuedBytes;
+        }
+    }
+
+    private static void EnsureCanonical(InboundArticle article)
+    {
+        if (article.Record.ParseStatus != ArticleParseStatus.CanonicalV1)
+        {
+            throw new ArgumentException(
+                "The ingress queue accepts CanonicalV1 ArticleRecord items only.",
+                nameof(article));
         }
     }
 

@@ -15,6 +15,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Networking.Transport;
@@ -53,7 +54,7 @@ public sealed class TakeThisCommandTests
         Assert.NotNull(article);
         Assert.Equal(id, article!.MessageId);
         Assert.Equal(InboundArticleProducer.TakeThis, article.Producer);
-        Assert.Null(article.Structured);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
         Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
         Assert.True(article.Payload.Equals(article.Record.ArtData));
         Assert.Equal(article.Record.ArtData.Length, article.Record.ArtSize);
@@ -70,11 +71,47 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
-    public async Task TakeThis_TextOnlyCapability_RejectsYEncoded()
+    public async Task WantTrashFalse_UnknownGroup_Returns439_AndWritesRejectedNews()
     {
+        var news = new RecordingNewsLogWriter();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
         await using var duplex = await TakeThisDuplex.CreateAsync();
-        var session = duplex.CreateSession(queue);
+        var session = duplex.CreateSession(
+            queue,
+            newsLog: news,
+            transit: new TransitOptions { WantTrash = false, LogTrash = false },
+            catalogue: new StaticNewsgroupCatalogue(
+                NewsgroupSnapshot.Create(
+                    [new NewsgroupDefinition("alt.test", string.Empty, 2, 1, NewsgroupPostingStatus.Allowed)])));
+        session.SetAuthorization(TransitAuth);
+
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<takethis-notrash@example.com>";
+        await duplex.WriteClientAsync(
+            BuildTakeThis(id, CanonicalArticleText.Destuffed(id, newsgroups: "unknown.un.carried")));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(439, evt.ResponseCode);
+        Assert.Equal(
+            IngressNewsReasons.WithGroups(IngressNewsReasons.NewsgroupNotCarried, ["unknown.un.carried"]),
+            Encoding.ASCII.GetString(evt.Reason.Span));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task TakeThis_TextOnlyCapability_RejectsYEncoded()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
         session.SetAuthorization(TransitAuth);
         session.ApplySuccessfulAuthentication(
             "poster",
@@ -85,12 +122,17 @@ public sealed class TakeThisCommandTests
         _ = await duplex.ReadClientLineAsync();
 
         const string id = "<yenc-denied@example.com>";
-        var article = CanonicalArticleText.Destuffed(
-            id,
-            "=ybegin line=128 size=3 name=a.bin\r\nabc\r\n=yend size=3\r\n");
+        var decoded = new byte[] { 0x41 };
+        var crc = VectorNNTP.Common.Articles.YEnc.YEncCrc32.Compute(decoded);
+        var encoded = unchecked((byte)(decoded[0] + 42));
+        var body = $"=ybegin line=128 size=1 name=t.bin\r\n{(char)encoded}\r\n=yend size=1 crc32={crc:x8}\r\n";
+        var article = CanonicalArticleText.Destuffed(id, body);
         await duplex.WriteClientAsync(BuildTakeThis(id, article));
         Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
         Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(IngressNewsReasons.ArticleTypeNotPermitted, Encoding.ASCII.GetString(evt.Reason.Span));
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -471,6 +513,61 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
+    public async Task TakeThis_TooLarge_WritesRejectedNews()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
+        {
+            QueueCapacity = 4,
+            MaxArticleBytes = 16,
+        });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<big-news@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: oversized-payload-here\r\n\r\nbody\r\n"));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(439, evt.ResponseCode);
+        Assert.Equal(IngressNewsReasons.ArticleTooLarge, Encoding.ASCII.GetString(evt.Reason.Span));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task TakeThis_NewsWriterFailure_On439_DoesNotChangeRejectionResponse()
+    {
+        var news = new ThrowingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
+        {
+            QueueCapacity = 4,
+            MaxArticleBytes = 16,
+        });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<news-fail-439@ex.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, "Subject: oversized-payload-here\r\n\r\nbody\r\n"));
+        Assert.Equal($"439 {id}", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        Assert.Equal(1, news.WriteCalls);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
     public async Task TakeThis_MixedAcceptReject_ResponseMessageIdsCorrelate()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions
@@ -682,11 +779,7 @@ public sealed class TakeThisCommandTests
                 NullLogger<IncomingSpoolWriterService>.Instance);
             await writer.StartAsync(CancellationToken.None);
 
-            var article = new InboundArticle(
-                "<spool@ex.com>",
-                Encoding.ASCII.GetBytes("Subject: spool\r\n\r\nok\r\n"),
-                ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-                DateTimeOffset.UtcNow);
+            var article = CanonicalArticleText.CreateQueued("<spool@ex.com>", InboundArticleProducer.TakeThis);
             Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -740,11 +833,7 @@ public sealed class TakeThisCommandTests
 
             for (var i = 0; i < 3; i++)
             {
-                var article = new InboundArticle(
-                    $"<drain{i}@ex.com>",
-                    Encoding.ASCII.GetBytes($"Subject: {i}\r\n\r\n"),
-                    ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-                    DateTimeOffset.UtcNow);
+                var article = CanonicalArticleText.CreateQueued($"<drain{i}@ex.com>", InboundArticleProducer.TakeThis);
                 Assert.True(queue.TryEnqueue(article));
             }
 
@@ -827,6 +916,76 @@ public sealed class TakeThisCommandTests
         Assert.Equal(".leading\r\nplain\r\n", Encoding.ASCII.GetString(result.Payload.Span));
     }
 
+    [Fact]
+    public async Task TakeThis_UnknownNewsgroup_WantTrash_Returns239()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<wanttrash-take@example.com>";
+        await duplex.WriteClientAsync(
+            BuildTakeThis(id, CanonicalArticleText.Destuffed(id, "body\r\n", "unknown.un.carried")));
+        Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
+
+        var article = await queue.DequeueAsync(CancellationToken.None);
+        Assert.Equal("unknown.un.carried", Encoding.ASCII.GetString(article!.Record.Newsgroups));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task TakeThis_NewsWriterFailure_DoesNotEmitSecondResponseOrRequeue()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
+        var throwing = new ThrowingNewsLogWriter();
+        var persisted = new ConcurrentBag<string>();
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new CollectingPersister(persisted),
+            Options.Create(new NntpdOptions
+            {
+                ArticleIngestion = new ArticleIngestionOptions(),
+                Transit = new TransitOptions { WantTrash = true, LogTrash = true },
+            }),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            newsLog: throwing,
+            catalogue: new StaticNewsgroupCatalogue(
+                NewsgroupSnapshot.Create(
+                    [new NewsgroupDefinition("alt.test", string.Empty, 2, 1, NewsgroupPostingStatus.Allowed)])));
+        await writer.StartAsync(CancellationToken.None);
+
+        await using var duplex = await TakeThisDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        const string id = "<news-fail@example.com>";
+        await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id)));
+        Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
+
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (persisted.IsEmpty && !wait.IsCancellationRequested)
+        {
+            await Task.Delay(10, wait.Token);
+        }
+
+        Assert.Equal(id, Assert.Single(persisted));
+        Assert.Equal(1, throwing.WriteCalls);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
+    }
+
     private static string BuildTakeThis(string messageId, string articleWithoutTerminator) =>
         $"TAKETHIS {messageId}\r\n{articleWithoutTerminator}.\r\n";
 
@@ -850,6 +1009,15 @@ public sealed class TakeThisCommandTests
         }
 
         return line.ToString();
+    }
+
+    private sealed class CollectingPersister(ConcurrentBag<string> persisted) : IIncomingArticlePersister
+    {
+        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
+        {
+            persisted.Add(article.MessageId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class GatedPersister(Task gate, ConcurrentBag<string> persisted) : IIncomingArticlePersister
@@ -906,7 +1074,10 @@ public sealed class TakeThisCommandTests
             ITransitPeerAuthorization? transitPeers = null,
             System.Net.IPAddress? clientAddress = null,
             VectorNNTP.NNTPD.History.IHistoryDb? historyDb = null,
-            IPostFilter? postFilter = null)
+            IPostFilter? postFilter = null,
+            INewsLogWriter? newsLog = null,
+            TransitOptions? transit = null,
+            INewsgroupCatalogue? catalogue = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -919,7 +1090,10 @@ public sealed class TakeThisCommandTests
                 articleIngestion: queue,
                 transitPeerAuthorization: transitPeers,
                 historyDb: historyDb,
-                postFilter: postFilter);
+                postFilter: postFilter,
+                newsgroupCatalogue: catalogue,
+                newsLog: newsLog,
+                transit: transit);
         }
 
         public async Task WriteClientLineAsync(string line)

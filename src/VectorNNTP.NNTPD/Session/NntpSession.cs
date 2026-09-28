@@ -107,7 +107,9 @@ public sealed class NntpSession
         IArticleWorkRpcClient? articleWorkRpc = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
-        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
+        INewsLogWriter? newsLog = null,
+        TransitOptions? transit = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(logger);
@@ -178,6 +180,8 @@ public sealed class NntpSession
         PostFilter = postFilter ?? DisabledPostFilter.Instance;
         PostFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         PostFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
+        NewsLog = newsLog ?? NullNewsLogWriter.Instance;
+        Transit = transit ?? new TransitOptions();
         SessionId = Guid.NewGuid().ToString("N");
     }
 
@@ -206,6 +210,12 @@ public sealed class NntpSession
 
     /// <summary>Gets the bounded PostFilter rejection-evidence queue.</summary>
     internal IPostFilterRejectionEvidenceQueue PostFilterEvidence { get; }
+
+    /// <summary>Gets the dedicated INN <c>news</c> writer.</summary>
+    internal INewsLogWriter NewsLog { get; }
+
+    /// <summary>Gets site-wide transit options including WantTrash/LogTrash.</summary>
+    internal TransitOptions Transit { get; }
 
     /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
     public int MaxArticleSize { get; }
@@ -1225,6 +1235,25 @@ public sealed class NntpSession
         return TakeThisWindow.IsFull
             ? TakeThisWindow.WaitForCapacityAsync(cancellationToken)
             : ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Emits an already-decided news event. Failures are reported through diagnostics
+    /// and do not change protocol state.
+    /// </summary>
+    internal void TryWriteNews(in NewsLogEvent evt)
+    {
+        try
+        {
+            NewsLog.Write(in evt);
+        }
+        catch (Exception ex)
+        {
+            var id = evt.MessageId.IsEmpty
+                ? "-"
+                : System.Text.Encoding.ASCII.GetString(evt.MessageId.Span);
+            SpoolLogMessages.NewsLogFailed(_logger, ex, id);
+        }
     }
 
     /// <summary>Logs a parser rejection without converting the full command line to a string.</summary>

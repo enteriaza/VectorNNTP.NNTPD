@@ -5,44 +5,21 @@ using VectorNNTP.NNTPD.Session.Framing;
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>
-/// Downstream IHAVE interpretation: destuff wire bytes once and build <see cref="Article"/>.
+/// Destuffs IHAVE/TAKETHIS wire into <see cref="Article"/> for benches and
+/// classifier tests.
 /// </summary>
 /// <remarks>
-/// IHAVE still queues stuffed wire (terminator omitted). This type destuffs those
-/// items once. TAKETHIS and POST items that already carry a CanonicalV1
-/// <see cref="ArticleRecord"/> are returned unchanged.
+/// Production IHAVE no longer uses this type. After receive, IHAVE destuffs
+/// once in <see cref="ArticleRecordIngress.TryCreateFromStuffedWire"/> and
+/// materializes CanonicalV1 through <see cref="ArticleRecordFactory"/>.
+/// Remaining IHAVE-specific behaviour lives in the IHAVE command (History,
+/// 335/235/435/436/437, non-blocking probe/admit). Common owns parse,
+/// Date/Path materialize, ArtId, ArtHash, and ArtType.
 /// </remarks>
 public static class IhaveArticleInterpreter
 {
     /// <summary>
-    /// Destuffs <paramref name="inbound"/> once when the producer queued stuffed wire
-    /// (<see cref="InboundArticleProducer.IHave"/> or <see cref="InboundArticleProducer.Post"/>)
-    /// and returns a new item whose <see cref="InboundArticle.Payload"/> is the destuffed
-    /// complete article (headers + blank line + body). TAKETHIS items are returned unchanged.
-    /// </summary>
-    public static InboundArticle Interpret(InboundArticle inbound, int maxArticleBytes)
-    {
-        ArgumentNullException.ThrowIfNull(inbound);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
-        if (inbound.Record.ParseStatus == ArticleParseStatus.CanonicalV1
-            || inbound.Producer is not (InboundArticleProducer.IHave or InboundArticleProducer.Post))
-        {
-            return inbound;
-        }
-
-        var article = DestuffToArticle(inbound.Payload.Span, maxArticleBytes);
-        return new InboundArticle(
-            inbound.MessageId,
-            article.Payload,
-            inbound.ClientIdentity,
-            inbound.ReceivedAtUtc,
-            article,
-            inbound.Producer);
-    }
-
-    /// <summary>
-    /// Destuffs stuffed IHAVE wire (no terminator) into the same <see cref="Article"/>
-    /// the previous receive-path destuffer produced.
+    /// Destuffs stuffed IHAVE wire (no terminator) into <see cref="Article"/>.
     /// </summary>
     public static Article DestuffToArticle(ReadOnlySpan<byte> stuffedWire, int maxArticleBytes)
     {

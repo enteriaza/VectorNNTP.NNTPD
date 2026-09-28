@@ -580,7 +580,7 @@ A rematerialized buffer would change ArtData, ArtSize, ArtHash, and Path/later r
 ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** used by:
 
 - BackFiller retrieve / parse / materialize / retain (Phase 4 still retains a canonical `byte[]` and uses `NntpArticleIdentity.MatchesRequest` separately)
-- NNTPD IHAVE destuff (`IhaveArticleInterpreter` still builds `Article` with Common `ArticleType` flags only)
+- NNTPD IHAVE now constructs CanonicalV1 `ArticleRecord` before queue admission (same factory as TAKETHIS/POST). `IhaveArticleInterpreter.DestuffToArticle` remains a bench/classifier helper only.
 - RabbitMQ Article Work JSON / cache URIs
 - Retention, storage, overview databases, XOVER/XHDR
 - Process-boundary serialization

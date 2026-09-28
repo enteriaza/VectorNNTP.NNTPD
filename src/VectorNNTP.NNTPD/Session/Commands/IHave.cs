@@ -11,10 +11,14 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <remarks>
 /// Not pipelined. Serial two-stage exchange: HistoryDB peek → non-blocking
 /// Transit queue probe → 335/435/436 → raw article receive (frame terminator,
-/// own stuffed wire) → non-blocking <see cref="IArticleIngestionQueue.TryAdmit"/>
-/// → 235/436/437. IHAVE never waits for queue memory. TAKETHIS is not used and
-/// is not modified. Destuff, classification, and <see cref="Article"/>
-/// construction occur in <see cref="IhaveArticleInterpreter"/>.
+/// own stuffed wire) → destuff + <c>ArticleRecordFactory</c> → non-blocking
+/// <see cref="IArticleIngestionQueue.TryAdmit"/> → 235/436/437. IHAVE never
+/// waits for queue memory. TAKETHIS is not used and is not modified. Common
+/// owns article parse/materialize. IHAVE-specific behaviour is History peek,
+/// non-blocking probe/admit, and 335/235/435/436/437 timing. The command
+/// Message-ID is used for History and is not matched against the article
+/// Message-ID (RFC 3977 §6.3.2 permits a mismatch). Incomplete articles that
+/// cannot become CanonicalV1 are rejected with 437 after 335.
 /// </remarks>
 internal static class IHave
 {
@@ -102,6 +106,12 @@ internal static class IHave
 
         if (read.Status == NntpMultilineReadStatus.TooLarge)
         {
+            const string tooLarge = "rejected too large";
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                CommandMessageId(messageId),
+                437,
+                IngressNewsReasons.ArticleTooLarge);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
@@ -109,22 +119,54 @@ internal static class IHave
                     NntpResponseStatus.IhaveRejected,
                     cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "rejected too large";
+            context.CompletionDetail = tooLarge;
+            return;
+        }
+
+        var created = ArticleRecordIngress.TryCreateFromStuffedWire(
+            context.Session.ArticleParser,
+            read.Payload,
+            queue.MaxArticleBytes);
+        if (!created.IsAccepted)
+        {
+            var recordReject = created.ParseFailure != VectorNNTP.Common.Articles.Parsing.NntpArticleParseFailureCode.None
+                ? "rejected article record " + created.ParseFailure
+                : "rejected article record " + created.MaterializeFailure;
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                CommandMessageId(messageId),
+                437,
+                IngressNewsReasons.ForArticleRecord(in created));
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveRejected,
+                    NntpResponseStatus.IhaveRejected,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = recordReject;
             return;
         }
 
         var messageIdText = System.Text.Encoding.ASCII.GetString(messageId.Span);
-        var inbound = new InboundArticle(
+        var inbound = ArticleRecordIngress.CreateQueued(
             messageIdText,
-            read.Payload,
+            created.Record,
             context.Session.ClientIdentity,
             DateTimeOffset.UtcNow,
-            structured: null,
             InboundArticleProducer.IHave);
 
-        var enqueue = queue.TryAdmit(inbound);
-        if (enqueue == ArticleEnqueueResult.Rejected)
+        if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
+                inbound,
+                context.Session.Transit,
+                context.Session.NewsgroupCatalogue,
+                out var uncarriedReason))
         {
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                messageIdText,
+                437,
+                uncarriedReason);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
@@ -132,7 +174,27 @@ internal static class IHave
                     NntpResponseStatus.IhaveRejected,
                     cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "rejected exceeds queue budget";
+            context.CompletionDetail = IngressNewsEvents.NewsgroupNotCarried;
+            return;
+        }
+
+        var enqueue = queue.TryAdmit(inbound);
+        if (enqueue == ArticleEnqueueResult.Rejected)
+        {
+            const string budget = "rejected exceeds queue budget";
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                messageIdText,
+                437,
+                IngressNewsReasons.QueueCapacityExceeded);
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveRejected,
+                    NntpResponseStatus.IhaveRejected,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = budget;
             return;
         }
 
@@ -175,4 +237,7 @@ internal static class IHave
             .ConfigureAwait(false);
         context.CompletionDetail = "accepted";
     }
+
+    private static string CommandMessageId(ReadOnlyMemory<byte> messageId) =>
+        System.Text.Encoding.ASCII.GetString(messageId.Span);
 }

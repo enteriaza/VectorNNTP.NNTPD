@@ -168,9 +168,15 @@ internal static class TakeThis
 
         if (status == NntpMultilineReadStatus.TooLarge)
         {
+            const string tooLarge = "rejected too large";
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                System.Text.Encoding.ASCII.GetString(messageIdBytes),
+                439,
+                IngressNewsReasons.ArticleTooLarge);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "rejected too large";
+            context.CompletionDetail = tooLarge;
             return;
         }
 
@@ -207,9 +213,31 @@ internal static class TakeThis
                 out var inbound,
                 out var recordReject))
         {
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                messageId,
+                439,
+                IngressNewsReasons.ForExistingRejectDetail(recordReject));
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = recordReject;
+            return;
+        }
+
+        if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
+                inbound,
+                context.Session.Transit,
+                context.Session.NewsgroupCatalogue,
+                out var uncarriedReason))
+        {
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                messageId,
+                439,
+                uncarriedReason);
+            await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = IngressNewsEvents.NewsgroupNotCarried;
             return;
         }
 
@@ -238,9 +266,15 @@ internal static class TakeThis
 
         if (enqueue == ArticleEnqueueResult.Rejected)
         {
+            const string budget = "rejected exceeds queue budget";
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                messageId,
+                439,
+                IngressNewsReasons.QueueCapacityExceeded);
             await EnqueueTransferReplyAsync(context, rejected: true, cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "rejected exceeds queue budget";
+            context.CompletionDetail = budget;
             return;
         }
 

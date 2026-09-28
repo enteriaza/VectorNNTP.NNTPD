@@ -407,6 +407,7 @@ internal static class Post
             context.Session.Authentication.Username ?? "-",
             read.DestuffedSize);
 
+        IngressNewsEvents.TryWriteModerated(context.Session, read.MessageId);
         await WriteStatusAsync(
                 context,
                 NntpResponses.ArticleReceivedOk,
@@ -432,6 +433,11 @@ internal static class Post
             newsgroups ?? "-",
             size,
             failure.Detail);
+        IngressNewsEvents.TryWriteRejected(
+            context.Session,
+            messageId ?? "-",
+            441,
+            IngressNewsReasons.ForPostingFailure(failure));
         await WriteFailedAsync(context, cancellationToken).ConfigureAwait(false);
     }
 

@@ -32,4 +32,16 @@ internal static partial class SpoolLogMessages
         Level = LogLevel.Information,
         Message = "Incoming spool writer stopped")]
     public static partial void WriterStopped(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 2005,
+        Level = LogLevel.Error,
+        Message = "Failed to write news log for incoming article {MessageId}; article remains accepted and is not reprocessed")]
+    public static partial void NewsLogFailed(ILogger logger, Exception exception, string MessageId);
+
+    [LoggerMessage(
+        EventId = 2006,
+        Level = LogLevel.Error,
+        Message = "Failed to flush the news log during incoming spool writer stop")]
+    public static partial void NewsLogFlushFailed(ILogger logger, Exception exception);
 }

@@ -8,7 +8,8 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// <para>
 /// <see cref="Headers"/> and <see cref="Body"/> are owned destuffed copies built by
-/// <see cref="IhaveArticleInterpreter"/> after queue admission. They are not Pipe spans.
+/// <see cref="IhaveArticleInterpreter.DestuffToArticle"/> for benches and classifier
+/// tests. Production IHAVE queues CanonicalV1 <c>ArticleRecord</c> instead.
 /// </para>
 /// <para>
 /// <see cref="Size"/> is the destuffed complete-article length (headers, the header/body

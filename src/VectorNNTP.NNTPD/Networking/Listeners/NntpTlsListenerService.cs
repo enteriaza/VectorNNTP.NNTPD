@@ -64,6 +64,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IPostFilter _postFilter;
     private readonly PostFilterMetrics _postFilterMetrics;
     private readonly IPostFilterRejectionEvidenceQueue _postFilterEvidence;
+    private readonly INewsLogWriter _newsLog;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
@@ -103,7 +104,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IArticleWorkRpcClient? articleWorkRpc = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
-        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
+        INewsLogWriter? newsLog = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -138,6 +140,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _postFilter = postFilter ?? DisabledPostFilter.Instance;
         _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         _postFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
+        _newsLog = newsLog ?? NullNewsLogWriter.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -387,7 +390,9 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 articleWorkRpc: _articleWorkRpc,
                 postFilter: _postFilter,
                 postFilterMetrics: _postFilterMetrics,
-                postFilterEvidence: _postFilterEvidence);
+                postFilterEvidence: _postFilterEvidence,
+                newsLog: _newsLog,
+                transit: _options.Value.Transit);
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {

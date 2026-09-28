@@ -522,9 +522,15 @@ internal sealed class TakeThisPipeline
 
         if (read.Status == NntpMultilineReadStatus.TooLarge)
         {
+            const string tooLarge = "rejected too large";
+            IngressNewsEvents.TryWriteRejected(
+                _session,
+                SlotMessageId(slot),
+                439,
+                IngressNewsReasons.ArticleTooLarge);
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            WriteTxIfDebug(slot, "rejected too large", TransferLogKind.Rejected);
+            WriteTxIfDebug(slot, tooLarge, TransferLogKind.Rejected);
             return;
         }
 
@@ -573,6 +579,11 @@ internal sealed class TakeThisPipeline
                 out var inbound,
                 out var recordReject))
         {
+            IngressNewsEvents.TryWriteRejected(
+                _session,
+                messageIdText,
+                439,
+                IngressNewsReasons.ForExistingRejectDetail(recordReject));
             var rejectProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -582,6 +593,30 @@ internal sealed class TakeThisPipeline
             rejectProbe?.RecordArticleCompleted(
                 duplicate: false,
                 System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
+            _session.SetActivityState(FeedSessionState.Idle);
+            return;
+        }
+
+        if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
+                inbound,
+                _session.Transit,
+                _session.NewsgroupCatalogue,
+                out var uncarriedReason))
+        {
+            IngressNewsEvents.TryWriteRejected(
+                _session,
+                messageIdText,
+                439,
+                uncarriedReason);
+            var uncarriedProbe = _session.FeedProbe;
+            _session.SetActivityState(FeedSessionState.Completing);
+            var uncarriedStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
+                .ConfigureAwait(false);
+            WriteTxIfDebug(slot, IngressNewsEvents.NewsgroupNotCarried, TransferLogKind.Rejected);
+            uncarriedProbe?.RecordArticleCompleted(
+                duplicate: false,
+                System.Diagnostics.Stopwatch.GetTimestamp() - uncarriedStart);
             _session.SetActivityState(FeedSessionState.Idle);
             return;
         }
@@ -620,12 +655,18 @@ internal sealed class TakeThisPipeline
 
         if (enqueue == ArticleEnqueueResult.Rejected)
         {
+            const string budget = "rejected exceeds queue budget";
+            IngressNewsEvents.TryWriteRejected(
+                _session,
+                messageIdText,
+                439,
+                IngressNewsReasons.QueueCapacityExceeded);
             var rejectProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            WriteTxIfDebug(slot, "rejected exceeds queue budget", TransferLogKind.Rejected);
+            WriteTxIfDebug(slot, budget, TransferLogKind.Rejected);
             rejectProbe?.RecordArticleCompleted(
                 duplicate: false,
                 System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
@@ -849,6 +890,9 @@ internal sealed class TakeThisPipeline
         _progress = NewProgress();
         previous.TrySetResult();
     }
+
+    private static string SlotMessageId(Slot slot) =>
+        System.Text.Encoding.ASCII.GetString(slot.MessageId);
 
     private static TaskCompletionSource NewProgress() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);

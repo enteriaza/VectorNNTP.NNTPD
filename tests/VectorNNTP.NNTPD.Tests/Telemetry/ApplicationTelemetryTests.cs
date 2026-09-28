@@ -13,6 +13,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Telemetry;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Tests.Transit;
 using VectorNNTP.NNTPD.Transit;
@@ -147,14 +148,16 @@ public sealed class ApplicationTelemetryTests
     [Fact]
     public async Task TransitIngressQueue_ValuesComeFromAuthoritativeQueue()
     {
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), 32);
+        var a = Article("<a@ex.com>");
+        var b = Article("<b@ex.com>");
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), a.Payload.Length + b.Payload.Length);
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(a, CancellationToken.None));
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(b, CancellationToken.None));
         Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(Article("<a@ex.com>", 8), CancellationToken.None));
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(Article("<b@ex.com>", 8), CancellationToken.None));
-        Assert.Equal(ArticleEnqueueResult.Rejected, queue.TryAdmit(Article("<huge@ex.com>", 64)));
+            ArticleEnqueueResult.Rejected,
+            queue.TryAdmit(Article(
+                "<huge@ex.com>",
+                body: string.Concat(Enumerable.Repeat(new string('Z', 80) + "\r\n", 20)))));
 
         var logger = new RecordingLogger<ApplicationTelemetryService>();
         await using var service = CreateService(logger, queue: queue);
@@ -169,7 +172,7 @@ public sealed class ApplicationTelemetryTests
         Assert.Equal(queue.MemoryLimitBytes, GetInt64(row, "Limit"));
         Assert.Equal(queue.AdmissionFailureCount, GetInt64(row, "AdmissionFailures"));
         Assert.Equal(2, GetInt32(row, "Articles"));
-        Assert.Equal(16L, GetInt64(row, "Bytes"));
+        Assert.Equal(a.Payload.Length + b.Payload.Length, GetInt64(row, "Bytes"));
         Assert.Equal(1L, GetInt64(row, "AdmissionFailures"));
     }
 
@@ -482,11 +485,12 @@ public sealed class ApplicationTelemetryTests
     {
         var store = CreatePeerStore(("giganews", 100));
         var metrics = new TransitPeerMetrics();
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), 64);
+        var queued = Article("<queued@ex.com>");
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), queued.Payload.Length);
         Assert.Equal(
             ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(Article("<queued@ex.com>", 32), CancellationToken.None));
-        metrics.RecordArticleReceived("giganews", 32);
+            await queue.EnqueueAsync(queued, CancellationToken.None));
+        metrics.RecordArticleReceived("giganews", queued.Payload.Length);
 
         var logger = new RecordingLogger<ApplicationTelemetryService>();
         await using var service = CreateService(logger, queue: queue, peerMetrics: metrics, transit: store);
@@ -789,14 +793,8 @@ public sealed class ApplicationTelemetryTests
         return store;
     }
 
-    private static InboundArticle Article(string messageId, int bytes) =>
-        new(
-            messageId,
-            new byte[bytes],
-            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.TakeThis);
+    private static InboundArticle Article(string messageId, string body = "body\r\n") =>
+        CanonicalArticleText.CreateQueued(messageId, InboundArticleProducer.TakeThis, body);
 
     private static long GetInt64(LogRow row, string name) =>
         Convert.ToInt64(row.Properties[name], System.Globalization.CultureInfo.InvariantCulture);

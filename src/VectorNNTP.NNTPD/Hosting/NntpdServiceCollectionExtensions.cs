@@ -364,6 +364,7 @@ public static class NntpdServiceCollectionExtensions
             AesGcmPostingTraceProtector.Create(sp.GetRequiredService<IOptions<NntpdOptions>>()));
         services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
+        services.TryAddSingleton<INewsLogWriter, SerilogNewsLogWriter>();
         services.TryAddSingleton<IncomingSpoolWriterService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, IncomingSpoolWriterService>(static sp =>

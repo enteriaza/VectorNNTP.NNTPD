@@ -10,6 +10,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
+using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -348,6 +349,49 @@ public sealed class PostCommandTests
     }
 
     [Fact]
+    public async Task ReceiveSizeRejection_WritesRejectedNews()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Poster, maxArticleSize: 256, newsLog: news);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(PaddedArticle(300) + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(441, evt.ResponseCode);
+        Assert.Equal(IngressNewsReasons.ArticleTooLarge, Encoding.ASCII.GetString(evt.Reason.Span));
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task NewsWriterFailure_On441_DoesNotChangeRejectionResponse()
+    {
+        var news = new ThrowingNewsLogWriter();
+        var queue = NewQueue();
+        await using var duplex = new PostDuplex();
+        var session = duplex.CreateSession(queue, Poster, maxArticleSize: 256, newsLog: news);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("POST");
+        Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(PaddedArticle(300) + ".\r\n");
+        Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        Assert.Equal(1, news.WriteCalls);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
     public async Task ExactConfiguredLimit_IsAccepted()
     {
         var queue = NewQueue();
@@ -641,18 +685,12 @@ public sealed class PostCommandTests
         Assert.Equal("240 Article received OK", await duplex.ReadClientLineAsync());
 
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
-        Assert.Null(inbound!.Structured);
-        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound!.Record.ParseStatus);
         Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
         var text = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
         Assert.Contains("\r\n\r\n.hidden\r\n", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\r\n\r\n..hidden\r\n", text, StringComparison.Ordinal);
         Assert.False(inbound.Payload.Span.EndsWith(".\r\n"u8));
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Same(inbound, interpreted);
-        Assert.Null(interpreted.Structured);
-        Assert.True(interpreted.Record.ArtData.Equals(inbound.Record.ArtData));
 
         await QuitAsync(duplex, run);
     }
@@ -801,18 +839,11 @@ public sealed class PostCommandTests
     [Fact]
     public async Task QueueBudgetExhausted_Returns441()
     {
+        var held = CanonicalArticleText.CreateQueued("<held@example.com>", InboundArticleProducer.IHave);
         var queue = new ArticleIngestionQueue(
-            new ArticleIngestionOptions { QueueCapacity = 8, MaxArticleBytes = 1024 },
-            transitQueueMemoryLimit: 32);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            queue.TryAdmit(new InboundArticle(
-                "<held@example.com>",
-                new byte[32],
-                ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
-                DateTimeOffset.UtcNow,
-                structured: null,
-                InboundArticleProducer.IHave)));
+            new ArticleIngestionOptions { QueueCapacity = 8, MaxArticleBytes = 64 * 1024 },
+            transitQueueMemoryLimit: held.Payload.Length);
+        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(held));
 
         await using var duplex = new PostDuplex();
         var session = duplex.CreateSession(queue, Poster);
@@ -845,7 +876,6 @@ public sealed class PostCommandTests
 
         var inbound = await queue.DequeueAsync(new CancellationTokenSource(Safety).Token);
         Assert.Equal(InboundArticleProducer.Post, inbound!.Producer);
-        Assert.Null(inbound.Structured);
         Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
         Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
         Assert.False(inbound.Payload.Span.EndsWith("\r\n.\r\n"u8));
@@ -1101,7 +1131,9 @@ public sealed class PostCommandTests
             string? mailComplaintsTo = null,
             bool includeTraceProtector = true,
             IPostingTraceProtector? postingTraceProtector = null,
-            INntpAuthenticationProvider? authenticationProvider = null)
+            INntpAuthenticationProvider? authenticationProvider = null,
+            INewsLogWriter? newsLog = null,
+            IPostFilter? postFilter = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -1121,7 +1153,9 @@ public sealed class PostCommandTests
                 timeProvider: timeProvider,
                 maxArticleSize: maxArticleSize,
                 mailComplaintsTo: mailComplaintsTo,
-                postingTraceProtector: protector);
+                postingTraceProtector: protector,
+                postFilter: postFilter,
+                newsLog: newsLog);
             if (authorization is not null)
             {
                 session.SetAuthorization(authorization);

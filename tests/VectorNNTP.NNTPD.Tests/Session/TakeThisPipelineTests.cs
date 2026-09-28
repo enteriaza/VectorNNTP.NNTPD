@@ -791,7 +791,6 @@ public sealed class TakeThisPipelineTests
         var article = await queue.DequeueAsync(CancellationToken.None);
         Assert.Equal(id, article!.MessageId);
         Assert.Equal(InboundArticleProducer.TakeThis, article.Producer);
-        Assert.Null(article.Structured);
         Assert.Equal(ArticleParseStatus.CanonicalV1, article.Record.ParseStatus);
         Assert.True(article.Payload.Equals(article.Record.ArtData));
         Assert.Contains("\r\n\r\n.stuffed\r\nplain\r\n", Encoding.ASCII.GetString(article.Record.ArtData.Span), StringComparison.Ordinal);
@@ -860,11 +859,6 @@ public sealed class TakeThisPipelineTests
         Assert.Equal(article.Record.ArtSize, segment.Array.Length);
         Assert.Equal(article.Record.ArtSize, article.Payload.Length);
         Assert.Contains("\r\n\r\n.dot\r\n", Encoding.ASCII.GetString(article.Record.ArtData.Span), StringComparison.Ordinal);
-
-        var interpreted = IhaveArticleInterpreter.Interpret(article, 64 * 1024);
-        Assert.Same(article, interpreted);
-        Assert.Null(interpreted.Structured);
-        Assert.True(interpreted.Record.ArtData.Equals(article.Record.ArtData));
 
         await QuitAsync(duplex, run);
     }

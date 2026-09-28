@@ -151,11 +151,12 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// </remarks>
     public bool AllowCleartextAuth { get; set; } = true;
 
-    /// <summary>Default relative Serilog file-log directory.</summary>
+    /// <summary>Default relative Serilog file-log and INN <c>news</c> directory.</summary>
     public const string DefaultLogDir = "logs/";
 
     /// <summary>
-    /// Gets or sets the filesystem directory for Serilog daily rolling application logs.
+    /// Gets or sets the filesystem directory for Serilog daily rolling application logs
+    /// and the INN-compatible <c>news</c> file.
     /// </summary>
     public string LogDir { get; set; } = DefaultLogDir;
 
@@ -201,7 +202,8 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
         ApplicationFqdn.Build(ApplicationPrefix, serverId, dnsSuffix);
 
     /// <summary>
-    /// Gets or sets NNTPD-local transit runtime options (STREAM TX depth).
+    /// Gets or sets NNTPD-local transit runtime options (STREAM TX depth and
+    /// WantTrash/LogTrash).
     /// </summary>
     /// <remarks>
     /// Named Transit peers bind from the top-level <c>Transit</c> section

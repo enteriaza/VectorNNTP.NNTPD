@@ -1,13 +1,14 @@
+using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
-using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 
@@ -44,78 +45,6 @@ public sealed class IhaveArticleInterpreterTests
     }
 
     [Fact]
-    public void Interpret_IHave_ReplacesPayloadWithDestuffed()
-    {
-        var inbound = new InboundArticle(
-            "<i@example.com>",
-            "Subject: d\r\n\r\n..foo\r\n"u8.ToArray(),
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.IHave);
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Equal(InboundArticleProducer.IHave, interpreted.Producer);
-        Assert.NotNull(interpreted.Structured);
-        Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
-        Assert.Equal(interpreted.Structured.Value.Payload.ToArray(), interpreted.Payload.ToArray());
-        Assert.Equal("..foo\r\n", Encoding.ASCII.GetString(inbound.Payload.Span[^7..]));
-    }
-
-    [Fact]
-    public void Interpret_Post_DestuffsOnce_AndPreservesProducer()
-    {
-        var inbound = new InboundArticle(
-            "<p@example.com>",
-            "Subject: d\r\n\r\n..foo\r\n"u8.ToArray(),
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.Post);
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Equal(InboundArticleProducer.Post, interpreted.Producer);
-        Assert.NotNull(interpreted.Structured);
-        Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
-    }
-
-    [Fact]
-    public void Interpret_CanonicalV1Record_IsReturnedUnchanged()
-    {
-        var created = ArticleRecordIngress.TryCreateFromDestuffed(
-            new NntpArticleParser("nntpd01.usenet.ninja"),
-            Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<rec@example.com>", ".foo\r\n")));
-        Assert.True(created.IsAccepted);
-        var inbound = ArticleRecordIngress.CreateQueued(
-            "<rec@example.com>",
-            created.Record,
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            InboundArticleProducer.Post);
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Same(inbound, interpreted);
-        Assert.True(interpreted.Record.ArtData.Equals(created.Record.ArtData));
-        Assert.Null(interpreted.Structured);
-    }
-
-    [Fact]
-    public void Interpret_TakeThis_IsUnchanged()
-    {
-        var payload = "Subject: d\r\n\r\n..foo\r\n"u8.ToArray();
-        var inbound = new InboundArticle(
-            "<t@example.com>",
-            payload,
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow);
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.Same(inbound, interpreted);
-        Assert.Equal(payload, interpreted.Payload.ToArray());
-        Assert.Null(interpreted.Structured);
-    }
-
-    [Fact]
     public void DestuffThenRestuff_PreservesDotStuffingOnOutbound()
     {
         var stuffed = "Subject: d\r\n\r\n..foo\r\n"u8.ToArray();
@@ -125,7 +54,7 @@ public sealed class IhaveArticleInterpreterTests
     }
 
     [Fact]
-    public async Task SpoolWriter_DestuffsIhaveAndPostOnce_AndLeavesTakeThisUntouched()
+    public async Task SpoolWriter_ConsumesCanonicalRecordsWithoutReparse()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var captured = new List<InboundArticle>();
@@ -136,53 +65,21 @@ public sealed class IhaveArticleInterpreterTests
             NullLogger<IncomingSpoolWriterService>.Instance);
         await writer.StartAsync(CancellationToken.None);
 
-        var identity = ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119));
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(
-                new InboundArticle(
-                    "<ihave@example.com>",
-                    "Subject: d\r\n\r\n..foo\r\n"u8.ToArray(),
-                    identity,
-                    DateTimeOffset.UtcNow,
-                    structured: null,
-                    InboundArticleProducer.IHave),
-                CancellationToken.None));
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(
-                new InboundArticle(
-                    "<takethis@example.com>",
-                    "Subject: d\r\n\r\n..foo\r\n"u8.ToArray(),
-                    identity,
-                    DateTimeOffset.UtcNow),
-                CancellationToken.None));
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(
-                new InboundArticle(
-                    "<post@example.com>",
-                    "Subject: d\r\n\r\n..foo\r\n"u8.ToArray(),
-                    identity,
-                    DateTimeOffset.UtcNow,
-                    structured: null,
-                    InboundArticleProducer.Post),
-                CancellationToken.None));
+        var ihave = CanonicalArticleText.CreateQueued("<ihave@example.com>", InboundArticleProducer.IHave, ".foo\r\n");
+        var takeThis = CanonicalArticleText.CreateQueued("<takethis@example.com>", InboundArticleProducer.TakeThis, ".foo\r\n");
+        var post = CanonicalArticleText.CreateQueued("<post@example.com>", InboundArticleProducer.Post, ".foo\r\n");
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(ihave, CancellationToken.None));
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(takeThis, CancellationToken.None));
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(post, CancellationToken.None));
 
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
 
         Assert.Equal(3, captured.Count);
-        var ihave = captured.Single(static a => a.MessageId == "<ihave@example.com>");
-        var takeThis = captured.Single(static a => a.MessageId == "<takethis@example.com>");
-        var post = captured.Single(static a => a.MessageId == "<post@example.com>");
-        Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(ihave.Structured!.Value.Body.Span));
-        Assert.Equal("Subject: d\r\n\r\n.foo\r\n", Encoding.ASCII.GetString(ihave.Payload.Span));
-        Assert.Null(takeThis.Structured);
-        Assert.Equal("Subject: d\r\n\r\n..foo\r\n", Encoding.ASCII.GetString(takeThis.Payload.Span));
-        Assert.Equal(InboundArticleProducer.Post, post.Producer);
-        Assert.Equal(".foo\r\n", Encoding.ASCII.GetString(post.Structured!.Value.Body.Span));
-        Assert.Equal("Subject: d\r\n\r\n.foo\r\n", Encoding.ASCII.GetString(post.Payload.Span));
+        Assert.All(captured, static a => Assert.Equal(ArticleParseStatus.CanonicalV1, a.Record.ParseStatus));
+        Assert.True(captured.Single(static a => a.MessageId == "<ihave@example.com>").Payload.Equals(ihave.Payload));
+        Assert.True(captured.Single(static a => a.MessageId == "<takethis@example.com>").Payload.Equals(takeThis.Payload));
+        Assert.True(captured.Single(static a => a.MessageId == "<post@example.com>").Payload.Equals(post.Payload));
     }
 
     [Fact]
@@ -204,12 +101,10 @@ public sealed class IhaveArticleInterpreterTests
         var inbound = ArticleRecordIngress.CreateQueued(
             "<q@example.com>",
             created.Record,
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
+            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
             DateTimeOffset.UtcNow,
             InboundArticleProducer.TakeThis);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(inbound, CancellationToken.None));
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
 
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
@@ -218,97 +113,6 @@ public sealed class IhaveArticleInterpreterTests
         Assert.Equal(ArticleParseStatus.CanonicalV1, persisted.Record.ParseStatus);
         Assert.True(persisted.Record.ArtData.Equals(created.Record.ArtData));
         Assert.True(persisted.Payload.Equals(persisted.Record.ArtData));
-        Assert.Null(persisted.Structured);
-    }
-
-    [Fact]
-    public async Task SpoolWriter_CanonicalV1PostRecord_IsNotReparsedOrCopied()
-    {
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var captured = new List<InboundArticle>();
-        var writer = new IncomingSpoolWriterService(
-            queue,
-            new CapturingPersister(captured),
-            Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
-            NullLogger<IncomingSpoolWriterService>.Instance);
-        await writer.StartAsync(CancellationToken.None);
-
-        var created = ArticleRecordIngress.TryCreateFromDestuffed(
-            new NntpArticleParser("nntpd01.usenet.ninja"),
-            Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<post-q@example.com>", "one\r\n")));
-        Assert.True(created.IsAccepted);
-        var inbound = ArticleRecordIngress.CreateQueued(
-            "<post-q@example.com>",
-            created.Record,
-            ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            InboundArticleProducer.Post);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(inbound, CancellationToken.None));
-
-        queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
-
-        var persisted = Assert.Single(captured);
-        Assert.Equal(InboundArticleProducer.Post, persisted.Producer);
-        Assert.Equal(ArticleParseStatus.CanonicalV1, persisted.Record.ParseStatus);
-        Assert.True(persisted.Record.ArtData.Equals(created.Record.ArtData));
-        Assert.True(persisted.Payload.Equals(persisted.Record.ArtData));
-        Assert.Null(persisted.Structured);
-    }
-
-    [Fact]
-    public async Task SpoolWriter_DestuffsPostLargerThanMaxArticleBytes_UsingQueuedPayloadLength()
-    {
-        var ingestion = new ArticleIngestionOptions { QueueCapacity = 4, MaxArticleBytes = 64 };
-        var queue = new ArticleIngestionQueue(ingestion);
-        var captured = new List<InboundArticle>();
-        var writer = new IncomingSpoolWriterService(
-            queue,
-            new CapturingPersister(captured),
-            Options.Create(new NntpdOptions
-            {
-                MaxArticleSize = 1024,
-                ArticleIngestion = ingestion,
-            }),
-            NullLogger<IncomingSpoolWriterService>.Instance);
-        await writer.StartAsync(CancellationToken.None);
-
-        var identity = ConnectionClientIdentity.Direct(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119));
-        var postBody = "Subject: d\r\n\r\n" + new string('Z', 200) + "\r\n";
-        Assert.True(Encoding.ASCII.GetByteCount(postBody) > ingestion.MaxArticleBytes);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(
-                new InboundArticle(
-                    "<post-large@example.com>",
-                    Encoding.ASCII.GetBytes(postBody),
-                    identity,
-                    DateTimeOffset.UtcNow,
-                    structured: null,
-                    InboundArticleProducer.Post),
-                CancellationToken.None));
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            await queue.EnqueueAsync(
-                new InboundArticle(
-                    "<ihave-large@example.com>",
-                    Encoding.ASCII.GetBytes(postBody),
-                    identity,
-                    DateTimeOffset.UtcNow,
-                    structured: null,
-                    InboundArticleProducer.IHave),
-                CancellationToken.None));
-
-        queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
-
-        var post = captured.Single(static a => a.MessageId == "<post-large@example.com>");
-        var ihave = captured.Single(static a => a.MessageId == "<ihave-large@example.com>");
-        Assert.Equal(postBody, Encoding.ASCII.GetString(post.Payload.Span));
-        Assert.True(post.Structured!.Value.Body.Length > 64);
-        Assert.True(ihave.Structured!.Value.Payload.Length <= ingestion.MaxArticleBytes);
     }
 
     private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister

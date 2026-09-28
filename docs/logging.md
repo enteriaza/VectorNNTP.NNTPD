@@ -59,7 +59,58 @@ Daily rolling uses Serilog `rollingInterval: Day` (local midnight). The active f
 
 Gzip runs only because Serilog deletes rolled uncompressed files. `ArchiveHooks.OnFileDeleting` copies the doomed `.log` to `{filename}.gz` in the same directory, then Serilog deletes the uncompressed original. File `retainedFileCountLimit` is **1 uncompressed file** (the active day). That is not gzip-archive retention: Serilog's matcher is `{ApplicationName}-*.log` and does not select `.log.gz`. Historical `.gz` files stay until an external retention process removes them. The active file is not compressed.
 
-High-volume writes use `Serilog.Sinks.Async` (`bufferSize: 50000`, `blockWhenFull: true`) wrapping a buffered File sink. Events are **not dropped**: if the file writer cannot keep up, logging calls block until the queue has space. `Program` still calls `Log.CloseAndFlushAsync()` on shutdown so the async buffer is flushed.
+## INN `news` log
+
+`news` is an article-disposition log, not an acceptance-only file. VectorNNTP implements the dispositions that current ingress actually produces:
+
+| Character | Meaning | When emitted |
+|-----------|---------|--------------|
+| `+` | accepted/carried | after dequeue for a normal accepted article |
+| `j` | accepted but junk | after dequeue when WantTrash junk applies and `LogTrash` is true |
+| `-` | deliberately rejected | at the IHAVE/TAKETHIS/POST decision that produced the NNTP rejection |
+| `m` | accepted for moderation | at successful POST moderation submission (does not enter the queue) |
+
+Cancel processing (`c`) is not implemented and is not emitted. INN's informational `?` disposition (isolated CR/LF) is not emitted. `m` is a VectorNNTP disposition for moderated POST; it is not an innd(8) code. This is not a claim of complete INN `news` behaviour.
+
+The INN line format is an application invariant implemented by `InnNewsTextFormatter` in code. Operators cannot change field order, timestamp representation, disposition characters, feed placement, Message-ID placement, rejection formatting, or delimiters through `outputTemplate` or any other appsettings key.
+
+Field order is taken from innd(8) LOGGING and INN `innd/art.c` `ARTlog`: timestamp, disposition, inbound feed/site, Message-ID, then either outbound sites (`+`/`m`) or the already-decided reason (`-`/`j`). Optional INN hostname/size fields after the Message-ID are not emitted.
+
+```text
+mon dd hh:mm:ss.mmm +|m ? <message-id>
+mon dd hh:mm:ss.mmm j ? <message-id> <reason>
+mon dd hh:mm:ss.mmm - ? <message-id> <reason>
+```
+
+Examples:
+
+```text
+Aug 25 13:37:41.839 + ? <cancel.4066@foo.com>
+Jan  5 00:00:00.000 j ? <AbC@Example.COM> newsgroup not carried: unknown.un.carried
+Jan  5 00:00:00.000 j ? <peer@example.com> peer-only: junk.local
+Aug 25 13:37:41.839 m ? <mod@example.com>
+Aug 25 13:37:54.638 - ? <23k82@bar.net> yEncoding invalid
+```
+
+Accepted (`+` / `j`) events are emitted by `IncomingSpoolWriterService` after dequeue. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
+
+The NNTP response code is not a news field and is not rendered. INN's `- feed <message-id> reason` template has no response-code column; a code that appears inside some INN filter reason strings is not used here.
+
+Rejection reasons are short operational journal text decided at the source, for example `message-id invalid`, `date invalid`, `newsgroup not carried`, `article too large`, `article type not permitted`, `queue capacity exceeded`, `yEncoding invalid`. An existing PostFilter reason such as `closed` is written unchanged.
+
+Feed is INN's unavailable token `?` in the inbound feed/site field (immediately after the disposition) because authoritative transit/site identity is not yet available; IP, `PeerName`, and AUTHINFO are not substituted. Outbound `SITE` tokens after the Message-ID are omitted until outbound routing exists.
+
+`Nntpd:Transit:WantTrash` (TAKETHIS/IHAVE only): when `true`, articles posted only to unknown or RFC 6048 `j` groups are accepted and treated as junk internally without rewriting `Newsgroups:`. The `j` line carries `newsgroup not carried: <group>[, <group>...]` for the unknown header tokens when every listed group is unknown, or `peer-only: <group>[, <group>...]` for the RFC 6048 `PeerOnly` catalogue hits that caused junk. When `false`, unknown/non-carried groups are rejected before enqueue and write `-` with the same `newsgroup not carried: ...` group list. PeerOnly (`j`) groups remain accepted junk. POST is not subject to this policy. Only the groups responsible for the existing decision are listed; a complete Newsgroups header is not dumped.
+
+`Nntpd:Transit:LogTrash` controls accepted-junk `j` lines only. It does not suppress `+`, `-`, or `m`. Accepted articles then continue to the existing /dev/null no-op sink.
+
+Temporary capacity or pre-article responses (`435` not wanted, `436` try later, TAKETHIS `400`, POST `440`) are not article-rejection news events and are not written as `-`.
+
+Operational file behaviour is the same Serilog File/Async contract as application logs and is configured under `Serilog:News` (path, `rollingInterval`, `retainedFileCountLimit`, `fileSizeLimitBytes`, `rollOnFileSizeLimit`, `hooks` compression, `buffered`, Async `bufferSize` / `blockWhenFull`). `Nntpd:LogDir` still resolves the directory; the runtime path is `{LogDir}/news-yyyyMMdd.log` for daily rolling. Changing those Serilog settings changes the news file. Changing them does not change the INN formatter.
+
+A news-log I/O failure is reported through application diagnostics and does not produce a second NNTP response. The dedicated news logger is not written to Console or the application File sink, so normal application logs do not contain INN `news` lines.
+
+High-volume writes use `Serilog.Sinks.Async` (`bufferSize: 50000`, `blockWhenFull: true`) wrapping a buffered File sink. Events are **not dropped**: if the file writer cannot keep up, logging calls block until the queue has space. `Program` still calls `Log.CloseAndFlushAsync()` on shutdown so the application async buffer is flushed. The news logger is disposed with the host / `INewsLogWriter`.
 
 ### Change minimum level
 

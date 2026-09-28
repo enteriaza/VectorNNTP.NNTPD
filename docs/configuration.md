@@ -24,7 +24,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `ACMEACCOUNT` / `VECTOR__ACMEACCOUNT` | string | _(none)_ | **yes when TLS enabled** | Shared ACME account contact email used by every Common ACME client. Not `Nntpd:AcmeEmail` or `BackFiller:AcmeEmail`. Ignored when `BindPortTls` is `0`. |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state. Relative paths resolve with Common `ResolveAcmeStateDir` (delegates to `ApplicationLocalPath.ResolveApplicationLocalPath`) against `AppContext.BaseDirectory` (the binary directory), not the process working directory, source tree, or IDE content root. |
-| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. The Serilog File `path` in `appsettings.json` is a placeholder; startup overwrites it from this setting and `ApplicationName`. |
+| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs and the dedicated Serilog `news` file. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Application File `path` and `Serilog:News:path` in `appsettings.json` are placeholders; startup overwrites them from this setting. The INN news line format is not configurable. |
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
 | `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
@@ -47,6 +47,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
+| `Nntpd:Transit:WantTrash` | bool | `true` | no | INN `wanttrash`. TAKETHIS/IHAVE only. When `true`, articles whose `Newsgroups:` names are all unknown or RFC 6048 `j` are accepted and treated as junk internally after dequeue. When `false`, unknown/non-carried groups are rejected before enqueue (`437`/`439`) and write a `-` news line. The original `Newsgroups:` header is not rewritten. POST is not subject to this policy. |
+| `Nntpd:Transit:LogTrash` | bool | `true` | no | INN `logtrash`. When `true`, accepted-junk events write a `j` line to `{LogDir}/news`. When `false`, junk articles are still accepted; only the junk news line is omitted. Accepted (`+`), rejected (`-`), and moderated (`m`) events are still written. |
 | `Nntpd:PostFilter` | _(removed)_ | n/a | **must be absent** | Leftover section fails startup. Cluster PostFilter policy is MySQL `nntppostfiltercurrent`. See [postfilter.md](postfilter.md). |
 | `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
 | `SpeedTest:MaxConcurrent` | int | `2` | no | Maximum concurrent SPEEDTEST operations on this host (`1–8`) |
@@ -72,7 +74,7 @@ CHECK in-flight depth is **not configurable**. Per-session overlap is the archit
 
 The count is the destuffed client article: header block, the blank header/body separator, and body. The NNTP multiline terminator (`CRLF . CRLF`) is not included. Stuffing dots (`..` on the wire for a destuffed `.` line) are not counted. The limit is enforced while the article is streamed; exceeding it ends reception and returns `441 Posting failed`. The server does not buffer an oversized article merely because the terminator has not arrived yet.
 
-This setting is distinct from `ArticleIngestion:MaxArticleBytes`, which bounds IHAVE/TAKETHIS receive and IHAVE worker destuff (default 4 MiB). A valid 5 MiB POST is not re-checked against `MaxArticleBytes`. The spool worker destuffs POST using the queued stuffed payload length so server-owned headers added after receive cannot cause a second size reject.
+This setting is distinct from `ArticleIngestion:MaxArticleBytes`, which bounds IHAVE/TAKETHIS receive destuff before `ArticleRecord` creation (default 4 MiB). A valid 5 MiB POST is not re-checked against `MaxArticleBytes`. The post-queue worker does not destuff or re-parse queued records.
 
 Operator runbook (NntpDB schema, 60s snapshot refresh, Redis reservation lifecycle, SPAMD, failure matrix): [postfilter.md](postfilter.md). Do not put PostFilter policy in `appsettings.json`.
 
@@ -308,7 +310,7 @@ Malformed or empty `Newsgroups:` remain existing parser syntax failures (`441`) 
 
 `Nntpd:TransitQueueMemoryLimit` is the Transit article-queue **payload** budget in bytes. Default is `1073741824` (exactly 1 GiB). Zero and negative values fail startup validation. The implementation accounts with a signed 64-bit integer, so the maximum representable value is `9223372036854775807`.
 
-The budget is the sum of owned queued article payload lengths (`InboundArticle.Payload.Length`): complete NNTP article bytes as queued. For IHAVE that is stuffed wire with the terminating `CRLF . CRLF` excluded. Object overhead is not counted. This is **not** total process memory.
+The budget is the sum of owned queued article payload lengths (`InboundArticle.Payload.Length`), which aliases CanonicalV1 `ArticleRecord.ArtData` for TAKETHIS, POST, and IHAVE. Object overhead is not counted. This is **not** total process memory.
 
 Larger values permit more burst absorption between network ingress and downstream workers. Memory is released as queued articles are consumed. An individual article larger than the configured budget is rejected (IHAVE `437`, TAKETHIS `439`) rather than waited for, so admission cannot deadlock.
 
@@ -913,10 +915,14 @@ Example:
 ```json
 "Nntpd": {
   "Transit": {
-    "StreamOutstandingArticleDepth": 8
+    "LogTrash": true,
+    "StreamOutstandingArticleDepth": 8,
+    "WantTrash": true
   }
 }
 ```
+
+`WantTrash` / `LogTrash` are site-wide `Nntpd:Transit` settings (inn.conf-style), not per-peer keys in the top-level `Transit` dictionary. Accepted `+`/`j` events are emitted after dequeue; rejected `-` events and moderated `m` events are emitted at the IHAVE/TAKETHIS/POST decision. See [logging.md](logging.md#inn-news-log).
 
 ## TCP ports
 
@@ -962,7 +968,7 @@ NNTPD-owned ACME directory URL, renewal threshold, and state directory bind from
 | `AcmeDirectoryUrl` | `https://acme-staging-v02.api.letsencrypt.org/directory` | **Staging** by default. Production requires an explicit override such as `https://acme-v02.api.letsencrypt.org/directory`. |
 | `VECTOR__ACMEACCOUNT` | _(none)_ | Required only when TLS is enabled. Shared Common ACME account contact email. Must be a plausible contact email. |
 | `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). NNTPD binds this from `Nntpd:AcmeStateDir`. Relative paths resolve against `AppContext.BaseDirectory`. Both applications may point at the same physical directory. |
-| `LogDir` | `logs/` | Serilog daily file-log root (relative or absolute path). Created at logging startup if missing. |
+| `LogDir` | `logs/` | Serilog daily file-log root and dedicated Serilog `news` file directory (relative or absolute path). Created at logging startup if missing. |
 | `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
 | `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
 

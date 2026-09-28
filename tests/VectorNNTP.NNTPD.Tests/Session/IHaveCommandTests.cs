@@ -13,6 +13,9 @@ using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -38,7 +41,7 @@ public sealed class IHaveCommandTests
 
         await duplex.WriteClientLineAsync("IHAVE <want@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientAsync("Subject: hi\r\n\r\n..body\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<want@example.com>", ".body\r\n") + ".\r\n");
         Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
 
         using var dequeueCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -46,13 +49,40 @@ public sealed class IHaveCommandTests
         Assert.NotNull(inbound);
         Assert.Equal("<want@example.com>", inbound!.MessageId);
         Assert.Equal(InboundArticleProducer.IHave, inbound.Producer);
-        Assert.Null(inbound.Structured);
-        Assert.Equal("Subject: hi\r\n\r\n..body\r\n", Encoding.ASCII.GetString(inbound.Payload.Span));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
+        var text = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
+        Assert.Contains("\r\n\r\n.body\r\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r\n\r\n..body\r\n", text, StringComparison.Ordinal);
 
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 64 * 1024);
-        Assert.NotNull(interpreted.Structured);
-        Assert.Equal(".body\r\n", Encoding.ASCII.GetString(interpreted.Structured!.Value.Body.Span));
-        Assert.Equal(interpreted.Structured.Value.Size, interpreted.Payload.Length);
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task ValidIhave_UnknownNewsgroup_WantTrash_Returns235()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <ihave-wanttrash@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            CanonicalArticleText.Stuffed("<ihave-wanttrash@example.com>", newsgroups: "unknown.un.carried") + ".\r\n");
+        Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
+
+        using var dequeueCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var inbound = await queue.DequeueAsync(dequeueCts.Token);
+        Assert.Equal("<ihave-wanttrash@example.com>", inbound!.MessageId);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.Equal("unknown.un.carried", Encoding.ASCII.GetString(inbound.Record.Newsgroups));
+        Assert.Contains("Newsgroups: unknown.un.carried"u8, inbound.Payload.Span);
+        Assert.DoesNotContain("junk"u8, inbound.Record.Newsgroups);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -72,7 +102,7 @@ public sealed class IHaveCommandTests
 
         await duplex.WriteClientLineAsync("IHAVE <want-pf@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientAsync("Subject: hi\r\n\r\n..body\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<want-pf@example.com>") + ".\r\n");
         Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
         Assert.Equal(0, filter.EvaluateCalls);
 
@@ -92,15 +122,17 @@ public sealed class IHaveCommandTests
             TimeProvider.System,
             new HistoryWriteQueue());
         history.Remember("<have@example.com>"u8.ToArray());
+        var news = new RecordingNewsLogWriter();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 2 });
         await using var duplex = await IHaveDuplex.CreateAsync();
-        var session = duplex.CreateSession(queue, history);
+        var session = duplex.CreateSession(queue, history, newsLog: news);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("IHAVE <have@example.com>");
         Assert.Equal("435 Article not wanted", await duplex.ReadClientLineAsync());
+        Assert.Empty(news.Events);
         await duplex.WriteClientLineAsync("DATE");
         Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
 
@@ -172,21 +204,25 @@ public sealed class IHaveCommandTests
     [Fact]
     public async Task ArticleLargerThanQueueBudget_Returns437()
     {
+        var news = new RecordingNewsLogWriter();
         var queue = new ArticleIngestionQueue(
             new ArticleIngestionOptions { MaxArticleBytes = 1024 },
             transitQueueMemoryLimit: 16);
         await using var duplex = await IHaveDuplex.CreateAsync();
-        var session = duplex.CreateSession(queue);
+        var session = duplex.CreateSession(queue, newsLog: news);
         session.SetAuthorization(TransitAuth);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("IHAVE <budget@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientAsync("Subject: hi\r\n\r\n" + new string('Z', 32) + "\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<budget@example.com>") + ".\r\n");
         Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
         Assert.Equal(0, queue.Count);
         Assert.Equal(0, queue.QueuedBytes);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(IngressNewsReasons.QueueCapacityExceeded, Encoding.ASCII.GetString(evt.Reason.Span));
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -196,10 +232,11 @@ public sealed class IHaveCommandTests
     [Fact]
     public async Task BudgetExhaustedBefore335_Returns436Immediately_AndDoesNotWait()
     {
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), transitQueueMemoryLimit: 16);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            queue.TryAdmit(FillArticle("<held@ex.com>", 16)));
+        var held = FillArticle("<held@ex.com>");
+        var queue = new ArticleIngestionQueue(
+            new ArticleIngestionOptions(),
+            transitQueueMemoryLimit: held.Payload.Length);
+        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(held));
         Assert.False(queue.TryProbeCapacity());
 
         await using var duplex = await IHaveDuplex.CreateAsync();
@@ -211,7 +248,7 @@ public sealed class IHaveCommandTests
         var response = duplex.ReadClientLineAsync();
         await duplex.WriteClientLineAsync("IHAVE <nowait@example.com>");
         Assert.Equal("436 Transfer not possible; try again later", await response.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal(16, queue.QueuedBytes);
+        Assert.Equal(held.Payload.Length, queue.QueuedBytes);
         Assert.Equal(1, queue.Count);
         Assert.Equal(0, queue.DebugWaiterCount);
 
@@ -223,12 +260,13 @@ public sealed class IHaveCommandTests
     [Fact]
     public async Task PostReceiveCapacityFailure_Returns436_Not235_AndReleasesOwnership()
     {
+        var held = FillArticle("<held@ex.com>");
+        var incoming = CanonicalArticleText.CreateQueued("<late@example.com>", InboundArticleProducer.IHave);
+        Assert.True(held.Payload.Length < incoming.Payload.Length);
         var queue = new ArticleIngestionQueue(
-            new ArticleIngestionOptions { MaxArticleBytes = 1024 },
-            transitQueueMemoryLimit: 20);
-        Assert.Equal(
-            ArticleEnqueueResult.Accepted,
-            queue.TryAdmit(FillArticle("<held@ex.com>", 10)));
+            new ArticleIngestionOptions { MaxArticleBytes = 64 * 1024 },
+            transitQueueMemoryLimit: incoming.Payload.Length);
+        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(held));
         Assert.True(queue.TryProbeCapacity());
 
         await using var duplex = await IHaveDuplex.CreateAsync();
@@ -240,10 +278,9 @@ public sealed class IHaveCommandTests
         await duplex.WriteClientLineAsync("IHAVE <late@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
         var article = duplex.ReadClientLineAsync();
-        // 17 stuffed bytes: fits the 20-byte budget, but not the remaining 10.
-        await duplex.WriteClientAsync("Subject: x\r\n\r\ny\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<late@example.com>") + ".\r\n");
         Assert.Equal("436 Transfer failed; try again later", await article.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal(10, queue.QueuedBytes);
+        Assert.Equal(held.Payload.Length, queue.QueuedBytes);
         Assert.Equal(1, queue.Count);
         Assert.Equal(0, queue.DebugWaiterCount);
 
@@ -252,7 +289,7 @@ public sealed class IHaveCommandTests
 
         await duplex.WriteClientLineAsync("IHAVE <next@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientAsync("Subject: n\r\n\r\nok\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<next@example.com>") + ".\r\n");
         Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
         Assert.Equal("<next@example.com>", (await queue.DequeueAsync(CancellationToken.None))!.MessageId);
         Assert.Equal(0, queue.QueuedBytes);
@@ -265,7 +302,10 @@ public sealed class IHaveCommandTests
     [Fact]
     public async Task QueueCompleteAfter335_Returns436_AndLeavesAccounting()
     {
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), transitQueueMemoryLimit: 64);
+        var sample = FillArticle("<shut@example.com>");
+        var queue = new ArticleIngestionQueue(
+            new ArticleIngestionOptions(),
+            transitQueueMemoryLimit: sample.Payload.Length);
         await using var duplex = await IHaveDuplex.CreateAsync();
         var session = duplex.CreateSession(queue);
         session.SetAuthorization(TransitAuth);
@@ -275,7 +315,7 @@ public sealed class IHaveCommandTests
         await duplex.WriteClientLineAsync("IHAVE <shut@example.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
         queue.Complete();
-        await duplex.WriteClientAsync("Subject: x\r\n\r\ny\r\n.\r\n");
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<shut@example.com>") + ".\r\n");
         Assert.Equal("436 Transfer failed; try again later", await duplex.ReadClientLineAsync());
         Assert.Equal(0, queue.QueuedBytes);
         Assert.Equal(0, queue.Count);
@@ -291,14 +331,17 @@ public sealed class IHaveCommandTests
         IHaveAdmissionLog.ResetForTests();
         IHaveAdmissionLog.WarningInterval = TimeSpan.FromHours(1);
         var recording = new RecordingLogger();
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions(), transitQueueMemoryLimit: 8);
-        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(FillArticle("<held@ex.com>", 8)));
+        var held = FillArticle("<held@ex.com>");
+        var queue = new ArticleIngestionQueue(
+            new ArticleIngestionOptions(),
+            transitQueueMemoryLimit: held.Payload.Length);
+        Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(held));
 
         IHaveAdmissionLog.BudgetExhausted(recording, queue);
         IHaveAdmissionLog.BudgetExhausted(recording, queue);
         var first = Assert.Single(recording.Warnings);
         Assert.Contains("TransitQueueMemoryLimit exhausted", first, StringComparison.Ordinal);
-        Assert.Contains("8/8", first, StringComparison.Ordinal);
+        Assert.Contains($"{held.Payload.Length}/{held.Payload.Length}", first, StringComparison.Ordinal);
         Assert.DoesNotContain("Subject:", first, StringComparison.Ordinal);
 
         IHaveAdmissionLog.ResetForTests();
@@ -330,6 +373,57 @@ public sealed class IHaveCommandTests
     }
 
     [Fact]
+    public async Task TooLarge_WritesRejectedNewsWith437()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(
+            new ArticleIngestionOptions { QueueCapacity = 2, MaxArticleBytes = 16 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <big-news@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync("Subject: big\r\n\r\n" + new string('Z', 64) + "\r\n.\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(437, evt.ResponseCode);
+        Assert.Equal(IngressNewsReasons.ArticleTooLarge, Encoding.ASCII.GetString(evt.Reason.Span));
+        Assert.DoesNotContain("437", Encoding.ASCII.GetString(evt.Reason.Span), StringComparison.Ordinal);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task NewsWriterFailure_On437_DoesNotChangeRejectionResponse()
+    {
+        var news = new ThrowingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <news-fail-437@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync("Subject: hi\r\n\r\n..body\r\n.\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        Assert.Equal(1, news.WriteCalls);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
     public async Task Capabilities_AdvertisesIhave()
     {
         await using var duplex = await IHaveDuplex.CreateAsync();
@@ -353,14 +447,206 @@ public sealed class IHaveCommandTests
         await run;
     }
 
-    private static InboundArticle FillArticle(string messageId, int bytes) =>
-        new(
-            messageId,
-            new byte[bytes],
-            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.IHave);
+    [Fact]
+    public async Task IncompleteArticleAfter335_Returns437_AndDoesNotEnqueue()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <incomplete@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync("Subject: hi\r\n\r\n..body\r\n.\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(437, evt.ResponseCode);
+        var incompleteReason = Encoding.ASCII.GetString(evt.Reason.Span);
+        Assert.DoesNotContain("rejected article record", incompleteReason, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(incompleteReason));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task WantTrashFalse_UnknownGroup_Returns437_AndWritesRejectedNews()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(
+            queue,
+            newsLog: news,
+            transit: new TransitOptions { WantTrash = false, LogTrash = false },
+            catalogue: CarriedCatalogue("alt.test"));
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <ihave-notrash@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            CanonicalArticleText.Stuffed("<ihave-notrash@example.com>", newsgroups: "unknown.un.carried") + ".\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(437, evt.ResponseCode);
+        Assert.Equal(
+            IngressNewsReasons.WithGroups(IngressNewsReasons.NewsgroupNotCarried, ["unknown.un.carried"]),
+            Encoding.ASCII.GetString(evt.Reason.Span));
+        Assert.True(evt.MessageId.Span.SequenceEqual("<ihave-notrash@example.com>"u8));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task InvalidMessageIdAfter335_WritesRejectedNewsWithParseReason()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <bad-mid@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(
+            CanonicalArticleText.Stuffed("not-a-message-id") + ".\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(437, evt.ResponseCode);
+        Assert.Equal(IngressNewsReasons.MessageIdInvalid, Encoding.ASCII.GetString(evt.Reason.Span));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task InvalidDateAfter335_WritesRejectedNewsWithParseReason()
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <bad-date@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        var article = CanonicalArticleText.Destuffed("<bad-date@example.com>")
+            .Replace(CanonicalArticleText.Date, "not-a-date", StringComparison.Ordinal);
+        await duplex.WriteClientAsync(article.Replace("\r\n.", "\r\n..", StringComparison.Ordinal) + ".\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(IngressNewsReasons.DateInvalid, Encoding.ASCII.GetString(evt.Reason.Span));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    [Fact]
+    public async Task YEncValidationFailureAfter335_WritesRejectedNewsWithYEncReason()
+    {
+        await AssertYEncRejectionAsync(
+            "<yenc-meta@example.com>",
+            "=ybegin line=128 size=abc name=t.bin\r\n.\r\n=yend size=1 crc32=00000000\r\n");
+    }
+
+    [Fact]
+    public async Task YEncCrcMismatchAfter335_WritesRejectedNewsWithYEncReason()
+    {
+        await AssertYEncRejectionAsync(
+            "<yenc-crc@example.com>",
+            "=ybegin line=128 size=1 name=t.bin\r\nk\r\n=yend size=1 crc32=00000000\r\n");
+    }
+
+    [Fact]
+    public async Task CommandMessageIdNeedNotMatchArticleMessageId()
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE <command@example.com>");
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed("<article@example.com>") + ".\r\n");
+        Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
+
+        var inbound = await queue.DequeueAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+        Assert.Equal("<command@example.com>", inbound!.MessageId);
+        Assert.True(inbound.Record.MessageId.SequenceEqual("<article@example.com>"u8));
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
+
+    private static InboundArticle FillArticle(string messageId) =>
+        CanonicalArticleText.CreateQueued(messageId, InboundArticleProducer.IHave);
+
+    private static INewsgroupCatalogue CarriedCatalogue(string group) =>
+        new StaticNewsgroupCatalogue(
+            NewsgroupSnapshot.Create(
+                [new NewsgroupDefinition(group, string.Empty, 2, 1, NewsgroupPostingStatus.Allowed)]));
+
+    private static string FormatNews(in NewsLogEvent evt)
+    {
+        var timestamp = evt.Timestamp == default
+            ? new DateTimeOffset(2024, 8, 25, 13, 37, 54, 638, TimeSpan.Zero)
+            : evt.Timestamp;
+        Span<byte> buffer = stackalloc byte[NewsLogLineFormatter.RequiredLength(in evt) + 16];
+        var written = NewsLogLineFormatter.Write(buffer, in evt, timestamp);
+        return Encoding.ASCII.GetString(buffer[..written]);
+    }
+
+    private static async Task AssertYEncRejectionAsync(string commandId, string body)
+    {
+        var news = new RecordingNewsLogWriter();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        await using var duplex = await IHaveDuplex.CreateAsync();
+        var session = duplex.CreateSession(queue, newsLog: news);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        await duplex.WriteClientLineAsync("IHAVE " + commandId);
+        Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
+        await duplex.WriteClientAsync(CanonicalArticleText.Stuffed(commandId, body) + ".\r\n");
+        Assert.Equal("437 Transfer rejected; do not retry", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, queue.Count);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Rejected, evt.Disposition);
+        Assert.Equal(437, evt.ResponseCode);
+        Assert.Equal(IngressNewsReasons.YEncodingInvalid, Encoding.ASCII.GetString(evt.Reason.Span));
+        var rendered = FormatNews(in evt);
+        Assert.EndsWith("- ? " + commandId + " yEncoding invalid\n", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("437", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("YEncDecodingFailed", rendered, StringComparison.Ordinal);
+
+        await duplex.WriteClientLineAsync("QUIT");
+        _ = await duplex.ReadClientLineAsync();
+        await run;
+    }
 
     private sealed class RecordingLogger : ILogger
     {
@@ -404,7 +690,10 @@ public sealed class IHaveCommandTests
         public NntpSession CreateSession(
             IArticleIngestionQueue queue,
             IHistoryDb? history = null,
-            IPostFilter? postFilter = null)
+            IPostFilter? postFilter = null,
+            INewsLogWriter? newsLog = null,
+            TransitOptions? transit = null,
+            INewsgroupCatalogue? catalogue = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -415,7 +704,10 @@ public sealed class IHaveCommandTests
                 NullLogger<NntpSession>.Instance,
                 articleIngestion: queue,
                 historyDb: history,
-                postFilter: postFilter);
+                postFilter: postFilter,
+                newsgroupCatalogue: catalogue,
+                newsLog: newsLog,
+                transit: transit);
         }
 
         public async Task WriteClientLineAsync(string line)

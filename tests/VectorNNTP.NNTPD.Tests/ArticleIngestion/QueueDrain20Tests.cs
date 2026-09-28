@@ -1,8 +1,7 @@
 using System.Collections.Concurrent;
-using System.Net;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking.Proxy;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 
@@ -17,25 +16,24 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task TwoWorkers_ConsumeEveryArticleExactlyOnce()
     {
-        await DrainExactlyOnceAsync(workers: 2, articleCount: 100, payloadBytes: 32);
+        await DrainExactlyOnceAsync(workers: 2, articleCount: 100);
     }
 
     [Fact]
     public async Task TwentyWorkers_ConsumeEveryArticleExactlyOnce()
     {
-        await DrainExactlyOnceAsync(workers: WorkerCount, articleCount: 200, payloadBytes: 32);
+        await DrainExactlyOnceAsync(workers: WorkerCount, articleCount: 200);
     }
 
     [Fact]
     public async Task TwentyWorkers_CallDequeueAsyncConcurrently_AndAllParticipate()
     {
         const int articleCount = 400;
-        const int payloadBytes = 16;
-        var queue = CreateQueue(articleCount * payloadBytes);
+        var queue = CreateQueue(articleCount);
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var hits = new int[WorkerCount];
         var workers = StartWorkers(queue, WorkerCount, seen, hits);
-        EnqueueUnique(queue, articleCount, payloadBytes);
+        EnqueueUnique(queue, articleCount);
         queue.Complete();
         await WaitWorkersAsync(workers);
 
@@ -51,13 +49,12 @@ public sealed class QueueDrain20Tests
     public async Task TwentyWorkers_WaitingThenEnqueue_AllExitAfterComplete()
     {
         const int articleCount = 200;
-        const int payloadBytes = 16;
-        var queue = CreateQueue(articleCount * payloadBytes);
+        var queue = CreateQueue(articleCount);
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var hits = new int[WorkerCount];
         var workers = StartWorkers(queue, WorkerCount, seen, hits);
 
-        var ids = EnqueueUnique(queue, articleCount, payloadBytes);
+        var ids = EnqueueUnique(queue, articleCount);
         queue.Complete();
         await WaitWorkersAsync(workers);
 
@@ -73,9 +70,8 @@ public sealed class QueueDrain20Tests
     public async Task ConcurrentConsumers_EachWorkerReceivesIncreasingFifoSubsequence()
     {
         const int articleCount = 200;
-        const int payloadBytes = 8;
-        var queue = CreateQueue(articleCount * payloadBytes);
-        EnqueueUnique(queue, articleCount, payloadBytes, idPrefix: "seq");
+        var queue = CreateQueue(articleCount);
+        EnqueueUnique(queue, articleCount, idPrefix: "seq");
         var perWorker = new List<int>[WorkerCount];
         for (var i = 0; i < WorkerCount; i++)
         {
@@ -125,10 +121,9 @@ public sealed class QueueDrain20Tests
     public async Task TwentyWorkers_AccountingReturnsToZero_AndPeaksMatchPrefill()
     {
         const int articleCount = 80;
-        const int payloadBytes = 64;
-        var expectedBytes = articleCount * payloadBytes;
-        var queue = CreateQueue(expectedBytes);
-        EnqueueUnique(queue, articleCount, payloadBytes);
+        var queue = CreateQueue(articleCount);
+        EnqueueUnique(queue, articleCount);
+        var expectedBytes = queue.QueuedBytes;
 
         Assert.Equal(expectedBytes, queue.QueuedBytes);
         Assert.Equal(articleCount, queue.Count);
@@ -150,7 +145,7 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task TwentyWorkers_CompleteEmptyQueue_UnblocksEveryWorker()
     {
-        var queue = CreateQueue(64);
+        var queue = CreateQueue(1);
         var workers = StartWorkers(queue, WorkerCount);
         queue.Complete();
         await WaitWorkersAsync(workers);
@@ -163,7 +158,7 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task TwentyWorkers_Cancellation_UnblocksWithoutReservationLeak()
     {
-        var queue = CreateQueue(64);
+        var queue = CreateQueue(1);
         using var cts = new CancellationTokenSource();
         var workers = StartWorkers(queue, WorkerCount, cancellationToken: cts.Token);
 
@@ -180,9 +175,8 @@ public sealed class QueueDrain20Tests
     public async Task CancelledConsumer_DoesNotCorruptAccounting_RemainingWorkersDrain()
     {
         const int articleCount = 120;
-        const int payloadBytes = 8;
-        var queue = CreateQueue(articleCount * payloadBytes);
-        EnqueueUnique(queue, articleCount, payloadBytes);
+        var queue = CreateQueue(articleCount);
+        EnqueueUnique(queue, articleCount);
 
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         using var cancelled = new CancellationTokenSource();
@@ -205,9 +199,9 @@ public sealed class QueueDrain20Tests
     public async Task TwentyWorkers_CancelDuringDrain_DoesNotDoubleRelease()
     {
         const int articleCount = 100;
-        const int payloadBytes = 8;
-        var queue = CreateQueue(articleCount * payloadBytes);
-        EnqueueUnique(queue, articleCount, payloadBytes);
+        var queue = CreateQueue(articleCount);
+        var sample = Article("<q20.000@ex.com>");
+        EnqueueUnique(queue, articleCount);
 
         using var cts = new CancellationTokenSource();
         var consumed = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
@@ -219,7 +213,7 @@ public sealed class QueueDrain20Tests
         var remainingCount = queue.Count;
         Assert.True(remainingBytes >= 0);
         Assert.True(remainingCount >= 0);
-        Assert.Equal(remainingCount * payloadBytes, remainingBytes);
+        Assert.Equal(remainingCount * sample.Payload.Length, remainingBytes);
         Assert.Equal(0, queue.DebugWaiterCount);
         Assert.All(consumed.Values, static count => Assert.Equal(1, count));
 
@@ -239,15 +233,14 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task TwentyWorkers_CompleteAfterPartialPrefill_DrainsAndRejectsNewAdmits()
     {
-        const int payloadBytes = 10;
-        var queue = CreateQueue(200);
-        EnqueueUnique(queue, 5, payloadBytes, idPrefix: "held");
+        var queue = CreateQueue(5);
+        EnqueueUnique(queue, 5, idPrefix: "held");
 
         var workers = StartWorkers(queue, WorkerCount);
         queue.Complete();
         await WaitWorkersAsync(workers);
 
-        Assert.Equal(ArticleEnqueueResult.Unavailable, queue.TryAdmit(Article("<late@ex.com>", payloadBytes)));
+        Assert.Equal(ArticleEnqueueResult.Unavailable, queue.TryAdmit(Article("<late@ex.com>")));
         Assert.Equal(0, queue.QueuedBytes);
         Assert.Equal(0, queue.Count);
         Assert.False(queue.IsAccepting);
@@ -257,12 +250,13 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task ConcurrentProducersAndConsumers_CannotOversubscribeBudget()
     {
-        const int size = 8;
-        const long limit = 32;
+        var sample = Article("<p0.00@c>");
+        var size = sample.Payload.Length;
+        var limit = size * 4L;
         const int producers = 8;
         const int consumers = 4;
         const int perProducer = 8;
-        var queue = CreateQueue(limit);
+        var queue = CreateWithByteLimit(limit);
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var maxObserved = 0L;
         var oversubscribed = 0;
@@ -295,7 +289,7 @@ public sealed class QueueDrain20Tests
             {
                 for (var i = 0; i < perProducer; i++)
                 {
-                    var result = await queue.EnqueueAsync(Article($"<p{producer}.{i}@c>", size), CancellationToken.None);
+                    var result = await queue.EnqueueAsync(Article($"<p{producer}.{i:D2}@c>"), CancellationToken.None);
                     Assert.Equal(ArticleEnqueueResult.Accepted, result);
                 }
             });
@@ -320,23 +314,23 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task SuccessfulDequeue_ReleasesAccountingBeforeCallerOwnsArticle()
     {
-        var queue = CreateQueue(16);
-        var article = Article("<own@ex.com>", 8);
+        var article = Article("<own@ex.com>");
+        var queue = CreateQueue(1);
         Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(article));
-        Assert.Equal(8, queue.QueuedBytes);
+        Assert.Equal(article.Payload.Length, queue.QueuedBytes);
         Assert.Equal(1, queue.Count);
 
         var dequeued = await queue.DequeueAsync(CancellationToken.None);
         Assert.Same(article, dequeued);
         Assert.Equal(0, queue.QueuedBytes);
         Assert.Equal(0, queue.Count);
-        Assert.Equal(8, dequeued!.Payload.Length);
+        Assert.Equal(article.Payload.Length, dequeued!.Payload.Length);
     }
 
-    private static async Task DrainExactlyOnceAsync(int workers, int articleCount, int payloadBytes)
+    private static async Task DrainExactlyOnceAsync(int workers, int articleCount)
     {
-        var queue = CreateQueue(articleCount * payloadBytes);
-        var ids = EnqueueUnique(queue, articleCount, payloadBytes);
+        var queue = CreateQueue(articleCount);
+        var ids = EnqueueUnique(queue, articleCount);
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var hits = new int[workers];
 
@@ -354,21 +348,26 @@ public sealed class QueueDrain20Tests
         Assert.Equal(0, queue.DebugWaiterCount);
     }
 
-    private static ArticleIngestionQueue CreateQueue(long memoryLimit) =>
+    private static ArticleIngestionQueue CreateQueue(int articleSlots)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(articleSlots);
+        return new ArticleIngestionQueue(new ArticleIngestionOptions(), 64L * 1024 * 1024);
+    }
+
+    private static ArticleIngestionQueue CreateWithByteLimit(long memoryLimit) =>
         new(new ArticleIngestionOptions(), memoryLimit);
 
     private static HashSet<string> EnqueueUnique(
         ArticleIngestionQueue queue,
         int articleCount,
-        int payloadBytes,
         string idPrefix = "q20")
     {
         var ids = new HashSet<string>(articleCount, StringComparer.Ordinal);
         for (var i = 0; i < articleCount; i++)
         {
-            var id = $"<{idPrefix}.{i}@ex.com>";
+            var id = $"<{idPrefix}.{i:D3}@ex.com>";
             Assert.True(ids.Add(id));
-            Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(Article(id, payloadBytes)));
+            Assert.Equal(ArticleEnqueueResult.Accepted, queue.TryAdmit(Article(id)));
         }
 
         return ids;
@@ -435,12 +434,6 @@ public sealed class QueueDrain20Tests
         await Task.WhenAll(workers).WaitAsync(safety.Token);
     }
 
-    private static InboundArticle Article(string messageId, int bytes) =>
-        new(
-            messageId,
-            new byte[bytes],
-            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
-            DateTimeOffset.UtcNow,
-            structured: null,
-            InboundArticleProducer.IHave);
+    private static InboundArticle Article(string messageId) =>
+        CanonicalArticleText.CreateQueued(messageId, InboundArticleProducer.IHave);
 }

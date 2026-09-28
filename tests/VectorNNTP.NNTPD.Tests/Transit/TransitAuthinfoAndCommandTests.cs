@@ -290,7 +290,7 @@ public sealed class TransitAuthinfoAndCommandTests
 
         await duplex.WriteClientLineAsync("IHAVE <x@ex.com>");
         Assert.Equal("335 Send article to be transferred", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientBytesAsync("Subject: i\r\n\r\nbody\r\n.\r\n"u8.ToArray());
+        await duplex.WriteClientBytesAsync(Encoding.ASCII.GetBytes(CanonicalArticleText.Stuffed("<x@ex.com>") + ".\r\n"));
         Assert.Equal("235 Article transferred OK", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("TAKETHIS <x@ex.com>");

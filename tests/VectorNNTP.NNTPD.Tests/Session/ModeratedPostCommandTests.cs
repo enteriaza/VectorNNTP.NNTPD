@@ -88,6 +88,33 @@ public sealed class ModeratedPostCommandTests
     }
 
     [Fact]
+    public async Task M_OrdinaryUser_WritesModeratedNews_NotAccepted()
+    {
+        var news = new RecordingNewsLogWriter();
+        var submission = new RecordingModerationSubmissionService();
+        var outcome = await PostAsync(
+            "group.a",
+            extraHeaders: "",
+            user: MapNntpAuthenticationProvider.NormalUser,
+            submission: submission,
+            newsLog: news);
+        Assert.Equal("240 Article received OK", outcome.Response);
+        var evt = Assert.Single(news.Events);
+        Assert.Equal(NewsLogDisposition.Moderated, evt.Disposition);
+        Assert.NotEqual(NewsLogDisposition.Accepted, evt.Disposition);
+        Assert.NotEqual((byte)'?', (byte)evt.Disposition);
+        Assert.True(evt.MessageId.Span.SequenceEqual("<ok@example.com>"u8));
+        var timestamp = evt.Timestamp == default
+            ? new DateTimeOffset(2024, 8, 25, 13, 37, 41, 839, TimeSpan.Zero)
+            : evt.Timestamp;
+        var buffer = new byte[NewsLogLineFormatter.RequiredLength(in evt) + 16];
+        var written = NewsLogLineFormatter.Write(buffer, in evt, timestamp);
+        var line = Encoding.ASCII.GetString(buffer.AsSpan(0, written));
+        Assert.Contains(" m ? <ok@example.com>", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(" + ", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task M_Unauthenticated_Approved_Returns441()
     {
         var outcome = await PostAsync(
@@ -1052,14 +1079,16 @@ public sealed class ModeratedPostCommandTests
         string body = "body\r\n",
         string from = "poster@example.com",
         string? messageId = "<ok@example.com>",
-        IPostFilter? postFilter = null) =>
+        IPostFilter? postFilter = null,
+        INewsLogWriter? newsLog = null) =>
         await PostRawAsync(
             Article(newsgroups, extraHeaders, body, from, messageId) + ".\r\n",
             user,
             submission,
             snapshot,
             authorization,
-            postFilter: postFilter);
+            postFilter: postFilter,
+            newsLog: newsLog);
 
     private static async Task<PostOutcome> PostRawAsync(
         string stuffedArticle,
@@ -1068,7 +1097,8 @@ public sealed class ModeratedPostCommandTests
         NewsgroupSnapshot? snapshot = null,
         IModeratorAuthorization? authorization = null,
         int? chunkSize = null,
-        IPostFilter? postFilter = null)
+        IPostFilter? postFilter = null,
+        INewsLogWriter? newsLog = null)
     {
         var queue = new RecordingIngestionQueue(NewQueue());
         var history = new RecordingHistoryDb();
@@ -1080,7 +1110,8 @@ public sealed class ModeratedPostCommandTests
             authorization ?? StandardAuthorization(),
             submission ?? new RecordingModerationSubmissionService(ModerationSubmissionStatus.Unavailable, "unused"),
             user is null ? null : MapNntpAuthenticationProvider.CreateStandard(),
-            postFilter: postFilter);
+            postFilter: postFilter,
+            newsLog: newsLog);
         var run = session.RunAsync();
         _ = await duplex.ReadClientLineAsync();
         if (user is not null)
@@ -1298,7 +1329,8 @@ public sealed class ModeratedPostCommandTests
             IModerationSubmissionService submission,
             INntpAuthenticationProvider? authenticationProvider,
             IModeratorCatalogue? moderatorCatalogue = null,
-            IPostFilter? postFilter = null)
+            IPostFilter? postFilter = null,
+            INewsLogWriter? newsLog = null)
         {
             var connection = new PipeConnection(
                 _clientToServer.Reader,
@@ -1316,7 +1348,8 @@ public sealed class ModeratedPostCommandTests
                 moderatorCatalogue: moderatorCatalogue,
                 moderatorAuthorization: authorization,
                 moderationSubmission: submission,
-                postFilter: postFilter);
+                postFilter: postFilter,
+                newsLog: newsLog);
         }
 
         public async Task WriteClientLineAsync(string line) => await WriteClientAsync(line + "\r\n");

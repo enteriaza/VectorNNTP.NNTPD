@@ -1,8 +1,10 @@
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
@@ -35,12 +37,14 @@ public sealed class IHaveTcpTests
         await client.SendAsync("IHAVE <tcp-ihave@example.com>\r\n"u8.ToArray());
         Assert.Equal("335 Send article to be transferred", await rx.ReadLineAsync(client));
 
-        await client.SendAsync("Subject: split\r\n"u8.ToArray());
+        var body = string.Concat(Enumerable.Repeat("TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\r\n", 65));
+        var destuffed = CanonicalArticleText.Destuffed("<tcp-ihave@example.com>", body);
+        var headerEnd = destuffed.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        await client.SendAsync(Encoding.ASCII.GetBytes(destuffed[..headerEnd]));
         await Task.Yield();
-        await client.SendAsync("\r\n"u8.ToArray());
+        await client.SendAsync("\r\n\r\n"u8.ToArray());
         await Task.Yield();
-        var body = Encoding.ASCII.GetBytes(new string('T', 4096) + "\r\n.\r\nDATE\r\n");
-        await client.SendAsync(body);
+        await client.SendAsync(Encoding.ASCII.GetBytes(destuffed[(headerEnd + 4)..] + ".\r\nDATE\r\n"));
 
         Assert.Equal("235 Article transferred OK", await rx.ReadLineAsync(client));
         Assert.StartsWith("111 ", await rx.ReadLineAsync(client), StringComparison.Ordinal);
@@ -49,14 +53,10 @@ public sealed class IHaveTcpTests
         var inbound = await queue.DequeueAsync(dequeueCts.Token);
         Assert.NotNull(inbound);
         Assert.Equal(InboundArticleProducer.IHave, inbound!.Producer);
-        Assert.Null(inbound.Structured);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
         Assert.True(inbound.Payload.Length >= 4096);
         Assert.DoesNotContain("DATE"u8.ToArray(), inbound.Payload.ToArray());
-
-        var interpreted = IhaveArticleInterpreter.Interpret(inbound, 8 * 1024 * 1024);
-        Assert.NotNull(interpreted.Structured);
-        Assert.True(interpreted.Structured!.Value.Body.Length >= 4096);
-        Assert.Equal(interpreted.Structured.Value.Size, interpreted.Payload.Length);
 
         await client.SendAsync("QUIT\r\n"u8.ToArray());
         Assert.Equal("205 Connection closing", await rx.ReadLineAsync(client));

@@ -1,32 +1,41 @@
 using Microsoft.Extensions.Options;
-using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.NNTPD.Newsgroups;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>
-/// Background application service that drains the ingestion queue into the incoming spool.
+/// Background application service that drains CanonicalV1 queued articles.
 /// </summary>
 /// <remarks>
-/// Start order: after listeners may accept connections is acceptable; the queue is a singleton
-/// that buffers until this service is running. Stop completes the queue writer and drains
-/// already-accepted articles before exiting. IHAVE items without a CanonicalV1
-/// <see cref="ArticleRecord"/> are destuffed once under
-/// <c>ArticleIngestion:MaxArticleBytes</c>. TAKETHIS and POST items that already
-/// carry a CanonicalV1 record are not destuffed or parsed again.
-/// Production starts exactly one drain loop. The queue supports concurrent
-/// <see cref="IArticleIngestionQueue.DequeueAsync"/> callers; this service does not
-/// create additional consumers.
+/// <para>
+/// The queue guarantee is a CanonicalV1 <c>ArticleRecord</c>. This worker does
+/// not destuff, parse, or construct records. After dequeue it classifies
+/// <c>+</c>/<c>j</c> and emits those events through <see cref="INewsLogWriter"/>
+/// (production: Serilog), then continues to the existing
+/// <see cref="IIncomingArticlePersister"/> (/dev/null no-op). Rejected articles
+/// never reach this worker; <c>-</c> is emitted at the protocol decision.
+/// Moderated POST (<c>m</c>) is emitted at the moderation-success decision and
+/// never enters the queue.
+/// </para>
+/// <para>
+/// A news-log failure is reported through
+/// <see cref="SpoolLogMessages.NewsLogFailed"/> and does not re-admit, re-queue,
+/// or emit a second NNTP response. The article still proceeds to the persister.
+/// </para>
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
 {
     private readonly IArticleIngestionQueue _queue;
     private readonly IIncomingArticlePersister _persister;
+    private readonly INewsLogWriter _newsLog;
+    private readonly INewsgroupCatalogue? _catalogue;
     private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<IncomingSpoolWriterService> _logger;
     private readonly IFeedDiagnostics _feedDiagnostics;
+    private readonly TimeProvider _time;
     private readonly CancellationTokenSource _runCts = new();
     private Task? _execution;
     private int _started;
@@ -37,7 +46,10 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IIncomingArticlePersister persister,
         IOptions<NntpdOptions> options,
         ILogger<IncomingSpoolWriterService> logger,
-        IFeedDiagnostics? feedDiagnostics = null)
+        IFeedDiagnostics? feedDiagnostics = null,
+        INewsLogWriter? newsLog = null,
+        INewsgroupCatalogue? catalogue = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -48,6 +60,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _options = options;
         _logger = logger;
         _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
+        _newsLog = newsLog ?? NullNewsLogWriter.Instance;
+        _catalogue = catalogue;
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -71,27 +86,33 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // Stop accepting new articles; drain whatever is already queued.
         _queue.Complete();
         await _runCts.CancelAsync().ConfigureAwait(false);
 
         var execution = _execution;
-        if (execution is null)
+        if (execution is not null)
         {
-            return;
+            try
+            {
+                await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                SpoolLogMessages.StopCanceledWithBufferedArticles(_logger, _queue.Count);
+            }
+            catch (Exception ex)
+            {
+                SpoolLogMessages.WriterStoppedWithError(_logger, ex);
+            }
         }
 
         try
         {
-            await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            SpoolLogMessages.StopCanceledWithBufferedArticles(_logger, _queue.Count);
+            _newsLog.Flush();
         }
         catch (Exception ex)
         {
-            SpoolLogMessages.WriterStoppedWithError(_logger, ex);
+            SpoolLogMessages.NewsLogFlushFailed(_logger, ex);
         }
     }
 
@@ -104,8 +125,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _options.Value.ArticleIngestion?.IncomingDirectory
             ?? ArticleIngestionOptions.DefaultIncomingDirectory);
 
-        // Drain until the queue is completed and empty. Cancellation during stop still attempts
-        // cooperative exit after Complete(); WaitToReadAsync will return false once drained.
         while (true)
         {
             InboundArticle? article;
@@ -127,18 +146,12 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _feedDiagnostics.BeginSpoolWork();
             try
             {
-                if (article.Record.ParseStatus != ArticleParseStatus.CanonicalV1
-                    && article.Producer is InboundArticleProducer.IHave or InboundArticleProducer.Post)
-                {
-                    article = IhaveArticleInterpreter.Interpret(article, DestuffLimit(article));
-                }
-
+                WriteNewsLog(article);
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
                 persisted = true;
             }
             catch (Exception ex)
             {
-                // Already accepted (239). Log and continue — do not poison the drain loop.
                 SpoolLogMessages.PersistFailed(
                     _logger,
                     ex,
@@ -160,20 +173,29 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     }
 
     /// <summary>
-    /// Destuff ceiling for one queued item. IHAVE uses
-    /// <c>ArticleIngestion:MaxArticleBytes</c>. POST uses the queued stuffed
-    /// payload length, which is an upper bound on destuffed size and already
-    /// includes server-owned headers written after <c>Nntpd:MaxArticleSize</c>
-    /// was enforced on the client destuffed article.
+    /// Writes the post-queue INN <c>news</c> event. Failures are logged and
+    /// swallowed so the already-accepted article still reaches the persister.
     /// </summary>
-    internal int DestuffLimit(InboundArticle article)
+    private void WriteNewsLog(InboundArticle article)
     {
-        ArgumentNullException.ThrowIfNull(article);
-        if (article.Producer == InboundArticleProducer.Post)
+        try
         {
-            return Math.Max(1, article.Payload.Length);
-        }
+            var transit = _options.Value.Transit ?? new TransitOptions();
+            if (!IngressNewsDisposition.TryCreateEvent(
+                    article,
+                    transit,
+                    _catalogue,
+                    _time.GetLocalNow(),
+                    out var evt))
+            {
+                return;
+            }
 
-        return _queue.MaxArticleBytes;
+            _newsLog.Write(in evt);
+        }
+        catch (Exception ex)
+        {
+            SpoolLogMessages.NewsLogFailed(_logger, ex, article.MessageId);
+        }
     }
 }

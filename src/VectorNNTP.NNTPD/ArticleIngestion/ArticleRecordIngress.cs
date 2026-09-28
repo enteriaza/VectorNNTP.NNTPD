@@ -63,7 +63,7 @@ internal static class ArticleRecordIngress
     /// <param name="record">Accepted CanonicalV1 record.</param>
     /// <param name="clientIdentity">Session client identity at admission.</param>
     /// <param name="receivedAtUtc">Queue-admission timestamp.</param>
-    /// <param name="producer">TAKETHIS or POST.</param>
+    /// <param name="producer">TAKETHIS, POST, or IHAVE.</param>
     /// <returns>Queue item carrying <paramref name="record"/>.</returns>
     /// <remarks>
     /// Throws only when <paramref name="messageId"/> is empty or
@@ -86,10 +86,8 @@ internal static class ArticleRecordIngress
 
         return new InboundArticle(
             messageId,
-            record.ArtData,
             clientIdentity,
             receivedAtUtc,
-            structured: null,
             producer,
             record);
     }

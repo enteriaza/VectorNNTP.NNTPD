@@ -70,7 +70,24 @@ public sealed class ArticleRecordIngressTests
             InboundArticleProducer.TakeThis);
         Assert.True(inbound.Payload.Equals(created.Record.ArtData));
         Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
-        Assert.Null(inbound.Structured);
+        Assert.Equal(InboundArticleProducer.TakeThis, inbound.Producer);
+    }
+
+    [Fact]
+    public void CreateQueued_IHave_IsCanonicalV1()
+    {
+        var destuffed = Encoding.ASCII.GetBytes(CanonicalArticleText.Destuffed("<ihave@example.test>"));
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(Parser, destuffed);
+        Assert.True(created.IsAccepted);
+        var inbound = ArticleRecordIngress.CreateQueued(
+            "<ihave@example.test>",
+            created.Record,
+            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
+            DateTimeOffset.UtcNow,
+            InboundArticleProducer.IHave);
+        Assert.Equal(InboundArticleProducer.IHave, inbound.Producer);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Payload.Equals(created.Record.ArtData));
     }
 
     [Fact]

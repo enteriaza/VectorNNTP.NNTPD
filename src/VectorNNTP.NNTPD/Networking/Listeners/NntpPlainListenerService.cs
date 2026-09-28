@@ -62,6 +62,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IPostFilter _postFilter;
     private readonly PostFilterMetrics _postFilterMetrics;
     private readonly IPostFilterRejectionEvidenceQueue _postFilterEvidence;
+    private readonly INewsLogWriter _newsLog;
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
@@ -101,7 +102,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         IArticleWorkRpcClient? articleWorkRpc = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
-        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null)
+        IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
+        INewsLogWriter? newsLog = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -136,6 +138,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _postFilter = postFilter ?? DisabledPostFilter.Instance;
         _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         _postFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
+        _newsLog = newsLog ?? NullNewsLogWriter.Instance;
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
@@ -368,7 +371,9 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 articleWorkRpc: _articleWorkRpc,
                 postFilter: _postFilter,
                 postFilterMetrics: _postFilterMetrics,
-                postFilterEvidence: _postFilterEvidence);
+                postFilterEvidence: _postFilterEvidence,
+                newsLog: _newsLog,
+                transit: _options.Value.Transit);
             ConnectionAcceptanceLogging.LogPlainAccepted(_logger, connection.ClientIdentity);
 
             TransitInboundAdmitResult admission;

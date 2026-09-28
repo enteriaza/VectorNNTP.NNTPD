@@ -1,3 +1,9 @@
+using System.Net;
+using System.Text;
+using VectorNNTP.Common.Articles.Parsing;
+using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Networking.Proxy;
+
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 
 /// <summary>
@@ -30,5 +36,36 @@ internal static class CanonicalArticleText
             "Subject: ingress-test\r\n" +
             "\r\n" +
             body;
+    }
+
+    /// <summary>NNTP stuffed wire for <see cref="Destuffed"/> without the terminator.</summary>
+    public static string Stuffed(
+        string messageId,
+        string destuffedBody = "body\r\n",
+        string newsgroups = "alt.test") =>
+        Destuffed(messageId, destuffedBody, newsgroups)
+            .Replace("\r\n.", "\r\n..", StringComparison.Ordinal);
+
+    /// <summary>Builds a CanonicalV1 queue item for tests.</summary>
+    public static InboundArticle CreateQueued(
+        string messageId,
+        InboundArticleProducer producer,
+        string body = "body\r\n",
+        string newsgroups = "alt.test")
+    {
+        var created = ArticleRecordIngress.TryCreateFromDestuffed(
+            new NntpArticleParser("nntpd01.usenet.ninja"),
+            Encoding.ASCII.GetBytes(Destuffed(messageId, body, newsgroups)));
+        if (!created.IsAccepted)
+        {
+            throw new InvalidOperationException("Test article must be CanonicalV1.");
+        }
+
+        return ArticleRecordIngress.CreateQueued(
+            messageId,
+            created.Record,
+            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
+            DateTimeOffset.UtcNow,
+            producer);
     }
 }

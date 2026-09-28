@@ -66,7 +66,7 @@ Phase 0 establishes a production-shaped host for a long-running NNTP server with
 │  - ModeratorCatalogueService (nntpmoderators snapshot)      │
 │  - HistoryWriteService (async HistoryDB Redis persistence)  │
 │  - HistoryMaintenanceService (local HistoryDB expiry)       │
-│  - IncomingSpoolWriterService (TAKETHIS/IHAVE/POST spool)   │
+│  - IncomingSpoolWriterService (news log + /dev/null sink)   │
 │  - EmailDeliveryService (generic outbound SMTP worker)      │
 │  - SessionStateService (leases + IPs + bytes + rate shares) │
 │  - TransitPeerStateService (Transit inbound ownership)      │
@@ -127,11 +127,16 @@ Detached slot (off the RX stack; at most Depth in flight)
            │
            ↓
     IncomingSpoolWriterService (one production consumer)
+      → accepted ingress disposition (`+` / `j`)
+      → INN-compatible `{LogDir}/news`
+      → existing /dev/null no-op article sink
+    Deliberate rejections (`437` / `439` / POST `441`) emit `-` at the protocol decision
+    and never enter the queue. Successful moderated POST emits `m` at that decision.
 ```
 
 STREAM TAKETHIS is pipelined per session with a bounded window (`TakeThisPipeline.Depth` = 16). One physical RX task owns `Connection.Input`: it parses commands in order, frames each article, and detaches one owned stuffed-wire buffer per TAKETHIS. Pipeline workers never call `ReadAsync` on that pipe. After detach, Peek / queue / Remember / ordered 239 run independently; a fast Peek must not emit 239 on the RX task. Depth bounds how many owned article buffers may be retained; when the window is full the RX loop stops admitting and the input Pipe (64 KiB pause) applies TCP backpressure. 239 is never emitted before the complete article and the HistoryDB result, and never reordered. TAKETHIS does not destuff; MODE READER fallback still destuffs. Disk I/O is never on the TAKETHIS receive critical path.
 
-The ingestion queue is multi-reader (`DequeueAsync` is safe for concurrent callers). Production drains it with one `IncomingSpoolWriterService` consumer.
+The ingestion queue is multi-reader (`DequeueAsync` is safe for concurrent callers). Production drains it with one `IncomingSpoolWriterService` consumer. **All accepted ingress paths converge on CanonicalV1 `ArticleRecord` before enqueue:** TAKETHIS → `ArticleRecord` → queue; POST → `ArticleRecord` → queue; IHAVE → `ArticleRecord` → queue. The queue rejects items that are not CanonicalV1. After dequeue the worker classifies `+` / `j` from the already-canonical record, emits the accepted news event through a dedicated Serilog news logger (application-owned INN formatter; Serilog owns file lifecycle), then continues to the current /dev/null no-op persister. The worker does not destuff, parse, or construct `ArticleRecord`. Rejected articles never enter the queue; `-` is written at the IHAVE/TAKETHIS/POST decision that produced the NNTP rejection. The original `Newsgroups:` header is never rewritten to `junk`. Successful moderated POST writes `m` at the moderation decision and does not enter the queue. Cancel (`c`) is not implemented. `SITE` / outbound routing is not populated; the inbound feed/site field is currently `?` (innd(8) `ARTlog` field order: disposition, feed, Message-ID). A news-log I/O failure is logged and does not emit a second NNTP response or re-admit the article.
 
 ### IHAVE article ingestion
 
@@ -150,26 +155,27 @@ non-blocking Transit queue probe (no size reservation)
   ↓
 335 / 435 / 436
   ↓
-raw article reader (CRLF . CRLF framing)
+raw article reader (CRLF . CRLF framing; stuffed wire, terminator omitted)
   ↓
-one owned NNTP wire buffer (dot-stuffing preserved; terminator omitted)
+destuff once + ArticleRecordFactory.TryCreate
+  ↓
+CanonicalV1 ArticleRecord → CreateQueued(IHave)
   ↓
 non-blocking TryAdmit (never waits for queue memory)
   ↓
 235 / 436 / 437
   ↓
-IncomingSpoolWriterService
-  ↓
-IhaveArticleInterpreter (destuff exactly once → Article)
+accepted → IncomingSpoolWriterService → `+` / `j`
+rejected (`437` after an article was received) → `-` at the IHAVE decision
+temporary `436` / pre-article `435` → no news event
 ```
 
-- **Queue payload (IHAVE):** complete NNTP wire-format article bytes. Leading-dot stuffing is preserved. The terminating `CRLF . CRLF` is not stored. One owned buffer; no Pipe or pooled memory.
-- **Worker:** `IhaveArticleInterpreter` destuffs IHAVE items exactly once and builds `Article` (`Headers`, `Body`, `Size`, `ArticleType`). TAKETHIS items are not destuffed here.
-- **Article.Headers / Body:** destuffed owned copies produced **after** queue admission. Not Pipe spans.
-- **Article.Size:** destuffed complete article (headers + blank line + body). Terminator excluded. Same meaning as `MaxArticleBytes` (“after dot-unstuffing”).
-- **Body representation:** destuffed received bytes. yEnc/BASE64/uuencode are **not** decoded.
+- **Queue contract:** every queued item is a CanonicalV1 `ArticleRecord`. `InboundArticle.Payload` aliases `ArtData`. Heterogeneous stuffed/raw IHAVE items are not admitted.
+- **IHAVE receive:** stuffed wire is destuffed at the command boundary, then Common `ArticleRecordFactory` materializes the record. Incomplete articles that cannot become CanonicalV1 are `437` after `335`.
+- **IHAVE-specific (not in ArticleRecord):** History peek/Remember, non-blocking probe before `335`, non-blocking `TryAdmit`, 335/235/435/436/437 timing, and using the command Message-ID for History without matching the article Message-ID.
+- **Worker:** classifies `+`/`j` from the queued record and writes those news events through Serilog. It does not destuff, parse, construct `ArticleRecord`, or reconstruct rejections.
 - **HistoryDB:** CHECK, IHAVE, and TAKETHIS use `PeekAsync` (no miss reservation). IHAVE and TAKETHIS call `Remember` after a successful enqueue.
-- **Queue:** TAKETHIS still constructs `InboundArticle` with `Producer = TakeThis` and may wait for byte-budget capacity. IHAVE sets `Producer = IHave` and does not set `Structured` at enqueue. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after receive. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
+- **Queue admission:** TAKETHIS and POST may wait for byte-budget capacity. IHAVE uses `TransitQueueMemoryLimit` as **non-blocking** backpressure: it probes remaining budget before `335` (no MaxSize reservation) and `TryAdmit`s after record creation. Temporary inability to accept is `436`. IHAVE never waits for queue memory.
 
 ### POST PostFilter
 
@@ -689,4 +695,4 @@ Mandatory settings that fail startup when missing or invalid: `CloudFlareApiKey`
 
 ## Non-goals (deferred)
 
-NNTP article storage and successful ARTICLE/HEAD/BODY/STAT retrieval remain deferred; those commands currently return RFC 3977 lookup-failure codes only. AUTHINFO USER/PASS and AUTHINFO SASL (PLAIN, LOGIN, CRAM-MD5, SCRAM-SHA-256) authenticate against the configured newsmaster and MySQL `nntpusers` through the existing NntpDB pool. Every authenticated account receives both `account_rate_limit` (enforced by `VectorNNTP.NNTPD.SessionState.RateLimiting` at the outbound transport) and `account_byte_limit` (enforced by `VectorNNTP.NNTPD.SessionState.BytesAccounting` on the `SessionStateService` cycle; batched ~10s MySQL durable + Redis cluster remaining; see above). COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; raw wire receive, destuff downstream), POST (RFC 3977 §6.3.1; streaming receive into one stuffed IHAVE/TAKETHIS queue buffer, strict article validation, catalogue snapshot newsgroup/posting-status checks, moderator authorization for status `m`, proto-article moderation submission via `IEmailService` durable spool acceptance, server-owned injection metadata on the ordinary injection path, HistoryDB duplicate detection after the terminator, TryAdmit only), LIST/GROUP against the in-memory newsgroup catalogue, and the session authorization gates are in place. LISTGROUP remains a registered placeholder. The outbound Email subsystem is implemented as generic application infrastructure; moderation is one producer.
+NNTP article storage and successful ARTICLE/HEAD/BODY/STAT retrieval remain deferred; those commands currently return RFC 3977 lookup-failure codes only. AUTHINFO USER/PASS and AUTHINFO SASL (PLAIN, LOGIN, CRAM-MD5, SCRAM-SHA-256) authenticate against the configured newsmaster and MySQL `nntpusers` through the existing NntpDB pool. Every authenticated account receives both `account_rate_limit` (enforced by `VectorNNTP.NNTPD.SessionState.RateLimiting` at the outbound transport) and `account_byte_limit` (enforced by `VectorNNTP.NNTPD.SessionState.BytesAccounting` on the `SessionStateService` cycle; batched ~10s MySQL durable + Redis cluster remaining; see above). COMPRESS DEFLATE (RFC 8054), TAKETHIS streaming ingestion (RFC 4644), CHECK HistoryDB (RFC 4644), IHAVE transit ingest (RFC 3977 §6.3.2; stuffed receive → destuff → CanonicalV1 ArticleRecord → queue), POST (RFC 3977 §6.3.1; streaming receive into one stuffed IHAVE/TAKETHIS queue buffer, strict article validation, catalogue snapshot newsgroup/posting-status checks, moderator authorization for status `m`, proto-article moderation submission via `IEmailService` durable spool acceptance, server-owned injection metadata on the ordinary injection path, HistoryDB duplicate detection after the terminator, TryAdmit only), LIST/GROUP against the in-memory newsgroup catalogue, and the session authorization gates are in place. LISTGROUP remains a registered placeholder. The outbound Email subsystem is implemented as generic application infrastructure; moderation is one producer.
