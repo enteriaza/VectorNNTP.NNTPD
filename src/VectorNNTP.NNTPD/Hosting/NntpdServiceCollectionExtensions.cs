@@ -364,6 +364,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IPostingTraceProtector>(static sp =>
             AesGcmPostingTraceProtector.Create(sp.GetRequiredService<IOptions<NntpdOptions>>()));
         services.TryAddSingleton<IArticleIngestionQueue, ArticleIngestionQueue>();
+        services.TryAddSingleton(IngestionPipelineMetrics.Shared);
         services.TryAddSingleton<IIncomingArticlePersister, IncomingSpoolFilePersister>();
         services.TryAddSingleton<INewsLogWriter, SerilogNewsLogWriter>();
         services.TryAddSingleton<OverviewDbHandoffPublisher>();

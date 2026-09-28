@@ -14,7 +14,12 @@ public readonly struct NntpSessionCensusSnapshot
         int waitingHistory,
         int waitingQueue,
         int waitingWindow,
-        int completing)
+        int completing,
+        int takeThisOccupied = 0,
+        int takeThisOccupiedMax = 0,
+        int takeThisFullSessions = 0,
+        int takeThisProcessing = 0,
+        int takeThisProcessingMax = 0)
     {
         Active = active;
         Established = established;
@@ -24,6 +29,11 @@ public readonly struct NntpSessionCensusSnapshot
         WaitingQueue = waitingQueue;
         WaitingWindow = waitingWindow;
         Completing = completing;
+        TakeThisOccupied = takeThisOccupied;
+        TakeThisOccupiedMax = takeThisOccupiedMax;
+        TakeThisFullSessions = takeThisFullSessions;
+        TakeThisProcessing = takeThisProcessing;
+        TakeThisProcessingMax = takeThisProcessingMax;
     }
 
     /// <summary>Gets established session count (complete server population).</summary>
@@ -49,6 +59,21 @@ public readonly struct NntpSessionCensusSnapshot
 
     /// <summary>Gets sessions in <see cref="FeedSessionState.Completing"/>.</summary>
     public int Completing { get; }
+
+    /// <summary>Gets the sum of TAKETHIS Occupied slots across sessions.</summary>
+    public int TakeThisOccupied { get; }
+
+    /// <summary>Gets the highest TAKETHIS Occupied count on any one session.</summary>
+    public int TakeThisOccupiedMax { get; }
+
+    /// <summary>Gets how many sessions currently have Occupied equal to TAKETHIS Depth (16).</summary>
+    public int TakeThisFullSessions { get; }
+
+    /// <summary>Gets the sum of concurrent ProcessArticleAsync tasks across sessions.</summary>
+    public int TakeThisProcessing { get; }
+
+    /// <summary>Gets the highest concurrent ProcessArticleAsync count on any one session.</summary>
+    public int TakeThisProcessingMax { get; }
 }
 
 /// <summary>

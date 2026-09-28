@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Diagnostics;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
@@ -158,10 +159,16 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         var waitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var reserved = await ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
         var waitTicks = System.Diagnostics.Stopwatch.GetTimestamp() - waitStarted;
-        if (reserved != ArticleEnqueueResult.Accepted)
+        IngestionPipelineMetrics.Shared.RecordEnqueueWaitTicks(waitTicks);
+        if (reserved.WaitedForBudget)
         {
-            RecordAdmission(reserved, waitTicks);
-            return reserved;
+            IngestionPipelineMetrics.Shared.RecordBudgetWaitTicks(waitTicks);
+        }
+
+        if (reserved.Result != ArticleEnqueueResult.Accepted)
+        {
+            RecordAdmission(reserved.Result, waitTicks);
+            return reserved.Result;
         }
 
         var written = TryWriteReserved(article, bytes)
@@ -273,20 +280,22 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
     /// </summary>
     internal void CompleteChannelWithoutMarkingUnavailableForTests() => _channel.Writer.TryComplete();
 
-    private async ValueTask<ArticleEnqueueResult> ReserveAsync(int bytes, CancellationToken cancellationToken)
+    private async ValueTask<(ArticleEnqueueResult Result, bool WaitedForBudget)> ReserveAsync(
+        int bytes,
+        CancellationToken cancellationToken)
     {
         ByteWaiter? waiter;
         lock (_gate)
         {
             if (_completed != 0)
             {
-                return ArticleEnqueueResult.Unavailable;
+                return (ArticleEnqueueResult.Unavailable, false);
             }
 
             if (bytes <= _memoryLimit - _queuedBytes)
             {
                 AddReservation(bytes);
-                return ArticleEnqueueResult.Accepted;
+                return (ArticleEnqueueResult.Accepted, false);
             }
 
             waiter = new ByteWaiter(bytes);
@@ -300,12 +309,14 @@ public sealed class ArticleIngestionQueue : IArticleIngestionQueue
         try
         {
             var admitted = await waiter.Tcs.Task.ConfigureAwait(false);
-            return admitted ? ArticleEnqueueResult.Accepted : ArticleEnqueueResult.Unavailable;
+            return (
+                admitted ? ArticleEnqueueResult.Accepted : ArticleEnqueueResult.Unavailable,
+                true);
         }
         catch (OperationCanceledException)
         {
             waiter.CancelFromToken();
-            return ArticleEnqueueResult.Unavailable;
+            return (ArticleEnqueueResult.Unavailable, true);
         }
     }
 

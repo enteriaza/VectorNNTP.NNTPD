@@ -173,7 +173,9 @@ internal sealed class TakeThisPipeline
                 wait = _progress.Task;
             }
 
+            var waitStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+            IngestionPipelineMetrics.Shared.RecordOccupiedFullWait(waitStart);
         }
     }
 
@@ -232,6 +234,9 @@ internal sealed class TakeThisPipeline
             }
 
             _stageLog?.NoteOccupied(_count);
+            IngestionPipelineMetrics.Shared.ObserveTakeThis(
+                _count,
+                Volatile.Read(ref _activeArticleProcessing));
         }
 
         if (marks is not null)
@@ -513,7 +518,9 @@ internal sealed class TakeThisPipeline
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token);
         var token = linked.Token;
+        var emitGateStart = System.Diagnostics.Stopwatch.GetTimestamp();
         await _emitGate.WaitAsync(token).ConfigureAwait(false);
+        IngestionPipelineMetrics.Shared.RecordEmitGateWait(emitGateStart);
         try
         {
             while (true)
@@ -694,6 +701,7 @@ internal sealed class TakeThisPipeline
             _session.SetActivityState(FeedSessionState.WaitingQueue);
             var queueStart = System.Diagnostics.Stopwatch.GetTimestamp();
             enqueue = await queue.EnqueueAsync(inbound, cancellationToken).ConfigureAwait(false);
+            IngestionPipelineMetrics.Shared.RecordTakeThisEnqueue(queueStart);
             probe?.RecordQueue(enqueue, System.Diagnostics.Stopwatch.GetTimestamp() - queueStart, read.Payload.Length);
             if (slot.Marks is { } acceptedMarks)
             {

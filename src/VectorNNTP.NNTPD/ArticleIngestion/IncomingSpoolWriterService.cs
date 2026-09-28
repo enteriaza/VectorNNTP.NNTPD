@@ -43,6 +43,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<IncomingSpoolWriterService> _logger;
     private readonly IFeedDiagnostics _feedDiagnostics;
+    private readonly IngestionPipelineMetrics? _pipeline;
     private readonly TimeProvider _time;
     private readonly CancellationTokenSource _runCts = new();
     private Task? _execution;
@@ -58,7 +59,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         INewsLogWriter? newsLog = null,
         INewsgroupCatalogue? catalogue = null,
         TimeProvider? timeProvider = null,
-        IOverviewDbHandoffPublisher? overviewHandoff = null)
+        IOverviewDbHandoffPublisher? overviewHandoff = null,
+        IngestionPipelineMetrics? pipelineMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -73,6 +75,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _catalogue = catalogue;
         _time = timeProvider ?? TimeProvider.System;
         _overviewHandoff = overviewHandoff ?? NullOverviewDbHandoffPublisher.Instance;
+        _pipeline = pipelineMetrics;
     }
 
     /// <inheritdoc />
@@ -138,29 +141,41 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         while (true)
         {
             InboundArticle? article;
+            var idleStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 article = await _queue.DequeueAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
+                _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
+                _pipeline?.RecordDequeueWait(idleStart);
                 break;
             }
+
+            _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
+            _pipeline?.RecordDequeueWait(idleStart);
 
             if (article is null)
             {
                 break;
             }
 
+            var itemStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            _pipeline?.ObserveQueueDepth(_queue.Count + 1);
             var persisted = false;
             var overviewAccepted = false;
             _feedDiagnostics.BeginSpoolWork();
             try
             {
-                await PublishOverviewAsync(article, CancellationToken.None).ConfigureAwait(false);
+                await PublishOverviewAsync(article, itemStart, CancellationToken.None).ConfigureAwait(false);
                 overviewAccepted = true;
+                var newsStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 WriteNewsLog(article);
+                _pipeline?.RecordNews(newsStart);
+                var persistStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
+                _pipeline?.RecordPersist(persistStart);
                 persisted = true;
             }
             catch (Exception ex)
@@ -185,6 +200,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             }
             finally
             {
+                _pipeline?.AddBusyTicks(System.Diagnostics.Stopwatch.GetTimestamp() - itemStart);
+                _pipeline?.RecordWorkerItem(itemStart);
                 _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
             }
 
@@ -224,13 +241,19 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         }
     }
 
-    private async Task PublishOverviewAsync(InboundArticle article, CancellationToken cancellationToken)
+    private async Task PublishOverviewAsync(
+        InboundArticle article,
+        long itemStart,
+        CancellationToken cancellationToken)
     {
         var max = OverviewArticleV1Codec.GetMaxEncodedSize(article.Record);
         var rented = ArrayPool<byte>.Shared.Rent(Math.Max(max, 1));
         try
         {
+            var encodeStart = System.Diagnostics.Stopwatch.GetTimestamp();
             var written = OverviewArticleV1Codec.Encode(article.Record, rented);
+            _pipeline?.RecordEncode(encodeStart);
+            _pipeline?.RecordToPublishStart(itemStart);
             await _overviewHandoff
                 .PublishConfirmedAsync(rented.AsMemory(0, written), cancellationToken)
                 .ConfigureAwait(false);

@@ -63,4 +63,58 @@ internal static partial class ApplicationTelemetryLogMessages
         long AverageArticleBytes,
         double AverageMbps,
         long Checks);
+
+    [LoggerMessage(
+        EventId = 2404,
+        Level = LogLevel.Information,
+        Message = "IngestionWorker items={Items} arts_s={ArticlesPerSec:F2} busy_pct={BusyPct:F1} idle_ms={IdleMs} busy_ms={BusyMs} dq_p95_ms={DequeueP95Ms} to_pub_p95_ms={ToPublishP95Ms} encode_p95_ms={EncodeP95Ms} news_p95_ms={NewsP95Ms} persist_p95_ms={PersistP95Ms} item_avg_ms={ItemAvgMs} item_p95_ms={ItemP95Ms}")]
+    public static partial void IngestionWorker(
+        ILogger logger,
+        long Items,
+        double ArticlesPerSec,
+        double BusyPct,
+        long IdleMs,
+        long BusyMs,
+        long DequeueP95Ms,
+        long ToPublishP95Ms,
+        long EncodeP95Ms,
+        long NewsP95Ms,
+        long PersistP95Ms,
+        double ItemAvgMs,
+        long ItemP95Ms);
+
+    [LoggerMessage(
+        EventId = 2405,
+        Level = LogLevel.Information,
+        Message = "OverviewDbHandoff gate_p95_ms={GateP95Ms} pub_p95_ms={PublishP95Ms} confirm_avg_ms={ConfirmAvgMs} confirm_p95_ms={ConfirmP95Ms} handoff_avg_ms={HandoffAvgMs} handoff_p95_ms={HandoffP95Ms} confirm_busy_pct={ConfirmBusyPct:F1} fail={ConfirmFailures} timeout={ConfirmTimeouts}")]
+    public static partial void OverviewDbHandoff(
+        ILogger logger,
+        long GateP95Ms,
+        long PublishP95Ms,
+        double ConfirmAvgMs,
+        long ConfirmP95Ms,
+        double HandoffAvgMs,
+        long HandoffP95Ms,
+        double ConfirmBusyPct,
+        long ConfirmFailures,
+        long ConfirmTimeouts);
+
+    [LoggerMessage(
+        EventId = 2406,
+        Level = LogLevel.Information,
+        Message = "TakeThisPipeline occupied={Occupied} occupied_max={OccupiedMax} occupied_full_sessions={OccupiedFullSessions} occupied_full_waits={OccupiedFullWaits} processing={Processing} processing_max={ProcessingMax} emit_gate_p95_ms={EmitGateP95Ms} enqueue_avg_ms={EnqueueAvgMs} enqueue_p95_ms={EnqueueP95Ms} budget_wait_p95_ms={BudgetWaitP95Ms} budget_waits={BudgetWaits} budget_exhausted={BudgetExhausted}")]
+    public static partial void TakeThisPipeline(
+        ILogger logger,
+        int Occupied,
+        int OccupiedMax,
+        int OccupiedFullSessions,
+        long OccupiedFullWaits,
+        int Processing,
+        int ProcessingMax,
+        long EmitGateP95Ms,
+        double EnqueueAvgMs,
+        long EnqueueP95Ms,
+        long BudgetWaitP95Ms,
+        long BudgetWaits,
+        int BudgetExhausted);
 }

@@ -72,6 +72,25 @@ public sealed class IncomingSpoolOverviewHandoffTests
     }
 
     [Fact]
+    public async Task Worker_RecordsOneItemOnPipelineMetrics()
+    {
+        var overview = new RecordingOverviewDbHandoffPublisher();
+        var captured = new List<InboundArticle>();
+        var persister = new CapturingPersister(captured);
+        var pipeline = new IngestionPipelineMetrics();
+        var inbound = CreateArticle();
+        await RunWorkerAsync(inbound, persister, overview, pipeline);
+
+        var snapshot = pipeline.CaptureInterval();
+        Assert.Equal(1, snapshot.WorkerItems);
+        Assert.Equal(1, snapshot.ToPublishStart.Count);
+        Assert.Equal(1, snapshot.Encode.Count);
+        Assert.Equal(1, snapshot.News.Count);
+        Assert.Equal(1, snapshot.Persist.Count);
+        Assert.True(snapshot.BusyTicks > 0);
+    }
+
+    [Fact]
     public async Task PublishFailure_RequeuesUntilConfirm_ThenCompletes()
     {
         var overview = new RecordingOverviewDbHandoffPublisher { RemainingFailures = 1 };
@@ -183,6 +202,7 @@ public sealed class IncomingSpoolOverviewHandoffTests
         using var host = builder.Build();
         var publisher = host.Services.GetRequiredService<IOverviewDbHandoffPublisher>();
         Assert.IsType<OverviewDbHandoffPublisher>(publisher);
+        Assert.Same(IngestionPipelineMetrics.Shared, host.Services.GetRequiredService<IngestionPipelineMetrics>());
         Assert.IsNotType<ArticleWorkRpcService>(publisher);
         var services = host.Services.GetServices<IApplicationService>().Select(static s => s.GetType()).ToArray();
         Assert.DoesNotContain(services, static t => t.Name.Contains("OverviewDbClient", StringComparison.Ordinal));
@@ -192,10 +212,11 @@ public sealed class IncomingSpoolOverviewHandoffTests
     private static async Task RunWorkerAsync(
         InboundArticle inbound,
         CapturingPersister persister,
-        IOverviewDbHandoffPublisher overview)
+        IOverviewDbHandoffPublisher overview,
+        IngestionPipelineMetrics? pipelineMetrics = null)
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, persister, overview);
+        var writer = CreateWriter(queue, persister, overview, pipelineMetrics: pipelineMetrics);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -208,7 +229,8 @@ public sealed class IncomingSpoolOverviewHandoffTests
         IArticleIngestionQueue queue,
         IIncomingArticlePersister persister,
         IOverviewDbHandoffPublisher overview,
-        IFeedDiagnostics? feedDiagnostics = null) =>
+        IFeedDiagnostics? feedDiagnostics = null,
+        IngestionPipelineMetrics? pipelineMetrics = null) =>
         new(
             queue,
             persister,
@@ -223,7 +245,8 @@ public sealed class IncomingSpoolOverviewHandoffTests
                 NewsgroupSnapshot.Create(
                     [new NewsgroupDefinition("alt.test", string.Empty, 2, 1, NewsgroupPostingStatus.Allowed),
                      new NewsgroupDefinition("rec.test", string.Empty, 2, 1, NewsgroupPostingStatus.Allowed)])),
-            overviewHandoff: overview);
+            overviewHandoff: overview,
+            pipelineMetrics: pipelineMetrics);
 
     private static InboundArticle CreateArticle() =>
         CanonicalArticleText.CreateQueued(

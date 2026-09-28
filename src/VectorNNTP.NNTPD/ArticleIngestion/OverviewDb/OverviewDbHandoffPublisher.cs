@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.RabbitMq;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
@@ -17,6 +18,7 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
     private readonly IRabbitMqService _rabbitMq;
     private readonly IOptions<NntpdOptions> _nntpdOptions;
     private readonly IOptions<RabbitMqOptions> _rabbitMqOptions;
+    private readonly IngestionPipelineMetrics? _pipeline;
     private readonly SemaphoreSlim _publishGate = new(1, 1);
     private IRabbitMqPublishChannel? _channel;
     private int _disposed;
@@ -25,7 +27,8 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
     public OverviewDbHandoffPublisher(
         IRabbitMqService rabbitMq,
         IOptions<NntpdOptions> nntpdOptions,
-        IOptions<RabbitMqOptions> rabbitMqOptions)
+        IOptions<RabbitMqOptions> rabbitMqOptions,
+        IngestionPipelineMetrics? pipelineMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(rabbitMq);
         ArgumentNullException.ThrowIfNull(nntpdOptions);
@@ -33,6 +36,7 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
         _rabbitMq = rabbitMq;
         _nntpdOptions = nntpdOptions;
         _rabbitMqOptions = rabbitMqOptions;
+        _pipeline = pipelineMetrics;
     }
 
     /// <inheritdoc />
@@ -50,22 +54,53 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
         var confirmTimeoutSeconds = _rabbitMqOptions.Value.PublishConfirmTimeoutSeconds ?? 10;
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(confirmTimeoutSeconds));
 
-        await _publishGate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        var handoffStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        var gateStart = handoffStart;
+        try
+        {
+            await _publishGate.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _pipeline?.RecordConfirmTimeout();
+            _pipeline?.RecordHandoff(handoffStart);
+            throw;
+        }
+
+        _pipeline?.RecordGateWait(gateStart);
         try
         {
             var channel = await GetOrCreateChannelAsync(timeoutCts.Token).ConfigureAwait(false);
-            await channel.PublishConfirmedAsync(
-                    OverviewDbTopology.DefaultExchange,
-                    OverviewDbTopology.RoutingKey,
-                    Guid.NewGuid().ToString(),
-                    fqdn,
-                    OverviewDbTopology.ExpirationMilliseconds,
-                    payload,
-                    timeoutCts.Token)
-                .ConfigureAwait(false);
+            var publishStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                await channel.PublishConfirmedAsync(
+                        OverviewDbTopology.DefaultExchange,
+                        OverviewDbTopology.RoutingKey,
+                        Guid.NewGuid().ToString(),
+                        fqdn,
+                        OverviewDbTopology.ExpirationMilliseconds,
+                        payload,
+                        timeoutCts.Token)
+                    .ConfigureAwait(false);
+                _pipeline?.RecordPublishAndConfirm(publishStart);
+            }
+            catch (OperationCanceledException) when (
+                timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                _pipeline?.RecordConfirmTimeout();
+                throw;
+            }
+            catch
+            {
+                _pipeline?.RecordConfirmFailure();
+                throw;
+            }
         }
         finally
         {
+            _pipeline?.RecordHandoff(handoffStart);
             _publishGate.Release();
         }
     }

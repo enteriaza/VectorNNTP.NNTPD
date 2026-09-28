@@ -180,6 +180,8 @@ Avoid string interpolation or concatenation as the log message. Never log secret
 
 PostFilter operational EventIds (2800–2811) and reservation/COMMIT/SPAMD/policy-revision messages are listed in [postfilter.md](postfilter.md#11-observability). Those numeric IDs currently overlap RabbitMQ lifecycle EventIds; match on `PostFilter` message text.
 
+Always-on one-minute application telemetry (`ApplicationTelemetryService`) emits Information EventIds 2400–2406: HistoryDb (2400), TransitIngressQueue (2401), ActiveSessions (2402), per-peer TransitPeer (2403), IngestionWorker histograms (2404), OverviewDbHandoff publish/confirm histograms (2405), and TakeThisPipeline occupancy/wait histograms (2406). These are interval counters and bucketed percentiles, not per-article logs. RabbitMQ.Client publisher-confirmation tracking fuses send and confirm into one `BasicPublishAsync` await, so 2405 `pub_p95_ms` and `confirm_p95_ms` are the same fused duration. Publisher confirms remain enabled.
+
 Logging is a human-readable boundary. The current `ILogger` / `LoggerMessageAttribute` APIs require `string` (or other supported structured types) for operational text. Protocol bytes may be converted to a string **once, locally**, at that boundary when human-readable output is required. Do not treat logging as a reason to change protocol representation in the data plane.
 
 ## Shutdown flushing

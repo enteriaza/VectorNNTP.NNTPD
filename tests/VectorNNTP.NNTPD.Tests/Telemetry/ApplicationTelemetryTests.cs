@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Threading.Channels;
@@ -718,6 +719,48 @@ public sealed class ApplicationTelemetryTests
             precision: 6);
     }
 
+    [Fact]
+    public async Task PipelineMetrics_EmitAdditionalInformationRows()
+    {
+        var pipeline = new IngestionPipelineMetrics();
+        RecordAgo(pipeline.RecordWorkerItem, TimeSpan.FromMilliseconds(8));
+        pipeline.AddBusyTicks((long)(0.008 * Stopwatch.Frequency));
+        RecordAgo(pipeline.RecordPublishAndConfirm, TimeSpan.FromMilliseconds(4));
+        RecordAgo(pipeline.RecordHandoff, TimeSpan.FromMilliseconds(5));
+        RecordAgo(pipeline.RecordTakeThisEnqueue, TimeSpan.FromMilliseconds(12));
+        pipeline.RecordConfirmFailure();
+        pipeline.RecordOccupiedFullWait(Stopwatch.GetTimestamp() - (long)(0.003 * Stopwatch.Frequency));
+
+        var logger = new RecordingLogger<ApplicationTelemetryService>();
+        await using var service = CreateService(logger, pipelineMetrics: pipeline);
+        service.Emit();
+
+        Assert.Equal(6, logger.Entries.Count);
+        Assert.All(logger.Entries, static e => Assert.Equal(LogLevel.Information, e.Level));
+        var worker = Assert.Single(logger.Entries, static e => e.EventId.Id == 2404);
+        var handoff = Assert.Single(logger.Entries, static e => e.EventId.Id == 2405);
+        var takeThis = Assert.Single(logger.Entries, static e => e.EventId.Id == 2406);
+        Assert.Equal(1L, GetInt64(worker, "Items"));
+        Assert.True(GetDouble(worker, "ArticlesPerSec") > 0);
+        Assert.Equal(1L, GetInt64(handoff, "ConfirmFailures"));
+        Assert.Equal(0L, GetInt64(handoff, "ConfirmTimeouts"));
+        Assert.Equal(1L, GetInt64(takeThis, "OccupiedFullWaits"));
+        Assert.Contains("IngestionWorker items=", worker.Message, StringComparison.Ordinal);
+        Assert.Contains("OverviewDbHandoff gate_p95_ms=", handoff.Message, StringComparison.Ordinal);
+        Assert.Contains("TakeThisPipeline occupied=", takeThis.Message, StringComparison.Ordinal);
+
+        logger.Entries.Clear();
+        service.Emit();
+        var secondWorker = Assert.Single(logger.Entries, static e => e.EventId.Id == 2404);
+        Assert.Equal(0L, GetInt64(secondWorker, "Items"));
+    }
+
+    private static void RecordAgo(Action<long> record, TimeSpan ago)
+    {
+        var start = Stopwatch.GetTimestamp() - (long)(ago.TotalSeconds * Stopwatch.Frequency);
+        record(start);
+    }
+
     private static ApplicationTelemetryService CreateService(
         RecordingLogger<ApplicationTelemetryService> logger,
         IAsyncInterval? interval = null,
@@ -726,7 +769,8 @@ public sealed class ApplicationTelemetryTests
         IHistoryLookupMetrics? history = null,
         ITransitPeerMetrics? peerMetrics = null,
         TransitConfigurationStore? transit = null,
-        TimeSpan? period = null) =>
+        TimeSpan? period = null,
+        IngestionPipelineMetrics? pipelineMetrics = null) =>
         new(
             queue ?? new ArticleIngestionQueue(new ArticleIngestionOptions(), 64),
             census ?? new NntpSessionCensus(),
@@ -736,7 +780,8 @@ public sealed class ApplicationTelemetryTests
             interval,
             period ?? ApplicationTelemetryService.Period,
             transit,
-            peerMetrics);
+            peerMetrics,
+            pipelineMetrics);
 
     private static void RecordReceivedBytes(TransitPeerMetrics metrics, string peerId, long bytes)
     {

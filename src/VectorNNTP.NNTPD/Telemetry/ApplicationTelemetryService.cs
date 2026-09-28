@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Transit;
@@ -20,6 +21,7 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
     private readonly IHistoryLookupMetrics? _history;
     private readonly TransitConfigurationStore _transit;
     private readonly ITransitPeerMetrics? _peerMetrics;
+    private readonly IngestionPipelineMetrics? _pipeline;
     private readonly ILogger<ApplicationTelemetryService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IAsyncInterval? _injectedInterval;
@@ -46,8 +48,9 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
         IHistoryLookupMetrics? history = null,
         TimeProvider? timeProvider = null,
         TransitConfigurationStore? transit = null,
-        ITransitPeerMetrics? peerMetrics = null)
-        : this(queue, census, logger, history, timeProvider, interval: null, period: null, transit, peerMetrics)
+        ITransitPeerMetrics? peerMetrics = null,
+        IngestionPipelineMetrics? pipelineMetrics = null)
+        : this(queue, census, logger, history, timeProvider, interval: null, period: null, transit, peerMetrics, pipelineMetrics)
     {
     }
 
@@ -61,7 +64,8 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
         IAsyncInterval? interval,
         TimeSpan? period,
         TransitConfigurationStore? transit = null,
-        ITransitPeerMetrics? peerMetrics = null)
+        ITransitPeerMetrics? peerMetrics = null,
+        IngestionPipelineMetrics? pipelineMetrics = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(census);
@@ -71,6 +75,7 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
         _history = history;
         _transit = transit ?? new TransitConfigurationStore();
         _peerMetrics = peerMetrics;
+        _pipeline = pipelineMetrics;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _injectedInterval = interval;
@@ -217,7 +222,66 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
             sessions.WaitingWindow,
             sessions.Completing);
 
+        EmitPipeline(sessions);
         EmitConfiguredPeers();
+    }
+
+    private void EmitPipeline(NntpSessionCensusSnapshot sessions)
+    {
+        if (_pipeline is null)
+        {
+            return;
+        }
+
+        var snapshot = _pipeline.CaptureInterval();
+        var busyMs = IngestionPipelineSnapshot.TicksToMilliseconds(snapshot.BusyTicks);
+        var idleMs = IngestionPipelineSnapshot.TicksToMilliseconds(snapshot.IdleTicks);
+        ApplicationTelemetryLogMessages.IngestionWorker(
+            _logger,
+            snapshot.WorkerItems,
+            snapshot.ArticlesPerSecond(_period),
+            snapshot.BusyPercent,
+            idleMs,
+            busyMs,
+            snapshot.DequeueWait.P95Ms,
+            snapshot.ToPublishStart.P95Ms,
+            snapshot.Encode.P95Ms,
+            snapshot.News.P95Ms,
+            snapshot.Persist.P95Ms,
+            snapshot.WorkerItem.AvgMs,
+            snapshot.WorkerItem.P95Ms);
+        ApplicationTelemetryLogMessages.OverviewDbHandoff(
+            _logger,
+            snapshot.GateWait.P95Ms,
+            snapshot.Publish.P95Ms,
+            snapshot.Confirm.AvgMs,
+            snapshot.Confirm.P95Ms,
+            snapshot.Handoff.AvgMs,
+            snapshot.Handoff.P95Ms,
+            snapshot.ConfirmBusyPercent,
+            snapshot.ConfirmFailures,
+            snapshot.ConfirmTimeouts);
+
+        var budgetExhausted = _queue.WaitingProducerCount > 0
+            || _queue.QueuedBytes >= _queue.MemoryLimitBytes
+            ? 1
+            : 0;
+        var occupiedMax = Math.Max(sessions.TakeThisOccupiedMax, snapshot.MaxTakeThisOccupied);
+        var processingMax = Math.Max(sessions.TakeThisProcessingMax, snapshot.MaxTakeThisProcessing);
+        ApplicationTelemetryLogMessages.TakeThisPipeline(
+            _logger,
+            sessions.TakeThisOccupied,
+            occupiedMax,
+            sessions.TakeThisFullSessions,
+            snapshot.OccupiedFullWaits,
+            sessions.TakeThisProcessing,
+            processingMax,
+            snapshot.EmitGateWait.P95Ms,
+            snapshot.TakeThisEnqueue.AvgMs,
+            snapshot.TakeThisEnqueue.P95Ms,
+            snapshot.BudgetWait.P95Ms,
+            snapshot.BudgetWaits,
+            budgetExhausted);
     }
 
     private void EmitConfiguredPeers()

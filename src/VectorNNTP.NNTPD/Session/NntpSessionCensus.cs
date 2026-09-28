@@ -69,6 +69,11 @@ public sealed class NntpSessionCensus : INntpSessionCensus
         var waitingWindow = 0;
         var completing = 0;
         var active = 0;
+        var takeThisOccupied = 0;
+        var takeThisOccupiedMax = 0;
+        var takeThisFullSessions = 0;
+        var takeThisProcessing = 0;
+        var takeThisProcessingMax = 0;
         foreach (var session in _sessions.Keys)
         {
             active++;
@@ -93,6 +98,32 @@ public sealed class NntpSessionCensus : INntpSessionCensus
                     idle++;
                     break;
             }
+
+            var window = session.TakeThisWindow;
+            if (window is null)
+            {
+                continue;
+            }
+
+            var occupied = window.Occupied;
+            takeThisOccupied += occupied;
+            if (occupied > takeThisOccupiedMax)
+            {
+                takeThisOccupiedMax = occupied;
+            }
+
+            if (occupied >= TakeThisPipeline.Depth)
+            {
+                takeThisFullSessions++;
+            }
+
+            var processing = window.ActiveArticleProcessing;
+            takeThisProcessing += processing;
+            var processingPeak = window.MaxActiveArticleProcessing;
+            if (processingPeak > takeThisProcessingMax)
+            {
+                takeThisProcessingMax = processingPeak;
+            }
         }
 
         return new NntpSessionCensusSnapshot(
@@ -103,6 +134,11 @@ public sealed class NntpSessionCensus : INntpSessionCensus
             waitingHistory,
             waitingQueue,
             waitingWindow,
-            completing);
+            completing,
+            takeThisOccupied,
+            takeThisOccupiedMax,
+            takeThisFullSessions,
+            takeThisProcessing,
+            takeThisProcessingMax);
     }
 }
