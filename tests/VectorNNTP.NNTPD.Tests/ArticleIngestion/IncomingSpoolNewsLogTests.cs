@@ -93,7 +93,7 @@ public sealed class IncomingSpoolNewsLogTests
     }
 
     [Fact]
-    public async Task NamedInboundFeed_Junk_KeepsPeerAndOutboundPlaceholder()
+    public async Task NamedInboundFeed_Junk_KeepsPeerAndOmitsOutboundSites()
     {
         var news = new RecordingNewsLogWriter();
         var inbound = CanonicalArticleText.CreateQueued(
@@ -112,8 +112,8 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.True(evt.Feed.Span.SequenceEqual("BlueWorldHosting"u8));
         var line = FormatNews(in evt);
-        Assert.Contains(" j BlueWorldHosting <junk@example.com> " + evt.Size + " ?", line, StringComparison.Ordinal);
-        Assert.Contains(" ? " + Uncarried("unknown.un.carried"), line, StringComparison.Ordinal);
+        Assert.Contains(" j BlueWorldHosting <junk@example.com> " + evt.Size + " " + Uncarried("unknown.un.carried"), line, StringComparison.Ordinal);
+        Assert.DoesNotContain("?", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -507,7 +507,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.Equal(Uncarried("unknown.one", "unknown.two"), Encoding.ASCII.GetString(evt.Reason.Span));
         Assert.Equal(
-            $"Jan  5 00:00:00.000 j ? <try-unknown@example.com> {evt.Size} ? newsgroup not carried: unknown.one, unknown.two\n",
+            $"Jan  5 00:00:00.000 j ? <try-unknown@example.com> {evt.Size} newsgroup not carried: unknown.one, unknown.two\n",
             FormatNews(in evt));
     }
 
@@ -528,7 +528,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.Equal(NewsLogDisposition.Junk, evt.Disposition);
         Assert.Equal(PeerOnlyReason("junk.local"), Encoding.ASCII.GetString(evt.Reason.Span));
         Assert.Equal(
-            $"Jan  5 00:00:00.000 j ? <try-peer@example.com> {evt.Size} ? peer-only: junk.local\n",
+            $"Jan  5 00:00:00.000 j ? <try-peer@example.com> {evt.Size} peer-only: junk.local\n",
             FormatNews(in evt));
     }
 

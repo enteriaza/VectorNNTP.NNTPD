@@ -6,9 +6,11 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// This type does not classify junk or invent rejection reasons. The writer
 /// serializes the fields supplied here. An empty <see cref="Feed"/> is written
-/// as INN's unavailable token <c>?</c> in the inbound-peer position. An empty
-/// <see cref="Sites"/> is written as <c>?</c> in the outbound-site position
-/// (outbound routing is not implemented). <see cref="Size"/> is the INN article
+/// as INN's unavailable token <c>?</c> in the inbound-peer position. Outbound
+/// <see cref="Sites"/> exist only for articles accepted for propagation
+/// (<see cref="NewsLogDisposition.Accepted"/>); empty Sites then emit <c>?</c>
+/// until egress routing exists. Junk, rejected, moderated, and future cancel
+/// lines omit the outbound-site field. <see cref="Size"/> is the INN article
 /// size field after the Message-ID (canonical payload bytes). Timestamp is the
 /// news-log event time, not the article Date header. <see cref="ResponseCode"/>
 /// may be stored for <see cref="NewsLogDisposition.Rejected"/> but is not
@@ -23,7 +25,10 @@ public readonly struct NewsLogEvent
     /// <param name="disposition">Already-decided <c>+</c>, <c>j</c>, <c>-</c>, or <c>m</c>.</param>
     /// <param name="messageId">Article Message-ID bytes, including angle brackets when present.</param>
     /// <param name="feed">Authoritative inbound feed identity, or empty to emit <c>?</c>.</param>
-    /// <param name="sites">Future outbound site list; empty emits <c>?</c>.</param>
+    /// <param name="sites">
+    /// Outbound site list for <see cref="NewsLogDisposition.Accepted"/>; empty emits
+    /// <c>?</c> on that disposition only and is omitted on <c>j</c>/<c>-</c>/<c>m</c>.
+    /// </param>
     /// <param name="timestamp">
     /// Event time. <see cref="DateTimeOffset.MinValue"/> lets the writer stamp
     /// processing time.
@@ -66,7 +71,13 @@ public readonly struct NewsLogEvent
     /// <summary>Gets the INN article size in bytes (canonical payload length).</summary>
     public int Size { get; }
 
-    /// <summary>Gets optional future outbound site tokens; empty emits <c>?</c>.</summary>
+    /// <summary>
+    /// Gets whether this event includes the outbound-site field.
+    /// Only accepted-for-propagation (<c>+</c>) articles have it.
+    /// </summary>
+    public bool HasOutboundSiteField => Disposition == NewsLogDisposition.Accepted;
+
+    /// <summary>Gets optional future outbound site tokens; empty emits <c>?</c> when <see cref="HasOutboundSiteField"/> is true.</summary>
     public ReadOnlyMemory<byte> Sites { get; }
 
     /// <summary>Gets the NNTP response code carried for a rejection; 0 means none. Not rendered.</summary>

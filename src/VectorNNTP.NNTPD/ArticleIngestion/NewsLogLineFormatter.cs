@@ -5,13 +5,14 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </summary>
 /// <remarks>
 /// Verified INN field order (innd.pod LOGGING and <c>innd/art.c</c> <c>ARTlog</c>):
-/// <c>mon dd hh:mm:ss.mmm disposition feedsite message-id size sites [reason]</c>.
+/// <c>mon dd hh:mm:ss.mmm disposition feedsite message-id size [sites|reason]</c>.
 /// Timestamp uses English month abbreviations and local wall time at millisecond
 /// resolution. Empty inbound <c>Feed</c> is INN's unavailable token <c>?</c>.
-/// Empty outbound <c>Sites</c> is also <c>?</c> until routing exists. Rejected
-/// and junk lines append the already-decided reason after size and sites; the
-/// NNTP response code is not a news field. Disposition characters and field
-/// order are hard-coded.
+/// Outbound <c>Sites</c> are written only for <see cref="NewsLogDisposition.Accepted"/>
+/// (<c>+</c>); empty Sites then emit <c>?</c> until routing exists. Junk, rejected,
+/// and moderated lines omit Sites and append the already-decided reason after size
+/// when present. The NNTP response code is not a news field. Disposition characters
+/// and field order are hard-coded.
 /// </remarks>
 internal static class NewsLogLineFormatter
 {
@@ -48,10 +49,14 @@ internal static class NewsLogLineFormatter
         written += evt.MessageId.Length;
         destination[written++] = (byte)' ';
         written += WriteUnsignedDecimal(destination[written..], evt.Size);
-        destination[written++] = (byte)' ';
-        var sites = evt.Sites.IsEmpty ? UnknownFeed : evt.Sites.Span;
-        sites.CopyTo(destination[written..]);
-        written += sites.Length;
+        if (evt.HasOutboundSiteField)
+        {
+            destination[written++] = (byte)' ';
+            var sites = evt.Sites.IsEmpty ? UnknownFeed : evt.Sites.Span;
+            sites.CopyTo(destination[written..]);
+            written += sites.Length;
+        }
+
         if (WritesReason(evt.Disposition) && !evt.Reason.IsEmpty)
         {
             destination[written++] = (byte)' ';
@@ -67,12 +72,14 @@ internal static class NewsLogLineFormatter
     public static int RequiredLength(in NewsLogEvent evt)
     {
         var feedLength = evt.Feed.IsEmpty ? 1 : evt.Feed.Length;
-        var sitesLength = evt.Sites.IsEmpty ? 1 : evt.Sites.Length;
+        var sites = evt.HasOutboundSiteField
+            ? 1 + (evt.Sites.IsEmpty ? 1 : evt.Sites.Length)
+            : 0;
         var reason = WritesReason(evt.Disposition) && !evt.Reason.IsEmpty
             ? 1 + evt.Reason.Length
             : 0;
         return 24 + feedLength + evt.MessageId.Length + 1 + DecimalDigitCount(evt.Size)
-            + 1 + sitesLength + reason;
+            + sites + reason;
     }
 
     private static bool WritesReason(NewsLogDisposition disposition) =>

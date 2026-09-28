@@ -616,7 +616,7 @@ public sealed class IHaveCommandTests
                 reason: "yEncoding invalid"u8.ToArray(),
                 size: evt.Size)),
             rendered);
-        Assert.Contains("- BlueWorldHosting " + commandId + " " + evt.Size + " ? yEncoding invalid", rendered, StringComparison.Ordinal);
+        Assert.Contains("- BlueWorldHosting " + commandId + " " + evt.Size + " yEncoding invalid", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("- ? ", rendered, StringComparison.Ordinal);
 
         await duplex.WriteClientLineAsync("QUIT");
@@ -687,7 +687,7 @@ public sealed class IHaveCommandTests
         Assert.Equal(IngressNewsReasons.YEncodingInvalid, Encoding.ASCII.GetString(evt.Reason.Span));
         var rendered = FormatNews(in evt);
         Assert.EndsWith(
-            "- ? " + commandId + " " + evt.Size + " ? yEncoding invalid\n",
+            "- ? " + commandId + " " + evt.Size + " yEncoding invalid\n",
             rendered,
             StringComparison.Ordinal);
         Assert.DoesNotContain("437", rendered, StringComparison.Ordinal);

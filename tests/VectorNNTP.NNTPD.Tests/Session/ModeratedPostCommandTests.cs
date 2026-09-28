@@ -112,6 +112,7 @@ public sealed class ModeratedPostCommandTests
         var line = Encoding.ASCII.GetString(buffer.AsSpan(0, written));
         Assert.Contains(" m ? <ok@example.com>", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" + ", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(" " + evt.Size + " ?", line, StringComparison.Ordinal);
     }
 
     [Fact]

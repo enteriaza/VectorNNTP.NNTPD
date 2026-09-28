@@ -74,22 +74,22 @@ Cancel processing (`c`) is not implemented and is not emitted. INN's information
 
 The INN line format is an application invariant implemented by `InnNewsTextFormatter` in code. Operators cannot change field order, timestamp representation, disposition characters, feed placement, Message-ID placement, rejection formatting, or delimiters through `outputTemplate` or any other appsettings key.
 
-Field order is taken from innd(8) LOGGING and INN `innd/art.c` `ARTlog`: timestamp, disposition, inbound feed/site, Message-ID, article size in bytes, then outbound sites (`+`/`j`/`m`/`-`). Rejected and junk lines then append the already-decided reason. Empty inbound feed and empty outbound sites each render INN's unavailable token `?`. The inbound feed is the session Transit identifier (`NntpAuthorization.TransitPeerName`) captured onto the news event at decision time; the formatter does not consult a live session.
+Field order is taken from innd(8) LOGGING and INN `innd/art.c` `ARTlog`: timestamp, disposition, inbound feed/site, Message-ID, article size in bytes. Outbound sites exist only for articles accepted for propagation (`+`); empty Sites then emit INN's unavailable token `?` until egress routing exists. Junk (`j`), rejected (`-`), and moderated (`m`) lines omit the outbound-site field and terminate after size unless a reason is present. Empty inbound feed renders `?` in the inbound-peer position. The inbound feed is the session Transit identifier (`NntpAuthorization.TransitPeerName`) captured onto the news event at decision time; the formatter does not consult a live session.
 
 ```text
-mon dd hh:mm:ss.mmm +|m feed <message-id> size ?
-mon dd hh:mm:ss.mmm j feed <message-id> size ? <reason>
-mon dd hh:mm:ss.mmm - feed <message-id> size ? <reason>
+mon dd hh:mm:ss.mmm + feed <message-id> size ?
+mon dd hh:mm:ss.mmm j feed <message-id> size [reason]
+mon dd hh:mm:ss.mmm - feed <message-id> size [reason]
+mon dd hh:mm:ss.mmm m feed <message-id> size
 ```
 
 Examples:
 
 ```text
-Aug 25 13:37:41.839 + BlueWorldHosting <cancel.4066@foo.com> 1584 ?
-Jan  5 00:00:00.000 j BlueWorldHosting <AbC@Example.COM> 1584 ? newsgroup not carried: unknown.un.carried
-Jan  5 00:00:00.000 j BlueWorldHosting <peer@example.com> 1584 ? peer-only: junk.local
-Aug 25 13:37:41.839 m ? <mod@example.com> 1584 ?
-Aug 25 13:37:54.638 - BlueWorldHosting <23k82@bar.net> 1584 ? yEncoding invalid
+Sep 28 08:18:41.398 + giganews <accepted@example> 793311 ?
+Sep 28 08:18:41.398 j giganews <junk@example> 741116 newsgroup not carried: alt.binaries.encryptnzb.hotel
+Sep 28 08:18:41.398 - giganews <rejected@example> 793311 yEncoding invalid
+Sep 28 08:18:41.398 m giganews <moderated@example> 123456
 ```
 
 Accepted (`+` / `j`) events are emitted by `IncomingSpoolWriterService` after dequeue. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
@@ -98,7 +98,7 @@ The NNTP response code is not a news field and is not rendered. INN's `- feed <m
 
 Rejection reasons are short operational journal text decided at the source, for example `message-id invalid`, `date invalid`, `newsgroup not carried`, `article too large`, `article type not permitted`, `queue capacity exceeded`, `yEncoding invalid`. An existing PostFilter reason such as `closed` is written unchanged.
 
-Feed is the inbound Transit identifier already known on the NNTP session (`Authorization.TransitPeerName`, the Transit dictionary key). It is copied onto `NewsLogEvent.Feed` at the decision so the asynchronous writer does not consult a live session. When the session is not a named peer, the inbound field is INN's unavailable token `?`. The `?` after size is the outbound site placeholder; outbound `SITE` routing is not implemented and is not invented.
+Feed is the inbound Transit identifier already known on the NNTP session (`Authorization.TransitPeerName`, the Transit dictionary key). It is copied onto `NewsLogEvent.Feed` at the decision so the asynchronous writer does not consult a live session. When the session is not a named peer, the inbound field is INN's unavailable token `?`. On `+` only, the field after size is the outbound-site list; empty Sites emit `?` because outbound `SITE` routing is not implemented and is not invented. `j`, `-`, and `m` do not include that field.
 
 `Nntpd:Transit:WantTrash` (TAKETHIS/IHAVE only): when `true`, articles posted only to unknown or RFC 6048 `j` groups are accepted and treated as junk internally without rewriting `Newsgroups:`. The `j` line carries `newsgroup not carried: <group>[, <group>...]` for the unknown header tokens when every listed group is unknown, or `peer-only: <group>[, <group>...]` for the RFC 6048 `PeerOnly` catalogue hits that caused junk. When `false`, unknown/non-carried groups are rejected before enqueue and write `-` with the same `newsgroup not carried: ...` group list. PeerOnly (`j`) groups remain accepted junk. POST is not subject to this policy. Only the groups responsible for the existing decision are listed; a complete Newsgroups header is not dumped.
 

@@ -48,7 +48,8 @@ public sealed class InnNewsTextFormatterTests
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
         var line = writer.ToString();
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ?\n", line);
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0\n", line);
+        Assert.DoesNotContain(" 0 ?", line, StringComparison.Ordinal);
         Assert.DoesNotContain("newsgroup not carried", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" SITE", line, StringComparison.Ordinal);
     }
@@ -71,7 +72,7 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 ? peer-only: junk.local\n", writer.ToString());
+        Assert.Equal("Jan  5 00:00:00.000 j ? <AbC@Example.COM> 0 peer-only: junk.local\n", writer.ToString());
     }
 
     [Fact]
@@ -93,7 +94,7 @@ public sealed class InnNewsTextFormatterTests
 
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
-        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> 0 ? Poison newsgroup\n", writer.ToString());
+        Assert.Equal("Aug 25 13:37:54.638 - ? <23k82@bar.net> 0 Poison newsgroup\n", writer.ToString());
         Assert.DoesNotContain("437", writer.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("HACK", writer.ToString(), StringComparison.Ordinal);
     }
@@ -116,7 +117,8 @@ public sealed class InnNewsTextFormatterTests
         using var writer = new StringWriter();
         new InnNewsTextFormatter().Format(evt, writer);
         var line = writer.ToString();
-        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com> 0 ?\n", line);
+        Assert.Equal("Aug 25 13:37:41.839 m ? <mod@example.com> 0\n", line);
+        Assert.DoesNotContain(" 0 ?", line, StringComparison.Ordinal);
         Assert.DoesNotContain(" + ", line, StringComparison.Ordinal);
         Assert.NotEqual('?', (char)NewsLogDisposition.Moderated);
     }
