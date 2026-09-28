@@ -69,6 +69,34 @@ public sealed class VatpFrameParserTests
     }
 
     [Fact]
+    public void ParseOneFrame_CompleteThenPartial_LeavesIncompleteTail()
+    {
+        var complete = VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeData(1, new byte[64], fin: false));
+        var next = VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeData(1, new byte[64], fin: true));
+        var buffer = VatpTestArticles.Concat(complete, next.AsSpan(0, 20).ToArray());
+
+        var one = VatpFrameParser.ParseOneFrame(buffer, VatpProtocol.DefaultMaxFramePayload);
+        Assert.Equal(VatpFrameParseStatus.Success, one.Status);
+        Assert.Equal(complete.Length, one.ConsumedBytes);
+
+        var remaining = buffer.AsMemory((int)one.ConsumedBytes).ToArray();
+        var two = VatpFrameParser.ParseOneFrame(remaining, VatpProtocol.DefaultMaxFramePayload);
+        Assert.Equal(VatpFrameParseStatus.Incomplete, two.Status);
+    }
+
+    [Fact]
+    public void ParseOneFrame_MalformedPayloadLengthOverflow_Rejected()
+    {
+        var header = new byte[16];
+        // PayloadLength = uint.MaxValue would overflow Header+Payload as checked long path;
+        // parser rejects via FrameTooLarge against maxFramePayload first.
+        VatpFrameHeader.Create(VatpFrameType.Data, 1, payloadLength: uint.MaxValue).WriteTo(header);
+        var result = VatpFrameParser.ParseOneFrame(header, maxFramePayload: 1024);
+        Assert.Equal(VatpFrameParseStatus.Invalid, result.Status);
+        Assert.Equal(VatpErrorCode.FrameTooLarge, result.Error);
+    }
+
+    [Fact]
     public void ParseOneFrame_MultipleFramesInOneBuffer_ParsesFirstThenSecond()
     {
         var first = VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(1));

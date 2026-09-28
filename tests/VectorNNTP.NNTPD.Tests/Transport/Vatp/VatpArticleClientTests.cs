@@ -10,6 +10,115 @@ namespace VectorNNTP.NNTPD.Tests.Transport.Vatp;
 public sealed class VatpArticleClientTests
 {
     [Fact]
+    public async Task Coalesced_multi_frame_transfer_succeeds()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.CoalesceOutboundFrames;
+        var prepared = CreateArticle("<coalesce-multi@example.test>", body: BuildLargeBody(96 * 1024));
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtId, result.Record.ArtId);
+        Assert.Equal(prepared.Record.ArtSize, result.Record.ArtSize);
+        Assert.Equal(prepared.Record.ArtHash, result.Record.ArtHash);
+    }
+
+    [Fact]
+    public async Task Coalesced_240KiB_article_matches_live_failure_scale()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.CoalesceOutboundFrames;
+        var prepared = CreateArticle("<coalesce-240k@example.test>", body: BuildLargeBody(240 * 1024));
+        Assert.True(prepared.Record.ArtSize > VatpProtocol.DefaultMaxFramePayload);
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtId, result.Record.ArtId);
+        Assert.Equal(prepared.Record.ArtSize, result.Record.ArtSize);
+        Assert.Equal(prepared.Record.ArtHash, result.Record.ArtHash);
+        Assert.True(result.Record.ArtData.ToArray().AsSpan()
+            .SequenceEqual(prepared.Record.ArtData.ToArray()));
+    }
+
+    [Fact]
+    public async Task Tiny_writes_reconstruct_partial_frames_across_reads()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.TinyOutboundWrites;
+        var prepared = CreateArticle("<tiny-writes@example.test>", body: BuildLargeBody(8 * 1024));
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtId, result.Record.ArtId);
+        Assert.Equal(prepared.Record.ArtSize, result.Record.ArtSize);
+    }
+
+    [Fact]
+    public async Task Max_sized_single_data_frame_assembles_across_32KiB_reads()
+    {
+        // Live root cause: assembling one DefaultMaxFramePayload DATA across multiple
+        // 32 KiB socket reads must not trip the old one-frame accumulation guard.
+        await using var server = VatpLoopbackTestServer.Start();
+        var bodyBytes = (int)VatpProtocol.DefaultMaxFramePayload - 256;
+        var prepared = CreateArticle("<max-frame@example.test>", body: BuildLargeBody(bodyBytes));
+        Assert.True(prepared.Record.ArtSize > 32 * 1024);
+        Assert.True(prepared.Record.ArtSize <= VatpProtocol.DefaultMaxFramePayload);
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtSize, result.Record.ArtSize);
+        Assert.Equal(prepared.Record.ArtHash, result.Record.ArtHash);
+    }
+
+    [Fact]
+    public async Task Oversized_data_frame_still_rejected()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.OversizedDataFrame;
+        var prepared = CreateArticle("<oversized-frame@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var client = CreateClient(server);
+
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+
+        Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
+        Assert.NotEqual(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(default, result.Record);
+    }
+
+    [Fact]
     public async Task Hello_and_single_transfer_success()
     {
         await using var server = VatpLoopbackTestServer.Start();

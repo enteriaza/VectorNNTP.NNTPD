@@ -129,6 +129,24 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
         DisconnectMidData,
         DisconnectMidMeta,
         DisconnectAfterFinBeforeEnd,
+
+        /// <summary>
+        /// Writes META + all DATA frames + END as one contiguous socket write so the
+        /// client must parse multiple VATP frames from coalesced TCP/TLS reads.
+        /// </summary>
+        CoalesceOutboundFrames,
+
+        /// <summary>
+        /// Writes each outbound transfer byte in 1-byte socket writes to force
+        /// partial-frame reconstruction across many reads.
+        /// </summary>
+        TinyOutboundWrites,
+
+        /// <summary>
+        /// After META, sends a DATA frame whose declared payload exceeds the negotiated
+        /// maxFramePayload (must be rejected by the client).
+        /// </summary>
+        OversizedDataFrame,
     }
 
     private readonly record struct RegisteredArticle(ArticleRecord Record, NntpArticleHeaderName SelectedDateHeaderName);
@@ -265,9 +283,86 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                 new ArticleTransferWindow(_limits.InitialStreamWindowBytes, _limits.MaxStreamCreditBytes),
                 transferMode);
             _streams[frame.Header.StreamId] = send;
+
+            if (transferMode == TransferMode.OversizedDataFrame)
+            {
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes))
+                    .ConfigureAwait(false);
+                await WriteOversizedDataFrameAsync(frame.Header.StreamId).ConfigureAwait(false);
+                return true;
+            }
+
+            if (transferMode is TransferMode.CoalesceOutboundFrames or TransferMode.TinyOutboundWrites)
+            {
+                await WriteTransferBatchAsync(send, metaBytes).ConfigureAwait(false);
+                return true;
+            }
+
             await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes)).ConfigureAwait(false);
             await PumpStreamAsync(send).ConfigureAwait(false);
             return true;
+        }
+
+        private async Task WriteTransferBatchAsync(SendStream sendStream, ReadOnlyMemory<byte> metaBytes)
+        {
+            var frames = new List<byte[]>();
+            frames.Add(VatpFrameEncoder.ToSingleBuffer(
+                VatpFrameEncoder.EncodeMeta(sendStream.StreamId, metaBytes)));
+
+            var offset = 0;
+            while (offset < sendStream.ArtData.Length)
+            {
+                var remaining = sendStream.ArtData.Length - offset;
+                var chunkSize = (int)Math.Min(_maxFramePayload, remaining);
+                var fin = offset + chunkSize >= sendStream.ArtData.Length;
+                var chunk = sendStream.ArtData.AsMemory(offset, chunkSize);
+                frames.Add(VatpFrameEncoder.ToSingleBuffer(
+                    VatpFrameEncoder.EncodeData(sendStream.StreamId, chunk, fin)));
+                offset += chunkSize;
+            }
+
+            frames.Add(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(sendStream.StreamId)));
+
+            var total = 0;
+            foreach (var frame in frames)
+            {
+                total += frame.Length;
+            }
+
+            var batch = new byte[total];
+            var written = 0;
+            foreach (var frame in frames)
+            {
+                frame.AsSpan().CopyTo(batch.AsSpan(written));
+                written += frame.Length;
+            }
+
+            if (sendStream.TransferMode == TransferMode.TinyOutboundWrites)
+            {
+                for (var i = 0; i < batch.Length; i++)
+                {
+                    await stream.WriteAsync(batch.AsMemory(i, 1), cancellationToken).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                await stream.WriteAsync(batch, cancellationToken).ConfigureAwait(false);
+            }
+
+            sendStream.SentBytes = sendStream.ArtData.Length;
+            _streams.Remove(sendStream.StreamId);
+        }
+
+        private async Task WriteOversizedDataFrameAsync(uint streamId)
+        {
+            var oversizedPayload = (int)_maxFramePayload + 1;
+            var header = new byte[VatpProtocol.HeaderLengthBytes];
+            VatpFrameHeader.Create(VatpFrameType.Data, streamId, (uint)oversizedPayload, flags: 0)
+                .WriteTo(header);
+            var payload = new byte[oversizedPayload];
+            payload.AsSpan().Fill(0x41);
+            await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task HandleWindowAsync(VatpParsedFrame frame)

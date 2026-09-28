@@ -333,6 +333,9 @@ internal sealed class VatpConnection : IAsyncDisposable
 
     private async Task RunReadLoopAsync(CancellationToken cancellationToken)
     {
+        // Socket reads are independent of VATP framing: one ReadAsync may yield a partial
+        // frame, one frame, or many frames. Only the incomplete tail is retained, and that
+        // tail is bounded to one negotiated maximum frame.
         var readBuffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
         var parseBuffer = ArrayPool<byte>.Shared.Rent(VatpProtocol.HeaderLengthBytes + (int)_maxFramePayload);
         var buffered = 0;
@@ -340,6 +343,13 @@ internal sealed class VatpConnection : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested && !IsDead)
             {
+                var maxIncomplete = VatpProtocol.HeaderLengthBytes + (int)_maxFramePayload;
+                if (buffered > maxIncomplete)
+                {
+                    MarkDead("Read buffer exceeded negotiated frame size.");
+                    return;
+                }
+
                 int bytesRead;
                 try
                 {
@@ -357,13 +367,6 @@ internal sealed class VatpConnection : IAsyncDisposable
                 if (bytesRead == 0)
                 {
                     MarkDead("Peer closed connection.");
-                    return;
-                }
-
-                var maxAccumulation = VatpProtocol.HeaderLengthBytes + (int)_maxFramePayload;
-                if (buffered > maxAccumulation - bytesRead)
-                {
-                    MarkDead("Read buffer exceeded negotiated frame size.");
                     return;
                 }
 
@@ -404,6 +407,13 @@ internal sealed class VatpConnection : IAsyncDisposable
                 {
                     parseBuffer.AsSpan(consumed, buffered - consumed).CopyTo(parseBuffer);
                     buffered -= consumed;
+                }
+
+                // After dispatching every complete frame, only an incomplete frame may remain.
+                if (buffered > maxIncomplete)
+                {
+                    MarkDead("Read buffer exceeded negotiated frame size.");
+                    return;
                 }
             }
         }
@@ -463,25 +473,25 @@ internal sealed class VatpConnection : IAsyncDisposable
 
                 break;
             case VatpFrameType.Data:
-            {
-                var apply = receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
-                var payloadLength = checked((uint)frame.Payload.Length);
-                if (payloadLength > 0)
                 {
-                    await EnqueueFrameAsync(
-                        VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, payloadLength),
-                        cancellationToken).ConfigureAwait(false);
-                }
+                    var apply = receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
+                    var payloadLength = checked((uint)frame.Payload.Length);
+                    if (payloadLength > 0)
+                    {
+                        await EnqueueFrameAsync(
+                            VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, payloadLength),
+                            cancellationToken).ConfigureAwait(false);
+                    }
 
-                if (!apply.Success || receive.IsTerminal)
-                {
-                    CompletePending(
-                        frame.Header.StreamId,
-                        ToFetchFailure(receive, "DATA rejected."));
-                }
+                    if (!apply.Success || receive.IsTerminal)
+                    {
+                        CompletePending(
+                            frame.Header.StreamId,
+                            ToFetchFailure(receive, "DATA rejected."));
+                    }
 
-                break;
-            }
+                    break;
+                }
 
             case VatpFrameType.End:
                 if (!receive.TryAcceptEnd().Success)
