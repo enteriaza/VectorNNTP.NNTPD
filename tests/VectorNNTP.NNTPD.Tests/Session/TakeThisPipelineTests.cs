@@ -725,6 +725,131 @@ public sealed class TakeThisPipelineTests
     }
 
     [Fact]
+    public async Task SlowHeadProcess_DoesNotBlockLaterDestuff_ResponsesStayOrdered()
+    {
+        var history = new GatedHistoryDb();
+        history.Force("<slow-n@ex.com>", HistoryLookupResult.Unseen);
+        history.Force("<fast-n1@ex.com>", HistoryLookupResult.Unseen);
+        history.Force("<fast-n2@ex.com>", HistoryLookupResult.Unseen);
+        var queue = NewQueue();
+        await using var duplex = new TakeThisPipelineDuplex();
+        var session = duplex.CreateSession(queue, history);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        var holdN = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new ConcurrentBag<string>();
+        var completed = new ConcurrentBag<string>();
+        session.TakeThisWindow!.HoldProcess = id =>
+        {
+            var text = Encoding.ASCII.GetString(id.Span);
+            return text == "<slow-n@ex.com>" ? holdN.Task : Task.CompletedTask;
+        };
+        session.TakeThisWindow.AfterProcessStarted = id => started.Add(Encoding.ASCII.GetString(id.Span));
+        session.TakeThisWindow.AfterProcessCompleted = id => completed.Add(Encoding.ASCII.GetString(id.Span));
+
+        await duplex.WriteClientAsync(
+            BuildTakeThis("<slow-n@ex.com>", CanonicalArticleText.Destuffed("<slow-n@ex.com>", "N\r\n")) +
+            BuildTakeThis("<fast-n1@ex.com>", CanonicalArticleText.Destuffed("<fast-n1@ex.com>", "N1\r\n")) +
+            BuildTakeThis("<fast-n2@ex.com>", CanonicalArticleText.Destuffed("<fast-n2@ex.com>", "N2\r\n")));
+
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(
+            () => completed.Contains("<fast-n1@ex.com>") && completed.Contains("<fast-n2@ex.com>"),
+            safety.Token);
+
+        Assert.Contains("<slow-n@ex.com>", started);
+        Assert.DoesNotContain("<slow-n@ex.com>", completed);
+        Assert.True(session.TakeThisWindow.MaxActiveArticleProcessing >= 2);
+        Assert.Equal(3, session.TakeThisWindow.Occupied);
+        Assert.Null(duplex.TryReadClientLine());
+        Assert.Equal(0, queue.Count);
+        Assert.Empty(history.Remembered);
+
+        holdN.TrySetResult();
+        Assert.Equal("239 <slow-n@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("239 <fast-n1@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("239 <fast-n2@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Contains("<slow-n@ex.com>", completed);
+        Assert.Equal(3, queue.Count);
+        Assert.Equal(3, history.Remembered.Count);
+        Assert.Contains("<slow-n@ex.com>", history.Remembered);
+        Assert.Contains("<fast-n1@ex.com>", history.Remembered);
+        Assert.Contains("<fast-n2@ex.com>", history.Remembered);
+        Assert.Equal(1, session.TakeThisWindow.MaxActiveArticleReads);
+        Assert.Equal(0, session.TakeThisWindow.Occupied);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task HistorySeen_SkipsDestuff()
+    {
+        var history = new GatedHistoryDb();
+        history.Force("<skip-crc@ex.com>", HistoryLookupResult.Seen);
+        var queue = NewQueue();
+        await using var duplex = new TakeThisPipelineDuplex();
+        var session = duplex.CreateSession(queue, history);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        var processStarted = 0;
+        session.TakeThisWindow!.AfterProcessStarted = _ => Interlocked.Increment(ref processStarted);
+
+        await duplex.WriteClientAsync(BuildTakeThis("<skip-crc@ex.com>", CanonicalArticleText.Destuffed("<skip-crc@ex.com>", "x\r\n")));
+        Assert.Equal("239 <skip-crc@ex.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal(0, Volatile.Read(ref processStarted));
+        Assert.Equal(0, session.TakeThisWindow.MaxActiveArticleProcessing);
+        Assert.Equal(0, queue.Count);
+
+        await QuitAsync(duplex, run);
+    }
+
+    [Fact]
+    public async Task Shutdown_CancelsHeldProcess_ReleasesSlotWithoutResponse()
+    {
+        var history = new GatedHistoryDb();
+        history.Force("<shut-n@ex.com>", HistoryLookupResult.Unseen);
+        var queue = NewQueue();
+        await using var duplex = new TakeThisPipelineDuplex();
+        var session = duplex.CreateSession(queue, history);
+        session.SetAuthorization(TransitAuth);
+        var run = session.RunAsync();
+        _ = await duplex.ReadClientLineAsync();
+
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.TakeThisWindow!.HoldProcess = _ => hold.Task;
+        session.TakeThisWindow.AfterProcessStarted = _ => started.TrySetResult();
+
+        await duplex.WriteClientAsync(
+            BuildTakeThis("<shut-n@ex.com>", CanonicalArticleText.Destuffed("<shut-n@ex.com>", "x\r\n")));
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        await started.Task.WaitAsync(safety.Token);
+        Assert.Equal(1, session.TakeThisWindow.Occupied);
+        Assert.Null(duplex.TryReadClientLine());
+        Assert.Equal(0, queue.Count);
+
+        await session.TakeThisWindow.ShutdownAsync().AsTask().WaitAsync(safety.Token);
+        Assert.Equal(0, session.TakeThisWindow.Occupied);
+        Assert.Null(duplex.TryReadClientLine());
+        Assert.Equal(0, queue.Count);
+        Assert.Empty(history.Remembered);
+
+        await session.Connection.CompleteAsync();
+        try
+        {
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception)
+        {
+            // RX may observe connection close after the pipeline already shut down.
+        }
+    }
+
+    [Fact]
     public async Task HistorySeen_Returns239_DoesNotEnqueue()
     {
         var history = new GatedHistoryDb();

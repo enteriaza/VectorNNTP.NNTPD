@@ -17,16 +17,19 @@ namespace VectorNNTP.NNTPD.Session;
 /// The session RX task is the only consumer of <c>Connection.Input</c>. It parses the
 /// TAKETHIS command, starts HistoryDB peek, frames the article with
 /// <see cref="IHaveArticleReader"/> (one owned stuffed-wire buffer, terminator omitted),
-/// attaches that buffer to a slot, and returns. Pipeline workers destuff and build
-/// <see cref="VectorNNTP.Common.Articles.ArticleRecord"/> before enqueue. They never call
-/// <c>ReadAsync</c> on the session pipe. Depth matches the CHECK window and bounds
-/// how many owned article buffers may be retained.
+/// attaches that buffer to a slot, and returns. Each occupied slot destuffs and
+/// builds <see cref="VectorNNTP.Common.Articles.ArticleRecord"/> on its own completion
+/// task. They never call <c>ReadAsync</c> on the session pipe. Depth matches the
+/// CHECK window and bounds how many owned article buffers and process results
+/// may be retained.
 /// </para>
 /// <para>
 /// After detach, <see cref="CompleteWhenAsync"/> waits for Peek if needed, then
-/// enqueue / Remember / ordered 239/439/400. Emit never runs on the RX task, including
-/// when Peek already completed during receive. A slot is occupied from Message-ID
-/// copy / peek start until the response writer accepts the ordered line (or cancel).
+/// destuffs and builds <c>ArticleRecord</c> on that slot's task (concurrent across
+/// occupied slots). Enqueue / Remember / news <c>-</c> / ordered 239/439/400 stay
+/// behind <c>_emitGate</c> so publication remains command-ordered. Emit never runs
+/// on the RX task. A slot is occupied from Message-ID copy / peek start until the
+/// response writer accepts the ordered line (or cancel).
 /// </para>
 /// </remarks>
 internal sealed class TakeThisPipeline
@@ -51,6 +54,8 @@ internal sealed class TakeThisPipeline
     private int _inFlightCompletions;
     private int _activeArticleReads;
     private int _maxActiveArticleReads;
+    private int _activeArticleProcessing;
+    private int _maxActiveArticleProcessing;
     private TaskCompletionSource _progress = NewProgress();
 
     /// <summary>Initializes a new instance of the <see cref="TakeThisPipeline"/> class.</summary>
@@ -127,6 +132,30 @@ internal sealed class TakeThisPipeline
     /// <summary>Gets the peak concurrent article-receive count observed on this session (must stay 1).</summary>
     internal int MaxActiveArticleReads => Volatile.Read(ref _maxActiveArticleReads);
 
+    /// <summary>
+    /// Gets how many destuff/parse/CRC tasks are running on this session (at most <see cref="Depth"/>).
+    /// </summary>
+    internal int ActiveArticleProcessing => Volatile.Read(ref _activeArticleProcessing);
+
+    /// <summary>Gets the peak concurrent destuff/parse/CRC count observed on this session.</summary>
+    internal int MaxActiveArticleProcessing => Volatile.Read(ref _maxActiveArticleProcessing);
+
+    /// <summary>
+    /// Test-only: awaited on a slot after Peek is Unseen and before destuff/parse/CRC.
+    /// Production never sets this.
+    /// </summary>
+    internal Func<ReadOnlyMemory<byte>, Task>? HoldProcess { get; set; }
+
+    /// <summary>
+    /// Test-only: invoked when destuff/parse/CRC starts for a slot. Production never sets this.
+    /// </summary>
+    internal Action<ReadOnlyMemory<byte>>? AfterProcessStarted { get; set; }
+
+    /// <summary>
+    /// Test-only: invoked when destuff/parse/CRC finishes for a slot. Production never sets this.
+    /// </summary>
+    internal Action<ReadOnlyMemory<byte>>? AfterProcessCompleted { get; set; }
+
     /// <summary>Waits until a slot is free. The caller must not read RX while this is pending.</summary>
     public async ValueTask WaitForCapacityAsync(CancellationToken cancellationToken)
     {
@@ -150,8 +179,8 @@ internal sealed class TakeThisPipeline
 
     /// <summary>
     /// Starts HistoryDB peek, frames the STREAM article on the RX task, attaches the
-    /// owned buffer to a slot, and returns. Does not wait for Peek, enqueue, Remember,
-    /// or 239 after the article is detached from the PipeReader.
+    /// owned buffer to a slot, and returns. Does not wait for Peek, destuff, enqueue,
+    /// Remember, or 239 after the article is detached from the PipeReader.
     /// </summary>
     public async ValueTask AdmitAuthorizedAsync(
         NntpCommand command,
@@ -400,6 +429,33 @@ internal sealed class TakeThisPipeline
                 peek,
                 System.Diagnostics.Stopwatch.GetTimestamp() - peekWaitStart);
 
+            if (Volatile.Read(ref _shutDown) == 1
+                || cancellationToken.IsCancellationRequested)
+            {
+                CancelAndRelease(slot);
+                return;
+            }
+
+            ArticleProcessOutcome process = default;
+            try
+            {
+                using var processCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    _lifetimeCts.Token);
+                process = await ProcessArticleAsync(slot, peek, processCts.Token).ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                CancelAndRelease(slot);
+                return;
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested || Volatile.Read(ref _shutDown) == 1)
+            {
+                CancelAndRelease(slot);
+                return;
+            }
+
             var emit = false;
             lock (_gate)
             {
@@ -411,6 +467,7 @@ internal sealed class TakeThisPipeline
                 if (Volatile.Read(ref _shutDown) == 1)
                 {
                     slot.PeekCompleted = true;
+                    slot.Processed = true;
                     slot.Cancelled = true;
                     ReleaseCancelledPrefixNoLock();
                     SignalProgressNoLock();
@@ -419,6 +476,8 @@ internal sealed class TakeThisPipeline
 
                 slot.PeekCompleted = true;
                 slot.Peek = peek;
+                slot.Processed = true;
+                slot.Process = process;
                 emit = HeadIsReadyNoLock();
                 SignalProgressNoLock();
             }
@@ -571,25 +630,20 @@ internal sealed class TakeThisPipeline
         }
 
         var messageIdText = System.Text.Encoding.ASCII.GetString(slot.MessageId);
-        if (!TakeThis.TryCreateQueuedRecord(
-                _session,
-                read.Payload,
-                stuffed: true,
-                messageIdText,
-                out var inbound,
-                out var recordReject))
+        var process = slot.Process;
+        if (process.RecordRejected)
         {
             IngressNewsEvents.TryWriteRejected(
                 _session,
                 messageIdText,
                 439,
-                IngressNewsReasons.ForExistingRejectDetail(recordReject));
+                IngressNewsReasons.ForExistingRejectDetail(process.RejectDetail));
             var rejectProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var rejectStart = System.Diagnostics.Stopwatch.GetTimestamp();
             await EnqueueReplyAsync(slot, NntpResponses.TransferRejectedPrefix, cancellationToken)
                 .ConfigureAwait(false);
-            WriteTxIfDebug(slot, recordReject, TransferLogKind.Rejected);
+            WriteTxIfDebug(slot, process.RejectDetail ?? string.Empty, TransferLogKind.Rejected);
             rejectProbe?.RecordArticleCompleted(
                 duplicate: false,
                 System.Diagnostics.Stopwatch.GetTimestamp() - rejectStart);
@@ -597,17 +651,13 @@ internal sealed class TakeThisPipeline
             return;
         }
 
-        if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
-                inbound,
-                _session.Transit,
-                _session.NewsgroupCatalogue,
-                out var uncarriedReason))
+        if (process.UncarriedRejected)
         {
             IngressNewsEvents.TryWriteRejected(
                 _session,
                 messageIdText,
                 439,
-                uncarriedReason);
+                process.UncarriedReason ?? IngressNewsEvents.NewsgroupNotCarried);
             var uncarriedProbe = _session.FeedProbe;
             _session.SetActivityState(FeedSessionState.Completing);
             var uncarriedStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -618,6 +668,14 @@ internal sealed class TakeThisPipeline
                 duplicate: false,
                 System.Diagnostics.Stopwatch.GetTimestamp() - uncarriedStart);
             _session.SetActivityState(FeedSessionState.Idle);
+            return;
+        }
+
+        var inbound = process.Inbound;
+        if (inbound is null)
+        {
+            await TakeThis.FailTemporaryAsync(_session, _response, cancellationToken).ConfigureAwait(false);
+            WriteTxIfDebug(slot, "temporary failure", TransferLogKind.Temporary);
             return;
         }
 
@@ -809,7 +867,91 @@ internal sealed class TakeThisPipeline
         }
 
         var slot = _slots[_head];
-        return slot is { ArticleReady: true, PeekCompleted: true, Cancelled: false, Emitting: false };
+        return slot is
+        {
+            ArticleReady: true,
+            PeekCompleted: true,
+            Processed: true,
+            Cancelled: false,
+            Emitting: false,
+        };
+    }
+
+    /// <summary>
+    /// Destuff/parse/CRC for an unseen completed article. Independent per slot.
+    /// History Seen/Unavailable and receive failures skip this work.
+    /// </summary>
+    /// <param name="slot">Occupied slot that already owns stuffed wire.</param>
+    /// <param name="peek">Already-awaited HistoryDB result for this slot.</param>
+    /// <param name="cancellationToken">Session or pipeline lifetime cancellation.</param>
+    /// <returns>The destuff/parse outcome for the ordered publisher.</returns>
+    private async ValueTask<ArticleProcessOutcome> ProcessArticleAsync(
+        Slot slot,
+        HistoryLookupResult peek,
+        CancellationToken cancellationToken)
+    {
+        var read = slot.Read;
+        if (read.Status != NntpMultilineReadStatus.Completed
+            || peek != HistoryLookupResult.Unseen)
+        {
+            return default;
+        }
+
+        var processing = Interlocked.Increment(ref _activeArticleProcessing);
+        if (processing > _maxActiveArticleProcessing)
+        {
+            _maxActiveArticleProcessing = processing;
+        }
+
+        AfterProcessStarted?.Invoke(slot.MessageId);
+        try
+        {
+            if (HoldProcess is { } hold)
+            {
+                await hold(slot.MessageId).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (Volatile.Read(ref _shutDown) == 1 || cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            var messageIdText = SlotMessageId(slot);
+            if (!TakeThis.TryCreateQueuedRecord(
+                    _session,
+                    read.Payload,
+                    stuffed: true,
+                    messageIdText,
+                    out var inbound,
+                    out var recordReject))
+            {
+                return new ArticleProcessOutcome
+                {
+                    RecordRejected = true,
+                    RejectDetail = recordReject,
+                };
+            }
+
+            if (IngressNewsDisposition.IsUncarriedWantTrashRejection(
+                    inbound,
+                    _session.Transit,
+                    _session.NewsgroupCatalogue,
+                    out var uncarriedReason))
+            {
+                return new ArticleProcessOutcome
+                {
+                    UncarriedRejected = true,
+                    UncarriedReason = uncarriedReason,
+                };
+            }
+
+            return new ArticleProcessOutcome { Inbound = inbound };
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeArticleProcessing);
+            AfterProcessCompleted?.Invoke(slot.MessageId);
+        }
     }
 
     private Slot? TryBeginEmitHeadNoLock()
@@ -849,6 +991,7 @@ internal sealed class TakeThisPipeline
 
             slot.ArticleReady = true;
             slot.PeekCompleted = true;
+            slot.Processed = true;
             slot.Cancelled = true;
             slot.Emitting = false;
             ReleaseCancelledPrefixNoLock();
@@ -917,8 +1060,28 @@ internal sealed class TakeThisPipeline
 
         public bool PeekCompleted { get; set; }
 
+        public bool Processed { get; set; }
+
+        public ArticleProcessOutcome Process { get; set; }
+
         public bool Cancelled { get; set; }
 
         public bool Emitting { get; set; }
+    }
+
+    /// <summary>
+    /// Per-slot destuff/parse/CRC outcome consumed by the ordered publisher.
+    /// </summary>
+    private readonly struct ArticleProcessOutcome
+    {
+        public bool RecordRejected { get; init; }
+
+        public bool UncarriedRejected { get; init; }
+
+        public string? RejectDetail { get; init; }
+
+        public string? UncarriedReason { get; init; }
+
+        public InboundArticle? Inbound { get; init; }
     }
 }

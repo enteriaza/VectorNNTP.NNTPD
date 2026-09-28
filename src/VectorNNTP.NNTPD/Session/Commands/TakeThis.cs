@@ -21,12 +21,13 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <para>
 /// STREAM path: the session RX task starts HistoryDB peek at the Message-ID, frames
 /// the article with <see cref="IHaveArticleReader"/> (one owned stuffed-wire buffer,
-/// terminator omitted, no destuff), attaches that buffer to
-/// <see cref="TakeThisPipeline"/>, and returns. Peek / destuff / ArticleRecord /
-/// enqueue / Remember / ordered 239/439 run on pipeline completion workers, not on
-/// the RX stack. Depth bounds how many owned articles stay in flight. TAKETHIS
-/// responses flush immediately (no coalesce batch). ArticleRecord construction
-/// failure is a permanent <c>439</c>.
+/// terminator omitted, no destuff on RX), attaches that buffer to
+/// <see cref="TakeThisPipeline"/>, and returns. Peek and destuff/ArticleRecord
+/// run concurrently per occupied slot. Enqueue / Remember / ordered 239/439 stay
+/// on the emit gate so publication remains command-ordered. Depth bounds how
+/// many owned articles stay in flight. TAKETHIS responses flush immediately
+/// (no coalesce batch). ArticleRecord construction failure is a permanent
+/// <c>439</c>.
 /// </para>
 /// <para>
 /// MODE READER fallback still destuffs via <see cref="NntpMultilineDataReader"/> and
