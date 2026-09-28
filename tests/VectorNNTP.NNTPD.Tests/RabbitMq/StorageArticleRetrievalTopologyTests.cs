@@ -5,7 +5,7 @@ namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 public sealed class StorageArticleRetrievalTopologyTests
 {
     [Fact]
-    public void Definition_IsBackfillerStorage_FanoutQuorumBinding()
+    public void Definition_IsBackfillerStorage_FanoutClassicBinding()
     {
         var definition = StorageArticleRetrievalTopology.Definition;
 
@@ -24,11 +24,9 @@ public sealed class StorageArticleRetrievalTopologyTests
         Assert.False(definition.QueueExclusive);
         Assert.False(definition.QueueAutoDelete);
         Assert.NotNull(definition.QueueArguments);
-        Assert.Single(definition.QueueArguments);
-        Assert.True(definition.QueueArguments.TryGetValue(
-            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
-            out var queueType));
-        Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType as string);
+        Assert.Empty(definition.QueueArguments);
+        Assert.False(definition.QueueArguments.ContainsKey(
+            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
         Assert.False(definition.QueueArguments.ContainsKey("x-message-ttl"));
         Assert.False(definition.QueueArguments.ContainsKey("x-expires"));
         Assert.DoesNotContain("storage.requests", definition.ExchangeName, StringComparison.Ordinal);

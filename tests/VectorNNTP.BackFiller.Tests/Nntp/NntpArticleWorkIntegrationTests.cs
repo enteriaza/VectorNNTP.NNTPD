@@ -89,7 +89,7 @@ public sealed class NntpArticleWorkIntegrationTests
     }
 
     [Fact]
-    public async Task ArticleNotFound_maps_to_nack_without_requeue()
+    public async Task ArticleNotFound_maps_to_ack_without_requeue()
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
@@ -108,7 +108,9 @@ public sealed class NntpArticleWorkIntegrationTests
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, outcome);
         var intent = Assert.Single(publisher.Published);
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, intent.Outcome);
-        Assert.False(Assert.Single(channel.Settlements).Requeue);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.True(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
     }
 
     [Fact]

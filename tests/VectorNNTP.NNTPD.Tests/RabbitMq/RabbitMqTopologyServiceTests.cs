@@ -218,12 +218,7 @@ public sealed class RabbitMqTopologyServiceTests
                 Assert.True(queue.Durable);
                 Assert.False(queue.Exclusive);
                 Assert.False(queue.AutoDelete);
-                Assert.NotNull(queue.Arguments);
-                Assert.Single(queue.Arguments);
-                Assert.True(queue.Arguments.TryGetValue(
-                    RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
-                    out var queueType));
-                Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
+                AssertClassicQueueArguments(queue.Arguments);
 
                 var binding = connection.BindingDeclarations[endpointOffset + i];
                 Assert.Equal(definition.QueueName, binding.Queue);
@@ -237,7 +232,7 @@ public sealed class RabbitMqTopologyServiceTests
             Assert.True(overview.Durable);
             Assert.False(overview.Exclusive);
             Assert.False(overview.AutoDelete);
-            AssertOverviewDbClassicQueueArguments(overview.Arguments);
+            AssertClassicQueueArguments(overview.Arguments);
             Assert.DoesNotContain(
                 connection.BindingDeclarations.Skip(endpointOffset).Take(definitions.Count + 1),
                 static binding => binding.Queue == OverviewDbTopology.QueueName);
@@ -247,7 +242,7 @@ public sealed class RabbitMqTopologyServiceTests
         }
     }
 
-    private static void AssertOverviewDbClassicQueueArguments(
+    private static void AssertClassicQueueArguments(
         IReadOnlyDictionary<string, object?>? arguments)
     {
         var effective = arguments ?? new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -255,6 +250,12 @@ public sealed class RabbitMqTopologyServiceTests
         Assert.False(effective.ContainsKey(RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
         Assert.False(effective.ContainsKey("x-message-ttl"));
         Assert.False(effective.ContainsKey("x-expires"));
+        Assert.DoesNotContain(
+            effective,
+            static pair => string.Equals(
+                pair.Value as string,
+                RabbitMqArticleRetrievalEndpoints.QuorumQueueType,
+                StringComparison.Ordinal));
         Assert.Empty(effective);
     }
 }

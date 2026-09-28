@@ -50,7 +50,7 @@ public sealed class ArticleWorkRpcServiceTests
     [Fact]
     public async Task ConnectionReplacement_DisposesStaleSession_AndDoesNotCorruptNewGeneration()
     {
-        var factory = new FakeRabbitMqConnectionFactory();
+        var factory = CreateFactoryWithActiveConsumers();
         factory.Connected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var rabbit = CreateRabbitMqService(factory);
         var rpc = new ArticleWorkRpcService(rabbit, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<ArticleWorkRpcService>.Instance);
@@ -65,7 +65,7 @@ public sealed class ArticleWorkRpcServiceTests
         factory.Connected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         first.SimulateLost();
         await factory.Connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await WaitForAsync(() => rpc.CurrentSessionGeneration == 2);
+        await WaitForAsync(() => rpc.CurrentSessionGeneration == 2 && firstPublish.DisposeCount == 1);
 
         Assert.Equal(2, rpc.CurrentSessionGeneration);
         Assert.Equal(1, firstPublish.DisposeCount);
@@ -93,7 +93,7 @@ public sealed class ArticleWorkRpcServiceTests
     [Fact]
     public async Task StopAsync_CancelsPendingLookup_AndClearsCorrelations()
     {
-        var factory = new FakeRabbitMqConnectionFactory();
+        var factory = CreateFactoryWithActiveConsumers();
         await using var rabbit = CreateRabbitMqService(factory);
         var rpc = new ArticleWorkRpcService(rabbit, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<ArticleWorkRpcService>.Instance);
         await rabbit.StartAsync(CancellationToken.None);
@@ -117,7 +117,7 @@ public sealed class ArticleWorkRpcServiceTests
     public async Task WorkerResponse_CarriesOneSecondExpiration_AndCompletesLookup()
     {
         var time = new FakeTimeProvider();
-        var factory = new FakeRabbitMqConnectionFactory();
+        var factory = CreateFactoryWithActiveConsumers();
         await using var rabbit = CreateRabbitMqService(factory);
         var rpc = new ArticleWorkRpcService(
             rabbit,
@@ -151,7 +151,7 @@ public sealed class ArticleWorkRpcServiceTests
     public async Task StaleGenerationDelivery_CannotCompleteNewerLookup()
     {
         var time = new FakeTimeProvider();
-        var factory = new FakeRabbitMqConnectionFactory();
+        var factory = CreateFactoryWithActiveConsumers();
         factory.Connected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var rabbit = CreateRabbitMqService(factory);
         var rpc = new ArticleWorkRpcService(
@@ -227,6 +227,17 @@ public sealed class ArticleWorkRpcServiceTests
         Assert.Same(
             host.Services.GetRequiredService<IArticleWorkRpcClient>(),
             services[4]);
+    }
+
+    private static FakeRabbitMqConnectionFactory CreateFactoryWithActiveConsumers()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
+        {
+            factory.PassiveConsumerCounts[definition.QueueName] = 1;
+        }
+
+        return factory;
     }
 
     private static RabbitMqService CreateRabbitMqService(FakeRabbitMqConnectionFactory factory)

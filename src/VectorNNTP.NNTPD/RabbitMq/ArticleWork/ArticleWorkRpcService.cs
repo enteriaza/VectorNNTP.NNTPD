@@ -7,7 +7,7 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 /// <summary>
 /// NNTPD-owned article-work RPC session: shared reply consumer, generation-scoped channels,
-/// and storage-first orchestration.
+/// and sequential Backfill Scheduler orchestration.
 /// </summary>
 /// <remarks>
 /// <see cref="RabbitMqService"/> remains the sole TCP connection owner. This service
@@ -23,6 +23,7 @@ internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkR
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ArticleWorkRpcService> _logger;
     private readonly ArticleWorkRpcResponseRouter _router;
+    private readonly BackfillConsumerAvailabilityService _availability;
     private readonly ArticleWorkRpcClient _client;
     private readonly SemaphoreSlim _publishGate = new(1, 1);
     private readonly object _sessionGate = new();
@@ -46,9 +47,12 @@ internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkR
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _router = new ArticleWorkRpcResponseRouter(logger);
+        _availability = new BackfillConsumerAvailabilityService(rabbitMq, logger, _timeProvider);
         _client = new ArticleWorkRpcClient(
             this,
             _router,
+            _availability,
+            new WeightedBackboneSelector(),
             _timeProvider,
             logger,
             () => _rabbitMq.ConnectionGeneration);
@@ -86,6 +90,7 @@ internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkR
             _shutdownCts = new CancellationTokenSource();
             _rabbitMq.ConnectionReplaced += OnConnectionReplaced;
             await AttachCurrentSessionAsync(cancellationToken).ConfigureAwait(false);
+            await _availability.RefreshNowAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -333,6 +338,8 @@ internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkR
         {
             await session.DisposeAsync().ConfigureAwait(false);
         }
+
+        await _availability.DisposeAsync().ConfigureAwait(false);
 
         _shutdownCts?.Dispose();
         _shutdownCts = null;

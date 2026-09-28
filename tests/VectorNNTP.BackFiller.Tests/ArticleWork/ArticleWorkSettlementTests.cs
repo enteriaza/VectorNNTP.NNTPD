@@ -11,9 +11,9 @@ public sealed class ArticleWorkSettlementTests
 {
     [Theory]
     [InlineData(ArticleWorkOutcome.Success, true, false, true)]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, false, false, true)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, false, false, true)]
-    [InlineData(ArticleWorkOutcome.InvalidRequest, false, false, true)]
+    [InlineData(ArticleWorkOutcome.ArticleNotFound, true, false, true)]
+    [InlineData(ArticleWorkOutcome.InvalidArticle, true, false, true)]
+    [InlineData(ArticleWorkOutcome.InvalidRequest, true, false, true)]
     [InlineData(ArticleWorkOutcome.ProviderFailure, false, true, false)]
     [InlineData(ArticleWorkOutcome.Cancelled, false, true, false)]
     [InlineData(ArticleWorkOutcome.UnexpectedFailure, false, true, false)]
@@ -38,7 +38,7 @@ public sealed class ArticleWorkSettlementTests
             replyable: false,
             cancellationRequested: false);
 
-        Assert.False(disposition.Acknowledge);
+        Assert.True(disposition.Acknowledge);
         Assert.False(disposition.Requeue);
         Assert.False(disposition.PublishResponse);
     }
@@ -82,7 +82,7 @@ public sealed class ArticleWorkSettlementTests
     }
 
     [Fact]
-    public async Task InvalidRequest_nacks_without_requeue_and_records_a_response_intent()
+    public async Task InvalidRequest_acks_without_requeue_and_records_a_response_intent()
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher();
@@ -103,14 +103,14 @@ public sealed class ArticleWorkSettlementTests
         Assert.Equal(ArticleWorkOutcome.InvalidRequest, intent.Outcome);
         Assert.Null(intent.RequestId);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
     }
 
     [Theory]
     [InlineData(ArticleWorkOutcome.Success, true, false)]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, false, false)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, false, false)]
+    [InlineData(ArticleWorkOutcome.ArticleNotFound, true, false)]
+    [InlineData(ArticleWorkOutcome.InvalidArticle, true, false)]
     public async Task Terminal_handler_outcomes_publish_and_settle_exactly_once(
         ArticleWorkOutcome handlerOutcome,
         bool acknowledge,
@@ -184,7 +184,7 @@ public sealed class ArticleWorkSettlementTests
     }
 
     [Fact]
-    public async Task InvalidRequest_publish_failure_nacks_without_requeue()
+    public async Task InvalidRequest_publish_failure_acks_without_requeue()
     {
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher
@@ -206,7 +206,7 @@ public sealed class ArticleWorkSettlementTests
         Assert.Equal(ArticleWorkOutcome.InvalidRequest, outcome);
         Assert.Empty(publisher.Published);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
     }
 

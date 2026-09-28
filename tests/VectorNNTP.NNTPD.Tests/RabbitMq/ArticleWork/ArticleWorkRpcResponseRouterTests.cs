@@ -136,20 +136,22 @@ public sealed class ArticleWorkRpcResponseRouterTests
     }
 
     [Fact]
-    public void ArticleNotFound_DoesNotCompleteLookup()
+    public void ArticleNotFound_CompletesAttempt_ButIsNotLookupSuccess()
     {
         var router = new ArticleWorkRpcResponseRouter(NullLogger.Instance);
         var requestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 0);
+        router.Register(correlationId, operation, "backfiller.giganews", generation: 0);
 
         router.Dispatch(correlationId, FailureBody(requestId, "ArticleNotFound"), requestId.ToString("D"), 0);
-        Assert.False(operation.IsCompleted);
-        Assert.False(ArticleWorkAggregatePolicy.IsAggregateTerminal(ArticleWorkOutcome.ArticleNotFound));
-        Assert.False(ArticleWorkAggregatePolicy.IsAggregateTerminal(ArticleWorkOutcome.InvalidArticle));
-        Assert.False(ArticleWorkAggregatePolicy.IsAggregateTerminal(ArticleWorkOutcome.InvalidRequest));
-        Assert.True(ArticleWorkAggregatePolicy.IsAggregateTerminal(ArticleWorkOutcome.Success));
+        Assert.True(operation.IsCompleted);
+        Assert.True(operation.TryGetResult(out var result));
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.True(ArticleWorkAggregatePolicy.IsAttemptTerminal(ArticleWorkOutcome.ArticleNotFound));
+        Assert.True(ArticleWorkAggregatePolicy.ShouldTryNextBackbone(ArticleWorkOutcome.ArticleNotFound));
+        Assert.False(ArticleWorkAggregatePolicy.IsLookupSuccess(ArticleWorkOutcome.ArticleNotFound));
+        Assert.True(ArticleWorkAggregatePolicy.IsLookupSuccess(ArticleWorkOutcome.Success));
     }
 
     private static byte[] SuccessBody(Guid requestId, string backbone = "Storage")

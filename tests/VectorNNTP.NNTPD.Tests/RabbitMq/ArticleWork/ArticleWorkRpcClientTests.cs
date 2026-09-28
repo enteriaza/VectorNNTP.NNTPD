@@ -17,502 +17,454 @@ public sealed class ArticleWorkRpcClientTests
     private const string SuccessArticleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Fact]
-    public async Task StorageSuccess_At50ms_CompletesImmediately_DoesNotFanOut()
+    public async Task No_active_consumers_publishes_nothing()
     {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(TimeSpan.FromMilliseconds(50));
-        harness.DeliverSuccess(storage);
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(SuccessUri, result.Uri);
-        Assert.Equal(
-            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(SuccessArticleIdHex),
-            result.ArticleId);
-        Assert.Equal("backfiller.storage", result.SourceExchange);
-        Assert.Equal(50, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
-        Assert.Single(harness.Publisher.Publications);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-        AssertNoProviderFanOut(harness);
+        await using var harness = CreateHarness(eligible: []);
+        var result = await harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.Contains("No BackFiller", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(harness.Publisher.Publications);
     }
 
     [Fact]
-    public async Task StorageSuccess_At499ms_CompletesImmediately_DoesNotFanOut()
+    public async Task One_active_backbone_receives_exactly_one_request()
     {
-        await using var harness = CreateHarness();
+        await using var harness = CreateHarness(Eligible("Giganews", 10));
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(TimeSpan.FromMilliseconds(499));
-        harness.DeliverSuccess(storage);
+        var publication = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        AssertAmqpContract(publication);
+        Assert.Equal("Giganews", ReadBackbone(publication));
+        harness.DeliverSuccess(publication, "Giganews");
         var result = await lookup;
-
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
         Assert.Single(harness.Publisher.Publications);
-        AssertNoProviderFanOut(harness);
     }
 
     [Fact]
-    public async Task StorageTimeout_At500ms_PublishesAllTwelveProvidersConcurrently()
+    public async Task Two_active_backbones_first_attempt_goes_to_exactly_one()
     {
-        await using var harness = CreateHarness();
-        harness.Publisher.HoldPublications = true;
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            nextInt: static _ => 0);
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForStartedAsync(1);
-        harness.Publisher.ReleaseOne();
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        Assert.Equal("backfiller.storage", storage.RoutingKey);
-        AssertAmqpContract(storage);
-
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForStartedAsync(13);
-        Assert.Equal(13, harness.Publisher.StartedCount);
+        await harness.Publisher.WaitForPublicationCountAsync(1);
         Assert.Single(harness.Publisher.Publications);
-        harness.Publisher.ReleaseAll();
-        await harness.Publisher.WaitForPublicationCountAsync(13);
+        Assert.Equal("backfiller.giganews", harness.Publisher.Publications[0].Exchange);
+        harness.DeliverSuccess(harness.Publisher.Publications[0], "Giganews");
+        Assert.Equal(ArticleWorkOutcome.Success, (await lookup).Outcome);
+    }
 
-        var providerExchanges = BackfillArticleRetrievalTopology.Definitions
-            .Select(static definition => definition.ExchangeName)
-            .ToHashSet(StringComparer.Ordinal);
+    [Fact]
+    public async Task First_not_found_publishes_new_request_to_another_backbone()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            CreateSequentialRolls(0, 0));
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.DeliverOutcome(first, ArticleWorkOutcome.ArticleNotFound, "missing");
+        var second = await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        Assert.Equal(2, harness.Publisher.Publications.Count);
+        Assert.NotEqual(first.CorrelationId, second.CorrelationId);
+        Assert.Equal(Guid.Parse(first.RequestId), Guid.Parse(second.RequestId));
+        harness.DeliverSuccess(second, "Eweka");
+        var result = await lookup;
+        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
+        Assert.Equal("Eweka", result.Backbone);
+        Assert.Equal(2, harness.Publisher.Publications.Count);
+    }
+
+    [Fact]
+    public async Task First_not_found_never_retries_same_backbone()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 1)],
+            nextInt: static _ => 0);
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.DeliverOutcome(first, ArticleWorkOutcome.ArticleNotFound, "missing");
+        await harness.Publisher.WaitForPublicationCountAsync(2);
+        Assert.Equal("backfiller.eweka", harness.Publisher.Publications[1].Exchange);
+        harness.DeliverOutcome(harness.Publisher.Publications[1], ArticleWorkOutcome.ArticleNotFound, "missing");
+        var result = await lookup;
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.Equal(2, harness.Publisher.Publications.Count);
+        Assert.DoesNotContain(
+            harness.Publisher.Publications.Skip(1),
+            static p => p.Exchange == "backfiller.giganews");
+    }
+
+    [Fact]
+    public async Task All_eligible_not_found_returns_not_found_without_repeats()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 2), Eligible("Eweka", 2)],
+            CreateSequentialRolls(0, 0));
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        await harness.Publisher.WaitForPublicationCountAsync(1);
+        harness.DeliverOutcome(harness.Publisher.Publications[0], ArticleWorkOutcome.ArticleNotFound, "a");
+        await harness.Publisher.WaitForPublicationCountAsync(2);
+        harness.DeliverOutcome(harness.Publisher.Publications[1], ArticleWorkOutcome.ArticleNotFound, "b");
+        var result = await lookup;
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.Equal(2, harness.Publisher.Publications.Count);
         Assert.Equal(
-            providerExchanges,
-            harness.Publisher.Publications.Skip(1).Select(static publication => publication.Exchange).ToHashSet(StringComparer.Ordinal));
-        Assert.All(harness.Publisher.Publications, AssertAmqpContract);
+            new[] { "backfiller.eweka", "backfiller.giganews" },
+            harness.Publisher.Publications.Select(static p => p.Exchange).OrderBy(static x => x, StringComparer.Ordinal).ToArray());
+    }
 
+    [Fact]
+    public async Task Zero_consumer_backbone_is_never_selected()
+    {
+        await using var harness = CreateHarness(Eligible("Eweka", 5));
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        var publication = await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        Assert.DoesNotContain(harness.Publisher.Publications, static p => p.Exchange.Contains("giganews", StringComparison.Ordinal));
+        harness.DeliverSuccess(publication, "Eweka");
+        Assert.Equal(ArticleWorkOutcome.Success, (await lookup).Outcome);
+    }
+
+    [Fact]
+    public async Task Success_stops_immediately_without_further_publishes()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            nextInt: static _ => 0);
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.DeliverSuccess(first, "Giganews");
+        var result = await lookup;
+        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
+        Assert.Single(harness.Publisher.Publications);
+    }
+
+    [Fact]
+    public async Task Cancellation_stops_without_launching_another_attempt()
+    {
+        await using var harness = CreateHarness(Eligible("Giganews", 10));
+        using var cts = new CancellationTokenSource();
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, cts.Token);
+        await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await lookup);
+        Assert.Single(harness.Publisher.Publications);
+    }
+
+    [Fact]
+    public async Task Attempt_timeout_without_response_does_not_start_another_backbone()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            nextInt: static _ => 0);
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+        await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
         harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
         var result = await lookup;
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.True(
+            result.Error is not null
+            && (result.Error.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+                || result.Error.Contains("deadline elapsed", StringComparison.OrdinalIgnoreCase)),
+            result.Error);
+        Assert.Single(harness.Publisher.Publications);
+        Assert.Equal(TimeSpan.FromSeconds(5), ArticleWorkRpcTiming.LookupDeadline);
     }
 
     [Fact]
-    public async Task StorageArticleNotFound_At100ms_IsProcessedImmediately_ThenFansOutAt500ms()
+    public async Task Lookup_completes_by_five_second_scheduler_deadline()
     {
-        await using var harness = CreateHarness();
+        Assert.Equal(TimeSpan.FromSeconds(5), ArticleWorkRpcTiming.LookupDeadline);
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 10), Eligible("Eweka", 10)],
+            nextInt: static _ => 0);
+        var started = harness.Time.GetUtcNow();
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(TimeSpan.FromMilliseconds(100));
-        harness.DeliverOutcome(storage, ArticleWorkOutcome.ArticleNotFound, "missing");
-        Assert.False(lookup.IsCompleted);
-        Assert.Single(harness.Publisher.Publications);
-
-        harness.Time.Advance(TimeSpan.FromMilliseconds(400));
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        Assert.False(lookup.IsCompleted);
-
+        await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
         harness.Time.Advance(TimeSpan.FromSeconds(5));
         var result = await lookup;
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
-        Assert.Contains("deadline", result.Error, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task StorageInvalidArticle_IsSourceLocal_DoesNotWaitForGrace_AndDoesNotCompleteLookup()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(TimeSpan.FromMilliseconds(80));
-        harness.DeliverOutcome(storage, ArticleWorkOutcome.InvalidArticle, "bad article");
-        Assert.False(lookup.IsCompleted);
+        Assert.True(harness.Time.GetUtcNow() - started <= ArticleWorkRpcTiming.LookupDeadline);
         Assert.Single(harness.Publisher.Publications);
-
-        harness.Time.Advance(TimeSpan.FromMilliseconds(420));
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        var eweka = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        harness.DeliverSuccess(eweka, "Eweka");
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.eweka", result.SourceExchange);
-        Assert.Equal(SuccessUri, result.Uri);
+        Assert.DoesNotContain("absolute", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("60", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task StorageInvalidRequest_DoesNotSuppressLaterProviderSuccess()
+    public async Task Definitive_not_found_before_deadline_advances_to_next_backbone()
     {
-        await using var harness = CreateHarness();
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            CreateSequentialRolls(0, 0));
+        var started = harness.Time.GetUtcNow();
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.DeliverOutcome(storage, ArticleWorkOutcome.InvalidRequest, "bad request");
-        Assert.False(lookup.IsCompleted);
-
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        var giganews = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.giganews");
-        harness.DeliverSuccess(giganews, "Giganews");
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.Time.Advance(TimeSpan.FromSeconds(1));
+        harness.DeliverOutcome(first, ArticleWorkOutcome.ArticleNotFound, "missing");
+        var second = await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        harness.DeliverSuccess(second, "Eweka");
         var result = await lookup;
-
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.giganews", result.SourceExchange);
+        Assert.Equal(2, harness.Publisher.Publications.Count);
+        Assert.True(harness.Time.GetUtcNow() - started < ArticleWorkRpcTiming.LookupDeadline);
     }
 
     [Fact]
-    public async Task StorageSuccess_AfterFanOut_BeforeFiveSeconds_Wins()
+    public async Task Success_before_deadline_terminates_immediately()
     {
-        await using var harness = CreateHarness();
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 100), Eligible("Eweka", 50)],
+            nextInt: static _ => 0);
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        harness.Time.Advance(TimeSpan.FromMilliseconds(100));
-        harness.DeliverSuccess(storage);
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.Time.Advance(TimeSpan.FromMilliseconds(250));
+        harness.DeliverSuccess(first, "Giganews");
         var result = await lookup;
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.storage", result.SourceExchange);
+        Assert.Single(harness.Publisher.Publications);
     }
 
     [Fact]
-    public async Task ProviderSuccess_ImmediatelyAfterFanOut_CompletesWithoutWaitingForFiveSeconds()
+    public void Lookup_deadline_is_five_seconds_with_no_separate_sixty_second_ceiling()
     {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        var eweka = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        harness.DeliverSuccess(eweka, "Eweka");
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.eweka", result.SourceExchange);
-        Assert.Equal("Eweka", result.Backbone);
-        Assert.Equal(500, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
+        Assert.Equal(TimeSpan.FromSeconds(5), ArticleWorkRpcTiming.LookupDeadline);
+        Assert.Null(typeof(ArticleWorkRpcTiming).GetField(
+            "AbsoluteLifetime",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic));
     }
 
     [Fact]
-    public async Task ProviderSuccess_At4_9s_CompletesImmediately_DoesNotWaitForFiveSeconds()
+    public void Weighted_selection_is_approximately_two_to_one_for_100_vs_50()
     {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        harness.Time.Advance(TimeSpan.FromMilliseconds(4400));
-        var eweka = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        harness.DeliverSuccess(eweka, "Eweka");
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(4900, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
-        Assert.False(lookup.IsFaulted);
-    }
-
-    [Fact]
-    public async Task ProviderArticleNotFound_ContinuesWaiting()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        foreach (var publication in harness.Publisher.Publications.Where(static publication => publication.Exchange != "backfiller.storage"))
+        var roll = 0;
+        var selector = new WeightedBackboneSelector(exclusiveMax =>
         {
-            harness.DeliverOutcome(publication, ArticleWorkOutcome.ArticleNotFound, "missing");
+            var value = roll % exclusiveMax;
+            roll++;
+            return value;
+        });
+        var candidates = new[]
+        {
+            Eligible("Giganews", 100),
+            Eligible("Eweka", 50),
+        };
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        const int iterations = 15_000;
+        for (var i = 0; i < iterations; i++)
+        {
+            var pick = selector.Select(candidates)!.Value.Backbone;
+            counts[pick] = counts.GetValueOrDefault(pick) + 1;
         }
 
-        Assert.False(lookup.IsCompleted);
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        var result = await lookup;
-        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        var ratio = counts["Giganews"] / (double)counts["Eweka"];
+        Assert.InRange(ratio, 1.7, 2.3);
     }
 
     [Fact]
-    public async Task NoResponses_ResolvesAtFiveSecondAggregateDeadline()
+    public async Task Invalid_article_is_attempt_terminal_and_tries_next()
     {
-        await using var harness = CreateHarness();
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 10), Eligible("Eweka", 10)],
+            CreateSequentialRolls(0, 0));
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        Assert.False(lookup.IsCompleted);
-        harness.Time.Advance(TimeSpan.FromMilliseconds(4500));
-        var result = await lookup;
-        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
-        Assert.Contains("deadline", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(5000, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
-        Assert.Equal(0, harness.Router.OutstandingCount);
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.DeliverOutcome(first, ArticleWorkOutcome.InvalidArticle, "bad yenc");
+        var second = await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        harness.DeliverSuccess(second, "Eweka");
+        Assert.Equal(ArticleWorkOutcome.Success, (await lookup).Outcome);
     }
 
     [Fact]
-    public async Task LateResponse_AfterLookupCompletion_IsIgnored()
+    public async Task Repeated_lookups_with_single_active_backbone_never_touch_others()
     {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        var result = await lookup;
-        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        await using var harness = CreateHarness(Eligible("Giganews", 25));
+        for (var i = 0; i < 8; i++)
+        {
+            var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+            var publication = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews", skip: i);
+            Assert.Equal("backfiller.giganews", publication.Exchange);
+            harness.DeliverSuccess(publication, "Giganews");
+            Assert.Equal(ArticleWorkOutcome.Success, (await lookup).Outcome);
+        }
 
-        harness.DeliverSuccess(storage);
-        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-    }
-
-    [Fact]
-    public async Task UnknownCorrelationId_IsIgnored()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Router.Dispatch(
-            Guid.NewGuid().ToString("D"),
-            SuccessBody(Guid.NewGuid()),
-            storage.RequestId,
-            0);
-        Assert.False(lookup.IsCompleted);
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        var result = await lookup;
-        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
-    }
-
-    [Fact]
-    public async Task Publications_ShareRequestId_AndUseDistinctCorrelationIds()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-
-        var requestIds = harness.Publisher.Publications
-            .Select(static publication => publication.RequestId)
-            .ToArray();
-        Assert.Equal(13, requestIds.Length);
-        var requestId = Assert.Single(requestIds.Distinct(StringComparer.Ordinal));
-        Assert.True(Guid.TryParse(requestId, out var parsedRequestId));
-        Assert.NotEqual(Guid.Empty, parsedRequestId);
-        Assert.Equal(
-            13,
-            harness.Publisher.Publications.Select(static publication => publication.CorrelationId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(8, harness.Publisher.Publications.Count);
         Assert.All(
             harness.Publisher.Publications,
-            publication =>
-            {
-                AssertAmqpContract(publication);
-                Assert.Equal(requestId, publication.RequestId, StringComparer.Ordinal);
-                Assert.NotEqual(publication.RequestId, publication.CorrelationId, StringComparer.Ordinal);
-                using var document = JsonDocument.Parse(publication.Body);
-                var root = document.RootElement;
-                Assert.Equal(1, root.GetProperty("version").GetInt32());
-                Assert.Equal(parsedRequestId, root.GetProperty("requestId").GetGuid());
-                Assert.Equal(MessageId, root.GetProperty("messageId").GetString());
-                Assert.False(root.TryGetProperty("CorrelationId", out _));
-                Assert.False(root.TryGetProperty("ReplyTo", out _));
-            });
-        var storagePublication = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.storage");
-        Assert.Equal("Storage", JsonDocument.Parse(storagePublication.Body).RootElement.GetProperty("backbone").GetString());
-        Assert.Equal(
-            BackfillArticleRetrievalTopology.Definitions.ToDictionary(static definition => definition.ExchangeName, static definition => definition.Provider, StringComparer.Ordinal),
-            harness.Publisher.Publications
-                .Where(static publication => publication.Exchange != "backfiller.storage")
-                .ToDictionary(
-                    static publication => publication.Exchange,
-                    static publication => JsonDocument.Parse(publication.Body).RootElement.GetProperty("backbone").GetString()!,
-                    StringComparer.Ordinal));
-
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        await lookup;
+            static p => Assert.Equal("backfiller.giganews", p.Exchange));
+        Assert.DoesNotContain(
+            harness.Publisher.Publications,
+            static p =>
+                p.Exchange.Contains("eweka", StringComparison.Ordinal)
+                || p.Exchange.Contains("highwinds", StringComparison.Ordinal)
+                || p.Exchange.Contains("storage", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task TwoIndependentLookups_CannotCrossComplete()
+    public async Task Zero_consumer_and_storage_never_receive_attempts_even_when_listed()
     {
-        await using var harness = CreateHarness();
-        var first = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var firstStorage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        var firstRequestId = firstStorage.RequestId;
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        await first;
+        await using var harness = CreateHarness(
+            [
+                Eligible("Giganews", 100),
+                Eligible("Eweka", 50),
+                Eligible("Highwinds", 0),
+                new BackfillEligibleBackbone(
+                    "Storage",
+                    StorageArticleRetrievalTopology.EntityName,
+                    StorageArticleRetrievalTopology.EntityName,
+                    StorageArticleRetrievalTopology.EntityName,
+                    0),
+            ],
+            CreateSequentialRolls(0, 0));
 
-        var second = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var secondStorage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage", skip: 1);
-        Assert.NotEqual(firstRequestId, secondStorage.RequestId, StringComparer.Ordinal);
-        harness.DeliverSuccess(firstStorage, requestId: Guid.Parse(firstRequestId));
-        Assert.False(second.IsCompleted);
-        harness.DeliverSuccess(secondStorage);
-        var result = await second;
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(secondStorage.Exchange, result.SourceExchange);
-        Assert.Equal(secondStorage.RequestId, result.RequestId.ToString("D"), StringComparer.Ordinal);
+        for (var i = 0; i < 6; i++)
+        {
+            var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+            await harness.Publisher.WaitForPublicationCountAsync(i + 1);
+            var publication = harness.Publisher.Publications[i];
+            Assert.Contains(
+                publication.Exchange,
+                new[] { "backfiller.giganews", "backfiller.eweka" },
+                StringComparer.Ordinal);
+            harness.DeliverSuccess(publication, ReadBackbone(publication));
+            Assert.Equal(ArticleWorkOutcome.Success, (await lookup).Outcome);
+        }
+
+        Assert.DoesNotContain(
+            harness.Publisher.Publications,
+            static p =>
+                p.Exchange.Equals("backfiller.highwinds", StringComparison.Ordinal)
+                || p.Exchange.Equals(StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task RequestWithoutConsumer_UsesOneSecondExpiration_AndDoesNotCleanQueues()
+    public async Task Three_backbone_not_found_chain_never_reuses_attempted_backbone()
     {
-        await using var harness = CreateHarness();
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 10), Eligible("Eweka", 10), Eligible("Highwinds", 10)],
+            CreateSequentialRolls(0, 0, 0));
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        AssertAmqpContract(storage);
-        Assert.Equal(ArticleWorkRpcAmqp.ExpirationMilliseconds, storage.Expiration);
 
-        var publisherMethods = typeof(IArticleWorkRpcPublisher).GetMethods().Select(static method => method.Name);
-        Assert.DoesNotContain("QueueDeleteAsync", publisherMethods);
-        Assert.DoesNotContain("QueuePurgeAsync", publisherMethods);
-        var channelMethods = typeof(IRabbitMqRpcChannel).GetMethods().Select(static method => method.Name);
-        Assert.DoesNotContain("QueueDeleteAsync", channelMethods);
-        Assert.DoesNotContain("QueuePurgeAsync", channelMethods);
-
-        harness.Time.Advance(ArticleWorkRpcTiming.LookupDeadline);
-        await lookup;
-    }
-
-    [Fact]
-    public async Task FirstSuccessWins_ConcurrentResponses_CompleteExactlyOnce()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-
-        var first = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        var second = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.giganews");
-        await Task.WhenAll(
-            Task.Run(() => harness.DeliverSuccess(first, "Eweka")),
-            Task.Run(() => harness.DeliverSuccess(second, "Giganews")));
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.DeliverOutcome(first, ArticleWorkOutcome.ArticleNotFound, "missing-g");
+        var second = await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        harness.DeliverOutcome(second, ArticleWorkOutcome.ArticleNotFound, "missing-e");
+        var third = await harness.Publisher.WaitForPublicationAsync("backfiller.highwinds");
+        harness.DeliverSuccess(third, "Highwinds");
 
         var result = await lookup;
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.True(
-            result.SourceExchange is "backfiller.eweka" or "backfiller.giganews",
-            result.SourceExchange);
-        Assert.Equal(0, harness.Router.OutstandingCount);
+        Assert.Equal("Highwinds", result.Backbone);
+        Assert.Equal(3, harness.Publisher.Publications.Count);
+        Assert.Equal(
+            new[] { "backfiller.giganews", "backfiller.eweka", "backfiller.highwinds" },
+            harness.Publisher.Publications.Select(static p => p.Exchange).ToArray());
+        Assert.Equal(
+            Guid.Parse(first.RequestId),
+            Guid.Parse(second.RequestId));
+        Assert.Equal(
+            Guid.Parse(first.RequestId),
+            Guid.Parse(third.RequestId));
+        Assert.NotEqual(first.CorrelationId, second.CorrelationId);
+        Assert.NotEqual(second.CorrelationId, third.CorrelationId);
+        Assert.Equal(1, harness.Publisher.Publications.Count(static p => p.Exchange == "backfiller.giganews"));
     }
 
     [Fact]
-    public async Task AbsoluteLifetime_CompletesWhenPublishBlocksForSixtySeconds()
+    public async Task Global_deadline_bounds_total_lookup_not_per_attempt()
     {
-        await using var harness = CreateHarness();
-        harness.Publisher.HoldPublications = true;
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 10), Eligible("Eweka", 10), Eligible("Highwinds", 10)],
+            CreateSequentialRolls(0, 0, 0));
+        var started = harness.Time.GetUtcNow();
         var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForStartedAsync(1);
-        harness.Time.Advance(ArticleWorkRpcTiming.AbsoluteLifetime);
+
+        var first = await harness.Publisher.WaitForPublicationAsync("backfiller.giganews");
+        harness.Time.Advance(TimeSpan.FromSeconds(1));
+        harness.DeliverOutcome(first, ArticleWorkOutcome.ArticleNotFound, "missing");
+
+        await harness.Publisher.WaitForPublicationAsync("backfiller.eweka");
+        harness.Time.Advance(TimeSpan.FromSeconds(4));
+        var result = await lookup;
+
+        Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+        Assert.Equal(2, harness.Publisher.Publications.Count);
+        Assert.DoesNotContain(
+            harness.Publisher.Publications,
+            static p => p.Exchange == "backfiller.highwinds");
+        Assert.True(harness.Time.GetUtcNow() - started <= ArticleWorkRpcTiming.LookupDeadline);
+    }
+
+    [Fact]
+    public async Task All_three_backbones_not_found_attempts_each_once_only()
+    {
+        await using var harness = CreateHarness(
+            [Eligible("Giganews", 5), Eligible("Eweka", 5), Eligible("Highwinds", 5)],
+            CreateSequentialRolls(0, 0, 0));
+        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
+
+        await harness.Publisher.WaitForPublicationCountAsync(1);
+        harness.DeliverOutcome(harness.Publisher.Publications[0], ArticleWorkOutcome.ArticleNotFound, "a");
+        await harness.Publisher.WaitForPublicationCountAsync(2);
+        harness.DeliverOutcome(harness.Publisher.Publications[1], ArticleWorkOutcome.ArticleNotFound, "b");
+        await harness.Publisher.WaitForPublicationCountAsync(3);
+        harness.DeliverOutcome(harness.Publisher.Publications[2], ArticleWorkOutcome.ArticleNotFound, "c");
+
         var result = await lookup;
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
-        Assert.Contains("absolute", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, harness.Publisher.Publications.Count);
+        Assert.Equal(
+            3,
+            harness.Publisher.Publications.Select(static p => p.Exchange).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(
+            Guid.Parse(harness.Publisher.Publications[0].RequestId),
+            Guid.Parse(harness.Publisher.Publications[2].RequestId));
+        Assert.Equal(
+            3,
+            harness.Publisher.Publications.Select(static p => p.CorrelationId).Distinct(StringComparer.Ordinal).Count());
     }
 
-    [Fact]
-    public async Task CallerCancellation_CancelsPendingLookup()
+    private static Func<int, int> CreateSequentialRolls(params int[] rolls)
     {
-        await using var harness = CreateHarness();
-        using var cts = new CancellationTokenSource();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, cts.Token);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        cts.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lookup);
-        Assert.Equal(0, harness.Router.OutstandingCount);
+        var index = 0;
+        return exclusiveMax =>
+        {
+            _ = exclusiveMax;
+            var value = rolls[Math.Min(index, rolls.Length - 1)];
+            index++;
+            return value;
+        };
     }
 
-    [Fact]
-    public async Task Success_DoesNotWaitForOutstandingProviderPublications()
+    private static BackfillEligibleBackbone Eligible(string backbone, int consumers)
     {
-        await using var harness = CreateHarness();
-        harness.Publisher.HoldPublications = true;
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForStartedAsync(1);
-        harness.Publisher.ReleaseOne();
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForStartedAsync(13);
-        harness.DeliverSuccess(storage);
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-        Assert.Single(harness.Publisher.Publications);
-        harness.Publisher.ReleaseAll();
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(0, harness.Router.OutstandingCount);
+        var entity = BackfillArticleRetrievalTopology.BuildProviderEntityName(backbone);
+        return new BackfillEligibleBackbone(backbone, entity, entity, entity, consumers);
     }
 
-    [Fact]
-    public async Task OutstandingPublishCompletion_AfterSuccess_CannotMutateLookup()
-    {
-        await using var harness = CreateHarness();
-        harness.Publisher.HoldPublications = true;
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForStartedAsync(1);
-        harness.Publisher.ReleaseOne();
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForStartedAsync(13);
+    private static Harness CreateHarness(params BackfillEligibleBackbone[] eligible) =>
+        CreateHarness(eligible, nextInt: static _ => 0);
 
-        harness.DeliverSuccess(storage);
-        var result = await lookup;
-        Assert.Equal("backfiller.storage", result.SourceExchange);
+    private static Harness CreateHarness(BackfillEligibleBackbone[] eligible, Func<int, int> nextInt) =>
+        CreateHarness(eligible, nextInt, currentGeneration: null);
 
-        harness.Publisher.ReleaseAll();
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        var eweka = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        harness.DeliverSuccess(eweka, "Eweka");
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.storage", result.SourceExchange);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-    }
-
-    [Fact]
-    public async Task OutstandingPublishFailure_AfterSuccess_IsObservedWithoutMutatingLookup()
-    {
-        await using var harness = CreateHarness();
-        harness.Publisher.HoldPublications = true;
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForStartedAsync(1);
-        harness.Publisher.ReleaseOne();
-        var storage = await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForStartedAsync(13);
-
-        harness.DeliverSuccess(storage);
-        var result = await lookup;
-        harness.Publisher.FailAll(new InvalidOperationException("provider publish failed after success"));
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.storage", result.SourceExchange);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-    }
-
-    [Fact]
-    public async Task Success_AfterRequestTtlElapsed_StillCompletesInsideFiveSecondLookup()
-    {
-        await using var harness = CreateHarness();
-        var lookup = harness.Client.LookupByMessageIdAsync(MessageIdBytes, CancellationToken.None);
-        await harness.Publisher.WaitForPublicationAsync("backfiller.storage");
-        harness.Time.Advance(ArticleWorkRpcTiming.StorageGrace);
-        await harness.Publisher.WaitForPublicationCountAsync(13);
-        harness.Time.Advance(TimeSpan.FromMilliseconds(600));
-        Assert.False(lookup.IsCompleted);
-
-        var eweka = harness.Publisher.Publications.Single(static publication => publication.Exchange == "backfiller.eweka");
-        harness.DeliverSuccess(eweka, "Eweka");
-        var result = await lookup;
-
-        Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal(1100, harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds, precision: 0);
-        Assert.True(harness.Time.GetUtcNow().UtcDateTime.TimeOfDay.TotalMilliseconds > 1000);
-        Assert.Equal(0, harness.Router.OutstandingCount);
-    }
-
-    private static Harness CreateHarness(Func<long>? currentGeneration = null)
+    private static Harness CreateHarness(
+        BackfillEligibleBackbone[] eligible,
+        Func<int, int>? nextInt,
+        Func<long>? currentGeneration)
     {
         var time = new FakeTimeProvider();
         var publisher = new RecordingArticleWorkRpcPublisher();
         var router = new ArticleWorkRpcResponseRouter(NullLogger.Instance);
-        var client = new ArticleWorkRpcClient(publisher, router, time, NullLogger.Instance, currentGeneration);
-        return new Harness(time, publisher, router, client);
-    }
-
-    private static void AssertNoProviderFanOut(Harness harness)
-    {
-        Assert.DoesNotContain(
-            harness.Publisher.Publications,
-            static publication => publication.Exchange.StartsWith("backfiller.", StringComparison.Ordinal)
-                && publication.Exchange != "backfiller.storage");
+        var availability = new StaticBackfillConsumerAvailability(eligible);
+        var selector = new WeightedBackboneSelector(nextInt ?? (static _ => 0));
+        var client = new ArticleWorkRpcClient(
+            publisher,
+            router,
+            availability,
+            selector,
+            time,
+            NullLogger.Instance,
+            currentGeneration);
+        return new Harness(time, publisher, router, client, availability);
     }
 
     private static void AssertAmqpContract(FakeRabbitMqRpcPublication publication)
@@ -529,13 +481,16 @@ public sealed class ArticleWorkRpcClientTests
         Assert.Equal(requestId, document.RootElement.GetProperty("requestId").GetGuid());
     }
 
-    private static byte[] SuccessBody(Guid requestId, string backbone = "Storage")
+    private static string ReadBackbone(FakeRabbitMqRpcPublication publication) =>
+        JsonDocument.Parse(publication.Body).RootElement.GetProperty("backbone").GetString()!;
+
+    private static byte[] SuccessBody(Guid requestId, string backbone)
     {
         return Encoding.UTF8.GetBytes(
             $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"Success","uri":"{{SuccessUri}}","articleId":"{{SuccessArticleIdHex}}"}""");
     }
 
-    private static byte[] FailureBody(Guid requestId, ArticleWorkOutcome outcome, string error, string backbone = "Storage")
+    private static byte[] FailureBody(Guid requestId, ArticleWorkOutcome outcome, string error, string backbone)
     {
         return Encoding.UTF8.GetBytes(
             $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"{{outcome}}","error":"{{error}}"}""");
@@ -547,12 +502,14 @@ public sealed class ArticleWorkRpcClientTests
             FakeTimeProvider time,
             RecordingArticleWorkRpcPublisher publisher,
             ArticleWorkRpcResponseRouter router,
-            ArticleWorkRpcClient client)
+            ArticleWorkRpcClient client,
+            StaticBackfillConsumerAvailability availability)
         {
             Time = time;
             Publisher = publisher;
             Router = router;
             Client = client;
+            Availability = availability;
         }
 
         internal FakeTimeProvider Time { get; }
@@ -563,7 +520,9 @@ public sealed class ArticleWorkRpcClientTests
 
         internal ArticleWorkRpcClient Client { get; }
 
-        internal void DeliverSuccess(FakeRabbitMqRpcPublication publication, string backbone = "Storage", Guid? requestId = null)
+        internal StaticBackfillConsumerAvailability Availability { get; }
+
+        internal void DeliverSuccess(FakeRabbitMqRpcPublication publication, string backbone, Guid? requestId = null)
         {
             var id = requestId ?? Guid.Parse(publication.RequestId);
             Router.Dispatch(publication.CorrelationId, SuccessBody(id, backbone), id.ToString("D"), 0);
@@ -572,7 +531,7 @@ public sealed class ArticleWorkRpcClientTests
         internal void DeliverOutcome(FakeRabbitMqRpcPublication publication, ArticleWorkOutcome outcome, string error)
         {
             var requestId = Guid.Parse(publication.RequestId);
-            var backbone = JsonDocument.Parse(publication.Body).RootElement.GetProperty("backbone").GetString() ?? "Storage";
+            var backbone = ReadBackbone(publication);
             Router.Dispatch(
                 publication.CorrelationId,
                 FailureBody(requestId, outcome, error, backbone),
@@ -586,19 +545,12 @@ public sealed class ArticleWorkRpcClientTests
     private sealed class RecordingArticleWorkRpcPublisher : IArticleWorkRpcPublisher
     {
         private readonly SemaphoreSlim _publishedPulse = new(0, int.MaxValue);
-        private readonly SemaphoreSlim _startedPulse = new(0, int.MaxValue);
-        private readonly ConcurrentQueue<TaskCompletionSource> _holds = new();
-        private int _started;
 
         public string ReplyTo => "nntpd.01.test.rpc";
 
-        public bool HoldPublications { get; set; }
-
-        public int StartedCount => Volatile.Read(ref _started);
-
         public List<FakeRabbitMqRpcPublication> Publications { get; } = [];
 
-        public async Task PublishAsync(
+        public Task PublishAsync(
             string exchange,
             string routingKey,
             Guid requestId,
@@ -606,15 +558,6 @@ public sealed class ArticleWorkRpcClientTests
             ReadOnlyMemory<byte> body,
             CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _started);
-            _startedPulse.Release();
-            if (HoldPublications)
-            {
-                var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _holds.Enqueue(hold);
-                await hold.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-
             lock (Publications)
             {
                 Publications.Add(new FakeRabbitMqRpcPublication(
@@ -629,31 +572,7 @@ public sealed class ArticleWorkRpcClientTests
             }
 
             _publishedPulse.Release();
-        }
-
-        public void ReleaseOne()
-        {
-            if (_holds.TryDequeue(out var hold))
-            {
-                hold.TrySetResult();
-            }
-        }
-
-        public void ReleaseAll()
-        {
-            while (_holds.TryDequeue(out var hold))
-            {
-                hold.TrySetResult();
-            }
-        }
-
-        public void FailAll(Exception exception)
-        {
-            ArgumentNullException.ThrowIfNull(exception);
-            while (_holds.TryDequeue(out var hold))
-            {
-                hold.TrySetException(exception);
-            }
+            return Task.CompletedTask;
         }
 
         public async Task<FakeRabbitMqRpcPublication> WaitForPublicationAsync(string exchange, int skip = 0)
@@ -690,15 +609,6 @@ public sealed class ArticleWorkRpcClientTests
                 }
 
                 await _publishedPulse.WaitAsync(cts.Token).ConfigureAwait(false);
-            }
-        }
-
-        public async Task WaitForStartedAsync(int count)
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (StartedCount < count)
-            {
-                await _startedPulse.WaitAsync(cts.Token).ConfigureAwait(false);
             }
         }
     }

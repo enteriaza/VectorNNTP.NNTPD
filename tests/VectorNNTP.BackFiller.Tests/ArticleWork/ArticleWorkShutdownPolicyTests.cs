@@ -403,7 +403,7 @@ public sealed class ArticleWorkShutdownPolicyTests
         await retire.WaitAsync(TimeSpan.FromSeconds(2));
 
         var settlement = Assert.Single(context.Channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
         Assert.Single(context.Publisher.Published);
     }

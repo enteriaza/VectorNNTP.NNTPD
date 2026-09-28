@@ -10,9 +10,10 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 public interface IArticleWorkRpcClient
 {
     /// <summary>
-    /// Publishes the storage request at T+0, starts the 500ms provider-fan-out grace
-    /// concurrently, and returns as soon as the first valid Success arrives or the
-    /// 5-second aggregate deadline elapses.
+    /// Runs the sequential Backfill Scheduler: selects one eligible backbone at a time
+    /// (weighted by active consumer count), publishes one ArticleWork request per attempt,
+    /// and returns on Success, exhausted not-found, cancellation, or the 5-second lookup
+    /// deadline. The scheduler never exceeds that 5-second budget from its start time.
     /// </summary>
     /// <param name="messageId">Command-line Message-ID bytes, including angle brackets.</param>
     /// <param name="cancellationToken">Caller or session cancellation.</param>

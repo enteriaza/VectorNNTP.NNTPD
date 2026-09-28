@@ -14,8 +14,8 @@ internal static class OverviewDbTopology
     /// Durable classic queue consumed independently by OverviewDB.
     /// </summary>
     /// <remarks>
-    /// Declared without <c>x-queue-type</c> because the current deployment broker
-    /// is RabbitMQ 3.8.x, where quorum queues do not support per-message TTL.
+    /// Declared without <c>x-queue-type</c> (durable classic). All current VectorNNTP
+    /// application queues use classic while the broker is not yet quorum-ready.
     /// </remarks>
     internal const string QueueName = "overviewdb.queue";
 

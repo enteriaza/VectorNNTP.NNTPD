@@ -55,6 +55,16 @@ internal sealed class RabbitMqClientTopologyChannel : IRabbitMqTopologyChannel
     }
 
     /// <inheritdoc />
+    public async Task<RabbitMqQueueStats> QueueDeclarePassiveAsync(
+        string queue,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        var ok = await _channel.QueueDeclarePassiveAsync(queue, cancellationToken).ConfigureAwait(false);
+        return new RabbitMqQueueStats(ok.MessageCount, ok.ConsumerCount);
+    }
+
+    /// <inheritdoc />
     public Task QueueBindAsync(
         string queue,
         string exchange,

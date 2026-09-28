@@ -68,16 +68,14 @@ public sealed class BackfillArticleRetrievalTopologyTests
     }
 
     [Fact]
-    public void Definitions_RequireQuorumQueueTypeOnEveryQueue()
+    public void Definitions_DeclareClassicQueuesWithoutQueueTypeArgument()
     {
         foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
         {
             Assert.NotNull(definition.QueueArguments);
-            Assert.Single(definition.QueueArguments);
-            Assert.True(definition.QueueArguments.TryGetValue(
-                BackfillArticleRetrievalTopology.QueueTypeArgumentName,
-                out var queueType));
-            Assert.Equal(BackfillArticleRetrievalTopology.QuorumQueueType, queueType as string);
+            Assert.Empty(definition.QueueArguments);
+            Assert.False(definition.QueueArguments.ContainsKey(
+                BackfillArticleRetrievalTopology.QueueTypeArgumentName));
             Assert.False(definition.QueueArguments.ContainsKey("x-message-ttl"));
             Assert.False(definition.QueueArguments.ContainsKey("x-expires"));
         }

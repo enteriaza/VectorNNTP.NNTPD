@@ -181,11 +181,11 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Theory]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, false)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, false)]
-    public async Task Terminal_failure_confirms_then_nacks_without_requeue(
+    [InlineData(ArticleWorkOutcome.ArticleNotFound, true)]
+    [InlineData(ArticleWorkOutcome.InvalidArticle, true)]
+    public async Task Terminal_failure_confirms_then_acks_without_requeue(
         ArticleWorkOutcome handlerOutcome,
-        bool requeue)
+        bool acknowledge)
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
         var handler = new ControllableArticleWorkHandler { Outcome = handlerOutcome, Error = "missing" };
@@ -204,12 +204,12 @@ public sealed class ArticleWorkResponsePublicationTests
         Assert.Equal(handlerOutcome.ToString(), document.RootElement.GetProperty("outcome").GetString());
         Assert.False(document.RootElement.TryGetProperty("uri", out _));
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
-        Assert.Equal(requeue, settlement.Requeue);
+        Assert.Equal(acknowledge, settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
     }
 
     [Fact]
-    public async Task InvalidRequest_confirms_then_nacks_without_requeue()
+    public async Task InvalidRequest_confirms_then_acks_without_requeue()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -225,11 +225,12 @@ public sealed class ArticleWorkResponsePublicationTests
         Assert.Equal(ArticleWorkOutcome.InvalidRequest, outcome);
         using var document = JsonDocument.Parse(Assert.Single(context.PublishChannel.Publications).Body);
         Assert.Equal("InvalidRequest", document.RootElement.GetProperty("outcome").GetString());
+        Assert.True(Assert.Single(channel.Settlements).Acknowledge);
         Assert.False(Assert.Single(channel.Settlements).Requeue);
     }
 
     [Fact]
-    public async Task Terminal_response_confirm_failure_nacks_without_requeue()
+    public async Task Terminal_response_confirm_failure_acks_without_requeue()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Nack);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -247,12 +248,12 @@ public sealed class ArticleWorkResponsePublicationTests
 
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, outcome);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
     }
 
     [Fact]
-    public async Task InvalidRequest_publish_failure_nacks_without_requeue()
+    public async Task InvalidRequest_publish_failure_acks_without_requeue()
     {
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.ThrowOnPublish);
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -267,7 +268,7 @@ public sealed class ArticleWorkResponsePublicationTests
 
         Assert.Equal(ArticleWorkOutcome.InvalidRequest, outcome);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
     }
 

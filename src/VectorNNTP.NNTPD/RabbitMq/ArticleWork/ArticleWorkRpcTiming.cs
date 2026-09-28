@@ -4,13 +4,8 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 internal static class ArticleWorkRpcTiming
 {
     /// <summary>
-    /// Storage-to-provider fan-out grace, measured from lookup start. Not a response-wait window.
+    /// Maximum total Backfill Scheduler lookup duration measured from request start.
+    /// Also the per-attempt wait budget (remaining time until this deadline).
     /// </summary>
-    internal static readonly TimeSpan StorageGrace = TimeSpan.FromMilliseconds(500);
-
-    /// <summary>Operational article-not-found deadline measured from the original request start.</summary>
     internal static readonly TimeSpan LookupDeadline = TimeSpan.FromSeconds(5);
-
-    /// <summary>Absolute safety ceiling for a single RPC operation.</summary>
-    internal static readonly TimeSpan AbsoluteLifetime = TimeSpan.FromSeconds(60);
 }

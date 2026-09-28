@@ -1,57 +1,68 @@
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 /// <summary>
-/// NNTPD aggregate policy for multi-source article-work RPC.
+/// NNTPD policy for sequential Backfill Scheduler attempts.
 /// </summary>
 /// <remarks>
 /// <para>
-/// BackFiller v1 outcomes classify a single work item. They do not define how NNTPD
-/// combines storage plus twelve providers into one lookup result.
+/// BackFiller v1 outcomes classify a single work item. The scheduler publishes at most
+/// one ArticleWork request at a time and never fans out concurrently.
 /// </para>
 /// <para>
-/// Aggregate policy:
+/// Attempt policy:
 /// <list type="bullet">
 /// <item>
 /// <description>
-/// <see cref="ArticleWorkOutcome.Success"/> is the only aggregate-terminal source
-/// outcome. The first valid Success for the current logical <c>RequestId</c> completes
-/// the lookup immediately (first-response-wins). No grace timer, provider wait, or
-/// deadline wait follows.
+/// <see cref="ArticleWorkOutcome.Success"/> completes the logical lookup immediately.
 /// </description>
 /// </item>
 /// <item>
 /// <description>
-/// <see cref="ArticleWorkOutcome.ArticleNotFound"/> is source-local. The source did
-/// not have the article. The response is processed immediately and does not complete
-/// the aggregate lookup.
+/// <see cref="ArticleWorkOutcome.ArticleNotFound"/> and
+/// <see cref="ArticleWorkOutcome.InvalidArticle"/> are definitive for the selected
+/// backbone. The RabbitMQ message is ACKed by BackFiller. NNTPD marks that backbone
+/// attempted and may publish a NEW request to another eligible backbone.
 /// </description>
 /// </item>
 /// <item>
 /// <description>
-/// <see cref="ArticleWorkOutcome.InvalidArticle"/> is source-local. One destination
-/// rejected the article; another destination may still succeed. The response is
-/// processed immediately and does not complete the aggregate lookup.
-/// </description>
-/// </item>
-/// <item>
-/// <description>
-/// <see cref="ArticleWorkOutcome.InvalidRequest"/> is source-local. A protocol
-/// rejection from one destination must not suppress valid responses from others.
-/// The response is processed immediately and does not complete the aggregate lookup.
+/// <see cref="ArticleWorkOutcome.InvalidRequest"/> is also attempt-terminal for the
+/// selected backbone (protocol rejection from that destination).
 /// </description>
 /// </item>
 /// </list>
 /// </para>
 /// <para>
-/// The aggregate result is <see cref="ArticleWorkOutcome.ArticleNotFound"/> only when
-/// the 5-second lookup deadline elapses without Success (or the 60-second safety
-/// ceiling fires). The 500ms value is only the storage-to-provider fan-out grace. It
-/// is not a response-wait or qualification window.
+/// In-flight attempts cannot be cancelled on the broker. A per-attempt wait that
+/// expires without a definitive wire outcome ends the logical lookup without starting
+/// another backbone (avoids duplicate upstream retrieval).
 /// </para>
 /// </remarks>
 internal static class ArticleWorkAggregatePolicy
 {
-    /// <summary>Returns whether this source outcome completes the whole lookup.</summary>
-    internal static bool IsAggregateTerminal(ArticleWorkOutcome outcome) =>
+    /// <summary>Returns whether this outcome completes the whole logical lookup successfully.</summary>
+    internal static bool IsLookupSuccess(ArticleWorkOutcome outcome) =>
         outcome == ArticleWorkOutcome.Success;
+
+    /// <summary>
+    /// Returns whether this wire outcome ends the current backbone attempt
+    /// (success or definitive absence/rejection).
+    /// </summary>
+    internal static bool IsAttemptTerminal(ArticleWorkOutcome outcome) =>
+        outcome is ArticleWorkOutcome.Success
+            or ArticleWorkOutcome.ArticleNotFound
+            or ArticleWorkOutcome.InvalidArticle
+            or ArticleWorkOutcome.InvalidRequest;
+
+    /// <summary>
+    /// Returns whether the scheduler may try another eligible backbone after this outcome.
+    /// </summary>
+    internal static bool ShouldTryNextBackbone(ArticleWorkOutcome outcome) =>
+        outcome is ArticleWorkOutcome.ArticleNotFound
+            or ArticleWorkOutcome.InvalidArticle
+            or ArticleWorkOutcome.InvalidRequest;
+
+    /// <summary>Legacy name: only Success completed the old parallel aggregate.</summary>
+    internal static bool IsAggregateTerminal(ArticleWorkOutcome outcome) =>
+        IsLookupSuccess(outcome);
 }

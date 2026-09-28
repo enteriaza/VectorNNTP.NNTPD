@@ -5,33 +5,24 @@ using VectorNNTP.NNTPD.Session;
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 /// <summary>
-/// Orchestrates storage-first article-work RPC with a 500ms provider fan-out grace,
-/// first-Success-wins completion, and aggregate lookup deadlines.
+/// Sequential Backfill Scheduler: one ArticleWork publish per attempt, weighted by
+/// active consumer count, excluding already-attempted backbones.
 /// </summary>
 /// <remarks>
-/// The 500ms value is only the storage-to-provider grace. Responses are processed as
-/// soon as they arrive. The only aggregate-terminal source outcome is
-/// <see cref="ArticleWorkOutcome.Success"/>. In-process correlations are removed as
-/// soon as the lookup completes. Outstanding provider publications are observed, not
-/// awaited. RabbitMQ message TTL is a separate broker concern.
+/// <para>
+/// Never fans out concurrently. Definitive <c>ArticleNotFound</c> /
+/// <c>InvalidArticle</c> from BackFiller is ACKed there; NNTPD then publishes a NEW
+/// request to another eligible backbone. In-flight attempts cannot be cancelled on the
+/// broker — an attempt wait that expires without a definitive wire outcome ends the
+/// logical lookup without starting another backbone.
+/// </para>
 /// </remarks>
 internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
 {
-    private static readonly ArticleWorkRpcDestination StorageDestination = new(
-        StorageArticleRetrievalTopology.Definition.ExchangeName,
-        StorageArticleRetrievalTopology.Definition.RoutingKey,
-        StorageArticleRetrievalTopology.Backbone);
-
-    private static readonly ArticleWorkRpcDestination[] ProviderDestinations =
-        BackfillArticleRetrievalTopology.Definitions
-            .Select(static definition => new ArticleWorkRpcDestination(
-                definition.ExchangeName,
-                definition.RoutingKey,
-                definition.Provider))
-            .ToArray();
-
     private readonly IArticleWorkRpcPublisher _publisher;
     private readonly ArticleWorkRpcResponseRouter _router;
+    private readonly IBackfillConsumerAvailability _availability;
+    private readonly IBackboneSelector _selector;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
     private readonly Func<long> _currentGeneration;
@@ -40,16 +31,22 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
     internal ArticleWorkRpcClient(
         IArticleWorkRpcPublisher publisher,
         ArticleWorkRpcResponseRouter router,
+        IBackfillConsumerAvailability availability,
+        IBackboneSelector selector,
         TimeProvider timeProvider,
         ILogger logger,
         Func<long>? currentGeneration = null)
     {
         ArgumentNullException.ThrowIfNull(publisher);
         ArgumentNullException.ThrowIfNull(router);
+        ArgumentNullException.ThrowIfNull(availability);
+        ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _publisher = publisher;
         _router = router;
+        _availability = availability;
+        _selector = selector;
         _timeProvider = timeProvider;
         _logger = logger;
         _currentGeneration = currentGeneration ?? (() => 0);
@@ -63,107 +60,139 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
         var started = _timeProvider.GetUtcNow();
         var decoded = DecodeMessageId(messageId);
         var requestId = Guid.NewGuid();
-        var operation = new ArticleWorkLookupOperation(requestId, decoded);
+        var attempted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var deadline = started + ArticleWorkRpcTiming.LookupDeadline;
 
-        using var safetyCts = new CancellationTokenSource(ArticleWorkRpcTiming.AbsoluteLifetime, _timeProvider);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, safetyCts.Token);
+        using var deadlineCts = new CancellationTokenSource(ArticleWorkRpcTiming.LookupDeadline, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCts.Token);
         var lookupToken = linked.Token;
 
         try
         {
-            var storagePublish = PublishAsync(
-                operation,
-                StorageDestination,
-                lookupToken,
-                skipIfCompleted: false);
-            var graceWait = WaitUntilAsync(
-                operation,
-                started + ArticleWorkRpcTiming.StorageGrace,
-                lookupToken);
-
-            await storagePublish.ConfigureAwait(false);
-            lookupToken.ThrowIfCancellationRequested();
-            if (TryReturnCompleted(operation, started, out var afterStorage))
+            var attempt = 0;
+            while (true)
             {
-                return afterStorage;
+                lookupToken.ThrowIfCancellationRequested();
+                var now = _timeProvider.GetUtcNow();
+                if (now >= deadline)
+                {
+                    var timedOut = ArticleWorkRpcResult.NotFound(
+                        requestId,
+                        decoded,
+                        "Article lookup deadline elapsed");
+                    LogCompleted(timedOut, started);
+                    return timedOut;
+                }
+
+                var selected = SelectNext(attempted);
+                if (selected is null)
+                {
+                    var exhausted = ArticleWorkRpcResult.NotFound(
+                        requestId,
+                        decoded,
+                        attempted.Count == 0
+                            ? "No BackFiller ArticleWork consumers are active"
+                            : "All eligible BackFiller backbones returned not-found");
+                    LogCompleted(exhausted, started);
+                    return exhausted;
+                }
+
+                attempted.Add(selected.Value.Backbone);
+                attempt++;
+                ArticleWorkRpcLogMessages.SchedulerAttempt(
+                    _logger,
+                    requestId,
+                    decoded,
+                    selected.Value.Backbone,
+                    selected.Value.ConsumerCount,
+                    attempt);
+
+                var operation = new ArticleWorkLookupOperation(requestId, decoded);
+                try
+                {
+                    await PublishAsync(operation, selected.Value, lookupToken).ConfigureAwait(false);
+                    lookupToken.ThrowIfCancellationRequested();
+
+                    await WaitUntilAsync(operation, deadline, lookupToken).ConfigureAwait(false);
+
+                    if (!operation.TryGetResult(out var attemptResult))
+                    {
+                        // No definitive wire outcome before the remaining lookup deadline.
+                        // Do not start another backbone: in-flight work cannot be cancelled.
+                        var uncertain = ArticleWorkRpcResult.NotFound(
+                            requestId,
+                            decoded,
+                            "Article-work attempt timed out without a definitive response");
+                        LogCompleted(uncertain, started);
+                        return uncertain;
+                    }
+
+                    if (ArticleWorkAggregatePolicy.IsLookupSuccess(attemptResult.Outcome))
+                    {
+                        LogCompleted(attemptResult, started);
+                        return attemptResult;
+                    }
+
+                    if (!ArticleWorkAggregatePolicy.ShouldTryNextBackbone(attemptResult.Outcome))
+                    {
+                        LogCompleted(attemptResult, started);
+                        return attemptResult;
+                    }
+
+                    // Definitive not-found / invalid for this backbone — try another.
+                }
+                finally
+                {
+                    _router.UnregisterAll(operation);
+                }
             }
-
-            await graceWait.ConfigureAwait(false);
-            lookupToken.ThrowIfCancellationRequested();
-            if (TryReturnCompleted(operation, started, out var afterGrace))
-            {
-                return afterGrace;
-            }
-
-            StartProviderFanOut(operation, lookupToken);
-            await WaitUntilAsync(
-                    operation,
-                    started + ArticleWorkRpcTiming.LookupDeadline,
-                    lookupToken)
-                .ConfigureAwait(false);
-
-            if (TryReturnCompleted(operation, started, out var completed))
-            {
-                return completed;
-            }
-
-            var notFound = ArticleWorkRpcResult.NotFound(
-                requestId,
-                decoded,
-                "Article lookup deadline elapsed");
-            CompleteLocally(operation, notFound, started);
-            return notFound;
         }
-        catch (OperationCanceledException) when (safetyCts.IsCancellationRequested
+        catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested
                                                  && !cancellationToken.IsCancellationRequested)
         {
             var expired = ArticleWorkRpcResult.NotFound(
                 requestId,
                 decoded,
-                "Article-work RPC absolute lifetime elapsed");
-            CompleteLocally(operation, expired, started);
+                "Article lookup deadline elapsed");
+            LogCompleted(expired, started);
             return expired;
         }
-        finally
-        {
-            _router.UnregisterAll(operation);
-        }
     }
 
-    private void StartProviderFanOut(
-        ArticleWorkLookupOperation operation,
-        CancellationToken cancellationToken)
+    private BackfillEligibleBackbone? SelectNext(HashSet<string> attempted)
     {
-        for (var i = 0; i < ProviderDestinations.Length; i++)
+        var eligible = _availability.GetEligibleBackbones();
+        if (eligible.Count == 0)
         {
-            ObservePublication(PublishAsync(
-                operation,
-                ProviderDestinations[i],
-                cancellationToken,
-                skipIfCompleted: true));
+            return null;
         }
-    }
 
-    private static void ObservePublication(Task publication)
-    {
-        _ = publication.ContinueWith(
-            static task => _ = task.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        List<BackfillEligibleBackbone>? filtered = null;
+        for (var i = 0; i < eligible.Count; i++)
+        {
+            var candidate = eligible[i];
+            if (candidate.ConsumerCount < 1 || attempted.Contains(candidate.Backbone))
+            {
+                continue;
+            }
+
+            filtered ??= new List<BackfillEligibleBackbone>(eligible.Count);
+            filtered.Add(candidate);
+        }
+
+        if (filtered is null || filtered.Count == 0)
+        {
+            return null;
+        }
+
+        return _selector.Select(filtered);
     }
 
     private async Task PublishAsync(
         ArticleWorkLookupOperation operation,
-        ArticleWorkRpcDestination destination,
-        CancellationToken cancellationToken,
-        bool skipIfCompleted)
+        BackfillEligibleBackbone destination,
+        CancellationToken cancellationToken)
     {
-        if (skipIfCompleted && operation.IsCompleted)
-        {
-            return;
-        }
-
         var correlationId = Guid.NewGuid().ToString("D");
         var request = new ArticleWorkRequest(
             ArticleWorkWireProtocol.CurrentVersion,
@@ -188,11 +217,6 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
                     body,
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (operation.IsCompleted)
-            {
-                _router.Unregister(correlationId);
-                return;
-            }
 
             ArticleWorkRpcLogMessages.Published(
                 _logger,
@@ -205,21 +229,11 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
         catch (OperationCanceledException)
         {
             _router.Unregister(correlationId);
-            if (operation.IsCompleted)
-            {
-                return;
-            }
-
             throw;
         }
         catch (Exception ex)
         {
             _router.Unregister(correlationId);
-            if (operation.IsCompleted)
-            {
-                return;
-            }
-
             ArticleWorkRpcLogMessages.PublishFailed(
                 _logger,
                 ex,
@@ -228,6 +242,7 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
                 operation.MessageId,
                 destination.Exchange,
                 generation);
+            throw;
         }
     }
 
@@ -248,37 +263,12 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
         if (completed == operation.Completion)
         {
             await delayCts.CancelAsync().ConfigureAwait(false);
+            _ = await operation.Completion.ConfigureAwait(false);
         }
         else
         {
             await delay.ConfigureAwait(false);
         }
-    }
-
-    private bool TryReturnCompleted(
-        ArticleWorkLookupOperation operation,
-        DateTimeOffset started,
-        out ArticleWorkRpcResult result)
-    {
-        if (operation.TryGetResult(out result))
-        {
-            _router.UnregisterAll(operation);
-            LogCompleted(result, started);
-            return true;
-        }
-
-        result = default!;
-        return false;
-    }
-
-    private void CompleteLocally(
-        ArticleWorkLookupOperation operation,
-        ArticleWorkRpcResult result,
-        DateTimeOffset started)
-    {
-        operation.TryComplete(result);
-        _router.UnregisterAll(operation);
-        LogCompleted(result, started);
     }
 
     private void LogCompleted(ArticleWorkRpcResult result, DateTimeOffset started)
@@ -306,6 +296,4 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
 
         return Encoding.ASCII.GetString(messageId.Span);
     }
-
-    private readonly record struct ArticleWorkRpcDestination(string Exchange, string RoutingKey, string Backbone);
 }

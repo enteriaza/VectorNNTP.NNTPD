@@ -50,39 +50,39 @@ public sealed class ArticleWorkArticlePipelineIntegrationTests
     }
 
     [Fact]
-    public async Task Invalid_date_nacks_without_requeue_or_retain()
+    public async Task Invalid_date_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidDate());
 
     [Fact]
-    public async Task Invalid_headers_nacks_without_requeue_or_retain()
+    public async Task Invalid_headers_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidHeaders());
 
     [Fact]
-    public async Task Invalid_message_id_nacks_without_requeue_or_retain()
+    public async Task Invalid_message_id_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidMessageId());
 
     [Fact]
-    public async Task Invalid_newsgroups_nacks_without_requeue_or_retain()
+    public async Task Invalid_newsgroups_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidNewsgroups());
 
     [Fact]
-    public async Task Invalid_path_nacks_without_requeue_or_retain()
+    public async Task Invalid_path_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidPath());
 
     [Fact]
-    public async Task Bad_yenc_crc_nacks_without_requeue_or_retain()
+    public async Task Bad_yenc_crc_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.BadYEncCrc());
 
     [Fact]
-    public async Task Invalid_yenc_escape_nacks_without_requeue_or_retain()
+    public async Task Invalid_yenc_escape_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.InvalidYEncEscape());
 
     [Fact]
-    public async Task Canonical_materialization_exceeding_line_limit_nacks_without_requeue_or_retain()
+    public async Task Canonical_materialization_exceeding_line_limit_acks_without_requeue_or_retain()
         => await AssertInvalidArticleAsync(ArticleWorkTestArticles.PathRewriteExceedsLineLimit(LocalFqdn));
 
     [Fact]
-    public async Task Article_message_id_mismatch_nacks_without_requeue_retain_or_success_response()
+    public async Task Article_message_id_mismatch_acks_without_requeue_retain_or_success_response()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
         harness.EnqueueArticle(ArticleWorkTestArticles.Valid("<actual-provider-identity@example.com>"));
@@ -94,7 +94,7 @@ public sealed class ArticleWorkArticlePipelineIntegrationTests
         Assert.Null(harness.Handler.LastRetentionKind);
         Assert.Equal(0, harness.Retention.RetainedCount);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
         var publication = Assert.Single(harness.PublishChannel.Publications);
         using var document = JsonDocument.Parse(publication.Body);
@@ -165,7 +165,7 @@ public sealed class ArticleWorkArticlePipelineIntegrationTests
         Assert.Null(harness.Handler.LastRetentionKind);
         Assert.Equal(0, harness.Retention.RetainedCount);
         var settlement = Assert.Single(channel.Settlements);
-        Assert.False(settlement.Acknowledge);
+        Assert.True(settlement.Acknowledge);
         Assert.False(settlement.Requeue);
         var publication = Assert.Single(harness.PublishChannel.Publications);
         using var document = JsonDocument.Parse(publication.Body);

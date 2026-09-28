@@ -13,7 +13,10 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <param name="QueueExclusive">Whether the queue is exclusive to a single connection.</param>
 /// <param name="QueueAutoDelete">Whether the queue is auto-deleted when unused.</param>
 /// <param name="RoutingKey">Routing key used when binding the queue to the exchange.</param>
-/// <param name="QueueArguments">Queue arguments applied during declaration. Must include <c>x-queue-type=quorum</c>.</param>
+/// <param name="QueueArguments">
+/// Queue arguments applied during declaration. Classic durable queues omit
+/// <c>x-queue-type</c> while the deployment broker is not yet quorum-ready.
+/// </param>
 internal sealed record BackfillArticleRetrievalTopologyDefinition(
     string Provider,
     string ExchangeName,
@@ -53,16 +56,18 @@ internal sealed record BackfillArticleRetrievalTopologyDefinition(
 /// and routing key.
 /// </para>
 /// <para>
-/// Every queue is declared as a RabbitMQ quorum queue. NNTPD does not consume these
-/// queues; it will later publish RPC article-retrieval requests onto the same topology.
+/// Every queue is declared as a RabbitMQ classic durable queue (no <c>x-queue-type</c>).
+/// Quorum may return later as a topology-only change after the broker is upgraded.
+/// NNTPD does not consume these queues; it publishes sequential ArticleWork RPC requests
+/// onto selected provider queues.
 /// </para>
 /// </remarks>
 internal static class BackfillArticleRetrievalTopology
 {
-    /// <summary>Broker argument that selects the RabbitMQ queue type.</summary>
+    /// <summary>Broker argument that selects the RabbitMQ queue type when non-default.</summary>
     internal const string QueueTypeArgumentName = RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName;
 
-    /// <summary>Required queue type for every article-retrieval queue.</summary>
+    /// <summary>Historical quorum type; article-retrieval queues must not declare this while classic.</summary>
     internal const string QuorumQueueType = RabbitMqArticleRetrievalEndpoints.QuorumQueueType;
 
     /// <summary>
@@ -114,7 +119,7 @@ internal static class BackfillArticleRetrievalTopology
                 continue;
             }
 
-            var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(
+            var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutClassicBinding(
                 BuildProviderEntityName(canonicalProvider));
             definitions.Add(new BackfillArticleRetrievalTopologyDefinition(
                 Provider: canonicalProvider,

@@ -3,7 +3,7 @@ using VectorNNTP.NNTPD.Core;
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Declares the required article-retrieval exchanges, quorum queues, and bindings.
+/// Declares the required article-retrieval exchanges, classic durable queues, and bindings.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -18,8 +18,9 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
 /// entities are never deleted, purged, or mutated. An incompatible existing entity
-/// (including a classic queue where quorum is required, or a quorum queue where
-/// classic is required) fails startup.
+/// fails startup. Current VectorNNTP-owned queues are durable classic (no
+/// <c>x-queue-type</c>); quorum may return later as a topology-only change after the
+/// broker is upgraded.
 /// </para>
 /// <para>
 /// Topology is established during <see cref="StartAsync"/> and is required before

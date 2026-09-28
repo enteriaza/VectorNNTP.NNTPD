@@ -15,14 +15,17 @@ public sealed class RabbitMqTopologyNamesTests
     }
 
     [Fact]
-    public void CreateFanoutQuorumBinding_NormalizesExchangeQueueAndRoutingKey()
+    public void CreateFanoutClassicBinding_NormalizesExchangeQueueAndRoutingKey()
     {
-        var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding("  BackFiller.Abavia  ");
+        var endpoint = RabbitMqArticleRetrievalEndpoints.CreateFanoutClassicBinding("  BackFiller.Abavia  ");
         Assert.Equal("backfiller.abavia", endpoint.ExchangeName);
         Assert.Equal("backfiller.abavia", endpoint.QueueName);
         Assert.Equal("backfiller.abavia", endpoint.RoutingKey);
         Assert.Equal(endpoint.ExchangeName, endpoint.QueueName);
         Assert.Equal(endpoint.QueueName, endpoint.RoutingKey);
+        Assert.Empty(endpoint.QueueArguments);
+        Assert.False(endpoint.QueueArguments.ContainsKey(
+            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
         Assert.DoesNotContain("grabbers.", endpoint.ExchangeName, StringComparison.Ordinal);
     }
 

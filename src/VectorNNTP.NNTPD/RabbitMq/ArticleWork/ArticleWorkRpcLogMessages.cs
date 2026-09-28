@@ -83,4 +83,22 @@ internal static partial class ArticleWorkRpcLogMessages
         Level = LogLevel.Warning,
         Message = "ARTICLE message-id RPC lookup failed (messageId={MessageId})")]
     public static partial void ArticleLookupFailed(ILogger logger, Exception exception, string MessageId);
+
+    [LoggerMessage(
+        EventId = 2840,
+        Level = LogLevel.Debug,
+        Message = "Article-work consumer probe failed (queue={Queue})")]
+    public static partial void ConsumerProbeFailed(ILogger logger, Exception exception, string Queue);
+
+    [LoggerMessage(
+        EventId = 2841,
+        Level = LogLevel.Debug,
+        Message = "Article-work scheduler attempt (requestId={RequestId}, messageId={MessageId}, backbone={Backbone}, consumers={Consumers}, attempt={Attempt})")]
+    public static partial void SchedulerAttempt(
+        ILogger logger,
+        Guid RequestId,
+        string MessageId,
+        string Backbone,
+        int Consumers,
+        int Attempt);
 }

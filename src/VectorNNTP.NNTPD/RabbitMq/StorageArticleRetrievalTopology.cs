@@ -11,8 +11,10 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// </para>
 /// <para>
 /// Broker semantics match the BackFiller article-retrieval endpoints: durable fanout,
-/// durable non-exclusive non-auto-delete quorum queue, bound with the same name as
-/// the routing key. NNTPD does not consume this queue.
+/// durable non-exclusive non-auto-delete classic queue, bound with the same name as
+/// the routing key. NNTPD does not consume this queue. The sequential Backfill Scheduler
+/// only targets provider queues with active consumers; storage is not selected unless a
+/// consumer appears.
 /// </para>
 /// </remarks>
 internal static class StorageArticleRetrievalTopology
@@ -27,5 +29,5 @@ internal static class StorageArticleRetrievalTopology
 
     /// <summary>Single storage request endpoint.</summary>
     internal static RabbitMqArticleRetrievalEndpoint Definition { get; } =
-        RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(EntityName);
+        RabbitMqArticleRetrievalEndpoints.CreateFanoutClassicBinding(EntityName);
 }

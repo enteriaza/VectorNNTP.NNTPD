@@ -31,9 +31,11 @@ public static class ArticleWorkDispositionPlanner
         return outcome switch
         {
             ArticleWorkOutcome.Success => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
-            ArticleWorkOutcome.ArticleNotFound => new ArticleWorkDisposition(Acknowledge: false, Requeue: false, PublishResponse: true),
-            ArticleWorkOutcome.InvalidArticle => new ArticleWorkDisposition(Acknowledge: false, Requeue: false, PublishResponse: true),
-            ArticleWorkOutcome.InvalidRequest => new ArticleWorkDisposition(Acknowledge: false, Requeue: false, PublishResponse: replyable),
+            // Definitive absence / unusable article: processing completed successfully.
+            // ACK removes the message; NNTPD may publish a NEW request to another backbone.
+            ArticleWorkOutcome.ArticleNotFound => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
+            ArticleWorkOutcome.InvalidArticle => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
+            ArticleWorkOutcome.InvalidRequest => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: replyable),
             ArticleWorkOutcome.ProviderFailure => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
             ArticleWorkOutcome.Cancelled => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),
             ArticleWorkOutcome.UnexpectedFailure => new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false),

@@ -45,15 +45,16 @@ internal sealed class ArticleWorkLookupOperation
     }
 
     /// <summary>
-    /// Applies a validated response immediately. Only aggregate-terminal
-    /// <see cref="ArticleWorkOutcome.Success"/> completes the lookup.
+    /// Applies a validated response immediately. Attempt-terminal outcomes
+    /// (<see cref="ArticleWorkOutcome.Success"/>, NotFound, InvalidArticle, InvalidRequest)
+    /// complete this attempt's wait so the scheduler can decide whether to continue.
     /// </summary>
     internal void OnResponse(string exchange, ArticleWorkResponse response)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
         ArgumentNullException.ThrowIfNull(response);
 
-        if (!ArticleWorkAggregatePolicy.IsAggregateTerminal(response.Outcome))
+        if (!ArticleWorkAggregatePolicy.IsAttemptTerminal(response.Outcome))
         {
             return;
         }

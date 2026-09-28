@@ -47,6 +47,11 @@ internal sealed class FakeRabbitMqConnectionFactory : IRabbitMqConnectionFactory
     /// <summary>Copied onto each created connection as <see cref="FakeRabbitMqConnection.QueueDeclareException"/>.</summary>
     public Exception? QueueDeclareException { get; set; }
 
+    /// <summary>
+    /// Copied onto each created connection as <see cref="FakeRabbitMqConnection.PassiveConsumerCounts"/>.
+    /// </summary>
+    public Dictionary<string, uint> PassiveConsumerCounts { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Waits until at least <paramref name="count"/> connect attempts have started.</summary>
     public async Task WaitForAttemptsAsync(int count, CancellationToken cancellationToken)
     {
@@ -96,6 +101,10 @@ internal sealed class FakeRabbitMqConnectionFactory : IRabbitMqConnectionFactory
             IsOpen = !ReturnUnusableConnection,
             QueueDeclareException = QueueDeclareException,
         };
+        foreach (var pair in PassiveConsumerCounts)
+        {
+            connection.PassiveConsumerCounts[pair.Key] = pair.Value;
+        }
 
         LastConnection = connection;
         Connections.Add(connection);
@@ -170,6 +179,11 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>When set, the next created topology channel throws this exception from queue bind.</summary>
     public Exception? QueueBindException { get; set; }
 
+    /// <summary>
+    /// Passive-declare consumer counts copied onto each new topology channel (ArticleWork tests).
+    /// </summary>
+    public Dictionary<string, uint> PassiveConsumerCounts { get; } = new(StringComparer.Ordinal);
+
     /// <inheritdoc />
     public Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
     {
@@ -190,6 +204,11 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
             QueueDeclareException = QueueDeclareException,
             QueueBindException = QueueBindException,
         };
+        foreach (var pair in PassiveConsumerCounts)
+        {
+            channel.PassiveConsumerCounts[pair.Key] = pair.Value;
+        }
+
         TopologyChannels.Add(channel);
         return Task.FromResult<IRabbitMqTopologyChannel>(channel);
     }
@@ -289,6 +308,18 @@ internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
     /// <summary>When set, <see cref="QueueBindAsync"/> throws this exception.</summary>
     public Exception? QueueBindException { get; set; }
 
+    /// <summary>Passive-declare consumer counts keyed by queue name (tests).</summary>
+    public Dictionary<string, uint> PassiveConsumerCounts { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>When set, <see cref="QueueDeclarePassiveAsync"/> throws this exception.</summary>
+    public Exception? QueueDeclarePassiveException { get; set; }
+
+    /// <summary>Number of passive queue declares performed on this channel.</summary>
+    public int PassiveDeclareCount { get; private set; }
+
+    /// <summary>Passive-declare call targets in order.</summary>
+    public List<string> PassiveDeclareQueues { get; } = [];
+
     /// <inheritdoc />
     public Task ExchangeDeclareAsync(
         string exchange,
@@ -335,6 +366,21 @@ internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
             autoDelete,
             CopyArguments(arguments)));
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<RabbitMqQueueStats> QueueDeclarePassiveAsync(string queue, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueueDeclarePassiveException is not null)
+        {
+            throw QueueDeclarePassiveException;
+        }
+
+        PassiveDeclareCount++;
+        PassiveDeclareQueues.Add(queue);
+        PassiveConsumerCounts.TryGetValue(queue, out var consumers);
+        return Task.FromResult(new RabbitMqQueueStats(MessageCount: 0, ConsumerCount: consumers));
     }
 
     /// <inheritdoc />
