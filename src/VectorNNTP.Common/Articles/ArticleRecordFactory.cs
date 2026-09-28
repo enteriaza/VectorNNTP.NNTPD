@@ -64,7 +64,7 @@ public static class ArticleRecordFactory
             ArticleParseStatus.CanonicalV1,
             artData,
             fields);
-        return ArticleRecordCreateResult.Accepted(record);
+        return ArticleRecordCreateResult.Accepted(record, parse.SelectedDateHeaderName);
     }
 
     /// <summary>
@@ -174,7 +174,7 @@ public static class ArticleRecordFactory
             ArticleParseStatus.CanonicalV1,
             artData,
             meta.Fields);
-        return ArticleRecordCreateResult.Accepted(record);
+        return ArticleRecordCreateResult.Accepted(record, meta.SelectedDateHeaderName);
     }
 
     private static bool IsDateFamilyHeader(NntpArticleHeaderName name) =>
@@ -239,12 +239,14 @@ public readonly struct ArticleRecordCreateResult
         bool isAccepted,
         ArticleRecord record,
         NntpArticleParseFailureCode parseFailure,
-        NntpArticleCanonicalFailureCode materializeFailure)
+        NntpArticleCanonicalFailureCode materializeFailure,
+        NntpArticleHeaderName selectedDateHeaderName)
     {
         IsAccepted = isAccepted;
         Record = record;
         ParseFailure = parseFailure;
         MaterializeFailure = materializeFailure;
+        SelectedDateHeaderName = selectedDateHeaderName;
     }
 
     /// <summary>Gets a value indicating whether a CanonicalV1 record was produced.</summary>
@@ -259,21 +261,23 @@ public readonly struct ArticleRecordCreateResult
     /// <summary>Gets the materializer or transfer failure when construction stopped after parse.</summary>
     public NntpArticleCanonicalFailureCode MaterializeFailure { get; }
 
+    /// <summary>
+    /// Gets the Date-family header name selected during parse (for VATP META).
+    /// <see cref="NntpArticleHeaderName.Unknown"/> when not accepted.
+    /// </summary>
+    public NntpArticleHeaderName SelectedDateHeaderName { get; }
+
     /// <summary>Creates an accepted result that carries <paramref name="record"/> (no ArtData copy).</summary>
-    /// <param name="record">CanonicalV1 record.</param>
-    /// <returns>Accepted result.</returns>
-    public static ArticleRecordCreateResult Accepted(ArticleRecord record)
-        => new(true, record, NntpArticleParseFailureCode.None, NntpArticleCanonicalFailureCode.None);
+    public static ArticleRecordCreateResult Accepted(
+        ArticleRecord record,
+        NntpArticleHeaderName selectedDateHeaderName = NntpArticleHeaderName.Unknown)
+        => new(true, record, NntpArticleParseFailureCode.None, NntpArticleCanonicalFailureCode.None, selectedDateHeaderName);
 
     /// <summary>Creates a parse-rejected result with no ArtData.</summary>
-    /// <param name="parseFailure">Parser failure code.</param>
-    /// <returns>Rejected result.</returns>
     public static ArticleRecordCreateResult RejectedParse(NntpArticleParseFailureCode parseFailure)
-        => new(false, default, parseFailure, NntpArticleCanonicalFailureCode.None);
+        => new(false, default, parseFailure, NntpArticleCanonicalFailureCode.None, NntpArticleHeaderName.Unknown);
 
     /// <summary>Creates a materialize-rejected result with no ArtData.</summary>
-    /// <param name="materializeFailure">Materializer failure code.</param>
-    /// <returns>Rejected result.</returns>
     public static ArticleRecordCreateResult RejectedMaterialize(NntpArticleCanonicalFailureCode materializeFailure)
-        => new(false, default, NntpArticleParseFailureCode.None, materializeFailure);
+        => new(false, default, NntpArticleParseFailureCode.None, materializeFailure, NntpArticleHeaderName.Unknown);
 }

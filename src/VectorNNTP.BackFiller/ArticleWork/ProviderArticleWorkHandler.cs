@@ -1,12 +1,14 @@
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
-/// Retrieves an ARTICLE, validates and materializes it through the Common article pipeline, then retains the canonical bytes.
+/// Retrieves an ARTICLE, builds a CanonicalV1 <see cref="ArticleRecord"/>, then retains it for
+/// legacy MD5 cache GET and VATP OPEN (RequestId).
 /// </summary>
 public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {
@@ -37,8 +39,11 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     /// <summary>Gets the last retrieval classification (tests).</summary>
     public ArticleRetrievalKind? LastKind { get; private set; }
 
-    /// <summary>Gets the last canonical retained payload (tests). The same buffer is transferred into retention.</summary>
+    /// <summary>Gets the last canonical retained ArtData (tests). The same buffer is transferred into retention.</summary>
     public byte[]? LastPayload { get; private set; }
+
+    /// <summary>Gets the last retained CanonicalV1 record (tests).</summary>
+    public ArticleRecord? LastRecord { get; private set; }
 
     /// <summary>Gets the last retention classification (tests).</summary>
     public ArticleRetentionKind? LastRetentionKind { get; private set; }
@@ -55,6 +60,7 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
         LastRetentionKind = null;
         LastCacheUri = null;
         LastPayload = null;
+        LastRecord = null;
         if (cancellationToken.IsCancellationRequested)
         {
             LastKind = ArticleRetrievalKind.Cancelled;
@@ -88,30 +94,45 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
                     "Retrieved article payload could not be transferred into retention.");
             }
 
-            var parse = _parser.Parse(retrieval.Article.Memory);
-            if (!parse.IsAccepted)
+            var created = ArticleRecordFactory.TryCreate(_parser, retrieval.Article.Memory);
+            if (!created.IsAccepted)
             {
-                return MapParseFailure(parse.FailureCode);
+                if (created.ParseFailure != NntpArticleParseFailureCode.None)
+                {
+                    return MapParseFailure(created.ParseFailure);
+                }
+
+                return new ArticleWorkHandlerResult(
+                    ArticleWorkOutcome.InvalidArticle,
+                    created.MaterializeFailure.ToString());
             }
 
-            if (!NntpArticleIdentity.MatchesRequest(parse.OriginalMessageIdValue.Span, item.Request.MessageId))
+            var record = created.Record;
+            if (!NntpArticleIdentity.MatchesRequest(record.MessageId, item.Request.MessageId))
             {
                 return new ArticleWorkHandlerResult(
                     ArticleWorkOutcome.InvalidArticle,
                     "MessageIdMismatch");
             }
 
-            var materialized = NntpArticleCanonicalMaterializer.Materialize(parse);
-            if (!materialized.IsAccepted || materialized.ArticleBytes is null)
+            if (!System.Runtime.InteropServices.MemoryMarshal.TryGetArray(record.ArtData, out var segment)
+                || segment.Array is null
+                || segment.Offset != 0
+                || segment.Count != record.ArtSize)
             {
+                LastRetentionKind = ArticleRetentionKind.InvalidPayload;
                 return new ArticleWorkHandlerResult(
-                    ArticleWorkOutcome.InvalidArticle,
-                    materialized.FailureCode.ToString());
+                    ArticleWorkOutcome.RetentionRejected,
+                    "Canonical ArtData is not an owned contiguous buffer.");
             }
 
-            var payload = materialized.ArticleBytes;
-            LastPayload = payload;
-            var retained = _retention.Retain(item.Request.MessageId, payload);
+            LastPayload = segment.Array;
+            LastRecord = record;
+            var retained = _retention.RetainCanonical(
+                item.Request.MessageId,
+                item.Request.RequestId,
+                record,
+                created.SelectedDateHeaderName);
             LastRetentionKind = retained.Kind;
             LastCacheUri = retained.CacheUri;
             if (retained.IsAvailable)

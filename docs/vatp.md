@@ -1,10 +1,12 @@
 # Vector Article Transfer Protocol (VATP)
 
-Status: Phase 1 Common foundation implemented. Application adapters (NNTPD client,
-BackFiller listener), RabbitMQ extensions, and ARTICLE/HEAD/BODY/STAT integration
-are **not** implemented yet.
+Status: Phase 1 Common foundation + Phase 2 BackFiller VATP **server** are
+implemented. The NNTPD VATP client, RabbitMQ `articleId` extensions, and
+ARTICLE/HEAD/BODY/STAT integration are **not** implemented yet.
 
 Owner: `VectorNNTP.Common` (`VectorNNTP.Common.Transport.ArticleTransfer`).
+BackFiller adapter: `VectorNNTP.BackFiller.Listener.VatpListenerSession` on the
+existing TLS `CacheListenerService` (`BackFiller:BindPortTls`).
 Consumers: `VectorNNTP.NNTPD`, `VectorNNTP.BackFiller`, and future Storage. Common
 does not reference any of those applications.
 
@@ -45,8 +47,13 @@ than the HELLO-negotiated max are rejected.
 
 ## HELLO
 
-After TLS, both peers exchange HELLO on StreamId 0. There is no version negotiation
+After TLS, peers exchange HELLO on StreamId 0. There is no version negotiation
 framework beyond Version = 1 and exact magic match.
+
+**Direction (BackFiller server):** the client sends HELLO first; the server
+validates magic / maxFramePayload / StreamId 0, then replies with HELLO using
+`min(clientMax, serverDefault)`. OPEN is rejected until the client HELLO is
+accepted. Duplicate or malformed HELLO terminates the connection.
 
 Default advertised `maxFramePayload` is **64 KiB** (`VatpProtocol.DefaultMaxFramePayload`).
 That default is also the sensible DATA payload policy default; hosts may advertise a
@@ -90,17 +97,23 @@ There is no trusted `ArticleRecord.FromCanonicalTransfer` constructor.
 OPEN accepted
   → AwaitingMeta
   → META → ReceivingData
-  → DATA* (exact ArtSize)
-  → FIN and/or END
+  → DATA* (exact ArtSize) with FIN on the final DATA frame
+  → AwaitingEnd
+  → END
   → TryCreateFromCanonicalTransfer
   → Completed (consumable) | Failed
 ```
 
-END (or DATA FIN after exact ArtSize) does **not** by itself expose an article.
-Only successful canonical validation yields a consumable `ArticleRecord`.
+**Completion contract:**
 
-Invalid sequences (DATA before META, duplicate META, DATA after Completed, etc.)
-are deterministic protocol errors.
+- `FIN` marks the final DATA frame (exact `ArtSize` must already be assembled).
+- `END` confirms transfer completion.
+- An `ArticleRecord` becomes consumable only after ArtSize bytes + FIN + END and
+  successful canonical validation.
+- Neither FIN nor END alone exposes an article.
+
+Invalid sequences (DATA before META, duplicate META, DATA after FIN, END before
+ArtSize+FIN, duplicate END, etc.) are deterministic protocol errors.
 
 ## Flow control
 
@@ -134,12 +147,26 @@ default maxFramePayload. Not frozen as immutable protocol constants.
 `ArticleTransferStreamTable` bounds active StreamIds, rejects duplicates and StreamId 0,
 and requires removal after terminalization before reuse.
 
-## Not implemented in Phase 1
+## Not implemented yet (Phase 3+)
 
 - NNTPD outbound TLS client / connection pool
-- BackFiller listener VATP adapter
 - RabbitMQ `articleId` response field
 - ARTICLE/HEAD/BODY/STAT command wiring
 - Ingest / History integration
 - Storage consumers
-- Socket write pump
+
+## BackFiller Phase 2 server
+
+`CacheListenerService` remains the single TLS listener on `BindPortTls`. After the
+handshake it peeks the first 16-byte frame header and demultiplexes:
+
+- Type `HELLO` (`0x00`) → `VatpListenerSession` (Common VATP)
+- otherwise → legacy MD5 cache `CacheListenerSession`
+
+Both paths share TLS, connection limits, IO timeouts, and shutdown. The legacy
+cache protocol is intentionally retained until the VATP path fully replaces it.
+
+Canonical articles enter retention via `IArticleRetentionAuthority.RetainCanonical`
+(RequestId + `ArticleRecord`). VATP OPEN resolves RequestId, verifies ArticleId,
+acquires a transfer lease, then streams META / DATA / END under per-stream WINDOW
+credit and round-robin DATA scheduling.

@@ -6,7 +6,7 @@ namespace VectorNNTP.Common.Tests.Transport.ArticleTransfer;
 public sealed class ArticleTransferReceiveStreamTests
 {
     [Fact]
-    public void OpenMetaDataFin_ValidArticle_ProducesOneConsumableRecord()
+    public void OpenMetaDataFinEnd_ValidArticle_ProducesOneConsumableRecord()
     {
         var (record, selected, artData) = VatpTestArticles.CreateCanonical();
         var meta = ArticleCanonicalTransferMeta.FromRecord(record, selected);
@@ -16,6 +16,10 @@ public sealed class ArticleTransferReceiveStreamTests
         Assert.Equal(ArticleTransferPhase.ReceivingData, stream.Phase);
 
         Assert.True(stream.TryAcceptData(artData, fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        Assert.False(stream.HasConsumableRecord);
+
+        Assert.True(stream.TryAcceptEnd().Success);
         Assert.Equal(ArticleTransferPhase.Completed, stream.Phase);
         Assert.True(stream.HasConsumableRecord);
         Assert.Equal(record.ArtId, stream.ConsumableRecord.ArtId);
@@ -25,21 +29,85 @@ public sealed class ArticleTransferReceiveStreamTests
     }
 
     [Fact]
-    public void OpenMetaDataEnd_WithoutFin_ValidatesOnEnd()
+    public void FinAlone_DoesNotProduceConsumableRecord()
     {
         var (record, selected, artData) = VatpTestArticles.CreateCanonical();
-        var meta = ArticleCanonicalTransferMeta.FromRecord(record, selected);
-        var stream = new ArticleTransferReceiveStream(2, Guid.NewGuid(), record.ArtId);
-        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(in meta)).Success);
-        Assert.True(stream.TryAcceptData(artData, fin: false).Success);
+        var stream = new ArticleTransferReceiveStream(11, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData, fin: true).Success);
         Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
         Assert.False(stream.HasConsumableRecord);
+    }
+
+    [Fact]
+    public void EndWithoutFin_FailsIncomplete()
+    {
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(2, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData, fin: false).Success);
+        Assert.Equal(ArticleTransferPhase.ReceivingData, stream.Phase);
+        Assert.False(stream.HasConsumableRecord);
+        var end = stream.TryAcceptEnd();
+        Assert.False(end.Success);
+        Assert.Equal(VatpErrorCode.IncompleteTransfer, end.Error);
+        Assert.Equal(ArticleTransferPhase.Failed, stream.Phase);
+    }
+
+    [Fact]
+    public void ExactBytesThenEmptyFinThenEnd_Completes()
+    {
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(12, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData, fin: false).Success);
+        Assert.Equal(ArticleTransferPhase.ReceivingData, stream.Phase);
+        Assert.True(stream.TryAcceptData(ReadOnlySpan<byte>.Empty, fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
         Assert.True(stream.TryAcceptEnd().Success);
         Assert.True(stream.HasConsumableRecord);
     }
 
     [Fact]
-    public void ExactDataPlusEndPlusInvalidHash_DoesNotProduceConsumableRecord()
+    public void EndBeforeFinalData_FailsIncomplete()
+    {
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(13, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData.AsSpan(0, Math.Max(1, artData.Length / 2)), fin: false).Success);
+        var end = stream.TryAcceptEnd();
+        Assert.False(end.Success);
+        Assert.Equal(VatpErrorCode.IncompleteTransfer, end.Error);
+    }
+
+    [Fact]
+    public void DataAfterFin_Fails()
+    {
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(14, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData, fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        var again = stream.TryAcceptData(ReadOnlySpan<byte>.Empty, fin: false);
+        Assert.False(again.Success);
+        Assert.Equal(VatpErrorCode.InvalidStateTransition, again.Error);
+    }
+
+    [Fact]
+    public void DuplicateEnd_Fails()
+    {
+        var (record, selected, artData) = VatpTestArticles.CreateCanonical();
+        var stream = new ArticleTransferReceiveStream(15, Guid.NewGuid(), record.ArtId);
+        Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
+        Assert.True(stream.TryAcceptData(artData, fin: true).Success);
+        Assert.True(stream.TryAcceptEnd().Success);
+        var second = stream.TryAcceptEnd();
+        Assert.False(second.Success);
+        Assert.Equal(VatpErrorCode.InvalidStateTransition, second.Error);
+    }
+
+    [Fact]
+    public void ExactDataPlusFinPlusEndPlusInvalidHash_DoesNotProduceConsumableRecord()
     {
         var (record, selected, artData) = VatpTestArticles.CreateCanonical();
         var meta = new ArticleCanonicalTransferMeta(
@@ -50,7 +118,9 @@ public sealed class ArticleTransferReceiveStreamTests
             record.Fields);
         var stream = new ArticleTransferReceiveStream(3, Guid.NewGuid(), record.ArtId);
         Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(in meta)).Success);
-        var result = stream.TryAcceptData(artData, fin: true);
+        Assert.True(stream.TryAcceptData(artData, fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        var result = stream.TryAcceptEnd();
         Assert.False(result.Success);
         Assert.Equal(VatpErrorCode.ArtHashMismatch, result.Error);
         Assert.Equal(ArticleTransferPhase.Failed, stream.Phase);
@@ -95,6 +165,7 @@ public sealed class ArticleTransferReceiveStreamTests
         var stream = new ArticleTransferReceiveStream(7, Guid.NewGuid(), record.ArtId);
         Assert.True(stream.TryAcceptMeta(VatpMetaCodec.Encode(ArticleCanonicalTransferMeta.FromRecord(record, selected))).Success);
         Assert.True(stream.TryAcceptData(artData, fin: true).Success);
+        Assert.True(stream.TryAcceptEnd().Success);
         var again = stream.TryAcceptData("x"u8, fin: false);
         Assert.False(again.Success);
         Assert.Equal(VatpErrorCode.InvalidStateTransition, again.Error);
@@ -121,6 +192,9 @@ public sealed class ArticleTransferReceiveStreamTests
         var mid = artData.Length / 2;
         Assert.True(stream.TryAcceptData(artData.AsSpan(0, mid), fin: false).Success);
         Assert.True(stream.TryAcceptData(artData.AsSpan(mid), fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        Assert.False(stream.HasConsumableRecord);
+        Assert.True(stream.TryAcceptEnd().Success);
         Assert.True(stream.HasConsumableRecord);
         Assert.True(stream.ConsumableRecord.ArtData.Span.SequenceEqual(artData));
     }

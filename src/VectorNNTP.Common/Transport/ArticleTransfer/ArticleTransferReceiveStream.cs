@@ -21,13 +21,15 @@ public readonly record struct ArticleTransferApplyResult(bool Success, VatpError
 /// </summary>
 /// <remarks>
 /// <para>
-/// Integrity rule: END (or DATA FIN after exact ArtSize) never exposes an article by itself.
-/// The stream becomes consumable only after
-/// <see cref="ArticleRecordFactory.TryCreateFromCanonicalTransfer"/> succeeds.
+/// Completion contract: FIN marks the final DATA frame; END confirms transfer completion.
+/// A stream becomes consumable only after exact <c>ArtSize</c> bytes, FIN, END, and
+/// successful <see cref="ArticleRecordFactory.TryCreateFromCanonicalTransfer"/>.
+/// Neither FIN nor END alone exposes an article.
 /// </para>
 /// <para>
-/// Invalid sequences (DATA before META, duplicate META, DATA after END, etc.) fail the
-/// stream deterministically. WINDOW for a terminal stream is <see cref="VatpErrorCode.UnknownStream"/>.
+/// Invalid sequences (DATA before META, duplicate META, DATA after FIN/END, duplicate END,
+/// END before ArtSize+FIN, etc.) fail the stream deterministically. WINDOW for a terminal
+/// stream is <see cref="VatpErrorCode.UnknownStream"/>.
 /// </para>
 /// </remarks>
 public sealed class ArticleTransferReceiveStream
@@ -202,13 +204,14 @@ public sealed class ArticleTransferReceiveStream
             return ArticleTransferApplyResult.Ok();
         }
 
-        // Exact ArtSize received.
-        if (fin)
+        // Exact ArtSize received. FIN marks the final DATA frame; END is still required.
+        if (_finSeen)
         {
-            return TryFinalizeCanonical();
+            Phase = ArticleTransferPhase.AwaitingEnd;
+            return ArticleTransferApplyResult.Ok();
         }
 
-        Phase = ArticleTransferPhase.AwaitingEnd;
+        // Exact bytes without FIN: wait for an empty DATA FIN (or fail on extra payload).
         return ArticleTransferApplyResult.Ok();
     }
 
@@ -238,7 +241,8 @@ public sealed class ArticleTransferReceiveStream
     }
 
     /// <summary>
-    /// Applies END. When all DATA bytes are already present, runs canonical validation.
+    /// Applies END. Requires exact ArtSize bytes and FIN already observed, then runs
+    /// canonical validation.
     /// </summary>
     public ArticleTransferApplyResult TryAcceptEnd()
     {
@@ -248,12 +252,8 @@ public sealed class ArticleTransferReceiveStream
         }
 
         if (Phase == ArticleTransferPhase.AwaitingEnd
-            || (Phase == ArticleTransferPhase.ReceivingData && _received == _meta.ArtSize && _finSeen))
-        {
-            return TryFinalizeCanonical();
-        }
-
-        if (Phase == ArticleTransferPhase.ReceivingData && _received == _meta.ArtSize)
+            && _finSeen
+            && _received == _meta.ArtSize)
         {
             return TryFinalizeCanonical();
         }
@@ -321,7 +321,7 @@ public sealed class ArticleTransferReceiveStream
             return FailStream(VatpErrorCode.IncompleteTransfer);
         }
 
-        // END/FIN arrived with exact bytes: validate before exposing.
+        // END arrived with exact ArtSize + FIN: validate before exposing.
         var expectedArtId = ExpectedArtId;
         var created = ArticleRecordFactory.TryCreateFromCanonicalTransfer(
             _artData,

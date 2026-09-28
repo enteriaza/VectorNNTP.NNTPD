@@ -19,25 +19,39 @@ public interface IArticleRetentionAuthority
     /// Attempts to take ownership of <paramref name="payload"/> for <paramref name="messageId"/>.
     /// On any non-<see cref="ArticleRetentionKind.Retained"/> result, the caller still owns the payload.
     /// </summary>
-    /// <param name="messageId">Exact Message-ID. Not normalized.</param>
-    /// <param name="payload">Destuffed article bytes offered for ownership transfer.</param>
-    /// <returns>The admission result, including cache URI when available.</returns>
     ArticleRetentionResult Retain(string messageId, byte[] payload);
 
+    /// <summary>
+    /// Retains a CanonicalV1 article record and attaches a pending VATP RequestId for OPEN.
+    /// </summary>
+    /// <remarks>
+    /// Does not copy ArtData. On AlreadyPresent, the pending RequestId slot is overwritten
+    /// when the prior RequestId was not yet consumed.
+    /// </remarks>
+    ArticleRetentionResult RetainCanonical(
+        string messageId,
+        Guid requestId,
+        VectorNNTP.Common.Articles.ArticleRecord record,
+        VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName);
+
+    /// <summary>
+    /// Resolves a VATP OPEN: RequestId is primary; ArticleId is verified.
+    /// Successful OPEN consumes RequestId. Wrong ArticleId does not.
+    /// </summary>
+    VatpOpenResult TryOpenTransfer(Guid requestId, VectorNNTP.Common.Articles.ArticleId expectedArticleId);
+
+    /// <summary>Cancels a pending RequestId without releasing the Message-ID entry.</summary>
+    bool TryCancelPendingRequest(Guid requestId);
+
     /// <summary>Looks up by exact Message-ID. Expired entries are not returned.</summary>
-    /// <param name="messageId">Exact Message-ID.</param>
-    /// <returns>Found lease, missing, or expired.</returns>
     ArticleLookupResult TryGetByMessageId(string messageId);
 
     /// <summary>Looks up by lowercase MD5 hex. Expired entries are not returned.</summary>
-    /// <param name="md5Hex">32-character lowercase MD5 hex.</param>
-    /// <returns>Found lease, missing, or expired.</returns>
     ArticleLookupResult TryGetByMd5(string md5Hex);
 
-    /// <summary>Reclaims TTL-expired entries. Safe to call concurrently with retain/lookup.</summary>
-    /// <returns>Payload bytes physically released.</returns>
+    /// <summary>Reclaims TTL-expired entries.</summary>
     long SweepExpired();
 
-    /// <summary>Stops new admissions. Existing entries remain until expiry, eviction, or dispose.</summary>
+    /// <summary>Stops new admissions.</summary>
     void BeginShutdown();
 }

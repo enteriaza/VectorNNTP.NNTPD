@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 
 namespace VectorNNTP.BackFiller.Retention;
 
@@ -10,6 +13,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     private readonly object _gate = new();
     private readonly Dictionary<string, RetainedEntry> _byMessageId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _messageIdByMd5 = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, RetainedEntry> _byRequestId = new();
     private readonly LinkedList<RetainedEntry> _insertionOrder = [];
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
@@ -201,6 +205,203 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     }
 
     /// <inheritdoc />
+    public ArticleRetentionResult RetainCanonical(
+        string messageId,
+        Guid requestId,
+        ArticleRecord record,
+        NntpArticleHeaderName selectedDateHeaderName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        if (requestId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestId));
+        }
+
+        if (record.ParseStatus != ArticleParseStatus.CanonicalV1
+            || record.ArtSize <= 0
+            || !TryGetOwnedArtData(in record, out var payload))
+        {
+            ArticleRetentionLogMessages.Rejected(
+                _logger,
+                ArticleRetentionKind.InvalidPayload,
+                null,
+                record.ArtSize,
+                RetainedPayloadBytes);
+            return new ArticleRetentionResult(
+                ArticleRetentionKind.InvalidPayload,
+                null,
+                null,
+                RetainedPayloadBytes,
+                0);
+        }
+
+        if (payload.Length > _maximumBytes)
+        {
+            ArticleRetentionLogMessages.Rejected(
+                _logger,
+                ArticleRetentionKind.PayloadExceedsCapacity,
+                null,
+                payload.Length,
+                RetainedPayloadBytes);
+            return new ArticleRetentionResult(
+                ArticleRetentionKind.PayloadExceedsCapacity,
+                null,
+                null,
+                RetainedPayloadBytes,
+                0);
+        }
+
+        var identity = ArticleIdentity.FromExactMessageId(messageId);
+        var now = _time.GetUtcNow();
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_admissionClosed)
+            {
+                return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, payload.Length, 0);
+            }
+
+            if (_byRequestId.TryGetValue(requestId, out var requestOwner)
+                && !string.Equals(requestOwner.Identity.MessageId, messageId, StringComparison.Ordinal))
+            {
+                return RejectLocked(ArticleRetentionKind.Md5Collision, identity, payload.Length, 0);
+            }
+
+            if (_byMessageId.TryGetValue(messageId, out var existing))
+            {
+                if (IsExpiredLocked(existing, now))
+                {
+                    RemoveExpiredLocked(existing);
+                }
+                else
+                {
+                    AttachPendingRequestLocked(existing, requestId, in record, selectedDateHeaderName);
+                    return new ArticleRetentionResult(
+                        ArticleRetentionKind.AlreadyPresent,
+                        existing.Identity,
+                        existing.CacheUri,
+                        _retainedBytes,
+                        0);
+                }
+            }
+
+            if (_messageIdByMd5.TryGetValue(identity.Md5Hex, out var colliding)
+                && !string.Equals(colliding, messageId, StringComparison.Ordinal))
+            {
+                if (_byMessageId.TryGetValue(colliding, out var collidingEntry) && IsExpiredLocked(collidingEntry, now))
+                {
+                    RemoveExpiredLocked(collidingEntry);
+                }
+                else
+                {
+                    return RejectLocked(ArticleRetentionKind.Md5Collision, identity, payload.Length, 0);
+                }
+            }
+
+            var released = ReclaimForAdmissionLocked(payload.Length, now);
+            if (_retainedBytes + payload.Length > _maximumBytes)
+            {
+                return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, payload.Length, released);
+            }
+
+            var entry = new RetainedEntry(
+                identity,
+                CacheArticleUri.Create(_fqdn, _bindPort, identity),
+                payload,
+                now,
+                now + _ttl,
+                Interlocked.Increment(ref _nextGeneration),
+                record,
+                selectedDateHeaderName);
+            entry.Node = _insertionOrder.AddLast(entry);
+            _byMessageId[messageId] = entry;
+            _messageIdByMd5[identity.Md5Hex] = messageId;
+            AttachPendingRequestLocked(entry, requestId, in record, selectedDateHeaderName);
+            AddBytesLocked(payload.Length);
+            _physicalCount++;
+            ArticleRetentionLogMessages.Retained(_logger, identity.Md5Hex, payload.Length, _retainedBytes);
+            return new ArticleRetentionResult(
+                ArticleRetentionKind.Retained,
+                identity,
+                entry.CacheUri,
+                _retainedBytes,
+                released);
+        }
+    }
+
+    /// <inheritdoc />
+    public VatpOpenResult TryOpenTransfer(Guid requestId, ArticleId expectedArticleId)
+    {
+        if (requestId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestId));
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_byRequestId.TryGetValue(requestId, out var entry))
+            {
+                return VatpOpenResult.Rejected();
+            }
+
+            if (IsExpiredLocked(entry, _time.GetUtcNow()))
+            {
+                RemoveExpiredLocked(entry);
+                return VatpOpenResult.Rejected();
+            }
+
+            if (entry.Record is not { } record
+                || entry.SelectedDateHeaderName is not { } selectedDate)
+            {
+                return VatpOpenResult.Rejected();
+            }
+
+            if (record.ArtId != expectedArticleId)
+            {
+                // Wrong ArticleId must not consume RequestId.
+                return VatpOpenResult.Rejected();
+            }
+
+            if (!entry.TryAcquire())
+            {
+                return VatpOpenResult.Rejected();
+            }
+
+            ClearPendingRequestLocked(entry);
+            var lease = new VatpTransferLease(
+                record,
+                selectedDate,
+                entry.Identity,
+                entry.CacheUri,
+                () => ReleaseLease(entry));
+            return VatpOpenResult.Opened(lease);
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryCancelPendingRequest(Guid requestId)
+    {
+        if (requestId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(requestId));
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_byRequestId.TryGetValue(requestId, out var entry))
+            {
+                return false;
+            }
+
+            ClearPendingRequestLocked(entry);
+            return true;
+        }
+    }
+
+    /// <inheritdoc />
     public ArticleLookupResult TryGetByMessageId(string messageId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
@@ -383,11 +584,59 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         _byMessageId.Remove(entry.Identity.MessageId);
         _messageIdByMd5.Remove(entry.Identity.Md5Hex);
+        ClearPendingRequestLocked(entry);
         if (entry.Node is not null)
         {
             _insertionOrder.Remove(entry.Node);
             entry.Node = null;
         }
+    }
+
+    private void AttachPendingRequestLocked(
+        RetainedEntry entry,
+        Guid requestId,
+        in ArticleRecord record,
+        NntpArticleHeaderName selectedDateHeaderName)
+    {
+        if (entry.PendingRequestId is { } prior && prior != requestId)
+        {
+            _byRequestId.Remove(prior);
+        }
+
+        entry.AttachCanonical(in record, selectedDateHeaderName);
+        entry.PendingRequestId = requestId;
+        _byRequestId[requestId] = entry;
+    }
+
+    private void ClearPendingRequestLocked(RetainedEntry entry)
+    {
+        if (entry.PendingRequestId is not { } requestId)
+        {
+            return;
+        }
+
+        if (_byRequestId.TryGetValue(requestId, out var owner) && ReferenceEquals(owner, entry))
+        {
+            _byRequestId.Remove(requestId);
+        }
+
+        entry.PendingRequestId = null;
+    }
+
+    private static bool TryGetOwnedArtData(in ArticleRecord record, out byte[] payload)
+    {
+        if (MemoryMarshal.TryGetArray(record.ArtData, out ArraySegment<byte> segment)
+            && segment.Array is not null
+            && segment.Offset == 0
+            && segment.Count == record.ArtSize
+            && segment.Count > 0)
+        {
+            payload = segment.Array;
+            return true;
+        }
+
+        payload = null!;
+        return false;
     }
 
     private bool DisposePhysicallyLocked(RetainedEntry entry)
@@ -425,6 +674,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     private sealed class RetainedEntry
     {
         private byte[]? _payload;
+        private ArticleRecord? _record;
+        private NntpArticleHeaderName? _selectedDateHeaderName;
         private int _readers;
         private int _logicallyRemoved;
         private int _physicallyDisposed;
@@ -435,7 +686,9 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             byte[] payload,
             DateTimeOffset insertedUtc,
             DateTimeOffset expiresUtc,
-            long generation)
+            long generation,
+            ArticleRecord? record = null,
+            NntpArticleHeaderName? selectedDateHeaderName = null)
         {
             Identity = identity;
             CacheUri = cacheUri;
@@ -444,6 +697,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             InsertedUtc = insertedUtc;
             ExpiresUtc = expiresUtc;
             Generation = generation;
+            _record = record;
+            _selectedDateHeaderName = selectedDateHeaderName;
         }
 
         internal ArticleIdentity Identity { get; }
@@ -460,6 +715,12 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         internal LinkedListNode<RetainedEntry>? Node { get; set; }
 
+        internal Guid? PendingRequestId { get; set; }
+
+        internal ArticleRecord? Record => _record;
+
+        internal NntpArticleHeaderName? SelectedDateHeaderName => _selectedDateHeaderName;
+
         internal bool IsLogicallyRemoved => Volatile.Read(ref _logicallyRemoved) == 1;
 
         internal bool WasPhysicallyDisposedThisRemoval { get; set; }
@@ -471,6 +732,12 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 var payload = _payload ?? throw new ObjectDisposedException(nameof(RetainedEntry));
                 return payload;
             }
+        }
+
+        internal void AttachCanonical(in ArticleRecord record, NntpArticleHeaderName selectedDateHeaderName)
+        {
+            _record = record;
+            _selectedDateHeaderName = selectedDateHeaderName;
         }
 
         internal bool TryAcquire()
@@ -511,6 +778,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             }
 
             _payload = null;
+            _record = null;
+            _selectedDateHeaderName = null;
             return true;
         }
     }

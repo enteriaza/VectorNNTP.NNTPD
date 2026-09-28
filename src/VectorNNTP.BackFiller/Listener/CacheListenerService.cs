@@ -10,6 +10,7 @@ using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.NNTPD.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener;
@@ -341,11 +342,41 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
             }
 
             handshakeCompleted = true;
-            await using var session = new CacheListenerSession(
-                new StreamCacheListenerTransport(ssl, _runtime.Listener.IoProgressTimeout, leaveInnerStreamOpen: true),
-                new CacheListenerRetentionHandler(_retention),
-                _runtime.Listener);
-            await session.RunAsync(cancellationToken).ConfigureAwait(false);
+            var baseTransport = new StreamCacheListenerTransport(
+                ssl,
+                _runtime.Listener.IoProgressTimeout,
+                leaveInnerStreamOpen: true);
+            var peek = new byte[VatpProtocol.HeaderLengthBytes];
+            var peekOffset = 0;
+            while (peekOffset < peek.Length)
+            {
+                var read = await baseTransport.ReadAsync(peek.AsMemory(peekOffset), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return;
+                }
+
+                peekOffset += read;
+            }
+
+            var prefixed = new PrefixedCacheListenerTransport(baseTransport, peek);
+            if (peek[1] == (byte)VatpFrameType.Hello)
+            {
+                await using var vatpSession = new VatpListenerSession(
+                    prefixed,
+                    _retention,
+                    _runtime.Listener,
+                    _logger);
+                await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await using var session = new CacheListenerSession(
+                    prefixed,
+                    new CacheListenerRetentionHandler(_retention),
+                    _runtime.Listener);
+                await session.RunAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

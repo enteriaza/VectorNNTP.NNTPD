@@ -62,6 +62,9 @@ public sealed class ArticleTransferWindowAndFairnessTests
         Assert.Equal(0, stream.ReceiveCredit);
         Assert.True(stream.TryAcceptWindow((uint)(artData.Length - 4)).Success);
         Assert.True(stream.TryAcceptData(artData.AsSpan(4), fin: true).Success);
+        Assert.Equal(ArticleTransferPhase.AwaitingEnd, stream.Phase);
+        Assert.False(stream.HasConsumableRecord);
+        Assert.True(stream.TryAcceptEnd().Success);
         Assert.True(stream.HasConsumableRecord);
     }
 

@@ -6,8 +6,8 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer;
 /// <remarks>
 /// Valid progression: <see cref="AwaitingMeta"/> → <see cref="ReceivingData"/> →
 /// <see cref="AwaitingEnd"/> → <see cref="Completed"/> (after canonical validation).
-/// FIN on the last DATA may skip an explicit END and enter validation directly.
-/// A stream is consumable only in <see cref="Completed"/>.
+/// <see cref="AwaitingEnd"/> requires exact ArtSize bytes and FIN on the final DATA frame.
+/// END then runs canonical validation. A stream is consumable only in <see cref="Completed"/>.
 /// </remarks>
 public enum ArticleTransferPhase : byte
 {
@@ -18,8 +18,7 @@ public enum ArticleTransferPhase : byte
     ReceivingData = 1,
 
     /// <summary>
-    /// All ArtSize bytes received (and FIN seen or not yet). Waiting for END when FIN
-    /// was not set on the last DATA frame.
+    /// Exact ArtSize bytes and FIN observed. Waiting for END before canonical validation.
     /// </summary>
     AwaitingEnd = 2,
 
