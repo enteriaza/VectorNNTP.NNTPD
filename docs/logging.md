@@ -9,7 +9,7 @@ Serilog is the **only** logging implementation. Application code continues to us
 |-------|------|
 | `ILogger<T>` / `ILoggerFactory` | Application and framework logging API |
 | `SerilogLoggerFactory` | Exclusive MEL factory registered by `AddSerilog` |
-| Serilog sinks | Destinations (console Information+ → stdout → journald; file Verbose+ under `Nntpd:LogDir`) |
+| Serilog sinks | Destinations (console Information+ → stdout → journald; file Debug+ under `Nntpd:LogDir`) |
 
 Do not re-add `AddConsole`, `AddDebug`, or `AddEventLog`. `ConfigureNntpdLogging()` clears MEL providers and removes the default `ILoggerFactory` before registering Serilog.
 
@@ -34,12 +34,12 @@ After `host.Build()`, `NntpdLoggingExtensions.WriteLoggingInitialized` emits one
 
 Serilog is configured under the `Serilog` section in `appsettings.json` (and environment-specific files).
 
-Console and file have **separate** minimum levels. Do not raise the global / `VectorNNTP.NNTPD` minimum to `Information` — that would starve the file sink of Debug and Trace events.
+Console and file have **separate** minimum levels. Do not raise the global / `VectorNNTP.NNTPD` minimum to `Information` — that would starve the file sink of Debug events.
 
 | Sink | Minimum | Purpose |
 |------|---------|---------|
 | Console | Information+ | Interactive / journald operational use |
-| File | Verbose+ (MEL Trace / Debug+) | Full diagnostics, including TAKETHIS RX/TX |
+| File | Debug+ | Full diagnostics, including TAKETHIS RX/TX |
 
 There is one source of truth per operational setting. `Serilog:WriteTo` in `appsettings.json` owns File/Async/Archive **arguments**. `Nntpd:LogDir` owns the directory. Code does not re-declare rolling, retention, async buffer, or minimum-level values.
 
@@ -57,7 +57,7 @@ There is one source of truth per operational setting. `Serilog:WriteTo` in `apps
 
 Daily rolling uses Serilog `rollingInterval: Day` (local midnight). The active file is `{ApplicationName}-yyyyMMdd.log` (for example `VectorNNTP.NNTPD-20260925.log`). `fileSizeLimitBytes` is JSON `null` and `rollOnFileSizeLimit` is `false` so a single day may exceed 10 GB.
 
-Gzip runs only because Serilog deletes rolled uncompressed files. `ArchiveHooks.OnFileDeleting` copies the doomed `.log` to `{filename}.gz` in the same directory, then Serilog deletes the uncompressed original. File `retainedFileCountLimit` is **1 uncompressed file** (the active day). That is not gzip-archive retention: Serilog's matcher is `{ApplicationName}-*.log` and does not select `.log.gz`. Historical `.gz` files stay until an external retention process removes them. The active file is not compressed.
+Gzip runs only because Serilog deletes rolled uncompressed files. `ArchiveHooks.OnFileDeleting` copies the doomed `.log` to `{filename}.gz` in the same directory, then Serilog deletes the uncompressed original. The application File sink `retainedFileCountLimit` is **14 uncompressed daily files**. That is not gzip-archive retention and is not the Path-survey (`inpaths`) limit: Serilog's matcher is `{ApplicationName}-*.log` and does not select `.log.gz`. A rolled application log is gzipped when it falls outside those 14 uncompressed days. Historical `.gz` files stay until an external retention process removes them. The active file is not compressed.
 
 ## INN `news` log
 
@@ -192,7 +192,7 @@ Invalid Serilog configuration (unknown sink, malformed JSON) fails host startup 
 
 Prefer `Serilog:*` settings. There is no Microsoft `Logging` section in application configuration.
 
-`appsettings.Development.json` may raise the default minimum to Debug for interactive work. Keep `VectorNNTP.NNTPD` at `Verbose` so MEL Trace events still reach the file sink.
+`appsettings.Development.json` may raise the default minimum to Debug for interactive work. Production sets `VectorNNTP.NNTPD` and the File sink to `Debug` so TAKETHIS RX/TX reach the file without Console Debug noise. Raise the override to `Verbose` only when MEL Trace must also reach the file sink.
 
 ## Console and systemd/journald
 

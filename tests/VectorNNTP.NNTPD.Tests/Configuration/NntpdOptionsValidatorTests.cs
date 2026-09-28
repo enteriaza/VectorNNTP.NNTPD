@@ -838,7 +838,7 @@ public sealed class NntpdConfigurationTests
             doc.RootElement.GetProperty("Serilog").GetProperty("WriteTo")[0]
                 .GetProperty("Args").GetProperty("restrictedToMinimumLevel").GetString());
         Assert.Equal(
-            "Verbose",
+            "Debug",
             doc.RootElement.GetProperty("Serilog").GetProperty("MinimumLevel")
                 .GetProperty("Override").GetProperty("VectorNNTP.NNTPD").GetString());
         var async = doc.RootElement.GetProperty("Serilog").GetProperty("WriteTo")[1];
@@ -846,7 +846,7 @@ public sealed class NntpdConfigurationTests
         Assert.Equal(50000, async.GetProperty("Args").GetProperty("bufferSize").GetInt32());
         Assert.True(async.GetProperty("Args").GetProperty("blockWhenFull").GetBoolean());
         Assert.Equal(
-            "Verbose",
+            "Debug",
             async.GetProperty("Args").GetProperty("configure")[0].GetProperty("Args")
                 .GetProperty("restrictedToMinimumLevel").GetString());
     }

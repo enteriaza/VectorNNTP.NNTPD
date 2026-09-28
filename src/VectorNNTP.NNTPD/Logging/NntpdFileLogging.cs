@@ -121,14 +121,14 @@ internal static class NntpdFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "logs/VectorNNTP.NNTPD-.log",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Verbose",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:fileSizeLimitBytes"] = null,
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:buffered"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollingInterval"] = "Day",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "1",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "14",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:hooks"] =
             "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
     };

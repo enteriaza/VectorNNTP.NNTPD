@@ -127,28 +127,34 @@ public sealed class CloudflareDnsReconciliationServiceTests
 
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
+        // Cloudflare DNS must start first. Remaining checks are relative start-order
+        // dependencies, not frozen numeric indexes.
         Assert.Equal(typeof(CloudflareDnsReconciliationApplicationService), services[0].GetType());
         Assert.Equal(
             typeof(CloudflareDnsReconciliationService).Assembly,
             services[0].GetType().Assembly);
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Redis.RedisService), services[1].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService), services[2].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), services[3].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[4].GetType());
-        Assert.Equal(typeof(NntpDbService), services[5].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService), services[6].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService), services[7].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.PostFilter.PostFilterPolicyService), services[8].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryWriteService), services[9].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), services[10].GetType());
-        Assert.Equal(typeof(IncomingSpoolWriterService), services[11].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), services[12].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), services[13].GetType());
-        Assert.Equal(typeof(SessionStateService), services[14].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService), services[15].GetType());
-        Assert.Equal(typeof(NntpPlainListenerService), services[16].GetType());
-        Assert.Equal(typeof(AcmeCertificateApplicationService), services[17].GetType());
-        Assert.Equal(typeof(NntpTlsListenerService), services[18].GetType());
+
+        AssertRegisteredBefore(services, typeof(CloudflareDnsReconciliationApplicationService), typeof(VectorNNTP.NNTPD.Redis.RedisService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Redis.RedisService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), typeof(NntpDbService));
+        AssertRegisteredBefore(services, typeof(NntpDbService), typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService), typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService), typeof(VectorNNTP.NNTPD.PostFilter.PostFilterPolicyService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.PostFilter.PostFilterPolicyService), typeof(VectorNNTP.NNTPD.PostFilter.PostFilterRejectionEvidenceService));
+        AssertRegisteredBefore(services, typeof(NntpDbService), typeof(VectorNNTP.NNTPD.PostFilter.PostFilterRejectionEvidenceService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.PostFilter.PostFilterRejectionEvidenceService), typeof(VectorNNTP.NNTPD.History.HistoryWriteService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.History.HistoryWriteService), typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.History.HistoryMaintenanceService), typeof(IncomingSpoolWriterService));
+        AssertRegisteredBefore(services, typeof(IncomingSpoolWriterService), typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Email.EmailDeliveryService), typeof(VectorNNTP.NNTPD.Ninpaths.NinpathsProcessingService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Ninpaths.NinpathsProcessingService), typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Transit.TransitDnsRefreshService), typeof(SessionStateService));
+        AssertRegisteredBefore(services, typeof(SessionStateService), typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Transit.TransitPeerStateService), typeof(NntpPlainListenerService));
+        AssertRegisteredBefore(services, typeof(NntpPlainListenerService), typeof(AcmeCertificateApplicationService));
+        AssertRegisteredBefore(services, typeof(AcmeCertificateApplicationService), typeof(NntpTlsListenerService));
         Assert.DoesNotContain(services, static s => s.GetType().Name == "AccountByteService");
         Assert.Equal(1, services.Count(static s => s is SessionStateService));
 
@@ -172,6 +178,30 @@ public sealed class CloudflareDnsReconciliationServiceTests
             client);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.StartAsync(cts.Token));
+    }
+
+    private static void AssertRegisteredBefore(IApplicationService[] services, Type earlier, Type later)
+    {
+        var earlierIndex = -1;
+        var laterIndex = -1;
+        for (var i = 0; i < services.Length; i++)
+        {
+            var type = services[i].GetType();
+            if (type == earlier && earlierIndex < 0)
+            {
+                earlierIndex = i;
+            }
+            else if (type == later && laterIndex < 0)
+            {
+                laterIndex = i;
+            }
+        }
+
+        Assert.True(earlierIndex >= 0, $"{earlier.Name} must be registered.");
+        Assert.True(laterIndex >= 0, $"{later.Name} must be registered.");
+        Assert.True(
+            earlierIndex < laterIndex,
+            $"{earlier.Name} (index {earlierIndex}) must precede {later.Name} (index {laterIndex}).");
     }
 
     private static CloudflareDnsReconciliationService CreateService(

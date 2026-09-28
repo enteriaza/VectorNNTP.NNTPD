@@ -267,9 +267,10 @@ public static class NntpdServiceCollectionExtensions
         // RabbitMQ article-work RPC (hard dep; reply consumer + request orchestration) →
         // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
-        // moderator catalogue (nntpmoderators snapshot before RUNNING) → HistoryDB writer →
-        // HistoryDB maintenance → incoming spool writer → Email delivery (lazy SMTP) →
-        // ninpaths (completed inpaths; Top1000) →
+        // moderator catalogue (nntpmoderators snapshot before RUNNING) →
+        // PostFilter policy → PostFilter rejection evidence →
+        // HistoryDB writer → HistoryDB maintenance → incoming spool writer →
+        // Email delivery (lazy SMTP) → ninpaths (completed inpaths; Top1000) →
         // Transit AllowFrom DNS refresh → SessionState lease renewal →
         // Transit inbound-ownership renewal →
         // plain NNTP listener → ACME → TLS NNTP listener →

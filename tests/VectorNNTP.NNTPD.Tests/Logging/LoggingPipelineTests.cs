@@ -274,14 +274,14 @@ public sealed class LoggingPipelineTests
         Assert.Equal("Serilog.Sinks.Console", section["Serilog:Using:0"]);
         Assert.Equal("Console", section["Serilog:WriteTo:0:Name"]);
         Assert.Equal("Information", section["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"]);
-        Assert.Equal("Verbose", section["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"]);
+        Assert.Equal("Debug", section["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"]);
         Assert.Equal("Async", section["Serilog:WriteTo:1:Name"]);
         Assert.Equal("50000", section["Serilog:WriteTo:1:Args:bufferSize"]);
         Assert.Equal("true", section["Serilog:WriteTo:1:Args:blockWhenFull"]);
         Assert.Equal("File", section["Serilog:WriteTo:1:Args:configure:0:Name"]);
-        Assert.Equal("Verbose", section["Serilog:WriteTo:1:Args:configure:0:Args:restrictedToMinimumLevel"]);
+        Assert.Equal("Debug", section["Serilog:WriteTo:1:Args:configure:0:Args:restrictedToMinimumLevel"]);
         Assert.Equal("Day", section["Serilog:WriteTo:1:Args:configure:0:Args:rollingInterval"]);
-        Assert.Equal("1", section["Serilog:WriteTo:1:Args:configure:0:Args:retainedFileCountLimit"]);
+        Assert.Equal("14", section["Serilog:WriteTo:1:Args:configure:0:Args:retainedFileCountLimit"]);
         Assert.Null(section["Serilog:WriteTo:1:Args:configure:0:Args:fileSizeLimitBytes"]);
     }
 
@@ -409,7 +409,7 @@ public sealed class LoggingPipelineTests
             ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
             ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",
             ["Serilog:MinimumLevel:Override:System"] = "Warning",
-            ["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"] = "Verbose",
+            ["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"] = "Debug",
             ["Serilog:WriteTo:0:Name"] = "Console",
             ["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Information",
             ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,

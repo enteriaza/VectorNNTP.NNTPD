@@ -31,9 +31,11 @@ public sealed class FileLoggingTests
         var file = async.GetProperty("Args").GetProperty("configure")[0];
         Assert.Equal("File", file.GetProperty("Name").GetString());
         var args = file.GetProperty("Args");
-        Assert.Equal("Verbose", args.GetProperty("restrictedToMinimumLevel").GetString());
+        Assert.Equal("Debug", args.GetProperty("restrictedToMinimumLevel").GetString());
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
-        Assert.Equal(1, args.GetProperty("retainedFileCountLimit").GetInt32());
+        // Application File keeps 14 uncompressed days. Path-survey (inpaths) uses 1 so
+        // Serilog's delete callback can hand off completed files at daily rotation.
+        Assert.Equal(14, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.True(args.GetProperty("buffered").GetBoolean());
         Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
@@ -108,7 +110,8 @@ public sealed class FileLoggingTests
                 static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
-            Assert.Equal(1, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
+            // Uncompressed application File retention (14 daily files), not inpaths (1) or gzip archives.
+            Assert.Equal(14, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
             Assert.Same(
                 NntpdSerilogHooks.DailyGzipFastest,
