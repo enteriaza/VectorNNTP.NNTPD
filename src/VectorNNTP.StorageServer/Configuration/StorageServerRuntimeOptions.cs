@@ -36,9 +36,13 @@ public sealed record StorageServerRuntimeOptions(
 /// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
 /// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
-/// <param name="CapacityAdmissionEnabled">Process-local capacity admission (Phase 5E.1).</param>
+/// <param name="CapacityAdmissionEnabled">Process-local capacity admission (Phase 5E.1 / 5E.2).</param>
 /// <param name="CapacityMaximumUtilization">
-/// Max <c>(Used + Reserved + Required) / Total</c> when capacity admission is enabled.
+/// Article Accept ceiling: max <c>(Used + ArtRes + CompRes + Required) / Total</c>.
+/// </param>
+/// <param name="CapacityCompactionHeadroom">
+/// Utilisation delta added to <paramref name="CapacityMaximumUtilization"/> for compaction
+/// destination appends only (Phase 5E.2).
 /// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
@@ -47,7 +51,8 @@ public sealed record ArticleStorageRuntimeOptions(
     long JournalHardLimitBytes,
     long SegmentTargetSizeBytes,
     bool CapacityAdmissionEnabled = false,
-    double CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization);
+    double CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+    double CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

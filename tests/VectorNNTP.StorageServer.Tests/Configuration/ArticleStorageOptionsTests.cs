@@ -24,6 +24,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio, storage.Compaction.MinimumDeadRatio);
         Assert.False(storage.Capacity.Enabled);
         Assert.Equal(ArticleCapacityOptions.DefaultMaximumUtilization, storage.Capacity.MaximumUtilization);
+        Assert.Equal(ArticleCapacityOptions.DefaultCompactionHeadroom, storage.Capacity.CompactionHeadroom);
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
 
@@ -199,6 +200,29 @@ public sealed class ArticleStorageOptionsTests
         var capacity = storage.GetProperty("Capacity");
         Assert.False(capacity.GetProperty("Enabled").GetBoolean());
         Assert.Equal(0.80, capacity.GetProperty("MaximumUtilization").GetDouble());
+        Assert.Equal(0.10, capacity.GetProperty("CompactionHeadroom").GetDouble());
+    }
+
+    [Fact]
+    public void Validator_rejects_invalid_CompactionHeadroom()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Capacity.MaximumUtilization = 0.80;
+
+        options.Storage.Capacity.CompactionHeadroom = 0;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = -0.1;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = double.NaN;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = double.PositiveInfinity;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = 0.20;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = 0.25;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = 0.10;
+        Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
     }
 
     [Fact]

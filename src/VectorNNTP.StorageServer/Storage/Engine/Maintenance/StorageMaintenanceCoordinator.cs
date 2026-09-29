@@ -180,6 +180,21 @@ public sealed class StorageMaintenanceCoordinator
                     .ConfigureAwait(false);
 
             case ArticleCompactionOutcome.Incomplete:
+                // Capacity policy denial before any successful relocation → Skipped (not Failed).
+                if (compact.RelocatedCount == 0
+                    && compact.AbandonedCount == 0
+                    && compact.Reason is not null
+                    && compact.Reason.StartsWith("capacity", StringComparison.Ordinal))
+                {
+                    return EnrichCompactionResult(
+                        Skipped(
+                            compact.SourceSegmentId,
+                            compact.CompactionId,
+                            compact.Reason),
+                        compact,
+                        sourceAccountingHint);
+                }
+
                 return IncompleteFromCompaction(compact, sourceAccountingHint);
 
             case ArticleCompactionOutcome.RejectedSourceMissing:

@@ -412,7 +412,8 @@ public sealed class ProcessLocalCapacityAdmissionTests
             sink.Events,
             static e => e.Level == LogEventLevel.Warning
                 && e.Properties.ContainsKey("RequiredBytes")
-                && e.Properties.ContainsKey("ReservedBytes")
+                && e.Properties.ContainsKey("ArticleReservedBytes")
+                && e.Properties.ContainsKey("CompactionReservedBytes")
                 && e.Properties.ContainsKey("MaximumUtilization"));
 
         // Successful Accept must not emit capacity-rejection warnings.

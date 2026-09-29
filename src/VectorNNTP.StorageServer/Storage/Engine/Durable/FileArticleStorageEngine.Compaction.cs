@@ -163,6 +163,20 @@ public sealed partial class FileArticleStorageEngine
                     abandoned++;
                     break;
 
+                case ArticleRelocationOutcome.RejectedCapacity:
+                    return new ArticleCompactionResult(
+                        ArticleCompactionOutcome.Incomplete,
+                        compactionId,
+                        sourceSegmentId,
+                        sourceGeneration,
+                        worklist.Count,
+                        relocated,
+                        abandoned,
+                        CountPresentOnSource(sourceSegmentId),
+                        CompactionCommittedAppended: false,
+                        Reason: "capacity"
+                                + (relocate.Reason is null ? string.Empty : ":" + relocate.Reason));
+
                 case ArticleRelocationOutcome.RejectedSourceCorrupt:
                 case ArticleRelocationOutcome.Conflict:
                 case ArticleRelocationOutcome.RejectedCompaction:

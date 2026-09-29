@@ -20,16 +20,37 @@ internal static partial class FileArticleStorageEngineLogMessages
     [LoggerMessage(
         EventId = 3415,
         Level = LogLevel.Warning,
-        Message = "Article Accept rejected by process-local capacity (artId={ArtId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ReservedBytes={ReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization})")]
+        Message = "Article Accept rejected by process-local capacity (artId={ArtId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
     public static partial void RejectedCapacity(
         ILogger logger,
         string ArtId,
         long RequiredBytes,
         long UsedBytes,
-        long ReservedBytes,
+        long ArticleReservedBytes,
+        long CompactionReservedBytes,
         long TotalBytes,
         long AvailableBytes,
-        double MaximumUtilization);
+        double MaximumUtilization,
+        double CompactionHeadroom);
+
+    [LoggerMessage(
+        EventId = 3416,
+        Level = LogLevel.Warning,
+        Message = "Compaction relocation rejected by process-local capacity (artId={ArtId}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocationId={RelocationId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
+    public static partial void RejectedCompactionCapacity(
+        ILogger logger,
+        string ArtId,
+        ulong SegmentId,
+        ulong CompactionId,
+        ulong RelocationId,
+        long RequiredBytes,
+        long UsedBytes,
+        long ArticleReservedBytes,
+        long CompactionReservedBytes,
+        long TotalBytes,
+        long AvailableBytes,
+        double MaximumUtilization,
+        double CompactionHeadroom);
 
     [LoggerMessage(
         EventId = 3402,

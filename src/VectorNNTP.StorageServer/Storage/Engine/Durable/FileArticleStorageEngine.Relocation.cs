@@ -1,5 +1,6 @@
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
+using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 
@@ -17,6 +18,12 @@ public sealed partial class FileArticleStorageEngine
 
     /// <summary>Optional one-shot relocation fault (cleared when consumed). Tests only.</summary>
     internal RelocationFaultPoint TestRelocationFaultPoint { get; set; }
+
+    /// <summary>
+    /// Invoked after a successful compaction capacity reservation and before destination append.
+    /// Tests only. Remains installed until cleared by the test.
+    /// </summary>
+    internal Action? TestHookAfterCompactionCapacityReserved { get; set; }
 
     /// <summary>
     /// Invoked after durable RelocationWritten and before <see cref="IArticleIndex.TryRelocate"/>.
@@ -276,44 +283,123 @@ public sealed partial class FileArticleStorageEngine
         ReadOnlyMemory<byte> artData,
         CancellationToken cancellationToken)
     {
-        ThrowIfRelocationFault(RelocationFaultPoint.AfterIntentBeforeAppend);
-
-        var appender = await _segments.GetActiveAppenderAsync(cancellationToken).ConfigureAwait(false);
-        if (appender.SegmentId.Value == intent.ExpectedSourceLocation.SegmentId.Value)
+        var reservedCompaction = false;
+        if (_capacityAdmissionEnabled)
         {
-            // Source is Closed, so active must never be the source; fail closed if invariants break.
-            throw new InvalidOperationException(
-                "Active destination segment must not be the Closed compaction source.");
+            if (_capacityReader is null)
+            {
+                throw new InvalidOperationException(
+                    "Capacity admission is enabled but no IStorageCapacityReader is configured.");
+            }
+
+            var requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(intent.ArtSize);
+            lock (_gate)
+            {
+                var snap = _capacityReader.Read();
+                var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
+                if (!_capacityLedger.WouldFit(
+                        snap.UsedBytes,
+                        snap.TotalBytes,
+                        requiredBytes,
+                        ceiling))
+                {
+                    FileArticleStorageEngineLogMessages.RejectedCompactionCapacity(
+                        _logger,
+                        intent.ArtId.ToString() ?? string.Empty,
+                        intent.ExpectedSourceLocation.SegmentId.Value,
+                        intent.CompactionId,
+                        intent.RelocationId,
+                        requiredBytes,
+                        snap.UsedBytes,
+                        _capacityLedger.ArticleReservedBytes,
+                        _capacityLedger.CompactionReservedBytes,
+                        snap.TotalBytes,
+                        snap.AvailableBytes,
+                        _capacityMaximumUtilization,
+                        _capacityCompactionHeadroom);
+                    return new ArticleRelocationResult(
+                        ArticleRelocationOutcome.RejectedCapacity,
+                        intent.ArtId,
+                        Reason: "storage-capacity");
+                }
+
+                _capacityLedger.ReserveCompaction(
+                    intent.CompactionId,
+                    intent.RelocationId,
+                    requiredBytes);
+                reservedCompaction = true;
+            }
+
+            var reservedHook = TestHookAfterCompactionCapacityReserved;
+            reservedHook?.Invoke();
         }
 
-        var destination = await appender.AppendAsync(artData, cancellationToken).ConfigureAwait(false);
-        _ = Interlocked.Increment(ref _physicalAppendCount);
-
-        ThrowIfRelocationFault(RelocationFaultPoint.AfterAppendBeforeWritten);
-
-        var written = new JournalRelocationWrittenRecord(
-            1,
-            intent.CompactionId,
-            intent.RelocationId,
-            destination);
-        var writtenOutcome = await _journal
-            .AppendRelocationWrittenAsync(written, cancellationToken)
-            .ConfigureAwait(false);
-        if (writtenOutcome == JournalAppendOutcome.Conflict)
+        try
         {
-            throw new InvalidOperationException(
-                $"RelocationWritten conflict for compaction {intent.CompactionId} " +
-                $"relocation {intent.RelocationId}.");
-        }
+            // After capacity reservation: intentional pre-append fault still rolls back reservation.
+            ThrowIfRelocationFault(RelocationFaultPoint.AfterIntentBeforeAppend);
 
-        if (writtenOutcome == JournalAppendOutcome.Rejected)
+            var appender = await _segments.GetActiveAppenderAsync(cancellationToken).ConfigureAwait(false);
+            if (appender.SegmentId.Value == intent.ExpectedSourceLocation.SegmentId.Value)
+            {
+                // Source is Closed, so active must never be the source; fail closed if invariants break.
+                throw new InvalidOperationException(
+                    "Active destination segment must not be the Closed compaction source.");
+            }
+
+            var destination = await appender.AppendAsync(artData, cancellationToken).ConfigureAwait(false);
+            _ = Interlocked.Increment(ref _physicalAppendCount);
+
+            // Destination Flush(true) completed; process-local compaction reservation may release.
+            if (reservedCompaction)
+            {
+                ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+                reservedCompaction = false;
+            }
+
+            ThrowIfRelocationFault(RelocationFaultPoint.AfterAppendBeforeWritten);
+
+            var written = new JournalRelocationWrittenRecord(
+                1,
+                intent.CompactionId,
+                intent.RelocationId,
+                destination);
+            var writtenOutcome = await _journal
+                .AppendRelocationWrittenAsync(written, cancellationToken)
+                .ConfigureAwait(false);
+            if (writtenOutcome == JournalAppendOutcome.Conflict)
+            {
+                throw new InvalidOperationException(
+                    $"RelocationWritten conflict for compaction {intent.CompactionId} " +
+                    $"relocation {intent.RelocationId}.");
+            }
+
+            if (writtenOutcome == JournalAppendOutcome.Rejected)
+            {
+                throw new InvalidOperationException(
+                    $"RelocationWritten rejected for compaction {intent.CompactionId} " +
+                    $"relocation {intent.RelocationId}.");
+            }
+
+            return FinishIndexRelocate(intent, destination);
+        }
+        catch
         {
-            throw new InvalidOperationException(
-                $"RelocationWritten rejected for compaction {intent.CompactionId} " +
-                $"relocation {intent.RelocationId}.");
-        }
+            if (reservedCompaction)
+            {
+                ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+            }
 
-        return FinishIndexRelocate(intent, destination);
+            throw;
+        }
+    }
+
+    private void ReleaseCompactionReservation(ulong compactionId, ulong relocationId)
+    {
+        lock (_gate)
+        {
+            _ = _capacityLedger.ReleaseCompaction(compactionId, relocationId);
+        }
     }
 
     private async Task<ArticleRelocationResult> CompleteFromWrittenAsync(

@@ -177,6 +177,12 @@ public enum ArticleRelocationOutcome : byte
 
     /// <summary>Journal append conflict (fail-closed body mismatch).</summary>
     Conflict = 10,
+
+    /// <summary>
+    /// Rejected by process-local compaction capacity admission before destination append
+    /// (Phase 5E.2). Distinct from storage I/O failure and Abandoned.
+    /// </summary>
+    RejectedCapacity = 11,
 }
 
 /// <summary>Result of <c>FileArticleStorageEngine.RelocateArticleAsync</c>.</summary>

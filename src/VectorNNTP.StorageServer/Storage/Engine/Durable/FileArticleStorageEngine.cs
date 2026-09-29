@@ -34,9 +34,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// ArtId whose durable state is Evicted/Invalid is dropped rather than returned.
 /// </para>
 /// <para>
-/// Phase 5E.1: optional process-local capacity reservation under
+/// Phase 5E.1 / 5E.2: optional process-local capacity reservation under
 /// <see cref="ArticleCapacityOptions"/>. Reservations are not kernel/cross-process filesystem
-/// reservations. Compaction/relocation appends do not participate (deferred to 5E.2).
+/// reservations. Article Accept and compaction destination appends share process-local counters
+/// under distinct ceilings (<see cref="ArticleCapacityOptions.MaximumUtilization"/> vs
+/// MaximumUtilization + <see cref="ArticleCapacityOptions.CompactionHeadroom"/>).
 /// </para>
 /// <para>
 /// Phase 4A: logical death updates in-memory segment Live/Dead using
@@ -56,6 +58,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly IStorageCapacityReader? _capacityReader;
     private readonly bool _capacityAdmissionEnabled;
     private readonly double _capacityMaximumUtilization;
+    private readonly double _capacityCompactionHeadroom;
     private readonly ProcessLocalCapacityLedger _capacityLedger = new();
     private readonly object _gate = new();
     private readonly Queue<ulong> _pendingSequences = new();
@@ -75,7 +78,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         TimeProvider timeProvider,
         IStorageCapacityReader? capacityReader,
         bool capacityAdmissionEnabled,
-        double capacityMaximumUtilization)
+        double capacityMaximumUtilization,
+        double capacityCompactionHeadroom)
     {
         _journal = journal;
         _segments = segments;
@@ -86,6 +90,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityReader = capacityReader;
         _capacityAdmissionEnabled = capacityAdmissionEnabled;
         _capacityMaximumUtilization = capacityMaximumUtilization;
+        _capacityCompactionHeadroom = capacityCompactionHeadroom;
         _worker = Task.Run(() => RunPhysicalWorkerAsync(_workerCts.Token));
     }
 
@@ -121,7 +126,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>Number of SATA appends performed by this engine instance (tests).</summary>
     public long PhysicalAppendCount => Volatile.Read(ref _physicalAppendCount);
 
-    /// <summary>Process-local reserved SATA bytes awaiting PhysicalWritten (tests / diagnostics).</summary>
+    /// <summary>Process-local article + compaction reserved bytes (tests / diagnostics).</summary>
     internal long ProcessLocalReservedBytes
     {
         get
@@ -133,7 +138,31 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
     }
 
-    /// <summary>Number of sequences holding a process-local capacity reservation (tests).</summary>
+    /// <summary>Process-local article Accept reserved bytes (tests).</summary>
+    internal long ProcessLocalArticleReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capacityLedger.ArticleReservedBytes;
+            }
+        }
+    }
+
+    /// <summary>Process-local compaction destination reserved bytes (tests).</summary>
+    internal long ProcessLocalCompactionReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capacityLedger.CompactionReservedBytes;
+            }
+        }
+    }
+
+    /// <summary>Number of Accept sequences holding an article capacity reservation (tests).</summary>
     internal int ProcessLocalReservationCount
     {
         get
@@ -141,6 +170,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             lock (_gate)
             {
                 return _capacityLedger.ReservationCount;
+            }
+        }
+    }
+
+    /// <summary>Number of compaction relocation keys holding a reservation (tests).</summary>
+    internal int ProcessLocalCompactionReservationCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capacityLedger.CompactionReservationCount;
             }
         }
     }
@@ -216,7 +257,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 timeProvider ?? TimeProvider.System,
                 capacity,
                 options.CapacityAdmissionEnabled,
-                options.CapacityMaximumUtilization);
+                options.CapacityMaximumUtilization,
+                options.CapacityCompactionHeadroom);
             journal = null;
             segments = null;
             index = null;
@@ -297,10 +339,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         record.ArtId.ToString() ?? string.Empty,
                         requiredBytes,
                         snap.UsedBytes,
-                        _capacityLedger.ReservedBytes,
+                        _capacityLedger.ArticleReservedBytes,
+                        _capacityLedger.CompactionReservedBytes,
                         snap.TotalBytes,
                         snap.AvailableBytes,
-                        _capacityMaximumUtilization);
+                        _capacityMaximumUtilization,
+                        _capacityCompactionHeadroom);
                     return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
                 }
 

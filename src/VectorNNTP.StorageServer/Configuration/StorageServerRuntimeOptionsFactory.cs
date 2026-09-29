@@ -103,7 +103,9 @@ public static class StorageServerRuntimeOptionsFactory
                 SegmentTargetSizeBytes: storage.SegmentTargetSizeBytes,
                 CapacityAdmissionEnabled: storage.Capacity?.Enabled ?? false,
                 CapacityMaximumUtilization: storage.Capacity?.MaximumUtilization
-                    ?? ArticleCapacityOptions.DefaultMaximumUtilization),
+                    ?? ArticleCapacityOptions.DefaultMaximumUtilization,
+                CapacityCompactionHeadroom: storage.Capacity?.CompactionHeadroom
+                    ?? ArticleCapacityOptions.DefaultCompactionHeadroom),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             GracefulShutdownTimeout: options.GracefulShutdownTimeout,
             StartupTimeout: options.StartupTimeout,
