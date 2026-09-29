@@ -1,3 +1,5 @@
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
@@ -161,14 +163,23 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>Gets every confirm-enabled publish channel created on this connection.</summary>
     public List<FakeRabbitMqPublishChannel> PublishChannels { get; } = [];
 
+    /// <summary>Gets every async-confirm publish channel created on this connection.</summary>
+    public List<FakeRabbitMqAsyncConfirmPublishChannel> AsyncConfirmPublishChannels { get; } = [];
+
     /// <summary>When set, <see cref="CreateRpcChannelAsync"/> throws this exception.</summary>
     public Exception? CreateRpcChannelException { get; set; }
 
     /// <summary>When set, <see cref="CreatePublishChannelAsync"/> throws this exception.</summary>
     public Exception? CreatePublishChannelException { get; set; }
 
+    /// <summary>When set, <see cref="CreateAsyncConfirmPublishChannelAsync"/> throws this exception.</summary>
+    public Exception? CreateAsyncConfirmPublishChannelException { get; set; }
+
     /// <summary>Optional configurator invoked for every newly created publish channel.</summary>
     public Action<FakeRabbitMqPublishChannel>? ConfigurePublishChannel { get; set; }
+
+    /// <summary>Optional configurator invoked for every newly created async-confirm channel.</summary>
+    public Action<FakeRabbitMqAsyncConfirmPublishChannel>? ConfigureAsyncConfirmPublishChannel { get; set; }
 
     /// <summary>When set, <see cref="CreateTopologyChannelAsync"/> throws this exception.</summary>
     public Exception? CreateTopologyChannelException { get; set; }
@@ -268,6 +279,28 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
         ConfigurePublishChannel?.Invoke(channel);
         PublishChannels.Add(channel);
         return Task.FromResult<IRabbitMqPublishChannel>(channel);
+    }
+
+    /// <inheritdoc />
+    public Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CreateAsyncConfirmPublishChannelException is not null)
+        {
+            throw CreateAsyncConfirmPublishChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for OverviewDB publication.");
+        }
+
+        var channel = new FakeRabbitMqAsyncConfirmPublishChannel(generation);
+        ConfigureAsyncConfirmPublishChannel?.Invoke(channel);
+        AsyncConfirmPublishChannels.Add(channel);
+        return Task.FromResult<IRabbitMqAsyncConfirmPublishChannel>(channel);
     }
 
     /// <summary>Raises <see cref="ConnectionLost"/> as a peer-initiated disconnect.</summary>
@@ -687,6 +720,185 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
             Persistent: true,
             Mandatory: OverviewDbTopology.Mandatory,
             body.ToArray()));
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        IsOpen = false;
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// In-memory async-confirm publish channel. <see cref="PublishAsync"/> returns after the write;
+/// auto-acks by default so outstanding windows drain without a real broker.
+/// </summary>
+internal sealed class FakeRabbitMqAsyncConfirmPublishChannel : IRabbitMqAsyncConfirmPublishChannel
+{
+    private long _nextSequence = 1;
+    private AsyncEventHandler<BasicAckEventArgs>? _acks;
+    private AsyncEventHandler<BasicNackEventArgs>? _nacks;
+    private AsyncEventHandler<BasicReturnEventArgs>? _returns;
+
+    public FakeRabbitMqAsyncConfirmPublishChannel(long generation)
+    {
+        Generation = generation;
+    }
+
+    /// <inheritdoc />
+    public long Generation { get; }
+
+    /// <inheritdoc />
+    public bool IsOpen { get; set; } = true;
+
+    /// <summary>Gets recorded publications.</summary>
+    public List<FakeRabbitMqConfirmedPublication> Publications { get; } = [];
+
+    /// <summary>Gets how many times the channel was disposed.</summary>
+    public int DisposeCount { get; private set; }
+
+    /// <summary>When true (default), raises BasicAck after each successful publish.</summary>
+    public bool AutoAck { get; set; } = true;
+
+    /// <summary>Delay before auto-ack (simulates quorum confirm latency).</summary>
+    public TimeSpan AutoAckDelay { get; set; }
+
+    /// <summary>When set, <see cref="PublishAsync"/> throws this exception.</summary>
+    public Exception? PublishException { get; set; }
+
+    /// <summary>Remaining publications that throw before succeeding.</summary>
+    public int RemainingPublishFailures { get; set; }
+
+    /// <summary>Optional await before completing a publish write.</summary>
+    public Func<Task>? BeforePublishAsync { get; set; }
+
+    /// <inheritdoc />
+    public event AsyncEventHandler<BasicAckEventArgs> BasicAcksAsync
+    {
+        add => _acks += value;
+        remove => _acks -= value;
+    }
+
+    /// <inheritdoc />
+    public event AsyncEventHandler<BasicNackEventArgs> BasicNacksAsync
+    {
+        add => _nacks += value;
+        remove => _nacks -= value;
+    }
+
+    /// <inheritdoc />
+    public event AsyncEventHandler<BasicReturnEventArgs> BasicReturnAsync
+    {
+        add => _returns += value;
+        remove => _returns -= value;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<ulong> GetNextPublishSequenceNumberAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var seq = (ulong)Interlocked.Increment(ref _nextSequence) - 1;
+        return ValueTask.FromResult(seq);
+    }
+
+    /// <inheritdoc />
+    public async Task PublishAsync(
+        string exchange,
+        string routingKey,
+        string messageId,
+        string appId,
+        string expiration,
+        ulong publishSequenceNumber,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (DisposeCount > 0)
+        {
+            throw new ObjectDisposedException(nameof(FakeRabbitMqAsyncConfirmPublishChannel));
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ publish channel is not open.");
+        }
+
+        if (BeforePublishAsync is not null)
+        {
+            await BeforePublishAsync().ConfigureAwait(false);
+        }
+
+        if (RemainingPublishFailures > 0)
+        {
+            RemainingPublishFailures--;
+            throw PublishException
+                ?? new InvalidOperationException("RabbitMQ publish write failed.");
+        }
+
+        if (PublishException is not null)
+        {
+            throw PublishException;
+        }
+
+        Publications.Add(new FakeRabbitMqConfirmedPublication(
+            exchange,
+            routingKey,
+            messageId,
+            appId,
+            expiration,
+            Persistent: true,
+            Mandatory: OverviewDbTopology.Mandatory,
+            body.ToArray()));
+
+        if (AutoAck)
+        {
+            var delay = AutoAckDelay;
+            var seq = publishSequenceNumber;
+            _ = Task.Run(async () =>
+            {
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay).ConfigureAwait(false);
+                }
+
+                await RaiseAckAsync(seq, multiple: false).ConfigureAwait(false);
+            });
+        }
+    }
+
+    /// <summary>Raises a Basic.Ack for tests.</summary>
+    public Task RaiseAckAsync(ulong deliveryTag, bool multiple) =>
+        _acks?.Invoke(this, new BasicAckEventArgs(deliveryTag, multiple, CancellationToken.None))
+        ?? Task.CompletedTask;
+
+    /// <summary>Raises a Basic.Nack for tests.</summary>
+    public Task RaiseNackAsync(ulong deliveryTag, bool multiple) =>
+        _nacks?.Invoke(this, new BasicNackEventArgs(deliveryTag, multiple, requeue: false, CancellationToken.None))
+        ?? Task.CompletedTask;
+
+    /// <summary>Raises a Basic.Return for tests.</summary>
+    public Task RaiseReturnAsync(ulong publishSequenceNumber, ReadOnlyMemory<byte> body)
+    {
+        var properties = new BasicProperties
+        {
+            Headers = new Dictionary<string, object?>
+            {
+                [Constants.PublishSequenceNumberHeader] = publishSequenceNumber,
+            },
+        };
+        return _returns?.Invoke(
+                   this,
+                   new BasicReturnEventArgs(
+                       312,
+                       "NO_ROUTE",
+                       OverviewDbTopology.DefaultExchange,
+                       OverviewDbTopology.RoutingKey,
+                       properties,
+                       body,
+                       CancellationToken.None))
+               ?? Task.CompletedTask;
     }
 
     /// <inheritdoc />

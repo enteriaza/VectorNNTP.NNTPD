@@ -54,5 +54,23 @@ public interface IRabbitMqConnection : IAsyncDisposable
     /// <param name="generation">Connection generation the channel belongs to.</param>
     /// <param name="cancellationToken">Token used to cancel channel creation.</param>
     /// <returns>A publish channel owned by the caller. The caller must not dispose the connection.</returns>
+    /// <remarks>
+    /// Uses library confirmation tracking so <c>BasicPublishAsync</c> awaits the confirm.
+    /// Prefer <see cref="CreateAsyncConfirmPublishChannelAsync"/> for pipelined OverviewDB publishes.
+    /// </remarks>
     Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a caller-owned confirm-enabled channel for asynchronous publisher confirms.
+    /// </summary>
+    /// <param name="generation">Connection generation the channel belongs to.</param>
+    /// <param name="cancellationToken">Token used to cancel channel creation.</param>
+    /// <returns>
+    /// A channel with confirms enabled and library tracking disabled so publishes return
+    /// after the write; callers correlate <c>BasicAcksAsync</c>/<c>BasicNacksAsync</c>/
+    /// <c>BasicReturnAsync</c> by publish sequence number.
+    /// </returns>
+    Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken);
 }

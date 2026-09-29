@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Microsoft.Extensions.Options;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.RabbitMq;
@@ -7,34 +10,39 @@ using VectorNNTP.NNTPD.RabbitMq;
 namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 
 /// <summary>
-/// Publishes OverviewDB protobuf payloads to <c>overviewdb.queue</c> with publisher confirms.
+/// Publishes OverviewDB protobuf payloads to <c>overviewdb.queue</c> with an asynchronous
+/// outstanding-confirmation window.
 /// </summary>
 /// <remarks>
 /// <para>
-/// RabbitMQ is the handoff boundary. This type does not open an OverviewDB client,
-/// RPC channel, HTTP/gRPC call, or database connection, and does not wait for an
-/// OverviewDB acknowledgement.
+/// Uses one confirm-enabled RabbitMQ channel (library tracking disabled) so
+/// <c>BasicPublishAsync</c> returns after the write. Confirms arrive via
+/// <c>BasicAcksAsync</c> / <c>BasicNacksAsync</c> / <c>BasicReturnAsync</c> and are
+/// correlated by publish sequence number. Channel publishes are serialized; callbacks
+/// only update outstanding state and must not publish.
 /// </para>
 /// <para>
-/// Concurrent outstanding confirms use a bounded pool of confirm-enabled publish
-/// channels. Official RabbitMQ.Client guidance still treats concurrent publishes
-/// on one shared <c>IChannel</c> as unsafe for framing; each in-flight publish
-/// therefore leases a dedicated channel and returns it only after the confirm
-/// await completes. Pool size is <see cref="ArticleIngestionOptions.MaxPublishConcurrency"/>.
+/// Crash or shutdown loss of outstanding unconfirmed OverviewDB work is acceptable.
 /// </para>
 /// </remarks>
 internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, IAsyncDisposable
 {
     private readonly IRabbitMqService _rabbitMq;
     private readonly IOptions<NntpdOptions> _nntpdOptions;
-    private readonly IOptions<RabbitMqOptions> _rabbitMqOptions;
     private readonly IngestionPipelineMetrics? _pipeline;
-    private readonly ConcurrentBag<IRabbitMqPublishChannel> _idleChannels = new();
-    private readonly object _poolGate = new();
-    private SemaphoreSlim? _publishSlots;
-    private int _configuredSlots;
-    private int _createdChannels;
-    private long _poolGeneration = -1;
+    private readonly SemaphoreSlim _publishGate = new(1, 1);
+    private readonly ConcurrentDictionary<ulong, OverviewDbWorkItem> _outstanding = new();
+    private readonly ConcurrentDictionary<ulong, byte> _returned = new();
+    private readonly Channel<OverviewDbWorkItem> _failures = Channel.CreateUnbounded<OverviewDbWorkItem>(
+        new UnboundedChannelOptions
+        {
+            SingleReader = false,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false,
+        });
+    private SemaphoreSlim? _outstandingWindow;
+    private int _windowSize;
+    private IRabbitMqAsyncConfirmPublishChannel? _channel;
     private int _disposed;
 
     /// <summary>Initializes a new OverviewDB handoff publisher.</summary>
@@ -49,32 +57,20 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
         ArgumentNullException.ThrowIfNull(rabbitMqOptions);
         _rabbitMq = rabbitMq;
         _nntpdOptions = nntpdOptions;
-        _rabbitMqOptions = rabbitMqOptions;
         _pipeline = pipelineMetrics;
+        _ = rabbitMqOptions;
     }
-
-    /// <summary>Gets the number of currently leased / in-flight publishes (tests/telemetry).</summary>
-    internal int InFlightPublishes
-    {
-        get
-        {
-            var slots = Volatile.Read(ref _publishSlots);
-            var configured = Volatile.Read(ref _configuredSlots);
-            if (slots is null || configured <= 0)
-            {
-                return 0;
-            }
-
-            return configured - slots.CurrentCount;
-        }
-    }
-
-    /// <summary>Gets how many publish channels have been created for the current generation (tests).</summary>
-    internal int CreatedChannelCount => Volatile.Read(ref _createdChannels);
 
     /// <inheritdoc />
-    public async Task PublishConfirmedAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    public int OutstandingCount => _outstanding.Count;
+
+    /// <summary>Gets the configured outstanding window size (tests).</summary>
+    internal int WindowSize => Volatile.Read(ref _windowSize);
+
+    /// <inheritdoc />
+    public async Task PublishAsync(OverviewDbWorkItem item, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(item);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
 
         var fqdn = _nntpdOptions.Value.Fqdn;
@@ -83,78 +79,88 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
             throw new InvalidOperationException("OverviewDB handoff requires the generated application FQDN.");
         }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var confirmTimeoutSeconds = _rabbitMqOptions.Value.PublishConfirmTimeoutSeconds ?? 10;
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(confirmTimeoutSeconds));
+        var window = EnsureOutstandingWindow();
+        var publishStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        await window.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _pipeline?.RecordGateWait(publishStart);
+        _pipeline?.ObserveInFlightPublishes(OutstandingCount + 1);
 
-        var handoffStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        var leaseStart = handoffStart;
-        var slots = EnsurePublishSlots();
         try
         {
-            await slots.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            await _publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var channel = await EnsureChannelAlreadyLockedAsync(cancellationToken).ConfigureAwait(false);
+                var sequence = await channel
+                    .GetNextPublishSequenceNumberAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (!_outstanding.TryAdd(sequence, item))
+                {
+                    throw new InvalidOperationException(
+                        $"Duplicate OverviewDB publish sequence number {sequence}.");
+                }
+
+                try
+                {
+                    var writeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    await channel.PublishAsync(
+                            OverviewDbTopology.DefaultExchange,
+                            OverviewDbTopology.RoutingKey,
+                            Guid.NewGuid().ToString(),
+                            fqdn,
+                            OverviewDbTopology.ExpirationMilliseconds,
+                            sequence,
+                            item.Payload,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    // Write latency only; broker confirms are asynchronous.
+                    _pipeline?.RecordPublishAndConfirm(writeStart);
+                    _pipeline?.RecordHandoff(publishStart);
+                }
+                catch
+                {
+                    _outstanding.TryRemove(sequence, out _);
+                    _returned.TryRemove(sequence, out _);
+                    throw;
+                }
+            }
+            finally
+            {
+                _publishGate.Release();
+            }
         }
-        catch (OperationCanceledException) when (
-            timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch
         {
-            _pipeline?.RecordConfirmTimeout();
-            _pipeline?.RecordHandoff(handoffStart);
+            ReleaseWindowSlot();
+            _pipeline?.RecordConfirmFailure();
+            _pipeline?.ObserveInFlightPublishes(OutstandingCount);
             throw;
         }
 
-        _pipeline?.RecordGateWait(leaseStart);
-        _pipeline?.ObserveInFlightPublishes(InFlightPublishes);
-        IRabbitMqPublishChannel? channel = null;
-        var returnToPool = false;
-        try
-        {
-            channel = await LeaseChannelAsync(timeoutCts.Token).ConfigureAwait(false);
-            var publishStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            try
-            {
-                await channel.PublishConfirmedAsync(
-                        OverviewDbTopology.DefaultExchange,
-                        OverviewDbTopology.RoutingKey,
-                        Guid.NewGuid().ToString(),
-                        fqdn,
-                        OverviewDbTopology.ExpirationMilliseconds,
-                        payload,
-                        timeoutCts.Token)
-                    .ConfigureAwait(false);
-                _pipeline?.RecordPublishAndConfirm(publishStart);
-                returnToPool = true;
-            }
-            catch (OperationCanceledException) when (
-                timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-            {
-                _pipeline?.RecordConfirmTimeout();
-                throw;
-            }
-            catch
-            {
-                _pipeline?.RecordConfirmFailure();
-                throw;
-            }
-        }
-        finally
-        {
-            if (channel is not null)
-            {
-                if (returnToPool)
-                {
-                    ReturnChannel(channel);
-                }
-                else
-                {
-                    await DisposeChannelAsync(channel).ConfigureAwait(false);
-                    Interlocked.Decrement(ref _createdChannels);
-                }
-            }
+        _pipeline?.ObserveInFlightPublishes(OutstandingCount);
+    }
 
-            _pipeline?.RecordHandoff(handoffStart);
-            slots.Release();
-            _pipeline?.ObserveInFlightPublishes(InFlightPublishes);
+    /// <inheritdoc />
+    public bool TryDequeuePublishFailure(out OverviewDbWorkItem item) =>
+        _failures.Reader.TryRead(out item!);
+
+    /// <inheritdoc />
+    public void AbandonOutstanding()
+    {
+        foreach (var pair in _outstanding)
+        {
+            if (_outstanding.TryRemove(pair.Key, out _))
+            {
+                _returned.TryRemove(pair.Key, out _);
+                ReleaseWindowSlot();
+            }
         }
+
+        while (_failures.Reader.TryRead(out _))
+        {
+        }
+
+        _pipeline?.ObserveInFlightPublishes(OutstandingCount);
     }
 
     /// <inheritdoc />
@@ -165,136 +171,229 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
             return;
         }
 
-        var slots = Interlocked.Exchange(ref _publishSlots, null);
-        if (slots is not null)
-        {
-            await slots.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                await DrainIdleChannelsAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                slots.Release();
-                slots.Dispose();
-            }
-        }
-        else
-        {
-            await DrainIdleChannelsAsync().ConfigureAwait(false);
-        }
+        AbandonOutstanding();
+        await DisposeChannelAsync().ConfigureAwait(false);
+        _publishGate.Dispose();
+        Interlocked.Exchange(ref _outstandingWindow, null)?.Dispose();
     }
 
-    private SemaphoreSlim EnsurePublishSlots()
+    private SemaphoreSlim EnsureOutstandingWindow()
     {
-        var existing = Volatile.Read(ref _publishSlots);
+        var existing = Volatile.Read(ref _outstandingWindow);
         if (existing is not null)
         {
             return existing;
         }
 
-        var concurrency = _nntpdOptions.Value.ArticleIngestion?.MaxPublishConcurrency
-            ?? ArticleIngestionOptions.DefaultMaxPublishConcurrency;
-        if (concurrency < 1)
+        var size = _nntpdOptions.Value.ArticleIngestion?.OverviewDbPublisherBatchSize
+            ?? ArticleIngestionOptions.DefaultOverviewDbPublisherBatchSize;
+        if (size < 1)
         {
-            concurrency = 1;
+            size = 1;
         }
 
-        var created = new SemaphoreSlim(concurrency, concurrency);
-        var prior = Interlocked.CompareExchange(ref _publishSlots, created, null);
+        var created = new SemaphoreSlim(size, size);
+        var prior = Interlocked.CompareExchange(ref _outstandingWindow, created, null);
         if (prior is not null)
         {
             created.Dispose();
             return prior;
         }
 
-        Volatile.Write(ref _configuredSlots, concurrency);
+        Volatile.Write(ref _windowSize, size);
         return created;
     }
 
-    private async Task<IRabbitMqPublishChannel> LeaseChannelAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Ensures a usable async-confirm channel. Caller must hold <see cref="_publishGate"/>.
+    /// </summary>
+    private async Task<IRabbitMqAsyncConfirmPublishChannel> EnsureChannelAlreadyLockedAsync(
+        CancellationToken cancellationToken)
     {
         if (!_rabbitMq.TryGetCurrent(out var handle) || !handle.IsCurrent)
         {
             throw new InvalidOperationException("RabbitMQ connection is not ready for OverviewDB handoff.");
         }
 
-        InvalidatePoolIfGenerationChanged(handle.Generation);
-
-        while (_idleChannels.TryTake(out var idle))
+        var existing = _channel;
+        if (existing is not null
+            && existing.Generation == handle.Generation
+            && existing.IsOpen)
         {
-            if (idle.Generation == handle.Generation && idle.IsOpen)
-            {
-                return idle;
-            }
-
-            await DisposeChannelAsync(idle).ConfigureAwait(false);
-            Interlocked.Decrement(ref _createdChannels);
+            return existing;
         }
 
-        var channel = await handle.Connection
-            .CreatePublishChannelAsync(handle.Generation, cancellationToken)
+        if (existing is not null)
+        {
+            DetachHandlers(existing);
+            try
+            {
+                await existing.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+
+            FailOutstandingForChannelLoss();
+            _channel = null;
+        }
+
+        var created = await handle.Connection
+            .CreateAsyncConfirmPublishChannelAsync(handle.Generation, cancellationToken)
             .ConfigureAwait(false);
-        Interlocked.Increment(ref _createdChannels);
-        return channel;
+        AttachHandlers(created);
+        _channel = created;
+        return created;
     }
 
-    private void ReturnChannel(IRabbitMqPublishChannel channel)
+    private void AttachHandlers(IRabbitMqAsyncConfirmPublishChannel channel)
     {
-        if (!_rabbitMq.TryGetCurrent(out var handle)
-            || !handle.IsCurrent
-            || channel.Generation != handle.Generation
-            || !channel.IsOpen
-            || Volatile.Read(ref _disposed) == 1)
+        channel.BasicAcksAsync += OnBasicAckAsync;
+        channel.BasicNacksAsync += OnBasicNackAsync;
+        channel.BasicReturnAsync += OnBasicReturnAsync;
+    }
+
+    private void DetachHandlers(IRabbitMqAsyncConfirmPublishChannel channel)
+    {
+        channel.BasicAcksAsync -= OnBasicAckAsync;
+        channel.BasicNacksAsync -= OnBasicNackAsync;
+        channel.BasicReturnAsync -= OnBasicReturnAsync;
+    }
+
+    private Task OnBasicAckAsync(object sender, BasicAckEventArgs args)
+    {
+        // Lightweight: settle outstanding only — never publish from this callback.
+        CompleteOutstanding(args.DeliveryTag, args.Multiple, nack: false);
+        return Task.CompletedTask;
+    }
+
+    private Task OnBasicNackAsync(object sender, BasicNackEventArgs args)
+    {
+        CompleteOutstanding(args.DeliveryTag, args.Multiple, nack: true);
+        return Task.CompletedTask;
+    }
+
+    private Task OnBasicReturnAsync(object sender, BasicReturnEventArgs args)
+    {
+        // Mark returned; settlement (window release + failure dequeue) waits for ack/nack.
+        // RabbitMQ typically acks after returning a mandatory unroutable message.
+        if (TryReadPublishSequence(args.BasicProperties, out var sequence))
         {
-            _ = DisposeChannelAsync(channel);
-            Interlocked.Decrement(ref _createdChannels);
+            _returned[sequence] = 0;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void CompleteOutstanding(ulong deliveryTag, bool multiple, bool nack)
+    {
+        if (multiple)
+        {
+            foreach (var key in _outstanding.Keys)
+            {
+                if (key <= deliveryTag)
+                {
+                    SettleOne(key, nack);
+                }
+            }
+        }
+        else
+        {
+            SettleOne(deliveryTag, nack);
+        }
+
+        _pipeline?.ObserveInFlightPublishes(OutstandingCount);
+    }
+
+    private void SettleOne(ulong sequence, bool nack)
+    {
+        if (!_outstanding.TryRemove(sequence, out var item))
+        {
             return;
         }
 
-        _idleChannels.Add(channel);
+        var wasReturned = _returned.TryRemove(sequence, out _);
+        ReleaseWindowSlot();
+
+        if (nack || wasReturned)
+        {
+            _ = _failures.Writer.TryWrite(item);
+            _pipeline?.RecordConfirmFailure();
+        }
     }
 
-    private void InvalidatePoolIfGenerationChanged(long generation)
+    private void FailOutstandingForChannelLoss()
     {
-        if (Volatile.Read(ref _poolGeneration) == generation)
+        foreach (var pair in _outstanding)
+        {
+            if (_outstanding.TryRemove(pair.Key, out var item))
+            {
+                _returned.TryRemove(pair.Key, out _);
+                _ = _failures.Writer.TryWrite(item);
+                ReleaseWindowSlot();
+                _pipeline?.RecordConfirmFailure();
+            }
+        }
+    }
+
+    private void ReleaseWindowSlot()
+    {
+        try
+        {
+            EnsureOutstandingWindow().Release();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (SemaphoreFullException)
+        {
+        }
+    }
+
+    private async Task DisposeChannelAsync()
+    {
+        var channel = Interlocked.Exchange(ref _channel, null);
+        if (channel is null)
         {
             return;
         }
 
-        lock (_poolGate)
-        {
-            if (_poolGeneration == generation)
-            {
-                return;
-            }
-
-            _poolGeneration = generation;
-            while (_idleChannels.TryTake(out var stale))
-            {
-                _ = DisposeChannelAsync(stale);
-                Interlocked.Decrement(ref _createdChannels);
-            }
-        }
-    }
-
-    private async Task DrainIdleChannelsAsync()
-    {
-        while (_idleChannels.TryTake(out var channel))
-        {
-            await DisposeChannelAsync(channel).ConfigureAwait(false);
-            Interlocked.Decrement(ref _createdChannels);
-        }
-    }
-
-    private static async Task DisposeChannelAsync(IRabbitMqPublishChannel channel)
-    {
+        DetachHandlers(channel);
         try
         {
             await channel.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception)
         {
+        }
+    }
+
+    private static bool TryReadPublishSequence(IReadOnlyBasicProperties? properties, out ulong sequence)
+    {
+        sequence = 0;
+        if (properties?.Headers is null
+            || !properties.Headers.TryGetValue(Constants.PublishSequenceNumberHeader, out var raw)
+            || raw is null)
+        {
+            return false;
+        }
+
+        switch (raw)
+        {
+            case ulong u:
+                sequence = u;
+                return true;
+            case long l when l >= 0:
+                sequence = (ulong)l;
+                return true;
+            case int i when i >= 0:
+                sequence = (ulong)i;
+                return true;
+            case byte[] bytes when bytes.Length == 8:
+                sequence = BitConverter.ToUInt64(bytes, 0);
+                return true;
+            default:
+                return ulong.TryParse(raw.ToString(), out sequence);
         }
     }
 }

@@ -133,4 +133,19 @@ internal static partial class ApplicationTelemetryLogMessages
         long ScaleDowns,
         double QueueUtilisation,
         int WaitingProducers);
+
+    [LoggerMessage(
+        EventId = 2408,
+        Level = LogLevel.Information,
+        Message = "OverviewDbWorkQueue articles={Articles} bytes={Bytes} waiting={Waiting} publishers={Publishers} pub_min={MinPublishers} pub_max={MaxPublishers} scale_up={ScaleUps} scale_down={ScaleDowns}")]
+    public static partial void OverviewDbWorkQueue(
+        ILogger logger,
+        int Articles,
+        long Bytes,
+        int Waiting,
+        int Publishers,
+        int MinPublishers,
+        int MaxPublishers,
+        long ScaleUps,
+        long ScaleDowns);
 }

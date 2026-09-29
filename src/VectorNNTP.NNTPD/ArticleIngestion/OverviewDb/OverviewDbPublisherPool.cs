@@ -1,23 +1,22 @@
+using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 
-namespace VectorNNTP.NNTPD.ArticleIngestion;
+namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 
 /// <summary>
-/// Dynamically sized pool of ingestion workers that drain
-/// <see cref="IArticleIngestionQueue"/> concurrently.
+/// Dynamically sized pool that drains <see cref="IOverviewDbWorkQueue"/> and
+/// publishes through <see cref="IOverviewDbHandoffPublisher"/> with asynchronous confirms.
 /// </summary>
 /// <remarks>
-/// Each worker processes one article at a time. OverviewDB RabbitMQ publication
-/// is performed by a separate publisher pool; article workers only enqueue onto
-/// the in-process OverviewDB work queue. Scaling uses sustained queue pressure
-/// with hysteresis. A single worker fault does not stop the pool.
+/// Workers do not await broker confirmation per message. They wait only for outstanding
+/// confirmation-window capacity and the network write. Nack/return failures are drained
+/// from the publisher and requeued in-process (bounded; abandoned on shutdown).
 /// </remarks>
-internal sealed class IngestionWorkerPool
+internal sealed class OverviewDbPublisherPool
 {
-    private readonly IArticleIngestionQueue _queue;
-    private readonly Func<InboundArticle, long, CancellationToken, Task> _processArticleAsync;
-    private readonly Func<IngestionPressureSnapshot> _samplePressure;
+    private readonly IOverviewDbWorkQueue _queue;
+    private readonly IOverviewDbHandoffPublisher _publisher;
     private readonly ArticleIngestionOptions _options;
     private readonly ILogger _logger;
     private readonly IngestionPipelineMetrics? _pipeline;
@@ -29,30 +28,28 @@ internal sealed class IngestionWorkerPool
     private int _scaleUps;
     private int _scaleDowns;
 
-    /// <summary>Initializes a new ingestion worker pool.</summary>
-    public IngestionWorkerPool(
-        IArticleIngestionQueue queue,
-        Func<InboundArticle, long, CancellationToken, Task> processArticleAsync,
+    /// <summary>Initializes a new OverviewDB publisher pool.</summary>
+    public OverviewDbPublisherPool(
+        IOverviewDbWorkQueue queue,
+        IOverviewDbHandoffPublisher publisher,
         ArticleIngestionOptions options,
         ILogger logger,
         IngestionPipelineMetrics? pipelineMetrics = null,
-        Func<IngestionPressureSnapshot>? samplePressure = null,
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
-        ArgumentNullException.ThrowIfNull(processArticleAsync);
+        ArgumentNullException.ThrowIfNull(publisher);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         _queue = queue;
-        _processArticleAsync = processArticleAsync;
+        _publisher = publisher;
         _options = options;
         _logger = logger;
         _pipeline = pipelineMetrics;
-        _samplePressure = samplePressure ?? (() => IngestionPressureSnapshot.FromQueue(queue));
         _time = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>Gets the current worker count.</summary>
+    /// <summary>Gets the current publisher worker count.</summary>
     public int WorkerCount
     {
         get
@@ -64,22 +61,22 @@ internal sealed class IngestionWorkerPool
         }
     }
 
-    /// <summary>Gets how many scale-up decisions have been applied (tests).</summary>
+    /// <summary>Gets scale-up count (tests).</summary>
     public int ScaleUpCount => Volatile.Read(ref _scaleUps);
 
-    /// <summary>Gets how many scale-down decisions have been applied (tests).</summary>
+    /// <summary>Gets scale-down count (tests).</summary>
     public int ScaleDownCount => Volatile.Read(ref _scaleDowns);
 
-    /// <summary>Runs workers and the scaler until <paramref name="cancellationToken"/> is cancelled.</summary>
+    /// <summary>Runs publisher workers and the scaler until cancelled.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        IngestionWorkerPoolLogMessages.PoolStarting(
+        OverviewDbPublisherPoolLogMessages.PoolStarting(
             _logger,
-            _options.MinWorkers,
-            _options.MaxWorkers,
-            _options.MaxPublishConcurrency);
+            _options.OverviewDbMinPublisherWorkers,
+            _options.OverviewDbMaxPublisherWorkers,
+            _options.OverviewDbPublisherBatchSize);
 
-        for (var i = 0; i < _options.MinWorkers; i++)
+        for (var i = 0; i < _options.OverviewDbMinPublisherWorkers; i++)
         {
             AddWorker(cancellationToken);
         }
@@ -105,18 +102,21 @@ internal sealed class IngestionWorkerPool
                 await worker.Cts.CancelAsync().ConfigureAwait(false);
             }
 
+            var drainTimeout = TimeSpan.FromSeconds(
+                Math.Max(1, _options.OverviewDbPublisherShutdownSeconds));
+            using var drainCts = new CancellationTokenSource(drainTimeout);
             foreach (var worker in snapshot)
             {
                 try
                 {
-                    await worker.Execution.ConfigureAwait(false);
+                    await worker.Execution.WaitAsync(drainCts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                 }
                 catch (Exception ex)
                 {
-                    IngestionWorkerPoolLogMessages.WorkerFaulted(_logger, ex);
+                    OverviewDbPublisherPoolLogMessages.WorkerFaulted(_logger, ex);
                 }
                 finally
                 {
@@ -124,12 +124,14 @@ internal sealed class IngestionWorkerPool
                 }
             }
 
+            // Bounded shutdown: abandon any remaining outstanding confirms.
+            _publisher.AbandonOutstanding();
             PublishPoolObservation();
-            IngestionWorkerPoolLogMessages.PoolStopped(_logger, snapshot.Count);
+            OverviewDbPublisherPoolLogMessages.PoolStopped(_logger, snapshot.Count);
         }
     }
 
-    /// <summary>Applies one scaling decision from <paramref name="snapshot"/> (tests).</summary>
+    /// <summary>Applies one scaling decision (tests).</summary>
     internal void ApplyScaleDecisionForTests(IngestionPressureSnapshot snapshot, CancellationToken workerToken)
     {
         ApplyScaleDecision(snapshot, workerToken);
@@ -144,14 +146,28 @@ internal sealed class IngestionWorkerPool
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
-                var snapshot = _samplePressure();
-                ApplyScaleDecision(snapshot, cancellationToken);
+                ApplyScaleDecision(SamplePressure(), cancellationToken);
                 PublishPoolObservation();
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+    private IngestionPressureSnapshot SamplePressure()
+    {
+        var limit = _queue.MemoryLimitBytes;
+        var bytes = _queue.QueuedBytes;
+        var waiting = _queue.WaitingProducerCount;
+        var utilisation = limit <= 0 ? 0d : Math.Clamp(bytes / (double)limit, 0d, 1d);
+        var waitingSignal = waiting > 0 ? 1d : 0d;
+        return new IngestionPressureSnapshot(
+            Math.Max(utilisation, waitingSignal),
+            bytes,
+            limit,
+            _queue.Count,
+            waiting);
     }
 
     private void ApplyScaleDecision(IngestionPressureSnapshot snapshot, CancellationToken workerToken)
@@ -166,8 +182,8 @@ internal sealed class IngestionWorkerPool
                 if (TryAddWorker(workerToken))
                 {
                     Interlocked.Increment(ref _scaleUps);
-                    _pipeline?.RecordScaleUp();
-                    IngestionWorkerPoolLogMessages.ScaledUp(_logger, WorkerCount, snapshot.Pressure);
+                    _pipeline?.RecordOverviewDbPublisherScaleUp();
+                    OverviewDbPublisherPoolLogMessages.ScaledUp(_logger, WorkerCount, snapshot.Pressure);
                 }
             }
 
@@ -184,8 +200,8 @@ internal sealed class IngestionWorkerPool
                 if (TryRemoveWorker())
                 {
                     Interlocked.Increment(ref _scaleDowns);
-                    _pipeline?.RecordScaleDown();
-                    IngestionWorkerPoolLogMessages.ScaledDown(_logger, WorkerCount, snapshot.Pressure);
+                    _pipeline?.RecordOverviewDbPublisherScaleDown();
+                    OverviewDbPublisherPoolLogMessages.ScaledDown(_logger, WorkerCount, snapshot.Pressure);
                 }
             }
 
@@ -200,7 +216,7 @@ internal sealed class IngestionWorkerPool
     {
         lock (_gate)
         {
-            if (_workers.Count >= _options.MaxWorkers)
+            if (_workers.Count >= _options.OverviewDbMaxPublisherWorkers)
             {
                 return false;
             }
@@ -221,10 +237,7 @@ internal sealed class IngestionWorkerPool
     private void AddWorkerAlreadyLocked(CancellationToken workerToken)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(workerToken);
-        var worker = new Worker(cts)
-        {
-            Execution = Task.CompletedTask,
-        };
+        var worker = new Worker(cts) { Execution = Task.CompletedTask };
         worker.Execution = Task.Run(() => WorkerLoopAsync(worker, cts.Token), CancellationToken.None);
         _workers.Add(worker);
     }
@@ -234,7 +247,7 @@ internal sealed class IngestionWorkerPool
         Worker? victim;
         lock (_gate)
         {
-            if (_workers.Count <= _options.MinWorkers)
+            if (_workers.Count <= _options.OverviewDbMinPublisherWorkers)
             {
                 return false;
             }
@@ -259,7 +272,7 @@ internal sealed class IngestionWorkerPool
         }
         catch (Exception ex)
         {
-            IngestionWorkerPoolLogMessages.WorkerFaulted(_logger, ex);
+            OverviewDbPublisherPoolLogMessages.WorkerFaulted(_logger, ex);
         }
         finally
         {
@@ -274,37 +287,32 @@ internal sealed class IngestionWorkerPool
         {
             while (true)
             {
-                InboundArticle? article;
-                var idleStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                DrainPublishFailures();
+
+                OverviewDbWorkItem? item;
                 try
                 {
-                    article = await _queue.DequeueAsync(cancellationToken).ConfigureAwait(false);
+                    item = await _queue.DequeueAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
-                    _pipeline?.RecordDequeueWait(idleStart);
-
-                    // Shutdown Completes the queue then cancels workers. Drain leftovers
-                    // without cancellation so news/path/persist still run. Scale-down
-                    // cancel leaves the queue accepting, so exit without draining.
                     if (!_queue.IsAccepting)
                     {
                         await DrainRemainingAsync().ConfigureAwait(false);
                     }
 
+                    DrainPublishFailures();
                     break;
                 }
 
-                _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
-                _pipeline?.RecordDequeueWait(idleStart);
-
-                if (article is null)
+                if (item is null)
                 {
+                    DrainPublishFailures();
                     break;
                 }
 
-                await ProcessOneAsync(article).ConfigureAwait(false);
+                await PublishOneAsync(item, cancellationToken).ConfigureAwait(false);
+                DrainPublishFailures();
 
                 if (cancellationToken.IsCancellationRequested && _queue.Count == 0)
                 {
@@ -317,7 +325,7 @@ internal sealed class IngestionWorkerPool
         }
         catch (Exception ex)
         {
-            IngestionWorkerPoolLogMessages.WorkerFaulted(_logger, ex);
+            OverviewDbPublisherPoolLogMessages.WorkerFaulted(_logger, ex);
         }
     }
 
@@ -325,53 +333,92 @@ internal sealed class IngestionWorkerPool
     {
         while (true)
         {
-            InboundArticle? article;
+            DrainPublishFailures();
+            OverviewDbWorkItem? item;
             try
             {
-                article = await _queue.DequeueAsync(CancellationToken.None).ConfigureAwait(false);
+                item = await _queue.DequeueAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 break;
             }
 
-            if (article is null)
+            if (item is null)
             {
                 break;
             }
 
-            await ProcessOneAsync(article).ConfigureAwait(false);
+            await PublishOneAsync(item, CancellationToken.None).ConfigureAwait(false);
         }
+
+        DrainPublishFailures();
     }
 
-    private async Task ProcessOneAsync(InboundArticle article)
+    private async Task PublishOneAsync(OverviewDbWorkItem item, CancellationToken cancellationToken)
     {
-        var itemStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        _pipeline?.ObserveQueueDepth(_queue.Count + 1);
         try
         {
-            await _processArticleAsync(article, itemStart, CancellationToken.None).ConfigureAwait(false);
+            // Does not await broker confirmation — only outstanding-window capacity + write.
+            await _publisher.PublishAsync(item, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown: do not retry forever; abandon this item.
+            OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
         }
         catch (Exception ex)
         {
-            IngestionWorkerPoolLogMessages.WorkerFaulted(_logger, ex);
+            OverviewDbHandoffLogMessages.PublishFailed(_logger, ex, item.MessageId, item.ByteLength);
+            await TryRequeueFailureAsync(item).ConfigureAwait(false);
         }
-        finally
+    }
+
+    private void DrainPublishFailures()
+    {
+        while (_publisher.TryDequeuePublishFailure(out var failed))
         {
-            _pipeline?.AddBusyTicks(System.Diagnostics.Stopwatch.GetTimestamp() - itemStart);
-            _pipeline?.RecordWorkerItem(itemStart);
+            OverviewDbHandoffLogMessages.PublishFailed(
+                _logger,
+                new InvalidOperationException("OverviewDB publish was nacked or returned."),
+                failed.MessageId,
+                failed.ByteLength);
+            // Fire-and-forget requeue onto the in-process work queue while accepting.
+            _ = TryRequeueFailureAsync(failed);
         }
+    }
+
+    private async Task TryRequeueFailureAsync(OverviewDbWorkItem item)
+    {
+        if (!_queue.IsAccepting)
+        {
+            OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
+            return;
+        }
+
+        var result = await _queue.EnqueueAsync(item, CancellationToken.None).ConfigureAwait(false);
+        if (result == ArticleEnqueueResult.Accepted)
+        {
+            OverviewDbHandoffLogMessages.Requeued(_logger, item.MessageId);
+            return;
+        }
+
+        OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
     }
 
     private void PublishPoolObservation()
     {
-        _pipeline?.ObserveWorkerPool(WorkerCount, _options.MinWorkers, _options.MaxWorkers);
+        _pipeline?.ObserveOverviewDbPublisherPool(
+            WorkerCount,
+            _options.OverviewDbMinPublisherWorkers,
+            _options.OverviewDbMaxPublisherWorkers);
+        _pipeline?.ObserveOverviewDbWorkQueue(_queue.Count, _queue.QueuedBytes, _queue.WaitingProducerCount);
     }
 
     private sealed class Worker(CancellationTokenSource cts)
     {
         public CancellationTokenSource Cts { get; } = cts;
 
-        public required Task Execution { get; set; }
+        public Task Execution { get; set; } = Task.CompletedTask;
     }
 }

@@ -7,10 +7,11 @@ namespace VectorNNTP.NNTPD.Diagnostics;
 /// ApplicationTelemetry emits one Information snapshot per minute (no per-article logs).
 /// </summary>
 /// <remarks>
-/// RabbitMQ.Client publisher-confirmation tracking fuses send and confirm into one
-/// <c>BasicPublishAsync</c> await. <see cref="RecordPublishAndConfirm"/> therefore
-/// records the same duration for publish and confirm. Confirms remain enabled;
-/// publication is not fire-and-forget.
+/// OverviewDB publishes use an asynchronous outstanding-confirmation window.
+/// <see cref="RecordPublishAndConfirm"/> records the publish <b>write</b> duration
+/// (not fused with broker ack). <see cref="ObserveInFlightPublishes"/> tracks the
+/// outstanding confirmation count. Confirms remain enabled; crash loss of
+/// outstanding OverviewDB work is acceptable.
 /// </remarks>
 public sealed class IngestionPipelineMetrics
 {
@@ -50,11 +51,19 @@ public sealed class IngestionPipelineMetrics
     private int _maxInFlightPublishes;
     private long _scaleUps;
     private long _scaleDowns;
+    private int _overviewPublisherWorkers;
+    private int _overviewPublisherMinWorkers;
+    private int _overviewPublisherMaxWorkers;
+    private int _overviewWorkCount;
+    private long _overviewWorkBytes;
+    private int _overviewWorkWaiting;
+    private long _overviewPublisherScaleUps;
+    private long _overviewPublisherScaleDowns;
 
     /// <summary>Records time spent blocked in <c>DequeueAsync</c>.</summary>
     public void RecordDequeueWait(long startTimestamp) => _dequeueWait.Record(startTimestamp);
 
-    /// <summary>Records dequeue completion until OverviewDB <c>PublishConfirmedAsync</c> is entered.</summary>
+    /// <summary>Records dequeue completion until OverviewDB work-queue enqueue begins.</summary>
     public void RecordToPublishStart(long startTimestamp) => _toPublishStart.Record(startTimestamp);
 
     /// <summary>Records OverviewArticleV1 encode duration.</summary>
@@ -64,7 +73,7 @@ public sealed class IngestionPipelineMetrics
     public void RecordGateWait(long startTimestamp) => _gateWait.Record(startTimestamp);
 
     /// <summary>
-    /// Records the confirm-tracked <c>BasicPublishAsync</c> duration (send fused with confirm).
+    /// Records OverviewDB publish write duration (async confirms; not fused with broker ack).
     /// </summary>
     public void RecordPublishAndConfirm(long startTimestamp)
     {
@@ -183,6 +192,46 @@ public sealed class IngestionPipelineMetrics
 
     /// <summary>Records one worker-pool scale-down decision.</summary>
     public void RecordScaleDown() => Interlocked.Increment(ref _scaleDowns);
+
+    /// <summary>Records OverviewDB publisher worker-pool bounds and current count.</summary>
+    public void ObserveOverviewDbPublisherPool(int currentWorkers, int minWorkers, int maxWorkers)
+    {
+        Volatile.Write(ref _overviewPublisherWorkers, Math.Max(0, currentWorkers));
+        Volatile.Write(ref _overviewPublisherMinWorkers, Math.Max(0, minWorkers));
+        Volatile.Write(ref _overviewPublisherMaxWorkers, Math.Max(0, maxWorkers));
+    }
+
+    /// <summary>Records OverviewDB in-process work-queue depth gauges.</summary>
+    public void ObserveOverviewDbWorkQueue(int count, long queuedBytes, int waitingProducers)
+    {
+        Volatile.Write(ref _overviewWorkCount, Math.Max(0, count));
+        Volatile.Write(ref _overviewWorkBytes, Math.Max(0, queuedBytes));
+        Volatile.Write(ref _overviewWorkWaiting, Math.Max(0, waitingProducers));
+    }
+
+    /// <summary>Records one OverviewDB publisher scale-up.</summary>
+    public void RecordOverviewDbPublisherScaleUp() =>
+        Interlocked.Increment(ref _overviewPublisherScaleUps);
+
+    /// <summary>Records one OverviewDB publisher scale-down.</summary>
+    public void RecordOverviewDbPublisherScaleDown() =>
+        Interlocked.Increment(ref _overviewPublisherScaleDowns);
+
+    /// <summary>
+    /// Captures OverviewDB work-queue / publisher-pool gauges and interval scale counters.
+    /// </summary>
+    public OverviewDbStageSnapshot CaptureOverviewDbStage()
+    {
+        return new OverviewDbStageSnapshot(
+            Volatile.Read(ref _overviewPublisherWorkers),
+            Volatile.Read(ref _overviewPublisherMinWorkers),
+            Volatile.Read(ref _overviewPublisherMaxWorkers),
+            Volatile.Read(ref _overviewWorkCount),
+            Volatile.Read(ref _overviewWorkBytes),
+            Volatile.Read(ref _overviewWorkWaiting),
+            Interlocked.Exchange(ref _overviewPublisherScaleUps, 0),
+            Interlocked.Exchange(ref _overviewPublisherScaleDowns, 0));
+    }
 
     /// <summary>Captures interval totals and resets histograms and counters.</summary>
     public IngestionPipelineSnapshot CaptureInterval()
@@ -449,6 +498,55 @@ public readonly struct IngestionPipelineSnapshot
 
         return 100d * numerator / denominator;
     }
+}
+
+/// <summary>Gauge/counter snapshot for the OverviewDB work-queue publisher stage.</summary>
+public readonly struct OverviewDbStageSnapshot
+{
+    /// <summary>Initializes a stage snapshot.</summary>
+    public OverviewDbStageSnapshot(
+        int publisherWorkers,
+        int minPublisherWorkers,
+        int maxPublisherWorkers,
+        int workQueueCount,
+        long workQueueBytes,
+        int workQueueWaiting,
+        long publisherScaleUps,
+        long publisherScaleDowns)
+    {
+        PublisherWorkers = publisherWorkers;
+        MinPublisherWorkers = minPublisherWorkers;
+        MaxPublisherWorkers = maxPublisherWorkers;
+        WorkQueueCount = workQueueCount;
+        WorkQueueBytes = workQueueBytes;
+        WorkQueueWaiting = workQueueWaiting;
+        PublisherScaleUps = publisherScaleUps;
+        PublisherScaleDowns = publisherScaleDowns;
+    }
+
+    /// <summary>Gets current OverviewDB publisher workers.</summary>
+    public int PublisherWorkers { get; }
+
+    /// <summary>Gets configured minimum publisher workers.</summary>
+    public int MinPublisherWorkers { get; }
+
+    /// <summary>Gets configured maximum publisher workers.</summary>
+    public int MaxPublisherWorkers { get; }
+
+    /// <summary>Gets OverviewDB work-queue item count.</summary>
+    public int WorkQueueCount { get; }
+
+    /// <summary>Gets OverviewDB work-queue reserved bytes.</summary>
+    public long WorkQueueBytes { get; }
+
+    /// <summary>Gets producers waiting on the OverviewDB work queue.</summary>
+    public int WorkQueueWaiting { get; }
+
+    /// <summary>Gets publisher scale-ups in the interval.</summary>
+    public long PublisherScaleUps { get; }
+
+    /// <summary>Gets publisher scale-downs in the interval.</summary>
+    public long PublisherScaleDowns { get; }
 }
 
 /// <summary>Bucketed duration summary for one telemetry interval.</summary>

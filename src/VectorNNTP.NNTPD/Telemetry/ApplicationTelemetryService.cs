@@ -277,6 +277,18 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
             utilisation,
             _queue.WaitingProducerCount);
 
+        var overviewStage = _pipeline.CaptureOverviewDbStage();
+        ApplicationTelemetryLogMessages.OverviewDbWorkQueue(
+            _logger,
+            overviewStage.WorkQueueCount,
+            overviewStage.WorkQueueBytes,
+            overviewStage.WorkQueueWaiting,
+            overviewStage.PublisherWorkers,
+            overviewStage.MinPublisherWorkers,
+            overviewStage.MaxPublisherWorkers,
+            overviewStage.PublisherScaleUps,
+            overviewStage.PublisherScaleDowns);
+
         var budgetExhausted = _queue.WaitingProducerCount > 0
             || _queue.QueuedBytes >= _queue.MemoryLimitBytes
             ? 1

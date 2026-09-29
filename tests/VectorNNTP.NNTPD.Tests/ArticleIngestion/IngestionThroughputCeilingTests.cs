@@ -6,59 +6,31 @@ using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 
 /// <summary>
-/// Demonstrates that concurrent workers + bounded publish concurrency lift the
-/// serial confirm-latency ceiling (~1 / confirmDelay articles/sec).
+/// Demonstrates that article workers are not serialized behind OverviewDB
+/// publisher-confirm latency after the intermediate work-queue handoff, and that
+/// the publisher stage itself pipelines confirms asynchronously.
 /// </summary>
 public sealed class IngestionThroughputCeilingTests
 {
     private static readonly TimeSpan ConfirmLatency = TimeSpan.FromMilliseconds(18);
 
     [Fact]
-    public async Task ConcurrentWorkers_ExceedSerialConfirmLatencyCeiling()
+    public async Task ArticlePersistPath_IsNotSerializedBehindPublisherConfirmLatency()
     {
         const int articleCount = 32;
-
-        var serial = await MeasureDrainAsync(
-            articleCount,
-            workers: 1,
-            publishConcurrency: 1,
-            ConfirmLatency);
-
-        var concurrent = await MeasureDrainAsync(
-            articleCount,
-            workers: 8,
-            publishConcurrency: 8,
-            ConfirmLatency);
-
-        // Serial model ceiling ≈ 1000/18 ≈ 55.5 arts/s. With 32 articles that is ≥ ~576 ms.
-        // Eight concurrent confirms should finish near 4× serial time or better.
-        Assert.True(
-            concurrent.Elapsed < serial.Elapsed / 2,
-            $"Expected concurrent drain ({concurrent.Elapsed.TotalMilliseconds:F0} ms, {concurrent.ArticlesPerSecond:F1}/s) " +
-            $"to beat half of serial ({serial.Elapsed.TotalMilliseconds:F0} ms, {serial.ArticlesPerSecond:F1}/s).");
-
-        Assert.True(
-            concurrent.ArticlesPerSecond > 100,
-            $"Expected concurrent throughput > 100 arts/s; observed {concurrent.ArticlesPerSecond:F1}/s.");
-
-        // Serial remains near the confirm-latency ceiling (tolerance for scheduling jitter).
-        Assert.InRange(serial.ArticlesPerSecond, 30, 70);
-    }
-
-    private static async Task<DrainResult> MeasureDrainAsync(
-        int articleCount,
-        int workers,
-        int publishConcurrency,
-        TimeSpan confirmLatency)
-    {
         var queue = new ArticleIngestionQueue(
             new ArticleIngestionOptions { QueueCapacity = articleCount + 8 },
             transitQueueMemoryLimit: 64 * 1024 * 1024);
-        var overview = new DelayedOverviewDbHandoffPublisher(confirmLatency);
+        var overview = new RecordingOverviewDbHandoffPublisher
+        {
+            ConfirmDelay = ConfirmLatency,
+            OutstandingWindow = 100,
+        };
         var done = new CountdownEvent(articleCount);
         var persister = new CountingPersister(done);
 
@@ -69,9 +41,11 @@ public sealed class IngestionThroughputCeilingTests
             {
                 ArticleIngestion = new ArticleIngestionOptions
                 {
-                    MinWorkers = workers,
-                    MaxWorkers = workers,
-                    MaxPublishConcurrency = publishConcurrency,
+                    MinWorkers = 4,
+                    MaxWorkers = 4,
+                    OverviewDbMinPublisherWorkers = 1,
+                    OverviewDbMaxPublisherWorkers = 1,
+                    OverviewDbPublisherBatchSize = 100,
                     ScaleIntervalSeconds = 3600,
                 },
                 Transit = new TransitOptions { WantTrash = true, LogTrash = true },
@@ -88,7 +62,7 @@ public sealed class IngestionThroughputCeilingTests
         for (var i = 0; i < articleCount; i++)
         {
             var inbound = CanonicalArticleText.CreateQueued(
-                $"<throughput-{workers}-{i}@example.test>",
+                $"<throughput-decouple-{i}@example.test>",
                 InboundArticleProducer.TakeThis,
                 body: "throughput-body\r\n",
                 newsgroups: "alt.test");
@@ -98,33 +72,74 @@ public sealed class IngestionThroughputCeilingTests
         }
 
         var sw = Stopwatch.StartNew();
-        Assert.True(done.Wait(TimeSpan.FromSeconds(30)), "Timed out waiting for articles to persist.");
+        Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "Timed out waiting for article persist.");
         sw.Stop();
+
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromMilliseconds(articleCount * ConfirmLatency.TotalMilliseconds / 2),
+            $"Article persist took {sw.Elapsed.TotalMilliseconds:F0} ms; expected well under serial confirm ceiling.");
+
+        using var confirmWait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (overview.Payloads.Count < articleCount)
+        {
+            confirmWait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, confirmWait.Token);
+        }
 
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
-
-        Assert.Equal(articleCount, overview.ConfirmCount);
+        Assert.Equal(articleCount, overview.Payloads.Count);
         Assert.Equal(articleCount, persister.Count);
-        return new DrainResult(sw.Elapsed, articleCount);
     }
 
-    private readonly record struct DrainResult(TimeSpan Elapsed, int ArticleCount)
+    [Fact]
+    public async Task PublisherStage_PipelinesConfirms_WithOutstandingWindow()
     {
-        public double ArticlesPerSecond => ArticleCount / Math.Max(Elapsed.TotalSeconds, 0.001);
-    }
-
-    private sealed class DelayedOverviewDbHandoffPublisher(TimeSpan latency) : IOverviewDbHandoffPublisher
-    {
-        private int _confirms;
-
-        public int ConfirmCount => Volatile.Read(ref _confirms);
-
-        public async Task PublishConfirmedAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        var work = new OverviewDbWorkQueue(memoryLimitBytes: 16 * 1024 * 1024);
+        var overview = new RecordingOverviewDbHandoffPublisher
         {
-            await Task.Delay(latency, cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _confirms);
+            ConfirmDelay = ConfirmLatency,
+            OutstandingWindow = 100,
+        };
+        var options = new ArticleIngestionOptions
+        {
+            OverviewDbMinPublisherWorkers = 1,
+            OverviewDbMaxPublisherWorkers = 1,
+            OverviewDbPublisherBatchSize = 100,
+            OverviewDbPublisherShutdownSeconds = 5,
+            ScaleIntervalSeconds = 3600,
+        };
+
+        using var cts = new CancellationTokenSource();
+        var pool = new OverviewDbPublisherPool(work, overview, options, NullLogger.Instance);
+        var run = pool.RunAsync(cts.Token);
+
+        const int count = 40;
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < count; i++)
+        {
+            Assert.Equal(
+                ArticleEnqueueResult.Accepted,
+                await work.EnqueueAsync(
+                    new OverviewDbWorkItem([(byte)i], $"<pipe-{i}@test>"),
+                    CancellationToken.None));
         }
+
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (overview.Payloads.Count < count)
+        {
+            wait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, wait.Token);
+        }
+
+        sw.Stop();
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromMilliseconds(count * ConfirmLatency.TotalMilliseconds / 2),
+            $"Publisher stage took {sw.Elapsed.TotalMilliseconds:F0} ms; expected pipelined throughput.");
+
+        work.Complete();
+        await cts.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     private sealed class CountingPersister(CountdownEvent done) : IIncomingArticlePersister

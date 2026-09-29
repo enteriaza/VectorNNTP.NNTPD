@@ -116,6 +116,28 @@ internal sealed class RabbitMqClientConnection : IRabbitMqConnection
     }
 
     /// <inheritdoc />
+    public async Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        if (!_connection.IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for OverviewDB publication.");
+        }
+
+        // Tracking disabled: BasicPublishAsync returns after the write; confirms arrive
+        // via BasicAcksAsync / BasicNacksAsync / BasicReturnAsync.
+        var options = new CreateChannelOptions(
+            publisherConfirmationsEnabled: true,
+            publisherConfirmationTrackingEnabled: false);
+        var channel = await _connection
+            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return new RabbitMqClientAsyncConfirmPublishChannel(channel, generation);
+    }
+
+    /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)

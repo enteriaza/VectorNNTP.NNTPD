@@ -125,12 +125,12 @@ public sealed class IncomingSpoolOverviewHandoffTests
     }
 
     [Fact]
-    public async Task PublishFailure_DoesNotPersist_AndRequeuesUntilStop()
+    public async Task PublishFailure_ArticlePersistsBeforeConfirm_AndWorkItemRetries()
     {
         var block = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var overview = new RecordingOverviewDbHandoffPublisher
         {
-            PublishException = new InvalidOperationException("RabbitMQ negatively acknowledged the OverviewDB handoff."),
+            RemainingFailures = 1,
             BlockOnFailure = block,
         };
         var captured = new List<InboundArticle>();
@@ -138,24 +138,34 @@ public sealed class IncomingSpoolOverviewHandoffTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = CreateWriter(queue, persister, overview);
         await writer.StartAsync(CancellationToken.None);
-        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(CreateArticle(), CancellationToken.None));
+        var inbound = CreateArticle();
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await overview.FirstAttempt.WaitAsync(cts.Token);
+        await persister.Completed.Task.WaitAsync(cts.Token);
 
+        // Article path continues after OverviewDB work enqueue; Rabbit confirm is background.
+        Assert.Same(inbound, Assert.Single(captured));
+        await overview.FirstAttempt.WaitAsync(cts.Token);
         Assert.Equal(1, overview.AttemptCount);
         Assert.Empty(overview.Payloads);
-        Assert.Empty(captured);
+
+        block.TrySetResult();
+        using var retryWait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (overview.AttemptCount < 2 || overview.Payloads.Count < 1)
+        {
+            retryWait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, retryWait.Token);
+        }
 
         queue.Complete();
-        block.TrySetResult();
         await writer.StopAsync(CancellationToken.None);
-        Assert.Empty(captured);
-        Assert.Empty(overview.Payloads);
+        Assert.Equal(2, overview.AttemptCount);
+        Assert.Single(overview.Payloads);
     }
 
     [Fact]
-    public async Task PersistFailure_AfterRabbitMqConfirm_DoesNotRequeueOrRepublish()
+    public async Task PersistFailure_AfterOverviewEnqueue_DoesNotRequeueArticle()
     {
         var overview = new RecordingOverviewDbHandoffPublisher();
         var diagnostics = new SignalingFeedDiagnostics();
@@ -169,8 +179,6 @@ public sealed class IncomingSpoolOverviewHandoffTests
         var end = await diagnostics.Ended.Task.WaitAsync(cts.Token);
 
         Assert.False(end.Persisted);
-        Assert.Equal(1, overview.AttemptCount);
-        Assert.Single(overview.Payloads);
         Assert.Equal(0, queue.Count);
 
         queue.Complete();
@@ -242,6 +250,8 @@ public sealed class IncomingSpoolOverviewHandoffTests
                     MinWorkers = 1,
                     MaxWorkers = 1,
                     MaxPublishConcurrency = 1,
+                    OverviewDbMinPublisherWorkers = 1,
+                    OverviewDbMaxPublisherWorkers = 1,
                     ScaleIntervalSeconds = 3600,
                 },
                 Transit = new TransitOptions { WantTrash = true, LogTrash = true },
@@ -289,7 +299,7 @@ public sealed class IncomingSpoolOverviewHandoffTests
         }
     }
 
-    /// <summary>Persister that fails after OverviewDB confirm to prove the worker does not requeue.</summary>
+    /// <summary>Persister that fails after OverviewDB work enqueue to prove the worker does not requeue the article.</summary>
     private sealed class ThrowingPersister : IIncomingArticlePersister
     {
         /// <inheritdoc />

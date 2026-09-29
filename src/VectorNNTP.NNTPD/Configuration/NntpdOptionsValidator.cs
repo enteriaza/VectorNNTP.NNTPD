@@ -152,6 +152,36 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxPublishConcurrency)} must be between 1 and 512.");
         }
 
+        if (ingestion.OverviewDbPublisherBatchSize is < 1 or > 10_000)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbPublisherBatchSize)} must be between 1 and 10000.");
+        }
+
+        if (ingestion.OverviewDbPublisherShutdownSeconds is < 1 or > 60)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbPublisherShutdownSeconds)} must be between 1 and 60.");
+        }
+
+        if (ingestion.OverviewDbWorkQueueMemoryLimit < 1)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbWorkQueueMemoryLimit)} must be at least 1.");
+        }
+
+        if (ingestion.OverviewDbMinPublisherWorkers is < 1 or > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbMinPublisherWorkers)} must be between 1 and 512.");
+        }
+
+        if (ingestion.OverviewDbMaxPublisherWorkers is < 1 or > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbMaxPublisherWorkers)} must be between 1 and 512.");
+        }
+
+        if (ingestion.OverviewDbMaxPublisherWorkers < ingestion.OverviewDbMinPublisherWorkers)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.OverviewDbMaxPublisherWorkers)} must be greater than or equal to {nameof(ArticleIngestionOptions.OverviewDbMinPublisherWorkers)}.");
+        }
+
         if (ingestion.ScaleIntervalSeconds is < 1 or > 3600)
         {
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleIntervalSeconds)} must be between 1 and 3600.");

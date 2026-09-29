@@ -445,7 +445,30 @@ public sealed class NntpdOptionsValidatorTests
         Assert.Equal(ArticleIngestionOptions.DefaultMinWorkers, ingestion.MinWorkers);
         Assert.Equal(ArticleIngestionOptions.DefaultMaxWorkers, ingestion.MaxWorkers);
         Assert.Equal(ArticleIngestionOptions.DefaultMaxPublishConcurrency, ingestion.MaxPublishConcurrency);
+        Assert.Equal(
+            ArticleIngestionOptions.DefaultOverviewDbWorkQueueMemoryLimit,
+            ingestion.OverviewDbWorkQueueMemoryLimit);
+        Assert.Equal(
+            ArticleIngestionOptions.DefaultOverviewDbMinPublisherWorkers,
+            ingestion.OverviewDbMinPublisherWorkers);
+        Assert.Equal(
+            ArticleIngestionOptions.DefaultOverviewDbMaxPublisherWorkers,
+            ingestion.OverviewDbMaxPublisherWorkers);
         Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenOverviewDbMaxPublisherWorkersLessThanMin()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.ArticleIngestion.OverviewDbMinPublisherWorkers = 4;
+        options.ArticleIngestion.OverviewDbMaxPublisherWorkers = 2;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            "OverviewDbMaxPublisherWorkers",
+            NntpdOptionsValidator.JoinFailures(result),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -493,6 +516,9 @@ public sealed class NntpdOptionsValidatorTests
                 ["Nntpd:ArticleIngestion:MinWorkers"] = "3",
                 ["Nntpd:ArticleIngestion:MaxWorkers"] = "12",
                 ["Nntpd:ArticleIngestion:MaxPublishConcurrency"] = "8",
+                ["Nntpd:ArticleIngestion:OverviewDbWorkQueueMemoryLimit"] = "536870912",
+                ["Nntpd:ArticleIngestion:OverviewDbMinPublisherWorkers"] = "3",
+                ["Nntpd:ArticleIngestion:OverviewDbMaxPublisherWorkers"] = "10",
                 ["Nntpd:ArticleIngestion:ScaleIntervalSeconds"] = "5",
                 ["Nntpd:ArticleIngestion:ScaleUpPressureThreshold"] = "0.55",
                 ["Nntpd:ArticleIngestion:ScaleDownPressureThreshold"] = "0.15",
@@ -505,6 +531,9 @@ public sealed class NntpdOptionsValidatorTests
         Assert.Equal(3, options.ArticleIngestion.MinWorkers);
         Assert.Equal(12, options.ArticleIngestion.MaxWorkers);
         Assert.Equal(8, options.ArticleIngestion.MaxPublishConcurrency);
+        Assert.Equal(536870912, options.ArticleIngestion.OverviewDbWorkQueueMemoryLimit);
+        Assert.Equal(3, options.ArticleIngestion.OverviewDbMinPublisherWorkers);
+        Assert.Equal(10, options.ArticleIngestion.OverviewDbMaxPublisherWorkers);
         Assert.Equal(5, options.ArticleIngestion.ScaleIntervalSeconds);
         Assert.Equal(0.55, options.ArticleIngestion.ScaleUpPressureThreshold);
         Assert.Equal(0.15, options.ArticleIngestion.ScaleDownPressureThreshold);

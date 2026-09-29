@@ -14,9 +14,25 @@ internal sealed class NullOverviewDbHandoffPublisher : IOverviewDbHandoffPublish
     }
 
     /// <inheritdoc />
-    public Task PublishConfirmedAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    public Task PublishAsync(OverviewDbWorkItem item, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(item);
         cancellationToken.ThrowIfCancellationRequested();
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public int OutstandingCount => 0;
+
+    /// <inheritdoc />
+    public bool TryDequeuePublishFailure(out OverviewDbWorkItem item)
+    {
+        item = null!;
+        return false;
+    }
+
+    /// <inheritdoc />
+    public void AbandonOutstanding()
+    {
     }
 }

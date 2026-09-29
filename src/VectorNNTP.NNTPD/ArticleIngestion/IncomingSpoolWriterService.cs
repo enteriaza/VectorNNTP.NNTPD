@@ -11,38 +11,22 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>
 /// Background application service that drains CanonicalV1 queued articles through
-/// a dynamically sized <see cref="IngestionWorkerPool"/>.
+/// a dynamically sized <see cref="IngestionWorkerPool"/> and hands OverviewDB
+/// payloads to an independent publisher stage.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The queue guarantee is a CanonicalV1 <c>ArticleRecord</c>. Workers do not
-/// destuff, parse, or construct records. After dequeue each worker publishes a
-/// compact OverviewDB protobuf message to <c>overviewdb.queue</c> and waits for a
-/// RabbitMQ publisher confirmation on a leased confirm-enabled channel. On confirm
-/// it classifies <c>+</c>/<c>j</c> and emits those events through
-/// <see cref="INewsLogWriter"/> (production: Serilog), writes the canonical
-/// <c>ArticleRecord.Path</c> to the dedicated Path-survey stream
-/// (<see cref="IPathSurveyWriter"/>), then continues to the existing
-/// <see cref="IIncomingArticlePersister"/> (/dev/null no-op). A failed confirm or
-/// publish is treated as incomplete: the article is requeued through
-/// <see cref="IArticleIngestionQueue.EnqueueAsync"/>. Rejected articles never
-/// reach this service; <c>-</c> is emitted at the protocol decision. Moderated
-/// POST (<c>m</c>) is emitted at the moderation-success decision and never enters
-/// the queue. Path-survey observations are not written for articles that never
-/// become a CanonicalV1 queued record.
+/// Article workers encode OverviewArticleV1, enqueue the owned bytes onto a bounded
+/// in-process <see cref="IOverviewDbWorkQueue"/>, then write news / Path-survey /
+/// persist. They do <b>not</b> await RabbitMQ publication or publisher confirmation.
+/// Successful enqueue is not durable RabbitMQ handoff; broker confirmation remains
+/// owned by <see cref="OverviewDbPublisherPool"/> via asynchronous outstanding
+/// confirms on <see cref="IOverviewDbHandoffPublisher"/>.
 /// </para>
 /// <para>
-/// Multiple workers may be in-flight concurrently. Outstanding OverviewDB
-/// publishes are bounded by <see cref="ArticleIngestionOptions.MaxPublishConcurrency"/>
-/// via leased RabbitMQ publish channels. Worker count scales between
-/// <see cref="ArticleIngestionOptions.MinWorkers"/> and
-/// <see cref="ArticleIngestionOptions.MaxWorkers"/> from sustained queue pressure.
-/// A news-log or Path-survey failure is reported through
-/// <see cref="SpoolLogMessages.NewsLogFailed"/> /
-/// <see cref="SpoolLogMessages.PathSurveyFailed"/> and does not re-admit,
-/// re-queue, or emit a second NNTP response. The article still proceeds to the
-/// persister after a successful OverviewDB handoff. The worker never calls
-/// OverviewDB over RPC, HTTP, gRPC, or a database connection.
+/// OverviewDB publisher workers scale independently from article workers based on
+/// OverviewDB work-queue pressure. Publisher confirms, mandatory publishing,
+/// persistent delivery, and the 2-second AMQP expiration are unchanged.
 /// </para>
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
@@ -59,10 +43,14 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IngestionPipelineMetrics? _pipeline;
     private readonly TimeProvider _time;
     private readonly Func<IngestionPressureSnapshot>? _samplePressure;
-    private readonly CancellationTokenSource _runCts = new();
+    private readonly CancellationTokenSource _articleRunCts = new();
+    private readonly CancellationTokenSource _overviewRunCts = new();
     private Task? _execution;
     private int _started;
     private IngestionWorkerPool? _pool;
+    private OverviewDbWorkQueue? _overviewWorkQueue;
+    private OverviewDbPublisherPool? _overviewPublisherPool;
+    private Task? _overviewPublisherExecution;
 
     /// <summary>Initializes a new instance of the <see cref="IncomingSpoolWriterService"/> class.</summary>
     public IncomingSpoolWriterService(
@@ -103,8 +91,14 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// <inheritdoc />
     public Task? Execution => _execution;
 
-    /// <summary>Gets the active worker pool (tests).</summary>
+    /// <summary>Gets the active article worker pool (tests).</summary>
     internal IngestionWorkerPool? Pool => _pool;
+
+    /// <summary>Gets the OverviewDB work queue (tests).</summary>
+    internal IOverviewDbWorkQueue? OverviewWorkQueue => _overviewWorkQueue;
+
+    /// <summary>Gets the OverviewDB publisher pool (tests).</summary>
+    internal OverviewDbPublisherPool? OverviewPublisherPool => _overviewPublisherPool;
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -122,6 +116,18 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             ingestion.IncomingDirectory
             ?? ArticleIngestionOptions.DefaultIncomingDirectory);
 
+        _overviewWorkQueue = new OverviewDbWorkQueue(ingestion.OverviewDbWorkQueueMemoryLimit);
+        _overviewPublisherPool = new OverviewDbPublisherPool(
+            _overviewWorkQueue,
+            _overviewHandoff,
+            ingestion,
+            _logger,
+            _pipeline,
+            _time);
+        _overviewPublisherExecution = Task.Run(
+            () => _overviewPublisherPool.RunAsync(_overviewRunCts.Token),
+            CancellationToken.None);
+
         _pool = new IngestionWorkerPool(
             _queue,
             ProcessArticleAsync,
@@ -130,15 +136,17 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _pipeline,
             _samplePressure,
             _time);
-        _execution = Task.Run(() => _pool.RunAsync(_runCts.Token), CancellationToken.None);
+        _execution = Task.Run(() => _pool.RunAsync(_articleRunCts.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // 1) Stop admitting article ingress and drain article workers (they may still
+        //    enqueue OverviewDB work while draining). Publisher pool keeps running.
         _queue.Complete();
-        await _runCts.CancelAsync().ConfigureAwait(false);
+        await _articleRunCts.CancelAsync().ConfigureAwait(false);
 
         var execution = _execution;
         if (execution is not null)
@@ -156,6 +164,34 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 SpoolLogMessages.WriterStoppedWithError(_logger, ex);
             }
         }
+
+        // 2) Complete OverviewDB work queue and drain publisher workers for a bounded period.
+        //    Outstanding OverviewDB confirms may be abandoned after the configured timeout.
+        _overviewWorkQueue?.Complete();
+        await _overviewRunCts.CancelAsync().ConfigureAwait(false);
+        var overviewExecution = _overviewPublisherExecution;
+        if (overviewExecution is not null)
+        {
+            var shutdownSeconds = Math.Max(
+                1,
+                (_options.Value.ArticleIngestion ?? new ArticleIngestionOptions())
+                    .OverviewDbPublisherShutdownSeconds);
+            using var overviewDrainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            overviewDrainCts.CancelAfter(TimeSpan.FromSeconds(shutdownSeconds));
+            try
+            {
+                await overviewExecution.WaitAsync(overviewDrainCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                SpoolLogMessages.WriterStoppedWithError(_logger, ex);
+            }
+        }
+
+        _overviewHandoff.AbandonOutstanding();
 
         try
         {
@@ -188,7 +224,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _feedDiagnostics.BeginSpoolWork();
         try
         {
-            await PublishOverviewAsync(article, itemStart, cancellationToken).ConfigureAwait(false);
+            await EnqueueOverviewWorkAsync(article, itemStart, cancellationToken).ConfigureAwait(false);
             overviewAccepted = true;
             var newsStart = System.Diagnostics.Stopwatch.GetTimestamp();
             WriteNewsLog(article);
@@ -268,11 +304,18 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         }
     }
 
-    private async Task PublishOverviewAsync(
+    /// <summary>
+    /// Encodes OverviewArticleV1 and enqueues it onto the in-process OverviewDB work
+    /// queue. Does not call RabbitMQ.
+    /// </summary>
+    private async Task EnqueueOverviewWorkAsync(
         InboundArticle article,
         long itemStart,
         CancellationToken cancellationToken)
     {
+        var workQueue = _overviewWorkQueue
+            ?? throw new InvalidOperationException("OverviewDB work queue is not started.");
+
         var max = OverviewArticleV1Codec.GetMaxEncodedSize(article.Record);
         var rented = ArrayPool<byte>.Shared.Rent(Math.Max(max, 1));
         try
@@ -281,9 +324,16 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             var written = OverviewArticleV1Codec.Encode(article.Record, rented);
             _pipeline?.RecordEncode(encodeStart);
             _pipeline?.RecordToPublishStart(itemStart);
-            await _overviewHandoff
-                .PublishConfirmedAsync(rented.AsMemory(0, written), cancellationToken)
-                .ConfigureAwait(false);
+
+            var owned = new byte[written];
+            rented.AsSpan(0, written).CopyTo(owned);
+            var item = new OverviewDbWorkItem(owned, article.MessageId);
+            var result = await workQueue.EnqueueAsync(item, cancellationToken).ConfigureAwait(false);
+            if (result != ArticleEnqueueResult.Accepted)
+            {
+                throw new InvalidOperationException(
+                    $"OverviewDB work queue rejected handoff enqueue ({result}).");
+            }
         }
         finally
         {
