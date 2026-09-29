@@ -1,0 +1,884 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Configuration;
+
+namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
+
+/// <summary>
+/// Filesystem-backed Model A durability journal under <see cref="ArticleStorageRuntimeOptions.ControlDir"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Single append-only file <c>article.journal</c>. Accept durability uses
+/// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c> (Windows
+/// <c>FlushFileBuffers</c> / Unix <c>fsync</c>). <see cref="Stream.FlushAsync(CancellationToken)"/>
+/// alone is not treated as the durability boundary.
+/// </para>
+/// <para>
+/// Replay applies a contiguous prefix of CRC-verified frames. An incomplete or corrupt
+/// <em>final</em> frame (no complete bytes after the failure) is truncated to the last
+/// good boundary. Corruption with trailing bytes after a failed frame fails closed via
+/// <see cref="ArticleJournalCorruptException"/>.
+/// </para>
+/// <para>
+/// <see cref="IArticleJournal.OutstandingRecoverableBytes"/> tracks Accept ArtSize until
+/// IndexCommitted. <see cref="IArticleJournal.JournalPhysicalBytes"/> tracks on-disk file
+/// length and may remain larger until <see cref="CheckpointTruncateCommitted"/>.
+/// </para>
+/// </remarks>
+public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDisposable
+{
+    /// <summary>Engine-owned journal filename beneath ControlDir.</summary>
+    public const string JournalFileName = "article.journal";
+
+    private readonly long _softLimitBytes;
+    private readonly long _hardLimitBytes;
+    private readonly ILogger _logger;
+    private readonly object _gate = new();
+    private readonly Dictionary<ulong, SequenceState> _bySequence = new();
+    private readonly Dictionary<ArticleId, ulong> _outstandingArtIdToSequence = new();
+    private readonly string _journalPath;
+    private FileStream _stream;
+    private ulong _nextSequence = 1;
+    private long _outstandingRecoverableBytes;
+    private StorageWritePressure _lastLoggedPressure = (StorageWritePressure)byte.MaxValue;
+    private bool _disposed;
+
+    private FileArticleJournal(
+        ArticleStorageRuntimeOptions options,
+        string journalPath,
+        FileStream stream,
+        ILogger logger)
+    {
+        _softLimitBytes = options.JournalSoftLimitBytes;
+        _hardLimitBytes = options.JournalHardLimitBytes;
+        _journalPath = journalPath;
+        _stream = stream;
+        _logger = logger;
+    }
+
+    /// <summary>Gets the absolute journal file path.</summary>
+    public string JournalPath => _journalPath;
+
+    /// <summary>Gets the next sequence that will be allocated.</summary>
+    public ulong NextSequence
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _nextSequence;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public long OutstandingRecoverableBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _outstandingRecoverableBytes;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public long JournalPhysicalBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _stream.Length;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public StorageWritePressure Pressure
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return ComputePressureUnlocked();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens or creates <c>article.journal</c> under <paramref name="options"/>.ControlDir,
+    /// replays durable state, and truncates a torn/corrupt final tail when required.
+    /// </summary>
+    public static FileArticleJournal Open(
+        ArticleStorageRuntimeOptions options,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
+
+        var log = logger ?? NullLogger.Instance;
+        Directory.CreateDirectory(options.ControlDir);
+        var path = Path.Combine(options.ControlDir, JournalFileName);
+        var stream = new FileStream(
+            path,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 64 * 1024,
+            FileOptions.None);
+
+        var journal = new FileArticleJournal(options, path, stream, log);
+        try
+        {
+            journal.ReplayAndRecoverUnlocked();
+            FileArticleJournalLogMessages.Opened(
+                log,
+                path,
+                stream.Length,
+                journal._nextSequence,
+                journal._outstandingRecoverableBytes,
+                journal._bySequence.Values.Count(static s => !s.IndexCommitted));
+            FileArticleJournalLogMessages.SequenceRecovered(log, path, journal._nextSequence);
+            journal.LogPressureIfChangedUnlocked();
+            return journal;
+        }
+        catch
+        {
+            journal.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Atomically rejects under pressure / duplicate / conflict, otherwise allocates a
+    /// sequence and durably appends Accept (including ArtData).
+    /// </summary>
+    public bool TryAppendNewAccept(
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        DateTimeOffset utcNow,
+        ReadOnlyMemory<byte> artData,
+        out JournalAcceptRecord record,
+        out ArticleAcceptOutcome rejectOutcome)
+    {
+        if (artSize != artData.Length || artSize is < 1 or > ArticleResourceLimits.MaxArticleBytes)
+        {
+            record = null!;
+            rejectOutcome = ArticleAcceptOutcome.RejectedInvalid;
+            return false;
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            if (_outstandingArtIdToSequence.TryGetValue(artId, out var existingSeq)
+                && _bySequence.TryGetValue(existingSeq, out var existing)
+                && !existing.IndexCommitted)
+            {
+                record = existing.Accept;
+                rejectOutcome = existing.Accept.ArtHash == artHash && existing.Accept.ArtSize == artSize
+                    ? ArticleAcceptOutcome.Duplicate
+                    : ArticleAcceptOutcome.Conflict;
+                return false;
+            }
+
+            if (ComputePressureUnlocked() == StorageWritePressure.Critical)
+            {
+                record = null!;
+                rejectOutcome = ArticleAcceptOutcome.RejectedPressure;
+                return false;
+            }
+
+            var sequence = _nextSequence;
+            record = new JournalAcceptRecord(
+                version: ArticleJournalFrameCodec.SchemaVersion,
+                sequence,
+                artId,
+                artHash,
+                artSize,
+                utcNow,
+                artData);
+
+            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeAccept(record));
+            ApplyAcceptUnlocked(record);
+            _nextSequence = sequence + 1;
+            LogPressureIfChangedUnlocked();
+            rejectOutcome = default;
+            return true;
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask AppendAcceptAsync(JournalAcceptRecord record, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (record.ArtSize is < 1 or > ArticleResourceLimits.MaxArticleBytes
+            || record.ArtSize != record.ArtData.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(record), "ArtData length out of range.");
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_bySequence.ContainsKey(record.Sequence))
+            {
+                throw new InvalidOperationException($"Journal sequence {record.Sequence} already exists.");
+            }
+
+            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeAccept(record));
+            ApplyAcceptUnlocked(record);
+            if (record.Sequence >= _nextSequence)
+            {
+                _nextSequence = record.Sequence + 1;
+            }
+
+            LogPressureIfChangedUnlocked();
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<JournalAppendOutcome> AppendPhysicalWrittenAsync(
+        JournalPhysicalWrittenRecord record,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_bySequence.TryGetValue(record.Sequence, out var state))
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.Rejected);
+            }
+
+            if (state.PhysicalWritten is { } existing)
+            {
+                if (LocationsEqual(existing.Location, record.Location))
+                {
+                    return ValueTask.FromResult(JournalAppendOutcome.IdempotentNoOp);
+                }
+
+                return ValueTask.FromResult(JournalAppendOutcome.Conflict);
+            }
+
+            if (record.Location.Length < state.Accept.ArtSize)
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.Rejected);
+            }
+
+            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodePhysicalWritten(record));
+            state.PhysicalWritten = record;
+            return ValueTask.FromResult(JournalAppendOutcome.Applied);
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<JournalAppendOutcome> AppendIndexCommittedAsync(
+        JournalIndexCommittedRecord record,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_bySequence.TryGetValue(record.Sequence, out var state))
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.Rejected);
+            }
+
+            if (state.IndexCommitted)
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.IdempotentNoOp);
+            }
+
+            if (state.PhysicalWritten is null)
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.Rejected);
+            }
+
+            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeIndexCommitted(record));
+            state.IndexCommitted = true;
+            state.IndexCommittedRecord = record;
+            _ = _outstandingArtIdToSequence.Remove(state.Accept.ArtId);
+            _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.Accept.ArtSize);
+            LogPressureIfChangedUnlocked();
+            return ValueTask.FromResult(JournalAppendOutcome.Applied);
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryGetOutstanding(ArticleId artId, out JournalAcceptRecord record)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_outstandingArtIdToSequence.TryGetValue(artId, out var sequence)
+                && _bySequence.TryGetValue(sequence, out var state)
+                && !state.IndexCommitted)
+            {
+                record = state.Accept;
+                return true;
+            }
+
+            record = null!;
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<JournalIncompleteSequence> EnumerateIncomplete()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _bySequence.Values
+                .Where(static s => !s.IndexCommitted)
+                .OrderBy(static s => s.Accept.Sequence)
+                .Select(static s => new JournalIncompleteSequence(s.Accept, s.PhysicalWritten))
+                .ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Test-only fault injection for checkpoint durability ordering (InternalsVisibleTo).
+    /// </summary>
+    internal enum CheckpointFaultPoint
+    {
+        /// <summary>After the temporary replacement has been flushed; old journal still open.</summary>
+        AfterTempFlushed = 1,
+
+        /// <summary>After the old stream was closed; before <c>File.Move</c>.</summary>
+        AfterOldStreamClosedBeforeMove = 2,
+
+        /// <summary>After <c>File.Move</c> replaced the journal; before reopen.</summary>
+        AfterMoveBeforeReopen = 3,
+    }
+
+    /// <summary>
+    /// Optional test hook invoked at checkpoint stages. Throwing aborts checkpoint.
+    /// </summary>
+    internal Action<CheckpointFaultPoint>? CheckpointTestFault { get; set; }
+
+    /// <summary>
+    /// Rewrites the journal retaining only incomplete sequences plus a sequence fence.
+    /// Releases physical bytes of IndexCommitted records; does not change
+    /// <see cref="OutstandingRecoverableBytes"/>.
+    /// </summary>
+    /// <remarks>
+    /// Committed in-memory entries are removed only after the replacement file is installed
+    /// and successfully reopened. Checkpoint failure does not report success and does not
+    /// leave a usable live instance with memory/disk divergence.
+    /// </remarks>
+    public long CheckpointTruncateCommitted()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var before = _stream.Length;
+            var incomplete = _bySequence.Values
+                .Where(static s => !s.IndexCommitted)
+                .OrderBy(static s => s.Accept.Sequence)
+                .ToArray();
+
+            var committedKeys = _bySequence
+                .Where(static kv => kv.Value.IndexCommitted)
+                .Select(static kv => kv.Key)
+                .ToArray();
+            if (committedKeys.Length == 0)
+            {
+                return 0;
+            }
+
+            // Disk replacement + reopen first; publish memory only on success.
+            InstallReplacementJournalUnlocked(incomplete);
+
+            foreach (var key in committedKeys)
+            {
+                _ = _bySequence.Remove(key);
+            }
+
+            var released = Math.Max(0L, before - _stream.Length);
+            FileArticleJournalLogMessages.Checkpointed(
+                _logger,
+                _journalPath,
+                released,
+                _stream.Length,
+                _nextSequence);
+            return released;
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _stream.Dispose();
+            FileArticleJournalLogMessages.Closed(_logger, _journalPath);
+        }
+
+        GC.SuppressFinalize(this);
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    private void ReplayAndRecoverUnlocked()
+    {
+        var fileLength = _stream.Length;
+        if (fileLength == 0)
+        {
+            _stream.Seek(0, SeekOrigin.End);
+            return;
+        }
+
+        if (fileLength > int.MaxValue)
+        {
+            throw new ArticleJournalCorruptException(
+                $"Article journal exceeds supported size ({fileLength} bytes).",
+                0);
+        }
+
+        var buffer = new byte[(int)fileLength];
+        _stream.Seek(0, SeekOrigin.Begin);
+        var read = _stream.Read(buffer, 0, buffer.Length);
+        if (read != buffer.Length)
+        {
+            throw new IOException($"Short read replaying article journal ({read}/{buffer.Length}).");
+        }
+
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var span = buffer.AsSpan(offset);
+            if (!ArticleJournalFrameCodec.TryDecode(
+                    span,
+                    out var type,
+                    out var frameLength,
+                    out var accept,
+                    out var physicalWritten,
+                    out var indexCommitted,
+                    out var sequenceFence,
+                    out var error))
+            {
+                HandleDecodeFailureUnlocked(offset, frameLength, buffer.Length, error);
+                break;
+            }
+
+            ApplyFrameUnlocked(type, accept, physicalWritten, indexCommitted, sequenceFence);
+            offset += frameLength;
+        }
+
+        _stream.Seek(0, SeekOrigin.End);
+    }
+
+    private void HandleDecodeFailureUnlocked(
+        long offset,
+        int frameLength,
+        long fileLength,
+        ArticleJournalFrameError error)
+    {
+        switch (error)
+        {
+            case ArticleJournalFrameError.Incomplete:
+                TruncateTornTailUnlocked(offset, fileLength, "incomplete-final-frame");
+                return;
+
+            case ArticleJournalFrameError.CorruptChecksum:
+            case ArticleJournalFrameError.Corrupt:
+                if (frameLength > 0 && offset + frameLength < fileLength)
+                {
+                    FileArticleJournalLogMessages.MidFileCorrupt(
+                        _logger,
+                        _journalPath,
+                        offset,
+                        error.ToString());
+                    throw new ArticleJournalCorruptException(
+                        $"Article journal corrupt at offset {offset} ({error}) with trailing bytes after the failed frame.",
+                        offset);
+                }
+
+                TruncateTornTailUnlocked(offset, fileLength, error.ToString());
+                return;
+
+            case ArticleJournalFrameError.CorruptLength:
+                // Structurally invalid length is corruption, not a recoverable torn tail.
+                // Genuine EOF shortfalls with an in-range TotalLength use Incomplete instead.
+                FileArticleJournalLogMessages.MidFileCorrupt(
+                    _logger,
+                    _journalPath,
+                    offset,
+                    "corrupt-length");
+                throw new ArticleJournalCorruptException(
+                    $"Article journal corrupt length at offset {offset}.",
+                    offset);
+
+            default:
+                throw new ArticleJournalCorruptException(
+                    $"Article journal decode failed at offset {offset} ({error}).",
+                    offset);
+        }
+    }
+
+    private void TruncateTornTailUnlocked(long validEnd, long fileLength, string reason)
+    {
+        FileArticleJournalLogMessages.TruncatingTornTail(
+            _logger,
+            _journalPath,
+            validEnd,
+            fileLength,
+            reason);
+        _stream.SetLength(validEnd);
+        _stream.Flush(flushToDisk: true);
+    }
+
+    private void ApplyFrameUnlocked(
+        ArticleJournalFrameType type,
+        JournalAcceptRecord? accept,
+        JournalPhysicalWrittenRecord? physicalWritten,
+        JournalIndexCommittedRecord? indexCommitted,
+        ulong? sequenceFence)
+    {
+        switch (type)
+        {
+            case ArticleJournalFrameType.Accept:
+                ArgumentNullException.ThrowIfNull(accept);
+                if (_bySequence.ContainsKey(accept.Sequence))
+                {
+                    throw new ArticleJournalCorruptException(
+                        $"Duplicate Accept sequence {accept.Sequence} during replay.",
+                        0);
+                }
+
+                ApplyAcceptUnlocked(accept);
+                if (accept.Sequence >= _nextSequence)
+                {
+                    _nextSequence = accept.Sequence + 1;
+                }
+
+                break;
+
+            case ArticleJournalFrameType.PhysicalWritten:
+                if (physicalWritten is null)
+                {
+                    throw new ArticleJournalCorruptException("PhysicalWritten frame missing body.");
+                }
+
+                ApplyPhysicalWrittenReplayUnlocked(physicalWritten.Value);
+                break;
+
+            case ArticleJournalFrameType.IndexCommitted:
+                if (indexCommitted is null)
+                {
+                    throw new ArticleJournalCorruptException("IndexCommitted frame missing body.");
+                }
+
+                ApplyIndexCommittedReplayUnlocked(indexCommitted.Value);
+                break;
+
+            case ArticleJournalFrameType.SequenceFence:
+                if (sequenceFence is null)
+                {
+                    throw new ArticleJournalCorruptException("SequenceFence frame missing body.");
+                }
+
+                if (sequenceFence.Value > _nextSequence)
+                {
+                    _nextSequence = sequenceFence.Value;
+                }
+
+                break;
+
+            default:
+                throw new ArticleJournalCorruptException($"Unknown journal frame type {(byte)type}.");
+        }
+    }
+
+    private void ApplyAcceptUnlocked(JournalAcceptRecord record)
+    {
+        _bySequence[record.Sequence] = new SequenceState(record);
+        _outstandingArtIdToSequence[record.ArtId] = record.Sequence;
+        _outstandingRecoverableBytes += record.ArtSize;
+    }
+
+    private void ApplyPhysicalWrittenReplayUnlocked(JournalPhysicalWrittenRecord record)
+    {
+        if (!_bySequence.TryGetValue(record.Sequence, out var state))
+        {
+            throw new ArticleJournalCorruptException(
+                $"PhysicalWritten for unknown sequence {record.Sequence}.");
+        }
+
+        if (state.PhysicalWritten is { } existing)
+        {
+            if (!LocationsEqual(existing.Location, record.Location))
+            {
+                throw new ArticleJournalCorruptException(
+                    $"Conflicting PhysicalWritten locations for sequence {record.Sequence}.");
+            }
+
+            return;
+        }
+
+        if (record.Location.Length < state.Accept.ArtSize)
+        {
+            throw new ArticleJournalCorruptException(
+                $"PhysicalWritten length mismatch for sequence {record.Sequence}.");
+        }
+
+        state.PhysicalWritten = record;
+    }
+
+    private void ApplyIndexCommittedReplayUnlocked(JournalIndexCommittedRecord record)
+    {
+        if (!_bySequence.TryGetValue(record.Sequence, out var state))
+        {
+            throw new ArticleJournalCorruptException(
+                $"IndexCommitted for unknown sequence {record.Sequence}.");
+        }
+
+        if (state.IndexCommitted)
+        {
+            return;
+        }
+
+        if (state.PhysicalWritten is null)
+        {
+            throw new ArticleJournalCorruptException(
+                $"IndexCommitted without PhysicalWritten for sequence {record.Sequence}.");
+        }
+
+        state.IndexCommitted = true;
+        state.IndexCommittedRecord = record;
+        _ = _outstandingArtIdToSequence.Remove(state.Accept.ArtId);
+        _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.Accept.ArtSize);
+    }
+
+    private void AppendFrameUnlocked(byte[] frame)
+    {
+        _stream.Seek(0, SeekOrigin.End);
+        _stream.Write(frame, 0, frame.Length);
+
+        // Durability boundary: flush OS buffers to stable storage.
+        // FileStream.Flush(flushToDisk: true) maps to FlushFileBuffers (Windows) / fsync (Unix).
+        _stream.Flush(flushToDisk: true);
+    }
+
+    /// <summary>
+    /// Writes a flushed temporary replacement, installs it, and reopens it.
+    /// Does not mutate <see cref="_bySequence"/>. On failure before successful reopen of a
+    /// replaced file, restores the previous journal stream when possible; otherwise marks
+    /// the instance disposed/unusable.
+    /// </summary>
+    private void InstallReplacementJournalUnlocked(SequenceState[] incomplete)
+    {
+        var directory = Path.GetDirectoryName(_journalPath)
+            ?? throw new InvalidOperationException("Journal path has no directory.");
+        var tempPath = Path.Combine(
+            directory,
+            $".{JournalFileName}.{Guid.NewGuid():N}.tmp");
+
+        var oldStream = _stream;
+        var oldStreamClosed = false;
+        var replaced = false;
+        FileStream? newStream = null;
+
+        try
+        {
+            using (var temp = new FileStream(
+                       tempPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 64 * 1024,
+                       FileOptions.None))
+            {
+                var fence = ArticleJournalFrameCodec.EncodeSequenceFence(_nextSequence);
+                temp.Write(fence, 0, fence.Length);
+                foreach (var state in incomplete)
+                {
+                    var acceptFrame = ArticleJournalFrameCodec.EncodeAccept(state.Accept);
+                    temp.Write(acceptFrame, 0, acceptFrame.Length);
+                    if (state.PhysicalWritten is { } pw)
+                    {
+                        var pwFrame = ArticleJournalFrameCodec.EncodePhysicalWritten(pw);
+                        temp.Write(pwFrame, 0, pwFrame.Length);
+                    }
+                }
+
+                temp.Flush(flushToDisk: true);
+            }
+
+            CheckpointTestFault?.Invoke(CheckpointFaultPoint.AfterTempFlushed);
+
+            oldStream.Dispose();
+            oldStreamClosed = true;
+            CheckpointTestFault?.Invoke(CheckpointFaultPoint.AfterOldStreamClosedBeforeMove);
+
+            File.Move(tempPath, _journalPath, overwrite: true);
+            replaced = true;
+            tempPath = string.Empty;
+
+            CheckpointTestFault?.Invoke(CheckpointFaultPoint.AfterMoveBeforeReopen);
+
+            newStream = new FileStream(
+                _journalPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 64 * 1024,
+                FileOptions.None);
+            newStream.Seek(0, SeekOrigin.End);
+            _stream = newStream;
+            newStream = null;
+        }
+        catch (Exception)
+        {
+            if (!string.IsNullOrEmpty(tempPath))
+            {
+                TryDelete(tempPath);
+            }
+
+            newStream?.Dispose();
+
+            if (!replaced)
+            {
+                if (oldStreamClosed)
+                {
+                    try
+                    {
+                        _stream = OpenJournalStream(_journalPath);
+                    }
+                    catch (Exception reopenEx)
+                    {
+                        MarkUnusableUnlocked();
+                        throw new InvalidOperationException(
+                            "Article journal checkpoint failed and the previous journal could not be reopened.",
+                            reopenEx);
+                    }
+                }
+
+                // oldStream still open, or successfully reopened: memory unchanged, usable.
+                throw;
+            }
+
+            // Replacement is on disk but this instance could not reopen it — fail closed.
+            MarkUnusableUnlocked();
+            throw;
+        }
+    }
+
+    private static FileStream OpenJournalStream(string path) =>
+        new(
+            path,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 64 * 1024,
+            FileOptions.None);
+
+    private void MarkUnusableUnlocked()
+    {
+        _disposed = true;
+        try
+        {
+            _stream.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already closed during failed checkpoint.
+        }
+        catch (IOException)
+        {
+            // Best-effort close while failing closed.
+        }
+    }
+
+    private StorageWritePressure ComputePressureUnlocked()
+    {
+        if (_outstandingRecoverableBytes >= _hardLimitBytes)
+        {
+            return StorageWritePressure.Critical;
+        }
+
+        if (_outstandingRecoverableBytes >= _softLimitBytes)
+        {
+            return StorageWritePressure.Elevated;
+        }
+
+        return StorageWritePressure.Normal;
+    }
+
+    private void LogPressureIfChangedUnlocked()
+    {
+        var pressure = ComputePressureUnlocked();
+        if (pressure == _lastLoggedPressure)
+        {
+            return;
+        }
+
+        _lastLoggedPressure = pressure;
+        FileArticleJournalLogMessages.Pressure(
+            _logger,
+            pressure,
+            _outstandingRecoverableBytes,
+            _softLimitBytes,
+            _hardLimitBytes);
+    }
+
+    private static bool LocationsEqual(in StoredArticleLocation left, in StoredArticleLocation right) =>
+        left.SegmentId.Value == right.SegmentId.Value
+        && left.Offset == right.Offset
+        && left.Length == right.Length;
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+            // Best-effort.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best-effort.
+        }
+    }
+
+    private sealed class SequenceState(JournalAcceptRecord accept)
+    {
+        public JournalAcceptRecord Accept { get; } = accept;
+
+        public JournalPhysicalWrittenRecord? PhysicalWritten { get; set; }
+
+        public bool IndexCommitted { get; set; }
+
+        public JournalIndexCommittedRecord? IndexCommittedRecord { get; set; }
+    }
+}

@@ -138,10 +138,17 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <remarks>
     /// Relative paths resolve through Common
     /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
-    /// <see cref="AppContext.BaseDirectory"/>. Distinct from <see cref="LogDir"/>.
-    /// Does not imply any on-disk layout under this root.
+    /// <see cref="AppContext.BaseDirectory"/>. Distinct from <see cref="LogDir"/> and
+    /// <see cref="ArticleStorageOptions.ControlDir"/>. This root is the SATA / segment
+    /// data tier. Does not imply any on-disk layout under this root.
     /// </remarks>
     public string CacheDir { get; set; } = DefaultCacheDir;
+
+    /// <summary>
+    /// Gets or sets article-storage engine options (NVMe control tier and journal bounds).
+    /// </summary>
+    [Required]
+    public ArticleStorageOptions Storage { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.

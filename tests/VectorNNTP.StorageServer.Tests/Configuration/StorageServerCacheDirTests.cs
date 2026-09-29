@@ -137,6 +137,7 @@ public sealed class StorageServerCacheDirTests
         var storage = doc.RootElement.GetProperty("StorageServer");
         Assert.Equal("cache/", storage.GetProperty("CacheDir").GetString());
         Assert.Equal("/logs", storage.GetProperty("LogDir").GetString());
+        Assert.Equal("control/", storage.GetProperty("Storage").GetProperty("ControlDir").GetString());
     }
 
     private static bool ValidateOptionsResultSuccess(StorageServerOptions options) =>

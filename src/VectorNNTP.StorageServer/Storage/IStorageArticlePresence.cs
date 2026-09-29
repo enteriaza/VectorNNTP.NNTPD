@@ -6,8 +6,9 @@ namespace VectorNNTP.StorageServer.Storage;
 /// Local article-presence probe used by the <c>cache.requests</c> lookup consumer.
 /// </summary>
 /// <remarks>
-/// Future RocksDB / segment index implementations satisfy this seam. The current host
-/// registers <see cref="NullStorageArticlePresence"/> until storage exists.
+/// Future durable index implementations satisfy this seam. The current host
+/// registers <see cref="NullStorageArticlePresence"/> until the article storage
+/// engine index is wired.
 /// </remarks>
 public interface IStorageArticlePresence
 {

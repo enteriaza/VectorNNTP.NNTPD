@@ -7,7 +7,7 @@ namespace VectorNNTP.StorageServer.Listener;
 /// </summary>
 /// <remarks>
 /// Storage is not implemented in the skeleton. Callers must treat a rejected result
-/// as the only supported outcome until RocksDB/segment storage lands.
+/// as the only supported outcome until the article storage engine is wired to VATP OPEN.
 /// </remarks>
 public interface IStorageArticleOpenBoundary
 {

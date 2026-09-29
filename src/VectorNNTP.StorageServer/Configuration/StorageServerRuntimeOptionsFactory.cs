@@ -80,6 +80,9 @@ public static class StorageServerRuntimeOptionsFactory
         }
 
         var listener = options.Listener ?? throw new InvalidOperationException("StorageServer:Listener is required.");
+        var storage = options.Storage ?? throw new InvalidOperationException("StorageServer:Storage is required.");
+        var cacheDir = ApplicationLocalPath.ResolveApplicationLocalPath(options.CacheDir, contentRootPath);
+        var controlDir = ApplicationLocalPath.ResolveApplicationLocalPath(storage.ControlDir, contentRootPath);
 
         return new StorageServerRuntimeOptions(
             ServerId: serverId,
@@ -90,7 +93,14 @@ public static class StorageServerRuntimeOptionsFactory
             BindPort: options.BindPort,
             BindPortTls: bindPortTls,
             LogDir: ApplicationLocalPath.ResolveApplicationLocalPath(options.LogDir, contentRootPath),
-            CacheDir: ApplicationLocalPath.ResolveApplicationLocalPath(options.CacheDir, contentRootPath),
+            CacheDir: cacheDir,
+            ControlDir: controlDir,
+            Storage: new ArticleStorageRuntimeOptions(
+                ControlDir: controlDir,
+                SegmentDir: cacheDir,
+                JournalSoftLimitBytes: storage.JournalSoftLimitBytes,
+                JournalHardLimitBytes: storage.JournalHardLimitBytes,
+                SegmentTargetSizeBytes: storage.SegmentTargetSizeBytes),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             GracefulShutdownTimeout: options.GracefulShutdownTimeout,
             StartupTimeout: options.StartupTimeout,

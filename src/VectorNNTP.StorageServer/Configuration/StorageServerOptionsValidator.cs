@@ -152,6 +152,42 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             options.CacheDir,
             "StorageServer:CacheDir",
             failures);
+        ValidateStorage(options, failures);
+    }
+
+    private static void ValidateStorage(StorageServerOptions options, List<string> failures)
+    {
+        if (options.Storage is null)
+        {
+            failures.Add("StorageServer:Storage must be provided.");
+            return;
+        }
+
+        ValidateFilesystemPath(
+            options.Storage.ControlDir,
+            "StorageServer:Storage:ControlDir",
+            failures);
+
+        if (options.Storage.JournalSoftLimitBytes < 1)
+        {
+            failures.Add("StorageServer:Storage:JournalSoftLimitBytes must be at least 1.");
+        }
+
+        if (options.Storage.JournalHardLimitBytes < 1)
+        {
+            failures.Add("StorageServer:Storage:JournalHardLimitBytes must be at least 1.");
+        }
+        else if (options.Storage.JournalSoftLimitBytes >= 1
+                 && options.Storage.JournalHardLimitBytes < options.Storage.JournalSoftLimitBytes)
+        {
+            failures.Add(
+                "StorageServer:Storage:JournalHardLimitBytes must be greater than or equal to JournalSoftLimitBytes.");
+        }
+
+        if (options.Storage.SegmentTargetSizeBytes < 1)
+        {
+            failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
+        }
     }
 
     private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)

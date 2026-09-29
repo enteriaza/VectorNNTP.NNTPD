@@ -1,0 +1,88 @@
+using Microsoft.Extensions.Logging;
+
+namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
+
+/// <summary>Source-generated durable article storage engine diagnostics.</summary>
+internal static partial class FileArticleStorageEngineLogMessages
+{
+    [LoggerMessage(
+        EventId = 3400,
+        Level = LogLevel.Information,
+        Message = "Article storage engine opened (controlDir={ControlDir}, segmentDir={SegmentDir})")]
+    public static partial void Opened(ILogger logger, string ControlDir, string SegmentDir);
+
+    [LoggerMessage(
+        EventId = 3401,
+        Level = LogLevel.Information,
+        Message = "Article accepted (artId={ArtId}, sequence={Sequence}, artSize={ArtSize})")]
+    public static partial void Accepted(ILogger logger, string ArtId, ulong Sequence, int ArtSize);
+
+    [LoggerMessage(
+        EventId = 3402,
+        Level = LogLevel.Information,
+        Message = "Article storage recovery started (incomplete={IncompleteCount})")]
+    public static partial void RecoveryStarted(ILogger logger, int IncompleteCount);
+
+    [LoggerMessage(
+        EventId = 3403,
+        Level = LogLevel.Information,
+        Message = "Article storage recovery completed")]
+    public static partial void RecoveryCompleted(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 3404,
+        Level = LogLevel.Information,
+        Message = "Recovering Accept-only sequence by fresh SATA append (sequence={Sequence}, artId={ArtId}); prior orphan appends are not discovered")]
+    public static partial void RecoverAcceptOnly(ILogger logger, ulong Sequence, string ArtId);
+
+    [LoggerMessage(
+        EventId = 3405,
+        Level = LogLevel.Information,
+        Message = "Recovering sequence from PhysicalWritten (sequence={Sequence}, segmentId={SegmentId}, offset={Offset}, length={Length})")]
+    public static partial void RecoverPhysicalWritten(
+        ILogger logger,
+        ulong Sequence,
+        ulong SegmentId,
+        long Offset,
+        int Length);
+
+    [LoggerMessage(
+        EventId = 3406,
+        Level = LogLevel.Warning,
+        Message = "PhysicalWritten location failed integrity proof (sequence={Sequence}, segmentId={SegmentId}, offset={Offset}); journal forbids supersede — leaving outstanding")]
+    public static partial void PhysicalWrittenUnusable(
+        ILogger logger,
+        ulong Sequence,
+        ulong SegmentId,
+        long Offset);
+
+    [LoggerMessage(
+        EventId = 3407,
+        Level = LogLevel.Information,
+        Message = "Recovery completed IndexCommitted (sequence={Sequence}, artId={ArtId})")]
+    public static partial void RecoveredIndexCommitted(ILogger logger, ulong Sequence, string ArtId);
+
+    [LoggerMessage(
+        EventId = 3408,
+        Level = LogLevel.Error,
+        Message = "Durable persist stage failed (sequence={Sequence}, stage={Stage})")]
+    public static partial void PersistStageFailed(ILogger logger, ulong Sequence, string Stage, Exception ex);
+
+    [LoggerMessage(
+        EventId = 3409,
+        Level = LogLevel.Information,
+        Message = "Journal checkpoint completed (releasedBytes={ReleasedBytes})")]
+    public static partial void CheckpointCompleted(ILogger logger, long ReleasedBytes);
+
+    [LoggerMessage(
+        EventId = 3410,
+        Level = LogLevel.Error,
+        Message = "Journal checkpoint failed")]
+    public static partial void CheckpointFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(
+        EventId = 3411,
+        Level = LogLevel.Information,
+        Message = "Article storage engine closed")]
+    public static partial void Closed(ILogger logger);
+}

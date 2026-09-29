@@ -21,12 +21,27 @@ public sealed record StorageServerRuntimeOptions(
     int BindPortTls,
     string LogDir,
     string CacheDir,
+    string ControlDir,
+    ArticleStorageRuntimeOptions Storage,
     string CertificateDirectory,
     TimeSpan GracefulShutdownTimeout,
     TimeSpan? StartupTimeout,
     bool StopHostOnUnexpectedServiceTermination,
     StorageServerListenerRuntimeOptions Listener,
     IReadOnlyList<string> CertificateDomainNames);
+
+/// <summary>Validated article-storage engine runtime bounds.</summary>
+/// <param name="ControlDir">Resolved NVMe control-tier root.</param>
+/// <param name="SegmentDir">Resolved SATA segment root (same as <c>CacheDir</c>).</param>
+/// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
+/// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
+/// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
+public sealed record ArticleStorageRuntimeOptions(
+    string ControlDir,
+    string SegmentDir,
+    long JournalSoftLimitBytes,
+    long JournalHardLimitBytes,
+    long SegmentTargetSizeBytes);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(
