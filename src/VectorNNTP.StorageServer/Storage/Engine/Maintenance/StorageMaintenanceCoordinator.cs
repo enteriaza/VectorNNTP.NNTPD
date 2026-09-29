@@ -24,13 +24,13 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// pressure is recomputed each invocation and is not a persistent mode.
 /// </para>
 /// <para>
-/// Phase 5F.3: when continuing an open compaction returns
+/// Phase 5F.3 / 5F.4: when an open compaction returns
 /// <see cref="StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress"/>, that open
-/// compaction is not abandoned — it remains durable and resumable — but the same
-/// <see cref="RunOnceAsync"/> falls through to Closed-victim selection so a capacity-blocked
-/// open compaction cannot starve other Closed work. Multiple open uncommitted compactions are
-/// still enumerated by lowest CompactionId; only the selected open is attempted before
-/// fall-through (no same-run retry of another open).
+/// remains durable and resumable but yields for the remainder of this
+/// <see cref="RunOnceAsync"/>. The coordinator then tries the next uncommitted open by ascending
+/// CompactionId (each yielded open attempted at most once this run). After all eligible opens
+/// have capacity-yielded, Closed-victim selection runs (Phase 5F.3). CompetingOpenCompaction and
+/// other non-capacity outcomes do not rotate.
 /// </para>
 /// <para>
 /// Policy selection is a hint — every destructive step is revalidated against current
@@ -69,6 +69,16 @@ public sealed class StorageMaintenanceCoordinator
     internal Action<SegmentId>? TestHookAfterReclamationVictimSelected { get; set; }
 
     /// <summary>
+    /// Invoked after an open uncommitted compaction attempt completes (before yield/return decisions).
+    /// Tests only. Arguments: source segment, compaction id, attempt result.
+    /// </summary>
+    internal Action<SegmentId, ulong, StorageMaintenanceResult>? TestHookAfterOpenUncommittedAttempted
+    {
+        get;
+        set;
+    }
+
+    /// <summary>
     /// Evaluates current durable state and performs at most one maintenance cycle.
     /// </summary>
     public async Task<StorageMaintenanceResult> RunOnceAsync(CancellationToken cancellationToken)
@@ -97,10 +107,14 @@ public sealed class StorageMaintenanceCoordinator
                 pressure);
         }
 
-        // 3) Continue open uncommitted compaction. Capacity zero-progress does not monopolize
-        // the remainder of this run (Phase 5F.3 fall-through to Closed selection).
-        StorageMaintenanceResult? deferredOpenCapacitySkip = null;
-        if (TryFindOpenUncommitted(out var open))
+        // 3) Continue open uncommitted compaction(s). Capacity zero-progress yields to the next
+        // open (Phase 5F.4), then to Closed selection (Phase 5F.3). Each yielded open is not
+        // retried in this RunOnceAsync.
+        StorageMaintenanceResult? firstDeferredOpenCapacitySkip = null;
+        var deferredOpenCount = 0;
+        HashSet<ulong>? yieldedOpenCompactionIds = null;
+
+        while (TryFindOpenUncommitted(yieldedOpenCompactionIds, out var open))
         {
             var openResult = await CompactThenFinishAsync(
                     open.Begin.SourceSegmentId,
@@ -110,30 +124,53 @@ public sealed class StorageMaintenanceCoordinator
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            if (IsCapacityOpenCompactionZeroProgressSkip(in openResult))
+            TestHookAfterOpenUncommittedAttempted?.Invoke(
+                open.Begin.SourceSegmentId,
+                open.Begin.CompactionId,
+                openResult);
+
+            if (!IsCapacityOpenCompactionZeroProgressSkip(in openResult))
             {
-                deferredOpenCapacitySkip = openResult;
+                // Progress, Failed, CompetingOpen, stale Skip, etc. — return immediately.
+                var primary = AttachPressure(openResult, pressure);
+                if (firstDeferredOpenCapacitySkip is { } priorDeferred)
+                {
+                    return primary.WithDeferredOpenCompaction(in priorDeferred, deferredOpenCount);
+                }
+
+                return primary;
             }
-            else
-            {
-                return AttachPressure(openResult, pressure);
-            }
+
+            yieldedOpenCompactionIds ??= new HashSet<ulong>();
+            _ = yieldedOpenCompactionIds.Add(open.Begin.CompactionId);
+            deferredOpenCount++;
+            firstDeferredOpenCapacitySkip ??= openResult;
         }
 
         // 4) Select a new Closed compaction victim (pressure-aware when under admission pressure).
         var closedResult = await SelectAndRunClosedVictimAsync(pressure, cancellationToken)
             .ConfigureAwait(false);
 
-        if (deferredOpenCapacitySkip is { } deferred)
+        if (firstDeferredOpenCapacitySkip is { } deferred)
         {
-            // No Closed work available — preserve the open capacity Skip (Case A).
+            // No Closed work available — preserve a capacity-zero-progress Skip (first deferred).
             if (IsNoClosedWorkOutcome(in closedResult))
             {
+                // Keep primary Skip identity as the open result; only enrich when multiple opens yielded.
+                if (deferredOpenCount > 1)
+                {
+                    return AttachPressure(
+                        deferred.WithDeferredOpenCompaction(in deferred, deferredOpenCount),
+                        pressure);
+                }
+
                 return AttachPressure(deferred, pressure);
             }
 
-            // Closed path produced the primary outcome; record that an open was deferred.
-            return AttachPressure(closedResult.WithDeferredOpenCompaction(in deferred), pressure);
+            // Closed path produced the primary outcome; record deferred open(s).
+            return AttachPressure(
+                closedResult.WithDeferredOpenCompaction(in deferred, deferredOpenCount),
+                pressure);
         }
 
         return AttachPressure(closedResult, pressure);
@@ -590,13 +627,28 @@ public sealed class StorageMaintenanceCoordinator
         return true;
     }
 
-    private bool TryFindOpenUncommitted(out CompactionJournalSnapshot snapshot)
+    private bool TryFindOpenUncommitted(out CompactionJournalSnapshot snapshot) =>
+        TryFindOpenUncommitted(excludeCompactionIds: null, out snapshot);
+
+    /// <summary>
+    /// Selects the lowest-CompactionId open uncommitted compaction not in
+    /// <paramref name="excludeCompactionIds"/> (Phase 5F.4 same-run yield set).
+    /// </summary>
+    private bool TryFindOpenUncommitted(
+        HashSet<ulong>? excludeCompactionIds,
+        out CompactionJournalSnapshot snapshot)
     {
         snapshot = default;
         CompactionJournalSnapshot? best = null;
         foreach (var entry in _engine.Journal.EnumerateOpenCompactions())
         {
             if (entry.Committed || entry.Retired is not null)
+            {
+                continue;
+            }
+
+            if (excludeCompactionIds is not null
+                && excludeCompactionIds.Contains(entry.Begin.CompactionId))
             {
                 continue;
             }

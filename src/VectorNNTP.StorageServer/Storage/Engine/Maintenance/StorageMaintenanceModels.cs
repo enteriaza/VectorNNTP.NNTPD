@@ -68,6 +68,10 @@ public enum StorageMaintenanceOutcome : byte
 /// Skip reason from the deferred open compaction (typically
 /// <see cref="StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress"/>).
 /// </param>
+/// <param name="DeferredOpenCompactionCount">
+/// Number of open compactions that capacity-yielded this run before the primary outcome
+/// (0 when none; may be &gt; 1 after Phase 5F.4 same-run rotation).
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -93,4 +97,5 @@ public readonly record struct StorageMaintenanceResult(
     long? CapacityCompactionReservedBytes = null,
     ulong? DeferredOpenCompactionId = null,
     SegmentId? DeferredOpenSourceSegmentId = null,
-    string? DeferredOpenSkipReason = null);
+    string? DeferredOpenSkipReason = null,
+    int DeferredOpenCompactionCount = 0);

@@ -234,6 +234,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
         Assert.Equal(s3Id, result.SegmentId);
         Assert.Equal(c1Id, result.DeferredOpenCompactionId);
         Assert.Equal(c1Source, result.DeferredOpenSourceSegmentId);
+        Assert.Equal(2, result.DeferredOpenCompactionCount);
         Assert.Contains(engine.Journal.EnumerateOpenCompactions(), c => c.Begin.CompactionId == c1Id && !c.Committed);
         Assert.Contains(engine.Journal.EnumerateOpenCompactions(), c => c.Begin.CompactionId == c2Id && !c.Committed);
         Assert.False(engine.Segments.TryGetSegmentInfo(s3Id, out _));

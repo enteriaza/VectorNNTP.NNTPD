@@ -59,18 +59,22 @@ internal static class StorageMaintenanceResultAccounting
     }
 
     /// <summary>
-    /// Records that an open compaction was deferred this run after capacity zero-progress
-    /// (Phase 5F.3), without claiming that deferred compaction as the primary outcome.
+    /// Records that one or more open compactions were deferred this run after capacity
+    /// zero-progress (Phase 5F.3 / 5F.4), without claiming deferred work as the primary outcome.
+    /// Identity fields describe the first deferred open; <paramref name="deferredCount"/> is the
+    /// total number deferred this run.
     /// </summary>
     public static StorageMaintenanceResult WithDeferredOpenCompaction(
         this StorageMaintenanceResult result,
-        in StorageMaintenanceResult deferredOpenSkip)
+        in StorageMaintenanceResult deferredOpenSkip,
+        int deferredCount = 1)
     {
         return result with
         {
             DeferredOpenCompactionId = deferredOpenSkip.CompactionId,
             DeferredOpenSourceSegmentId = deferredOpenSkip.SegmentId,
             DeferredOpenSkipReason = deferredOpenSkip.SkipReason,
+            DeferredOpenCompactionCount = deferredCount > 0 ? deferredCount : 1,
         };
     }
 

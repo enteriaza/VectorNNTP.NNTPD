@@ -87,7 +87,7 @@ internal static class StorageMaintenanceRunLogging
         }
 
         var deferred =
-            $"deferred-open-compaction={deferredId};deferred-open-source={result.DeferredOpenSourceSegmentId?.Value};deferred-open-reason={result.DeferredOpenSkipReason}";
+            $"deferred-open-compaction={deferredId};deferred-open-source={result.DeferredOpenSourceSegmentId?.Value};deferred-open-reason={result.DeferredOpenSkipReason};deferred-open-count={result.DeferredOpenCompactionCount}";
         return result.SkipReason is null ? deferred : result.SkipReason + ";" + deferred;
     }
 }
