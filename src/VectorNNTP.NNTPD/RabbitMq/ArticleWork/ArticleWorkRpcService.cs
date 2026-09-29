@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
+using VectorNNTP.NNTPD.RabbitMq.Management;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
@@ -15,6 +16,8 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// rebuilds that session after <see cref="IRabbitMqService.ConnectionReplaced"/>.
 /// Outstanding application operations survive generation replacement in process memory;
 /// a stale channel cannot publish into or mutate the replacement session.
+/// BackFiller availability is discovered via the RabbitMQ Management HTTP API
+/// (eventually consistent ~5s snapshot), not via AMQP passive queue declares.
 /// </remarks>
 internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkRpcClient, IArticleWorkRpcPublisher
 {
@@ -36,18 +39,20 @@ internal sealed class ArticleWorkRpcService : IApplicationService, IArticleWorkR
     public ArticleWorkRpcService(
         IRabbitMqService rabbitMq,
         IOptions<NntpdOptions> nntpdOptions,
+        IRabbitMqManagementQueueInventory managementInventory,
         ILogger<ArticleWorkRpcService> logger,
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(rabbitMq);
         ArgumentNullException.ThrowIfNull(nntpdOptions);
+        ArgumentNullException.ThrowIfNull(managementInventory);
         ArgumentNullException.ThrowIfNull(logger);
         _rabbitMq = rabbitMq;
         _nntpdOptions = nntpdOptions;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _router = new ArticleWorkRpcResponseRouter(logger);
-        _availability = new BackfillConsumerAvailabilityService(rabbitMq, logger, _timeProvider);
+        _availability = new BackfillConsumerAvailabilityService(managementInventory, logger, _timeProvider);
         _client = new ArticleWorkRpcClient(
             this,
             _router,

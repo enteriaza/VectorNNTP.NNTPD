@@ -46,6 +46,9 @@ public sealed class RabbitMqOptionsTests
         Assert.Equal(2047, options.RequestedChannelMax);
         Assert.Null(options.ConsumerPrefetchCount);
         Assert.Null(options.DiagnosticPayloadCorrelationId);
+        Assert.NotNull(options.Management);
+        Assert.Null(options.Management.BaseUrl);
+        Assert.Equal(5, options.Management.RequestTimeoutSeconds);
     }
 
     [Fact]
@@ -85,6 +88,8 @@ public sealed class RabbitMqOptionsTests
                     ["RabbitMQ:RequestedChannelMax"] = "1024",
                     ["RabbitMQ:ConsumerPrefetchCount"] = "50",
                     ["RabbitMQ:DiagnosticPayloadCorrelationId"] = "ee9f7a44-a5d6-4603-ba22-c5e0803fc834",
+                    ["RabbitMQ:Management:BaseUrl"] = "http://rabbit-01.example.net:15672",
+                    ["RabbitMQ:Management:RequestTimeoutSeconds"] = "5",
                 })
             .Build();
 
@@ -120,6 +125,8 @@ public sealed class RabbitMqOptionsTests
         Assert.Equal(1024, options.RequestedChannelMax);
         Assert.Equal((ushort)50, options.ConsumerPrefetchCount);
         Assert.Equal("ee9f7a44-a5d6-4603-ba22-c5e0803fc834", options.DiagnosticPayloadCorrelationId);
+        Assert.Equal("http://rabbit-01.example.net:15672", options.Management.BaseUrl);
+        Assert.Equal(5, options.Management.RequestTimeoutSeconds);
     }
 
     [Fact]
@@ -308,6 +315,26 @@ public sealed class RabbitMqOptionsTests
     }
 
     [Fact]
+    public void Validate_Fails_WhenManagementBaseUrlMissing()
+    {
+        var options = CreateValid();
+        options.Management.BaseUrl = null;
+        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures, static failure => failure.Contains("Management:BaseUrl", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenManagementBaseUrlIncludesApiPath()
+    {
+        var options = CreateValid();
+        options.Management.BaseUrl = "http://127.0.0.1:15672/api";
+        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(result.Failures, static failure => failure.Contains("must not include a path", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void GetDefaultConnectionName_UsesNntpdPrefix()
     {
         Assert.Equal(
@@ -320,5 +347,12 @@ public sealed class RabbitMqOptionsTests
         {
             Hosts = ["127.0.0.1"],
             EnableSsl = false,
+            Username = "guest",
+            Password = "guest",
+            Management = new RabbitMqManagementOptions
+            {
+                BaseUrl = "http://127.0.0.1:15672",
+                RequestTimeoutSeconds = 5,
+            },
         };
 }

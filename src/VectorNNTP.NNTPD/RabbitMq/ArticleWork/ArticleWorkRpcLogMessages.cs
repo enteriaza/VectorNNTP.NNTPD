@@ -86,9 +86,9 @@ internal static partial class ArticleWorkRpcLogMessages
 
     [LoggerMessage(
         EventId = 2840,
-        Level = LogLevel.Debug,
-        Message = "Article-work consumer probe failed (queue={Queue})")]
-    public static partial void ConsumerProbeFailed(ILogger logger, Exception exception, string Queue);
+        Level = LogLevel.Warning,
+        Message = "Article-work Management API availability refresh failed; retaining last successful snapshot")]
+    public static partial void ManagementAvailabilityRefreshFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(
         EventId = 2841,
@@ -101,4 +101,10 @@ internal static partial class ArticleWorkRpcLogMessages
         string Backbone,
         int Consumers,
         int Attempt);
+
+    [LoggerMessage(
+        EventId = 2842,
+        Level = LogLevel.Debug,
+        Message = "Article-work availability snapshot refreshed (eligibleCount={EligibleCount})")]
+    public static partial void AvailabilitySnapshotRefreshed(ILogger logger, int EligibleCount);
 }

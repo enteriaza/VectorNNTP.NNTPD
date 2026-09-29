@@ -434,7 +434,7 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 
 `RabbitMqService` is the dedicated application service that owns the broker connection lifecycle. It establishes one process-wide connection, verifies that the connection is open, and replaces it on connectivity loss while incrementing a monotonic connection generation. Client automatic recovery is disabled. After a successful start, reconnect continues indefinitely until the connection is restored or NNTPD shuts down. Callers obtain the current connection with `TryGetCurrent`; they do not own or dispose it.
 
-`RabbitMqTopologyService` starts immediately after `RabbitMqService` and declares NNTPD-owned topology only: the internal `backfiller.storage` fanout/quorum endpoint and the one-way OverviewDB ingest queue `overviewdb.queue`. It does **not** declare per-backbone `backfiller.<backbone>` provider queues. Those are created by VectorNNTP.BackFiller when a backbone becomes usable (usable NNTP capacity), immediately before Article Work consumers start, using the same durable fanout + durable quorum queue (`x-queue-type=quorum`) + same-name binding semantics. Inactive backbones do not declare topology; becoming inactive later stops consumers but does **not** delete exchange/queue/binding. Either NNTPD or BackFiller may start first on an empty broker. Exchange, queue, and routing-key names are trimmed and invariant-lowercased. `backfiller.storage` and `overviewdb.queue` are application constants, not configuration keys. `backfiller.storage` is not a BackFiller provider. `overviewdb.queue` is a durable, non-exclusive, non-auto-delete quorum queue (`x-queue-type=quorum`, no queue-wide `x-message-ttl`) published through the AMQP default exchange with routing key `overviewdb.queue`; no dedicated OverviewDB exchange, bind, reply queue, or RPC topology is declared. All VectorNNTP-owned durable application work queues are quorum (`x-queue-type=quorum`). Exclusive auto-delete ArticleWork RPC reply queues remain non-durable classic. Declaration is fail-closed and uses RabbitMQ's idempotent declare/bind operations; incompatible existing topology is not deleted or rewritten. Connection-generation replacement does not redeclare topology. A missing provider queue observed by the NNTPD scheduler's passive probe simply means that backbone is currently unavailable (not eligible); it is not an NNTPD topology failure.
+`RabbitMqTopologyService` starts immediately after `RabbitMqService` and declares NNTPD-owned topology only: the internal `backfiller.storage` fanout/quorum endpoint and the one-way OverviewDB ingest queue `overviewdb.queue`. It does **not** declare per-backbone `backfiller.<backbone>` provider queues. Those are created by VectorNNTP.BackFiller when a backbone becomes usable (usable NNTP capacity), immediately before Article Work consumers start, using the same durable fanout + durable quorum queue (`x-queue-type=quorum`) + same-name binding semantics. Inactive backbones do not declare topology; becoming inactive later stops consumers but does **not** delete exchange/queue/binding. Either NNTPD or BackFiller may start first on an empty broker. Exchange, queue, and routing-key names are trimmed and invariant-lowercased. `backfiller.storage` and `overviewdb.queue` are application constants, not configuration keys. `backfiller.storage` is not a BackFiller provider. `overviewdb.queue` is a durable, non-exclusive, non-auto-delete quorum queue (`x-queue-type=quorum`, no queue-wide `x-message-ttl`) published through the AMQP default exchange with routing key `overviewdb.queue`; no dedicated OverviewDB exchange, bind, reply queue, or RPC topology is declared. All VectorNNTP-owned durable application work queues are quorum (`x-queue-type=quorum`). Exclusive auto-delete ArticleWork RPC reply queues remain non-durable classic. Declaration is fail-closed and uses RabbitMQ's idempotent declare/bind operations; incompatible existing topology is not deleted or rewritten. Connection-generation replacement does not redeclare topology. BackFiller ArticleWork availability discovery uses the RabbitMQ Management HTTP API (GET /api/queues/{vhost} with the URL-encoded virtual host, e.g. %2F for /), refreshed approximately every 5 seconds into an in-memory snapshot. A provider queue is eligible only when Management reports consumers > 0. Missing queues and zero-consumer queues are unavailable. Availability is intentionally eventually consistent (~5 seconds normal staleness). A failed Management refresh retains the last successful snapshot (last-known-good) and does not treat the outage as all-consumers-zero. AMQP remains the ArticleWork data plane; Management is the discovery plane only. Management Basic auth uses RabbitMQ:Username / RabbitMQ:Password (never log those secrets).
 
 `IncomingSpoolWriterService` encodes one Common `OverviewArticleV1` protobuf per accepted article and publishes it to `overviewdb.queue`, waiting for a publisher confirmation before treating the worker item as complete. Each publication sets a fresh AMQP `MessageId` (UUID), `AppId` to the generated `{Fqdn}`, `Expiration=2000` (per-message TTL in milliseconds; not a queue-wide TTL and not an application timer), persistent delivery mode, and `mandatory=true` so a missing or unroutable `overviewdb.queue` is returned to the publisher as a failure. A negative confirmation, unroutable/basic.return, or publish failure requeues the article on the in-memory ingestion queue. NNTPD does not call OverviewDB over RPC, HTTP, gRPC, or a database connection.
 
@@ -444,8 +444,8 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 |-----|------|---------|-----------|-------------|
 | `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query) |
 | `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
-| `Username` | string | _(none)_ | no | Broker username. When set, `Password` is required. Supply via `VECTOR__RABBITMQ__USERNAME` |
-| `Password` | string | _(none)_ | no (secret) | Broker password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
+| `Username` | string | _(none)_ | **yes** (for Management) | Broker / Management Basic-auth username. Required with `Password` for Management API availability discovery. Supply via `VECTOR__RABBITMQ__USERNAME` |
+| `Password` | string | _(none)_ | **yes** (secret; for Management) | Broker / Management Basic-auth password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
 | `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
 | `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS |
 | `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
@@ -471,6 +471,8 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 | `UnhealthyThreshold` | int | `5` | **yes** | Validated; reserved for later health policy (`1–120`) |
 | `ConsumerPrefetchCount` | ushort | _(none)_ | no | Optional Basic.Qos prefetch. Consumed by VectorNNTP.BackFiller Article Work consumers (`1–65535`) |
 | `DiagnosticPayloadCorrelationId` | string | _(none)_ | no | Optional diagnostic gate; not used in this phase |
+| `Management:BaseUrl` | string | _(none)_ | **yes** | Absolute Management HTTP API root (`http`/`https` host+port only; no `/api` path). Example: `http://rabbit-01.example.net:15672` |
+| `Management:RequestTimeoutSeconds` | int | `5` | **yes** | Per-request Management API timeout (`1–60`) |
 
 There is no application-level RabbitMQ connection pool. One long-lived connection is owned by `RabbitMqService`. `MinConnections` / `MaxConnections` are validated for contract compatibility and are not enforced.
 
@@ -481,7 +483,11 @@ Example (no secrets):
   "Hosts": [ "rabbit-01.example.net" ],
   "Port": 5672,
   "EnableSsl": false,
-  "VirtualHost": "/"
+  "VirtualHost": "/",
+  "Management": {
+    "BaseUrl": "http://rabbit-01.example.net:15672",
+    "RequestTimeoutSeconds": 5
+  }
 }
 ```
 
@@ -844,8 +850,8 @@ Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 | `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
 | `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
 | `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |
-| `Username` | string | `""` | no | Peer AUTHINFO username. Must be set together with `Password`, or both blank. Authentication requires both configured values and both supplied values to match. |
-| `Password` | string | `""` | no | Peer AUTHINFO password. Never log this value. Must be set together with `Username`, or both blank. |
+| `Username` | string | _(none)_ | **yes** (for Management) | Broker / Management Basic-auth username. Required with `Password` for Management API availability discovery. Supply via `VECTOR__RABBITMQ__USERNAME` |
+| `Password` | string | _(none)_ | **yes** (secret; for Management) | Broker / Management Basic-auth password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
 | `Ssl` | string | `""` | no | Blank = no TLS; `TLS` = native TLS; `STARTTLS` = upgrade. Case-insensitive; invalid values fail validation. |
 | `Patterns` | string | `*` | no | One newsfeeds(5) / `uwildmat_poison` subscription expression (comma-separated string, not a JSON array, regex, or .NET glob). |
 | `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE in-flight duplicate handling (`431`/`436` vs `438`/`435`). CHECK HistoryDB itself is implemented separately. |

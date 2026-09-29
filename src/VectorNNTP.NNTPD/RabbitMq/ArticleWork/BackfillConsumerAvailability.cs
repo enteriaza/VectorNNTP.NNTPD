@@ -1,25 +1,35 @@
 using System.Collections.Immutable;
+using VectorNNTP.NNTPD.RabbitMq.Management;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
 /// <summary>
-/// Cached BackFiller ArticleWork consumer counts from RabbitMQ passive queue declares.
+/// Cached BackFiller ArticleWork consumer counts from the RabbitMQ Management HTTP API.
 /// </summary>
 /// <remarks>
-/// Refreshes on a fixed interval rather than per selection when the snapshot is still
-/// fresh. When a refresh is due, selection waits for that probe so the first lookup after
-/// start (or after the interval) does not observe an empty snapshot spuriously.
-/// A missing provider queue (passive declare failure) means that backbone is not eligible;
-/// it is not an NNTPD topology startup failure. Queues with <c>ConsumerCount == 0</c> are
-/// likewise ineligible. Each queue is probed on its own topology channel so a broker
-/// channel closure after <c>NOT_FOUND</c> cannot skip later provider probes.
+/// <para>
+/// Discovery plane: Management API queue inventory refreshed on a fixed ~5s interval.
+/// AMQP remains the ArticleWork data plane. Availability is intentionally eventually
+/// consistent and may be approximately 5 seconds stale.
+/// </para>
+/// <para>
+/// A provider queue is eligible only when the Management API reports
+/// <c>consumers &gt; 0</c> for that queue name. Missing queues and zero-consumer queues
+/// are unavailable and are omitted from the snapshot. Absent/zero-consumer states are
+/// normal and do not produce exceptions.
+/// </para>
+/// <para>
+/// A failed Management API refresh retains the last successfully retrieved snapshot
+/// (last-known-good). There is no additional long-term stale expiry beyond the normal
+/// ~5s refresh cadence.
+/// </para>
 /// </remarks>
 internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAvailability, IAsyncDisposable
 {
-    /// <summary>Minimum interval between broker refresh attempts.</summary>
+    /// <summary>Minimum interval between Management API refresh attempts.</summary>
     internal static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(5);
 
-    private readonly IRabbitMqService _rabbitMq;
+    private readonly IRabbitMqManagementQueueInventory _inventory;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
     private readonly object _gate = new();
@@ -30,13 +40,13 @@ internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAva
 
     /// <summary>Initializes a new availability cache.</summary>
     internal BackfillConsumerAvailabilityService(
-        IRabbitMqService rabbitMq,
+        IRabbitMqManagementQueueInventory inventory,
         ILogger logger,
         TimeProvider? timeProvider = null)
     {
-        ArgumentNullException.ThrowIfNull(rabbitMq);
+        ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(logger);
-        _rabbitMq = rabbitMq;
+        _inventory = inventory;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -105,53 +115,37 @@ internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAva
 
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
-        if (!_rabbitMq.TryGetCurrent(out var handle))
-        {
-            return;
-        }
-
         try
         {
+            var queues = await _inventory.ListQueuesAsync(cancellationToken).ConfigureAwait(false);
+            var consumersByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < queues.Count; i++)
+            {
+                var queue = queues[i];
+                if (string.IsNullOrWhiteSpace(queue.Name))
+                {
+                    continue;
+                }
+
+                // Last duplicate name wins; Management API should not duplicate names in one vhost.
+                consumersByName[queue.Name] = queue.Consumers;
+            }
+
             var builder = ImmutableArray.CreateBuilder<BackfillEligibleBackbone>();
             foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (!consumersByName.TryGetValue(definition.QueueName, out var consumers)
+                    || consumers <= 0)
+                {
+                    continue;
+                }
 
-                // One channel per queue: RabbitMQ closes the channel on passive-declare
-                // NOT_FOUND, and a shared channel would poison later provider probes.
-                IRabbitMqTopologyChannel? channel = null;
-                try
-                {
-                    channel = await handle.Connection
-                        .CreateTopologyChannelAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                    var ok = await channel.QueueDeclarePassiveAsync(definition.QueueName, cancellationToken)
-                        .ConfigureAwait(false);
-                    var consumers = checked((int)ok.ConsumerCount);
-                    if (consumers > 0)
-                    {
-                        builder.Add(new BackfillEligibleBackbone(
-                            definition.Provider,
-                            definition.ExchangeName,
-                            definition.RoutingKey,
-                            definition.QueueName,
-                            consumers));
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    ArticleWorkRpcLogMessages.ConsumerProbeFailed(
-                        _logger,
-                        ex,
-                        definition.QueueName);
-                }
-                finally
-                {
-                    if (channel is not null)
-                    {
-                        await channel.DisposeAsync().ConfigureAwait(false);
-                    }
-                }
+                builder.Add(new BackfillEligibleBackbone(
+                    definition.Provider,
+                    definition.ExchangeName,
+                    definition.RoutingKey,
+                    definition.QueueName,
+                    consumers));
             }
 
             var next = builder.ToImmutable();
@@ -159,10 +153,17 @@ internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAva
             {
                 _snapshot = next;
             }
+
+            ArticleWorkRpcLogMessages.AvailabilitySnapshotRefreshed(_logger, next.Length);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
         {
-            ArticleWorkRpcLogMessages.ConsumerProbeFailed(_logger, ex, "(all)");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Retain last-known-good snapshot. Do not treat Management outage as zero consumers.
+            ArticleWorkRpcLogMessages.ManagementAvailabilityRefreshFailed(_logger, ex);
         }
     }
 

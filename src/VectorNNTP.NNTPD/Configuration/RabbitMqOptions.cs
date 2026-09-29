@@ -214,6 +214,11 @@ public sealed class RabbitMqOptions
     public string? DiagnosticPayloadCorrelationId { get; set; }
 
     /// <summary>
+    /// RabbitMQ Management HTTP API settings for BackFiller ArticleWork availability discovery.
+    /// </summary>
+    public RabbitMqManagementOptions Management { get; set; } = new();
+
+    /// <summary>
     /// Projects a validated options snapshot into immutable runtime settings.
     /// </summary>
     /// <returns>The runtime snapshot consumed by the RabbitMQ connection service.</returns>

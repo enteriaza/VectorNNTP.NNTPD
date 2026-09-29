@@ -531,5 +531,55 @@ public sealed class RabbitMqOptionsValidator : IValidateOptions<RabbitMqOptions>
                     $"RabbitMQ:ChannelPoolSize must be less than or equal to effective channel limit ({effectiveChannelLimit}) derived from MaxConnections * RequestedChannelMax.");
             }
         }
+
+        ValidateManagement(rabbitMq, failures);
+    }
+
+    private static void ValidateManagement(RabbitMqOptions rabbitMq, List<string> failures)
+    {
+        rabbitMq.Management ??= new RabbitMqManagementOptions();
+        var management = rabbitMq.Management;
+
+        if (string.IsNullOrWhiteSpace(management.BaseUrl))
+        {
+            failures.Add("RabbitMQ:Management:BaseUrl is required.");
+            return;
+        }
+
+        var trimmedBase = management.BaseUrl.Trim();
+        if (!Uri.TryCreate(trimmedBase, UriKind.Absolute, out var baseUri)
+            || (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps)
+            || !string.IsNullOrEmpty(baseUri.Query)
+            || !string.IsNullOrEmpty(baseUri.Fragment)
+            || !string.IsNullOrEmpty(baseUri.UserInfo))
+        {
+            failures.Add(
+                "RabbitMQ:Management:BaseUrl must be an absolute http or https URL without credentials, query, or fragment.");
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(baseUri.AbsolutePath.TrimEnd('/')))
+        {
+            failures.Add(
+                "RabbitMQ:Management:BaseUrl must not include a path (omit /api; the client appends /api/queues/{vhost}).");
+        }
+
+        if (management.RequestTimeoutSeconds is null)
+        {
+            failures.Add("RabbitMQ:Management:RequestTimeoutSeconds is required.");
+            return;
+        }
+
+        if (management.RequestTimeoutSeconds is < 1 or > 60)
+        {
+            failures.Add("RabbitMQ:Management:RequestTimeoutSeconds must be between 1 and 60.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rabbitMq.Username) || rabbitMq.Password is null)
+        {
+            failures.Add(
+                "RabbitMQ:Username and RabbitMQ:Password are required for Management API availability discovery "
+                + $"(supply via {RabbitMqOptions.UsernameEnvironmentVariable} / {RabbitMqOptions.PasswordEnvironmentVariable}).");
+        }
     }
 }

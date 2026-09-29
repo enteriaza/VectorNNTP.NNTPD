@@ -133,6 +133,10 @@ internal static class TestHostFactory
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["Redis:Port"] = "6379",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",
+                ["RabbitMQ:Username"] = "guest",
+                ["RabbitMQ:Password"] = "guest",
+                ["RabbitMQ:Management:BaseUrl"] = "http://127.0.0.1:15672",
+                ["RabbitMQ:Management:RequestTimeoutSeconds"] = "5",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] = TestNntpDbConnectionString,
                 [$"{NntpdOptions.SectionName}:LogDir"] = NewTestLogDir(),
             });

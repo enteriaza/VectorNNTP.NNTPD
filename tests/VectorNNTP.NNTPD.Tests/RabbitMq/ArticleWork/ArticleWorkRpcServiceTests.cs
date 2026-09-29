@@ -9,6 +9,7 @@ using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.RabbitMq.Management;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -23,7 +24,7 @@ public sealed class ArticleWorkRpcServiceTests
         var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMqService(factory);
         var topology = new RabbitMqTopologyService(rabbit, NullLogger<RabbitMqTopologyService>.Instance);
-        var rpc = new ArticleWorkRpcService(rabbit, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<ArticleWorkRpcService>.Instance);
+        var rpc = CreateRpcService(rabbit);
 
         await rabbit.StartAsync(CancellationToken.None);
         await topology.StartAsync(CancellationToken.None);
@@ -50,10 +51,10 @@ public sealed class ArticleWorkRpcServiceTests
     [Fact]
     public async Task ConnectionReplacement_DisposesStaleSession_AndDoesNotCorruptNewGeneration()
     {
-        var factory = CreateFactoryWithActiveConsumers();
+        var factory = new FakeRabbitMqConnectionFactory();
         factory.Connected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var rabbit = CreateRabbitMqService(factory);
-        var rpc = new ArticleWorkRpcService(rabbit, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<ArticleWorkRpcService>.Instance);
+        var rpc = CreateRpcService(rabbit, CreateActiveInventory());
 
         await rabbit.StartAsync(CancellationToken.None);
         await rpc.StartAsync(CancellationToken.None);
@@ -93,9 +94,9 @@ public sealed class ArticleWorkRpcServiceTests
     [Fact]
     public async Task StopAsync_CancelsPendingLookup_AndClearsCorrelations()
     {
-        var factory = CreateFactoryWithActiveConsumers();
+        var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMqService(factory);
-        var rpc = new ArticleWorkRpcService(rabbit, Options.Create(TestHostFactory.CreateValidOptions()), NullLogger<ArticleWorkRpcService>.Instance);
+        var rpc = CreateRpcService(rabbit, CreateActiveInventory());
         await rabbit.StartAsync(CancellationToken.None);
         await rpc.StartAsync(CancellationToken.None);
 
@@ -117,13 +118,9 @@ public sealed class ArticleWorkRpcServiceTests
     public async Task WorkerResponse_CarriesOneSecondExpiration_AndCompletesLookup()
     {
         var time = new FakeTimeProvider();
-        var factory = CreateFactoryWithActiveConsumers();
+        var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMqService(factory);
-        var rpc = new ArticleWorkRpcService(
-            rabbit,
-            Options.Create(TestHostFactory.CreateValidOptions()),
-            NullLogger<ArticleWorkRpcService>.Instance,
-            time);
+        var rpc = CreateRpcService(rabbit, CreateActiveInventory(), time);
 
         await rabbit.StartAsync(CancellationToken.None);
         await rpc.StartAsync(CancellationToken.None);
@@ -151,14 +148,10 @@ public sealed class ArticleWorkRpcServiceTests
     public async Task StaleGenerationDelivery_CannotCompleteNewerLookup()
     {
         var time = new FakeTimeProvider();
-        var factory = CreateFactoryWithActiveConsumers();
+        var factory = new FakeRabbitMqConnectionFactory();
         factory.Connected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var rabbit = CreateRabbitMqService(factory);
-        var rpc = new ArticleWorkRpcService(
-            rabbit,
-            Options.Create(TestHostFactory.CreateValidOptions()),
-            NullLogger<ArticleWorkRpcService>.Instance,
-            time);
+        var rpc = CreateRpcService(rabbit, CreateActiveInventory(), time);
 
         await rabbit.StartAsync(CancellationToken.None);
         await rpc.StartAsync(CancellationToken.None);
@@ -229,15 +222,23 @@ public sealed class ArticleWorkRpcServiceTests
             services[4]);
     }
 
-    private static FakeRabbitMqConnectionFactory CreateFactoryWithActiveConsumers()
-    {
-        var factory = new FakeRabbitMqConnectionFactory();
-        foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
-        {
-            factory.PassiveConsumerCounts[definition.QueueName] = 1;
-        }
+    private static ArticleWorkRpcService CreateRpcService(
+        IRabbitMqService rabbit,
+        IRabbitMqManagementQueueInventory? inventory = null,
+        TimeProvider? time = null) =>
+        new(
+            rabbit,
+            Options.Create(TestHostFactory.CreateValidOptions()),
+            inventory ?? new EmptyManagementInventory(),
+            NullLogger<ArticleWorkRpcService>.Instance,
+            time);
 
-        return factory;
+    private static IRabbitMqManagementQueueInventory CreateActiveInventory()
+    {
+        var queues = BackfillArticleRetrievalTopology.Definitions
+            .Select(static definition => new RabbitMqManagementQueueInfo(definition.QueueName, 1))
+            .ToArray();
+        return new StaticManagementInventory(queues);
     }
 
     private static RabbitMqService CreateRabbitMqService(FakeRabbitMqConnectionFactory factory)
@@ -265,5 +266,18 @@ public sealed class ArticleWorkRpcServiceTests
     {
         return Encoding.UTF8.GetBytes(
             $$"""{"version":1,"requestId":"{{requestId}}","messageId":"<12345@example.invalid>","backbone":"Storage","outcome":"Success","uri":"cache://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""");
+    }
+
+    private sealed class EmptyManagementInventory : IRabbitMqManagementQueueInventory
+    {
+        public Task<IReadOnlyList<RabbitMqManagementQueueInfo>> ListQueuesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<RabbitMqManagementQueueInfo>>([]);
+    }
+
+    private sealed class StaticManagementInventory(IReadOnlyList<RabbitMqManagementQueueInfo> queues)
+        : IRabbitMqManagementQueueInventory
+    {
+        public Task<IReadOnlyList<RabbitMqManagementQueueInfo>> ListQueuesAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(queues);
     }
 }

@@ -1673,6 +1673,10 @@ public sealed class NntpdConfigurationTests
             {
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",
+                ["RabbitMQ:Username"] = "guest",
+                ["RabbitMQ:Password"] = "guest",
+                ["RabbitMQ:Management:BaseUrl"] = "http://127.0.0.1:15672",
+                ["RabbitMQ:Management:RequestTimeoutSeconds"] = "5",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
                     TestHostFactory.TestNntpDbConnectionString,
             });
@@ -1697,6 +1701,10 @@ public sealed class NntpdConfigurationTests
                 [$"{NntpdOptions.SectionName}:LogDir"] = TestHostFactory.NewTestLogDir(),
                 ["Redis:Host:0"] = "127.0.0.1",
                 ["RabbitMQ:Hosts:0"] = "127.0.0.1",
+                ["RabbitMQ:Username"] = "guest",
+                ["RabbitMQ:Password"] = "guest",
+                ["RabbitMQ:Management:BaseUrl"] = "http://127.0.0.1:15672",
+                ["RabbitMQ:Management:RequestTimeoutSeconds"] = "5",
                 [$"ConnectionStrings:{NntpDbOptions.ConnectionStringName}"] =
                     TestHostFactory.TestNntpDbConnectionString,
             });

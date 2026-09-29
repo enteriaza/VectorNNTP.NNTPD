@@ -8,6 +8,7 @@ using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.RabbitMq.Management;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Cloudflare;
@@ -185,8 +186,31 @@ public static class NntpdServiceCollectionExtensions
         services
             .AddOptions<RabbitMqOptions>()
             .BindConfiguration(RabbitMqOptions.SectionName)
+            .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
+
+        services.AddHttpClient(RabbitMqManagementHttpClient.HttpClientName, static (sp, client) =>
+            {
+                var options = sp.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+                var baseUrl = options.Management?.BaseUrl?.Trim().TrimEnd('/');
+                if (string.IsNullOrWhiteSpace(baseUrl))
+                {
+                    throw new InvalidOperationException("RabbitMQ:Management:BaseUrl is required.");
+                }
+
+                client.BaseAddress = new Uri(baseUrl + "/", UriKind.Absolute);
+                // Stall protection comes from per-request CancelAfter on the Management client.
+                client.Timeout = Timeout.InfiniteTimeSpan;
+            });
+        services.TryAddSingleton<IRabbitMqManagementQueueInventory>(static sp =>
+        {
+            var http = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(RabbitMqManagementHttpClient.HttpClientName);
+            return new RabbitMqManagementHttpClient(
+                http,
+                sp.GetRequiredService<IOptions<RabbitMqOptions>>());
+        });
 
         services
             .AddOptions<TransitPeersOptions>()
