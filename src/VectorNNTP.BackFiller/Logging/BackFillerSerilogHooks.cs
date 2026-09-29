@@ -4,14 +4,13 @@ using Serilog.Sinks.File.Archive;
 namespace VectorNNTP.BackFiller.Logging;
 
 /// <summary>
-/// Public static hook factory for <c>Serilog.Settings.Configuration</c> File <c>hooks</c>.
+/// File lifecycle hooks for the BackFiller daily rolling log.
 /// </summary>
 /// <remarks>
-/// <see cref="ArchiveHooks"/> cannot be constructed from JSON value types. The File sink
-/// <c>hooks</c> argument is a type/member string:
-/// <c>VectorNNTP.BackFiller.Logging.BackFillerSerilogHooks::DailyGzipFastest, VectorNNTP.BackFiller</c>.
-/// Compression is <see cref="CompressionLevel.Fastest"/> with no archive count limit so
-/// historical <c>.gz</c> files are not deleted by this hook.
+/// Registered by direct reference from <see cref="BackFillerFileLogging.ConfigureLogger"/>
+/// (not via <c>Serilog.Settings.Configuration</c> type/member strings). Compression is
+/// <see cref="CompressionLevel.Fastest"/> with no archive count limit so historical
+/// <c>.gz</c> files are not deleted by this hook.
 /// </remarks>
 public static class BackFillerSerilogHooks
 {

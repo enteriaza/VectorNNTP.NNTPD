@@ -1,13 +1,12 @@
 using System.Globalization;
-using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
-using Certes;
+using ProtocolAcmeException = VectorNNTP.NNTPD.Acme.Protocol.AcmeException;
 
 namespace VectorNNTP.NNTPD.Acme;
 
 /// <summary>
-/// Formats Certes / ACME problem details into sanitized diagnostic strings
+/// Formats owned ACME protocol / problem details into sanitized diagnostic strings
 /// (no account keys, tokens, passwords, or PEM material).
 /// </summary>
 internal static partial class AcmeProblemDiagnostics
@@ -18,32 +17,88 @@ internal static partial class AcmeProblemDiagnostics
     public static string FormatException(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        if (exception is AcmeRequestException request)
+        if (exception is ProtocolAcmeException protocol)
         {
-            return FormatAcmeRequest(request);
-        }
-
-        if (exception is Certes.AcmeException)
-        {
-            var message = SanitizeText(exception.Message);
-            return string.IsNullOrEmpty(message) ? exception.GetType().Name : message;
+            return FormatProtocolException(protocol);
         }
 
         return exception.GetType().Name;
     }
 
-    /// <summary>Formats a Certes <see cref="AcmeRequestException"/> problem document.</summary>
-    public static string FormatAcmeRequest(AcmeRequestException exception)
+    /// <summary>Formats an owned ACME protocol exception / problem document.</summary>
+    public static string FormatProtocolException(ProtocolAcmeException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        var error = exception.Error;
-        if (error is null)
+        if (string.IsNullOrWhiteSpace(exception.ErrorType)
+            && string.IsNullOrWhiteSpace(exception.Detail)
+            && exception.StatusCode is null)
         {
             var fallback = SanitizeText(exception.Message);
-            return string.IsNullOrEmpty(fallback) ? "AcmeRequestException" : fallback;
+            return string.IsNullOrEmpty(fallback) ? nameof(ProtocolAcmeException) : fallback;
         }
 
-        return FormatAcmeError(error, preface: null);
+        return FormatProblemFields(
+            preface: null,
+            exception.ErrorType,
+            exception.StatusCode,
+            identifier: null,
+            exception.Detail,
+            subproblems: null);
+    }
+
+    /// <summary>Formats structured ACME problem fields (tests / readiness diagnostics).</summary>
+    public static string FormatProblemFields(
+        string? preface,
+        string? type,
+        int? status,
+        string? identifier,
+        string? detail,
+        IReadOnlyList<(string? Type, string? Detail, string? Identifier)>? subproblems)
+    {
+        var parts = new List<string>(6);
+        if (!string.IsNullOrWhiteSpace(preface))
+        {
+            parts.Add(preface + ":");
+        }
+
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            parts.Add("type=" + SanitizeText(type));
+        }
+
+        if (status is { } code)
+        {
+            parts.Add("status=" + code.ToString(CultureInfo.InvariantCulture));
+        }
+
+        var sanitizedId = SanitizeHostname(identifier);
+        if (sanitizedId is not null)
+        {
+            parts.Add("identifier=" + sanitizedId);
+        }
+
+        var sanitizedDetail = SanitizeText(detail);
+        if (sanitizedDetail is not null)
+        {
+            parts.Add("detail=" + sanitizedDetail);
+        }
+
+        if (subproblems is { Count: > 0 })
+        {
+            for (var i = 0; i < subproblems.Count && i < 5; i++)
+            {
+                var sub = subproblems[i];
+                var subType = SanitizeText(sub.Type) ?? "?";
+                var subDetail = SanitizeText(sub.Detail) ?? string.Empty;
+                var subId = SanitizeHostname(sub.Identifier);
+                parts.Add(
+                    subId is null
+                        ? $"subproblem[{i}]={subType} {subDetail}".TrimEnd()
+                        : $"subproblem[{i}]={subId}:{subType} {subDetail}".TrimEnd());
+            }
+        }
+
+        return parts.Count == 0 ? nameof(ProtocolAcmeException) : string.Join(' ', parts);
     }
 
     /// <summary>Formats a failed authorization for operator diagnostics.</summary>
@@ -58,22 +113,13 @@ internal static partial class AcmeProblemDiagnostics
             return preface + ": status=invalid";
         }
 
-        var error = new Certes.Acme.AcmeError
-        {
-            Type = authorization.ErrorType,
-            Detail = authorization.ErrorDetail,
-            Status = authorization.ErrorStatus is { } code
-                ? (HttpStatusCode)code
-                : default,
-            Identifier = authorization.Domain is null
-                ? null
-                : new Certes.Acme.Resource.Identifier
-                {
-                    Type = Certes.Acme.Resource.IdentifierType.Dns,
-                    Value = authorization.Domain,
-                },
-        };
-        return FormatAcmeError(error, preface);
+        return FormatProblemFields(
+            preface,
+            authorization.ErrorType,
+            authorization.ErrorStatus,
+            authorization.Domain,
+            authorization.ErrorDetail,
+            subproblems: null);
     }
 
     /// <summary>Formats an invalid order when per-authz detail is unavailable.</summary>
@@ -152,55 +198,6 @@ internal static partial class AcmeProblemDiagnostics
 
     internal static string NormalizeStatus(string? status) =>
         string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim().ToLowerInvariant();
-
-    private static string FormatAcmeError(Certes.Acme.AcmeError error, string? preface)
-    {
-        var parts = new List<string>(6);
-        if (!string.IsNullOrWhiteSpace(preface))
-        {
-            parts.Add(preface + ":");
-        }
-
-        if (!string.IsNullOrWhiteSpace(error.Type))
-        {
-            parts.Add("type=" + SanitizeText(error.Type));
-        }
-
-        if (error.Status != default)
-        {
-            parts.Add(
-                "status=" + ((int)error.Status).ToString(CultureInfo.InvariantCulture));
-        }
-
-        var identifier = SanitizeHostname(error.Identifier?.Value);
-        if (identifier is not null)
-        {
-            parts.Add("identifier=" + identifier);
-        }
-
-        var detail = SanitizeText(error.Detail);
-        if (detail is not null)
-        {
-            parts.Add("detail=" + detail);
-        }
-
-        if (error.Subproblems is { Count: > 0 })
-        {
-            for (var i = 0; i < error.Subproblems.Count && i < 5; i++)
-            {
-                var sub = error.Subproblems[i];
-                var subType = SanitizeText(sub.Type) ?? "?";
-                var subDetail = SanitizeText(sub.Detail) ?? string.Empty;
-                var subId = SanitizeHostname(sub.Identifier?.Value);
-                parts.Add(
-                    subId is null
-                        ? $"subproblem[{i}]={subType} {subDetail}".TrimEnd()
-                        : $"subproblem[{i}]={subId}:{subType} {subDetail}".TrimEnd());
-            }
-        }
-
-        return parts.Count == 0 ? "AcmeRequestException" : string.Join(' ', parts);
-    }
 
     [GeneratedRegex(
         @"-----BEGIN [^-]+-----.*?-----END [^-]+-----",

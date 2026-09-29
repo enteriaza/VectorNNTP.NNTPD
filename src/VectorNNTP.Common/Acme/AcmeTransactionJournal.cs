@@ -63,11 +63,6 @@ public sealed class AcmeTransactionJournal
     /// <summary>Issuance failed.</summary>
     public const string EventCertificateIssuanceFailed = "certificate_issuance_failed";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
-
     private static readonly ConcurrentDictionary<string, object> FileGates = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly string _fqdn;
@@ -494,73 +489,76 @@ public sealed class AcmeTransactionJournal
 
     private void Persist(AcmeJournalDocument document)
     {
-        var transactions = new List<Dictionary<string, object?>>(document.Transactions.Count);
+        var transactions = new List<AcmeJournalWireTransaction>(document.Transactions.Count);
         foreach (var transaction in document.Transactions)
         {
             transactions.Add(SerializeTransaction(transaction));
         }
 
-        var unattributed = new List<Dictionary<string, object?>>(document.UnattributedEvents.Count);
+        var unattributed = new List<AcmeJournalWireEvent>(document.UnattributedEvents.Count);
         foreach (var journalEvent in document.UnattributedEvents)
         {
             unattributed.Add(SerializeEvent(journalEvent));
         }
 
-        var payload = new Dictionary<string, object?>
+        var payload = new AcmeJournalWireDocument
         {
-            ["version"] = document.Version,
-            ["fqdn"] = document.Fqdn,
-            ["transactions"] = transactions,
-            ["unattributed_events"] = unattributed,
+            Version = document.Version,
+            Fqdn = document.Fqdn,
+            Transactions = transactions,
+            UnattributedEvents = unattributed,
         };
 
         AtomicFile.WriteText(
             _journalPath,
-            JsonSerializer.Serialize(payload, JsonOptions) + Environment.NewLine);
+            JsonSerializer.Serialize(payload, AcmeJsonSerializerContext.Default.AcmeJournalWireDocument)
+            + Environment.NewLine);
     }
 
-    private static Dictionary<string, object?> SerializeTransaction(AcmeJournalTransaction transaction)
+    private static AcmeJournalWireTransaction SerializeTransaction(AcmeJournalTransaction transaction)
     {
-        var events = new List<Dictionary<string, object?>>(transaction.Events.Count);
+        var events = new List<AcmeJournalWireEvent>(transaction.Events.Count);
         foreach (var journalEvent in transaction.Events)
         {
             events.Add(SerializeEvent(journalEvent));
         }
 
-        return new Dictionary<string, object?>
+        return new AcmeJournalWireTransaction
         {
-            ["id"] = transaction.Id,
-            ["started_at"] = FormatTimestamp(transaction.StartedAt),
-            ["completed_at"] = transaction.CompletedAt is { } completed ? FormatTimestamp(completed) : null,
-            ["identifiers"] = transaction.Identifiers,
-            ["directory_url"] = transaction.DirectoryUrl,
-            ["status"] = transaction.Status,
-            ["events"] = events,
-            ["serial_number"] = transaction.SerialNumber,
-            ["thumbprint"] = transaction.Thumbprint,
-            ["not_before"] = transaction.NotBefore is { } notBefore ? FormatTimestamp(notBefore) : null,
-            ["not_after"] = transaction.NotAfter is { } notAfter ? FormatTimestamp(notAfter) : null,
-            ["generation_id"] = transaction.GenerationId,
-            ["failure_category"] = transaction.FailureCategory,
-            ["failure_detail"] = transaction.FailureDetail,
+            Id = transaction.Id,
+            StartedAt = FormatTimestamp(transaction.StartedAt),
+            CompletedAt = transaction.CompletedAt is { } completed ? FormatTimestamp(completed) : null,
+            Identifiers = transaction.Identifiers is List<string> list
+                ? list
+                : [.. transaction.Identifiers],
+            DirectoryUrl = transaction.DirectoryUrl,
+            Status = transaction.Status,
+            Events = events,
+            SerialNumber = transaction.SerialNumber,
+            Thumbprint = transaction.Thumbprint,
+            NotBefore = transaction.NotBefore is { } notBefore ? FormatTimestamp(notBefore) : null,
+            NotAfter = transaction.NotAfter is { } notAfter ? FormatTimestamp(notAfter) : null,
+            GenerationId = transaction.GenerationId,
+            FailureCategory = transaction.FailureCategory,
+            FailureDetail = transaction.FailureDetail,
         };
     }
 
-    private static Dictionary<string, object?> SerializeEvent(AcmeJournalEvent journalEvent) =>
+    private static AcmeJournalWireEvent SerializeEvent(AcmeJournalEvent journalEvent) =>
         new()
         {
-            ["type"] = journalEvent.Type,
-            ["at"] = FormatTimestamp(journalEvent.At),
-            ["record_name"] = journalEvent.RecordName,
-            ["zone_id"] = journalEvent.ZoneId,
-            ["record_id"] = journalEvent.RecordId,
-            ["txt_content"] = journalEvent.TxtContent,
-            ["generation_id"] = journalEvent.GenerationId,
-            ["not_before"] = journalEvent.NotBefore is { } notBefore ? FormatTimestamp(notBefore) : null,
-            ["not_after"] = journalEvent.NotAfter is { } notAfter ? FormatTimestamp(notAfter) : null,
-            ["failure_category"] = journalEvent.FailureCategory,
-            ["failure_detail"] = journalEvent.FailureDetail,
-            ["recovery_entry_id"] = journalEvent.RecoveryEntryId,
+            Type = journalEvent.Type,
+            At = FormatTimestamp(journalEvent.At),
+            RecordName = journalEvent.RecordName,
+            ZoneId = journalEvent.ZoneId,
+            RecordId = journalEvent.RecordId,
+            TxtContent = journalEvent.TxtContent,
+            GenerationId = journalEvent.GenerationId,
+            NotBefore = journalEvent.NotBefore is { } notBefore ? FormatTimestamp(notBefore) : null,
+            NotAfter = journalEvent.NotAfter is { } notAfter ? FormatTimestamp(notAfter) : null,
+            FailureCategory = journalEvent.FailureCategory,
+            FailureDetail = journalEvent.FailureDetail,
+            RecoveryEntryId = journalEvent.RecoveryEntryId,
         };
 
     private AcmeJournalTransaction ParseTransaction(JsonElement root)

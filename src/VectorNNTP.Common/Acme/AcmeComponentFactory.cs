@@ -76,12 +76,12 @@ public class AcmeComponentFactory
                 fqdn,
                 stateDir,
                 historyJournal: journal);
-            var issuer = new CertesAcmeIssuer(
+            var issuer = new AcmeIssuer(
                 _options,
                 accountStore,
                 dnsSolver,
                 _httpClientFactory,
-                _loggerFactory.CreateLogger<CertesAcmeIssuer>(),
+                _loggerFactory.CreateLogger<AcmeIssuer>(),
                 journal);
             _manager = new CertificateManager(
                 fqdn,

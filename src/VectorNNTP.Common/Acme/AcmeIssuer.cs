@@ -1,25 +1,23 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using Certes;
-using Certes.Acme;
-using Certes.Acme.Resource;
 using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Acme.Protocol;
+using VectorNNTP.NNTPD.Acme.Protocol.Certificates;
 using VectorNNTP.NNTPD.Configuration;
+using ProtocolAcmeException = VectorNNTP.NNTPD.Acme.Protocol.AcmeException;
 
 namespace VectorNNTP.NNTPD.Acme;
 
 /// <summary>
-/// ACME v2 issuer using Certes with DNS-01 via <see cref="Dns01Solver"/>.
+/// ACME v2 issuer using the owned AutoHttps-derived protocol stack with DNS-01 via <see cref="Dns01Solver"/>.
 /// </summary>
 /// <remarks>
-/// Certes was selected as a maintained ACME v2 client with DNS-01 support, account key
-/// import/export (including DER), order finalization, and .NET Standard 2.0 compatibility
-/// suitable for <c>net10.0</c>. Protocol PEM may appear transiently inside Certes; the
-/// persisted TLS credential is PKCS#12/PFX. The ACME account key remains PKCS#8 DER.
+/// Replaces Certes. Account keys remain PKCS#8 DER on disk; PEM is used only transiently for the
+/// vendored <see cref="AcmeKey"/> import. Persisted TLS credentials remain PKCS#12/PFX via BCL.
 /// After DNS-01 challenges are triggered, the issuer polls until the ACME order is
-/// <c>ready</c> (or fails) before calling <c>Generate</c>/finalize.
+/// <c>ready</c> (or fails) before finalize.
 /// </remarks>
-public sealed class CertesAcmeIssuer : ICertificateIssuer
+public sealed class AcmeIssuer : ICertificateIssuer
 {
     /// <summary>Named <see cref="IHttpClientFactory"/> client for ACME HTTP.</summary>
     public const string HttpClientName = "AcmeDirectory";
@@ -30,24 +28,18 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     private readonly AccountStore _accountStore;
     private readonly Dns01Solver _dnsSolver;
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<CertesAcmeIssuer> _logger;
+    private readonly ILogger<AcmeIssuer> _logger;
     private readonly AcmeTransactionJournal? _journal;
     private readonly TimeSpan _readinessTimeout;
     private readonly TimeSpan _readinessInterval;
 
-    /// <summary>Initializes a new instance of the <see cref="CertesAcmeIssuer"/> class.</summary>
-    /// <param name="options">ACME and Cloudflare options.</param>
-    /// <param name="accountStore">Shared ACME account store.</param>
-    /// <param name="dnsSolver">DNS-01 solver for this FQDN.</param>
-    /// <param name="httpClientFactory">HTTP client factory for ACME.</param>
-    /// <param name="logger">Logger.</param>
-    /// <param name="journal">Optional persistent ACME journal for validation events.</param>
-    public CertesAcmeIssuer(
+    /// <summary>Initializes a new instance of the <see cref="AcmeIssuer"/> class.</summary>
+    public AcmeIssuer(
         IOptions<AcmeCloudflareOptions> options,
         AccountStore accountStore,
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
-        ILogger<CertesAcmeIssuer> logger,
+        ILogger<AcmeIssuer> logger,
         AcmeTransactionJournal? journal = null)
         : this(
             options,
@@ -62,12 +54,12 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     }
 
     /// <summary>Test constructor with injectable readiness poll timing.</summary>
-    internal CertesAcmeIssuer(
+    internal AcmeIssuer(
         IOptions<AcmeCloudflareOptions> options,
         AccountStore accountStore,
         Dns01Solver dnsSolver,
         IHttpClientFactory httpClientFactory,
-        ILogger<CertesAcmeIssuer> logger,
+        ILogger<AcmeIssuer> logger,
         TimeSpan? readinessTimeout,
         TimeSpan? readinessInterval,
         AcmeTransactionJournal? journal = null)
@@ -103,81 +95,116 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         var password = options.AcmeCertificatePassword;
         var account = EnsureAccount(options, cancellationToken);
         var directoryUri = new Uri(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute);
-        var accountKey = KeyFactory.FromDer(account.PrivateKeyDer);
-        var http = new AcmeHttpClient(directoryUri, _httpClientFactory.CreateClient(HttpClientName));
-        var acme = new AcmeContext(directoryUri, accountKey, http);
 
-        _ = await acme.Account().ConfigureAwait(false);
+        using AcmeKey accountKey = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(account.PrivateKeyDer);
+        var http = new AcmeHttpClient(
+            _httpClientFactory,
+            HttpClientName,
+            directoryUri,
+            _logger,
+            TimeProvider.System);
+        var acme = new AcmeClient(http, accountKey, _logger, TimeProvider.System);
+        acme.BindExistingAccount(account.AccountUri);
 
-        IKey certKey = KeyFactory.NewKey(KeyAlgorithm.RS256);
-        IOrderContext order;
+        using CertificateKey certKey = CertificateKey.Create(KeyAlgorithm.Rsa2048);
+        AcmeOrder order;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            order = await acme.NewOrder(domains.ToArray()).ConfigureAwait(false);
+            var identifiers = domains
+                .Select(static d => new AcmeIdentifier { Type = AcmeIdentifierTypes.Dns, Value = d })
+                .ToArray();
+            order = await acme.CreateOrderAsync(identifiers, profile: null, replaces: null, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             throw new AcmeOrderException("new_order_failed", AcmeProblemDiagnostics.FormatException(ex));
         }
 
-        var authzs = (await order.Authorizations().ConfigureAwait(false)).ToList();
-        var specs = new List<Dns01ChallengeSpec>();
-        var challenges = new List<IChallengeContext>();
-
-        foreach (var authz in authzs)
+        if (order.Resource.Authorizations is null || order.Resource.Authorizations.Count == 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var resource = await authz.Resource().ConfigureAwait(false);
-            var domain = resource.Identifier?.Value
-                ?? throw new AcmeOrderException("no_dns01_challenge", "missing identifier");
-            var dns = await authz.Dns().ConfigureAwait(false)
-                ?? throw new AcmeOrderException("no_dns01_challenge", domain);
-            var dnsTxt = accountKey.DnsTxt(dns.Token);
-            specs.Add(new Dns01ChallengeSpec(domain, dnsTxt));
-            challenges.Add(dns);
+            throw new AcmeOrderException("no_dns01_challenge", "missing authorizations");
         }
+
+        var authzUrls = order.Resource.Authorizations.ToArray();
+        var specs = new List<Dns01ChallengeSpec>(authzUrls.Length);
+        var challengeUrls = new List<Uri>(authzUrls.Length);
 
         try
         {
+            foreach (Uri authzUrl in authzUrls)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AcmeAuthorizationResource resource = await acme.GetAuthorizationAsync(authzUrl, cancellationToken)
+                    .ConfigureAwait(false);
+                var domain = resource.Identifier?.Value
+                    ?? throw new AcmeOrderException("no_dns01_challenge", "missing identifier");
+                AcmeChallengeResource dns = resource.Challenges?.FirstOrDefault(static c =>
+                        string.Equals(c.Type, "dns-01", StringComparison.OrdinalIgnoreCase))
+                    ?? throw new AcmeOrderException("no_dns01_challenge", domain);
+                if (string.IsNullOrWhiteSpace(dns.Token) || dns.Url is null)
+                {
+                    throw new AcmeOrderException("no_dns01_challenge", domain);
+                }
+
+                specs.Add(new Dns01ChallengeSpec(domain, accountKey.GetDnsRecordValue(dns.Token)));
+                challengeUrls.Add(dns.Url);
+            }
+
             await _dnsSolver.PlaceAsync(specs, cancellationToken).ConfigureAwait(false);
             AcmeLogMessages.Dns01RecordsPlaced(_logger, specs.Count);
 
             await _dnsSolver.WaitPropagatedAsync(specs, cancellationToken).ConfigureAwait(false);
             AcmeLogMessages.Dns01VisibilityConfirmed(_logger);
 
-            foreach (var challenge in challenges)
+            foreach (Uri challengeUrl in challengeUrls)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                _ = await challenge.Validate().ConfigureAwait(false);
+                await acme.SubmitChallengeAsync(challengeUrl, cancellationToken).ConfigureAwait(false);
             }
 
             _journal?.RecordAcmeValidationStarted();
             AcmeLogMessages.Dns01ChallengesTriggered(_logger, (int)_readinessTimeout.TotalSeconds);
 
-            await WaitForOrderReadyAsync(order, authzs, cancellationToken).ConfigureAwait(false);
+            await WaitForOrderReadyAsync(acme, order.Location, authzUrls, cancellationToken).ConfigureAwait(false);
             _journal?.RecordAcmeValidationSucceeded();
             AcmeLogMessages.OrderReady(_logger);
 
             cancellationToken.ThrowIfCancellationRequested();
-            CertificateChain certChain;
+            string certificatePem;
             try
             {
-                // Certes only retries while status == processing; LE staging often needs more than the default (1).
-                certChain = await order.Generate(
-                        new CsrInfo { CommonName = domains[0] },
-                        certKey,
-                        preferredChain: null,
-                        retryCount: 30)
+                Uri finalizeUrl = order.Resource.Finalize
+                    ?? throw new AcmeOrderException("finalize_failed", "missing finalize url");
+                byte[] csr = CsrBuilder.CreateDnsSigningRequest(domains, certKey);
+
+                // Refresh finalize URL from the ready order resource when present.
+                AcmeOrderResource readyOrder = await acme.GetOrderAsync(order.Location, cancellationToken)
                     .ConfigureAwait(false);
+                finalizeUrl = readyOrder.Finalize ?? finalizeUrl;
+
+                _ = await acme.FinalizeOrderAsync(finalizeUrl, csr, cancellationToken).ConfigureAwait(false);
+                AcmeOrderResource validOrder = await acme.WaitForOrderAsync(
+                        order.Location,
+                        timeout: TimeSpan.FromMinutes(3),
+                        pollInterval: TimeSpan.FromSeconds(2),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                Uri certificateUrl = validOrder.Certificate
+                    ?? throw new AcmeOrderException("finalize_failed", "missing certificate url");
+                AcmeCertificate certificate = await acme.DownloadCertificateAsync(certificateUrl, cancellationToken)
+                    .ConfigureAwait(false);
+                certificatePem = certificate.Pem;
             }
-            catch (Exception ex) when (ex is Certes.AcmeException or AcmeRequestException)
+            catch (Exception ex) when (ex is ProtocolAcmeException or CryptographicException)
             {
                 var orderStatus = "unknown";
                 try
                 {
-                    var resource = await order.Resource().ConfigureAwait(false);
-                    orderStatus = resource.Status?.ToString() ?? "unknown";
+                    AcmeOrderResource resource = await acme.GetOrderAsync(order.Location, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    orderStatus = resource.Status ?? "unknown";
                 }
                 catch (Exception statusEx) when (statusEx is not OperationCanceledException)
                 {
@@ -193,7 +220,7 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
 
             await CleanupDnsAsync(cancellationToken).ConfigureAwait(false);
 
-            var pfxBytes = BuildPfx(certChain, certKey, password);
+            var pfxBytes = BuildPfx(certificatePem, certKey, password);
             return CertificateValidator.RequireValidPfx(
                 pfxBytes,
                 password,
@@ -218,12 +245,13 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     }
 
     private async Task WaitForOrderReadyAsync(
-        IOrderContext order,
-        IReadOnlyList<IAuthorizationContext> authorizations,
+        AcmeClient acme,
+        Uri orderUrl,
+        IReadOnlyList<Uri> authorizationUrls,
         CancellationToken cancellationToken)
     {
         await AcmeOrderReadiness.WaitUntilReadyAsync(
-                async ct => await CaptureOrderViewAsync(order, authorizations, ct).ConfigureAwait(false),
+                async ct => await CaptureOrderViewAsync(acme, orderUrl, authorizationUrls, ct).ConfigureAwait(false),
                 _readinessTimeout,
                 _readinessInterval,
                 cancellationToken)
@@ -231,39 +259,36 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
     }
 
     private static async Task<AcmeOrderReadiness.OrderView> CaptureOrderViewAsync(
-        IOrderContext order,
-        IReadOnlyList<IAuthorizationContext> authorizations,
+        AcmeClient acme,
+        Uri orderUrl,
+        IReadOnlyList<Uri> authorizationUrls,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var orderResource = await order.Resource().ConfigureAwait(false);
-        var authzViews = new List<AcmeOrderReadiness.AuthorizationView>(authorizations.Count);
-        foreach (var authz in authorizations)
+        AcmeOrderResource orderResource = await acme.GetOrderAsync(orderUrl, cancellationToken).ConfigureAwait(false);
+        var authzViews = new List<AcmeOrderReadiness.AuthorizationView>(authorizationUrls.Count);
+        foreach (Uri authzUrl in authorizationUrls)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var resource = await authz.Resource().ConfigureAwait(false);
-            var dnsChallenge = resource.Challenges?
+            AcmeAuthorizationResource resource = await acme.GetAuthorizationAsync(authzUrl, cancellationToken)
+                .ConfigureAwait(false);
+            AcmeChallengeResource? dnsChallenge = resource.Challenges?
                 .FirstOrDefault(static c =>
-                    string.Equals(c.Type, ChallengeTypes.Dns01, StringComparison.OrdinalIgnoreCase));
-            var error = dnsChallenge?.Error
+                    string.Equals(c.Type, "dns-01", StringComparison.OrdinalIgnoreCase));
+            AcmeProblem? error = dnsChallenge?.Error
                 ?? resource.Challenges?.Select(static c => c.Error).FirstOrDefault(static e => e is not null);
-            int? errorStatus = null;
-            if (error is not null && error.Status != default)
-            {
-                errorStatus = (int)error.Status;
-            }
 
             authzViews.Add(
                 new AcmeOrderReadiness.AuthorizationView(
                     resource.Identifier?.Value,
-                    resource.Status?.ToString() ?? string.Empty,
+                    resource.Status ?? string.Empty,
                     error?.Type,
                     error?.Detail,
-                    errorStatus));
+                    error?.Status));
         }
 
         return new AcmeOrderReadiness.OrderView(
-            orderResource.Status?.ToString() ?? string.Empty,
+            orderResource.Status ?? string.Empty,
             authzViews);
     }
 
@@ -287,14 +312,30 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         try
         {
             var directoryUri = new Uri(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute);
-            var accountKey = KeyFactory.FromDer(keyDer);
-            var http = new AcmeHttpClient(directoryUri, _httpClientFactory.CreateClient(HttpClientName));
-            var acme = new AcmeContext(directoryUri, accountKey, http);
-            var account = acme.NewAccount(options.AcmeEmail.Trim(), termsOfServiceAgreed: true)
+            using AcmeKey accountKey = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(keyDer);
+            var http = new AcmeHttpClient(
+                _httpClientFactory,
+                HttpClientName,
+                directoryUri,
+                _logger,
+                TimeProvider.System);
+            var acme = new AcmeClient(http, accountKey, _logger, TimeProvider.System);
+            string email = options.AcmeEmail.Trim();
+            IReadOnlyList<string> contacts = string.IsNullOrWhiteSpace(email)
+                ? []
+                : ["mailto:" + email];
+            string location = acme.RegisterAccountAsync(
+                    contacts,
+                    termsOfServiceAgreed: true,
+                    externalAccountBinding: null,
+                    CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
-            var location = account.Location?.ToString()
-                ?? throw new AcmeAccountException("registration_failed", "empty account_uri");
+            if (string.IsNullOrWhiteSpace(location))
+            {
+                throw new AcmeAccountException("registration_failed", "empty account_uri");
+            }
+
             AcmeLogMessages.AccountRegistered(_logger);
             return (location, string.Empty);
         }
@@ -308,41 +349,39 @@ public sealed class CertesAcmeIssuer : ICertificateIssuer
         }
     }
 
-    private static byte[] BuildPfx(CertificateChain chain, IKey certKey, string password)
+    private static byte[] BuildPfx(string certificateChainPem, CertificateKey certKey, string password)
     {
-        var leafPem = chain.Certificate.ToPem();
-        if (string.IsNullOrWhiteSpace(leafPem))
+        if (string.IsNullOrWhiteSpace(certificateChainPem))
         {
             throw new AcmeOrderException("empty_certificate", "missing_leaf");
         }
 
-        using var leaf = X509Certificate2.CreateFromPem(leafPem);
-        using var rsa = RSA.Create();
-        rsa.ImportPkcs8PrivateKey(certKey.ToDer(), out _);
-        using var leafWithKey = leaf.CopyWithPrivateKey(rsa);
+        var chain = new X509Certificate2Collection();
+        chain.ImportFromPem(certificateChainPem);
+        if (chain.Count == 0)
+        {
+            throw new AcmeOrderException("empty_certificate", "missing_leaf");
+        }
+
+        string keyPem = certKey.ExportPem();
+        using X509Certificate2 leafPem = chain[0];
+        using X509Certificate2 leafWithKey = X509Certificate2.CreateFromPem(
+            leafPem.ExportCertificatePem(),
+            keyPem);
 
         var intermediates = new List<X509Certificate2>();
         try
         {
-            foreach (var issuer in chain.Issuers)
+            for (var i = 1; i < chain.Count; i++)
             {
-                var issuerPem = issuer.ToPem();
-                if (string.IsNullOrWhiteSpace(issuerPem))
-                {
-                    continue;
-                }
-
-                intermediates.Add(X509Certificate2.CreateFromPem(issuerPem));
+                intermediates.Add(chain[i]);
             }
 
             return PfxCrypto.ExportPfx(leafWithKey, intermediates, password);
         }
         finally
         {
-            foreach (var intermediate in intermediates)
-            {
-                intermediate.Dispose();
-            }
+            // leafPem/leafWithKey disposed via using; intermediates were borrowed from the collection.
         }
     }
 

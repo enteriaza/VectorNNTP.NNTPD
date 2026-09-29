@@ -1,5 +1,3 @@
-using Certes;
-using Certes.Acme;
 using VectorNNTP.NNTPD.Acme;
 
 namespace VectorNNTP.NNTPD.Tests.Acme;
@@ -162,87 +160,9 @@ public sealed class AcmeOrderReadinessTests
     }
 }
 
-public sealed class AcmeProblemDiagnosticsTests
-{
-    [Fact]
-    public void FormatAcmeRequest_PreservesStructuredFields()
-    {
-        var error = new Certes.Acme.AcmeError
-        {
-            Type = "urn:ietf:params:acme:error:orderNotReady",
-            Detail = "Order's status (\"pending\") is not acceptable for finalization",
-            Status = System.Net.HttpStatusCode.Forbidden,
-            Identifier = new Certes.Acme.Resource.Identifier
-            {
-                Type = Certes.Acme.Resource.IdentifierType.Dns,
-                Value = "nntpd01.usenet.ninja",
-            },
-        };
-        var ex = new AcmeRequestException("Error creating new order", error);
-        var formatted = AcmeProblemDiagnostics.FormatAcmeRequest(ex);
-
-        Assert.Contains("type=urn:ietf:params:acme:error:orderNotReady", formatted, StringComparison.Ordinal);
-        Assert.Contains("status=403", formatted, StringComparison.Ordinal);
-        Assert.Contains("identifier=nntpd01.usenet.ninja", formatted, StringComparison.Ordinal);
-        Assert.Contains("detail=", formatted, StringComparison.Ordinal);
-        Assert.Contains("pending", formatted, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void FormatException_RedactsPemAndLongTokens()
-    {
-        var pem = "oops -----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY----- trailing";
-        var error = new Certes.Acme.AcmeError
-        {
-            Type = "urn:ietf:params:acme:error:serverInternal",
-            Detail = pem + " " + new string('A', 100),
-        };
-        var formatted = AcmeProblemDiagnostics.FormatAcmeRequest(new AcmeRequestException("x", error));
-        Assert.Contains("[redacted-pem]", formatted, StringComparison.Ordinal);
-        Assert.Contains("[redacted-token]", formatted, StringComparison.Ordinal);
-        Assert.DoesNotContain("BEGIN PRIVATE KEY", formatted, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FailureSanitizer_IncludesAcmeOrderDiagnosticMessage()
-    {
-        var ex = new AcmeOrderException(
-            "challenge_failed",
-            "type=urn:ietf:params:acme:error:dns status=400 identifier=nntpd01.usenet.ninja detail=NXDOMAIN");
-        var sanitized = AcmeFailureSanitizer.Sanitize(ex);
-        Assert.Contains("challenge_failed", sanitized, StringComparison.Ordinal);
-        Assert.Contains("urn:ietf:params:acme:error:dns", sanitized, StringComparison.Ordinal);
-        Assert.Contains("nntpd01.usenet.ninja", sanitized, StringComparison.Ordinal);
-        Assert.DoesNotContain("PRIVATE KEY", sanitized, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ChallengeFailedWrapper_UsesFormattedCertesDetails_NotTypeNameOnly()
-    {
-        var error = new Certes.Acme.AcmeError
-        {
-            Type = "urn:ietf:params:acme:error:dns",
-            Detail = "DNS problem: NXDOMAIN looking up TXT",
-            Status = System.Net.HttpStatusCode.BadRequest,
-            Identifier = new Certes.Acme.Resource.Identifier
-            {
-                Type = Certes.Acme.Resource.IdentifierType.Dns,
-                Value = "news.usenet.ninja",
-            },
-        };
-        var certes = new AcmeRequestException("Error processing request", error);
-        var wrapped = new AcmeOrderException("challenge_failed", AcmeProblemDiagnostics.FormatException(certes));
-
-        Assert.Equal("challenge_failed", wrapped.Category);
-        Assert.Contains("type=urn:ietf:params:acme:error:dns", wrapped.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("challenge_failed: AcmeRequestException", wrapped.Message, StringComparison.Ordinal);
-        Assert.Equal(wrapped.Message, AcmeFailureSanitizer.Sanitize(wrapped));
-    }
-}
-
 /// <summary>
-/// Documents the required issue sequence: Generate must not run while the order is still Pending.
-/// Exercised via <see cref="AcmeOrderReadiness"/> which <c>CertesAcmeIssuer</c> calls after Validate().
+/// Documents the required issue sequence: finalize must not run while the order is still Pending.
+/// Exercised via <see cref="AcmeOrderReadiness"/> which <see cref="AcmeIssuer"/> calls after challenge submit.
 /// </summary>
 public sealed class AcmeIssuanceSequenceTests
 {

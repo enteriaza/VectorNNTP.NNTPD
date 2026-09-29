@@ -1,17 +1,20 @@
 using Microsoft.Extensions.Configuration;
+using Serilog;
+using Serilog.Events;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Logging;
 
 /// <summary>
-/// Resolves <see cref="BackFillerOptions.LogDirectory"/> into the Serilog File path before
-/// <c>ReadFrom.Configuration</c>. Operational File/Async settings live in <c>appsettings.json</c>.
+/// Resolves <see cref="BackFillerOptions.LogDirectory"/> and applies the fixed BackFiller
+/// Serilog sink graph in code (Native AOT / single-file safe).
 /// </summary>
 /// <remarks>
-/// Serilog.Settings.Configuration cannot expand <c>BackFiller:LogDirectory</c> into <c>path</c>.
-/// This type creates the directory and overwrites the File sink path so the JSON
-/// placeholder is never the runtime directory. It does not add a second File sink.
+/// Operational Console / Async / File settings match production <c>appsettings.json</c>
+/// <c>Serilog</c> section. The File path is never taken from JSON: it is always
+/// <see cref="RollingFilePath"/> under the resolved log directory. Operator-configurable
+/// location remains <see cref="BackFillerOptions.LogDirectory"/>.
 /// </remarks>
 internal static class BackFillerFileLogging
 {
@@ -27,8 +30,29 @@ internal static class BackFillerFileLogging
     /// <summary>Fixed application identity used in the rolling file name.</summary>
     public const string ApplicationName = "VectorNNTP.BackFiller";
 
-    /// <summary>Console-sink fallback minimum when <c>Serilog:WriteTo</c> is omitted.</summary>
-    public const Serilog.Events.LogEventLevel ConsoleMinimumLevel = Serilog.Events.LogEventLevel.Debug;
+    /// <summary>
+    /// Console and File sink output template matching production <c>appsettings.json</c>.
+    /// </summary>
+    public const string SinkOutputTemplate =
+        "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
+
+    /// <summary>Restricted minimum level for Console and File sinks.</summary>
+    public const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
+
+    /// <summary>Serilog.Sinks.Async buffer size.</summary>
+    public const int AsyncBufferSize = 50000;
+
+    /// <summary>Serilog.Sinks.Async <c>blockWhenFull</c>.</summary>
+    public const bool AsyncBlockWhenFull = true;
+
+    /// <summary>File sink uncompressed retention count.</summary>
+    public const int RetainedFileCountLimit = 1;
+
+    /// <summary>File sink buffering.</summary>
+    public const bool FileBuffered = true;
+
+    /// <summary>File sink size-based rolling.</summary>
+    public const bool RollOnFileSizeLimit = false;
 
     /// <summary>
     /// Resolves <paramref name="logDirectory"/> through Common
@@ -63,10 +87,10 @@ internal static class BackFillerFileLogging
         Path.GetFileName(rolledLogPath) + GzipArchiveSuffix;
 
     /// <summary>
-    /// Creates <see cref="BackFillerOptions.LogDirectory"/> and binds the resolved File path over the JSON placeholder.
+    /// Creates the log directory and returns the rolling File sink path for the current configuration.
     /// </summary>
-    public static void BindResolvedFilePath(
-        ConfigurationManager configuration,
+    public static string EnsureRollingFilePath(
+        IConfiguration configuration,
         string? applicationBaseDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -75,57 +99,48 @@ internal static class BackFillerFileLogging
             configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"],
             applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
-
-        var path = RollingFilePath(logDir, ApplicationName);
-        var pathKey = FindConfiguredFilePathKey(configuration);
-        if (pathKey is null)
-        {
-            return;
-        }
-
-        configuration.AddInMemoryCollection(new Dictionary<string, string?> { [pathKey] = path });
-    }
-
-    private static string? FindConfiguredFilePathKey(IConfiguration configuration)
-    {
-        foreach (var writeTo in configuration.GetSection("Serilog:WriteTo").GetChildren())
-        {
-            if (!string.Equals(writeTo["Name"], "Async", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            foreach (var inner in writeTo.GetSection("Args:configure").GetChildren())
-            {
-                if (string.Equals(inner["Name"], "File", StringComparison.OrdinalIgnoreCase))
-                {
-                    return $"{inner.Path}:Args:path";
-                }
-            }
-        }
-
-        return null;
+        return RollingFilePath(logDir, ApplicationName);
     }
 
     /// <summary>
-    /// In-memory Serilog File/Async keys matching production <c>appsettings.json</c> (path is a placeholder).
+    /// Applies production-equivalent minimum levels, enrichers, Console, and Async+File sinks.
     /// </summary>
-    public static Dictionary<string, string?> AsyncFileWriteToKeys(int writeToIndex = 1) => new()
+    /// <remarks>
+    /// Does not use <c>Serilog.Settings.Configuration</c>, assembly scanning, or string-based hooks.
+    /// </remarks>
+    public static void ConfigureLogger(
+        LoggerConfiguration loggerConfiguration,
+        IConfiguration configuration,
+        string? applicationBaseDirectory = null)
     {
-        [$"Serilog:WriteTo:{writeToIndex}:Name"] = "Async",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:bufferSize"] = "50000",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "logs/VectorNNTP.BackFiller-.log",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
-            "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:fileSizeLimitBytes"] = null,
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:buffered"] = "true",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollingInterval"] = "Day",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "1",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:hooks"] =
-            "VectorNNTP.BackFiller.Logging.BackFillerSerilogHooks::DailyGzipFastest, VectorNNTP.BackFiller",
-    };
+        ArgumentNullException.ThrowIfNull(loggerConfiguration);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var path = EnsureRollingFilePath(configuration, applicationBaseDirectory);
+
+        loggerConfiguration
+            .MinimumLevel.Information()
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+            .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
+            .MinimumLevel.Override("System", LogEventLevel.Warning)
+            .MinimumLevel.Override("VectorNNTP.BackFiller", LogEventLevel.Debug)
+            .Enrich.FromLogContext()
+            .Enrich.WithProperty("Application", ApplicationName)
+            .WriteTo.Console(
+                restrictedToMinimumLevel: SinkMinimumLevel,
+                outputTemplate: SinkOutputTemplate)
+            .WriteTo.Async(
+                a => a.File(
+                    path,
+                    restrictedToMinimumLevel: SinkMinimumLevel,
+                    outputTemplate: SinkOutputTemplate,
+                    fileSizeLimitBytes: null,
+                    buffered: FileBuffered,
+                    rollingInterval: RollingInterval.Day,
+                    rollOnFileSizeLimit: RollOnFileSizeLimit,
+                    retainedFileCountLimit: RetainedFileCountLimit,
+                    hooks: BackFillerSerilogHooks.DailyGzipFastest),
+                bufferSize: AsyncBufferSize,
+                blockWhenFull: AsyncBlockWhenFull);
+    }
 }

@@ -38,7 +38,7 @@ public static class AcmeCloudflareServiceCollectionExtensions
             client.DefaultRequestHeaders.ExpectContinue = false;
         });
 
-        services.AddHttpClient(CertesAcmeIssuer.HttpClientName, static client =>
+        services.AddHttpClient(AcmeIssuer.HttpClientName, static client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.DefaultRequestHeaders.ExpectContinue = false;

@@ -40,12 +40,6 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
 
     private static readonly Uri ApiBaseAddress = new("https://api.cloudflare.com/client/v4/");
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private readonly HttpClient _httpClient;
     private readonly IOptions<AcmeCloudflareOptions> _options;
     private readonly ILogger<CloudflareDnsClient> _logger;
@@ -148,11 +142,12 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                 $"zones/{Uri.EscapeDataString(zoneId)}/dns_records" +
                 $"?{queryWithoutPage}&page={page}";
 
-            var envelope = await SendAsync<List<CloudflareDnsRecord>>(
+            var envelope = await SendAsync(
                     HttpMethod.Get,
                     path,
                     content: null,
                     isMutation: false,
+                    CloudflareJsonSerializerContext.Default.CloudflareApiResponseListCloudflareDnsRecord,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -246,7 +241,13 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
         var path =
             $"zones/{Uri.EscapeDataString(zoneId)}/dns_records/{Uri.EscapeDataString(recordId)}";
 
-        await SendAsync<object>(HttpMethod.Delete, path, content: null, isMutation: true, cancellationToken)
+        await SendAsync(
+                HttpMethod.Delete,
+                path,
+                content: null,
+                isMutation: true,
+                CloudflareJsonSerializerContext.Default.CloudflareApiResponseCloudflareDeleteResult,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -257,11 +258,12 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
         CloudflareDnsRecordWriteRequest request,
         CancellationToken cancellationToken)
     {
-        var envelope = await SendAsync<CloudflareDnsRecord>(
+        var envelope = await SendAsync(
                 method,
                 path,
                 request,
                 isMutation: true,
+                CloudflareJsonSerializerContext.Default.CloudflareApiResponseCloudflareDnsRecord,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -288,8 +290,9 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
     private async Task<CloudflareApiResponse<T>> SendAsync<T>(
         HttpMethod method,
         string relativePath,
-        object? content,
+        CloudflareDnsRecordWriteRequest? content,
         bool isMutation,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<CloudflareApiResponse<T>> responseTypeInfo,
         CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt <= MaxRateLimitRetries; attempt++)
@@ -354,7 +357,7 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
                     {
                         envelope = string.IsNullOrWhiteSpace(payload)
                             ? null
-                            : JsonSerializer.Deserialize<CloudflareApiResponse<T>>(payload, JsonOptions);
+                            : JsonSerializer.Deserialize(payload, responseTypeInfo);
                     }
                     catch (JsonException ex)
                     {
@@ -459,7 +462,10 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
         return cts;
     }
 
-    private HttpRequestMessage CreateRequest(HttpMethod method, string relativePath, object? content)
+    private HttpRequestMessage CreateRequest(
+        HttpMethod method,
+        string relativePath,
+        CloudflareDnsRecordWriteRequest? content)
     {
         var apiKey = _options.Value.CloudFlareApiKey;
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -478,7 +484,9 @@ public sealed class CloudflareDnsClient : ICloudflareDnsClient
 
         if (content is not null)
         {
-            request.Content = JsonContent.Create(content, options: JsonOptions);
+            request.Content = JsonContent.Create(
+                content,
+                CloudflareJsonSerializerContext.Default.CloudflareDnsRecordWriteRequest);
         }
 
         return request;

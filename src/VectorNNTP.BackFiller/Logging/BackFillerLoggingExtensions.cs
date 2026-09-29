@@ -12,6 +12,10 @@ public static partial class BackFillerLoggingExtensions
     /// <summary>
     /// Single-line console template suitable for interactive terminals and journald collection.
     /// </summary>
+    /// <remarks>
+    /// Used by the bootstrap logger. Host Console/File sinks use
+    /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/> (production <c>appsettings.json</c>).
+    /// </remarks>
     public const string ConsoleOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
@@ -54,7 +58,7 @@ public static partial class BackFillerLoggingExtensions
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <param name="configure">
-    /// Optional additional Serilog configuration applied after reading <c>appsettings</c>.
+    /// Optional additional Serilog configuration applied after the explicit host logger graph.
     /// Used by tests to attach in-memory sinks without reintroducing MEL providers.
     /// </param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
@@ -63,6 +67,10 @@ public static partial class BackFillerLoggingExtensions
     /// Call order: clear MEL providers, remove default <see cref="ILoggerFactory"/> registrations,
     /// then <c>AddSerilog</c> with <c>writeToProviders: false</c> so framework and application
     /// <see cref="ILogger{T}"/> traffic flows only through Serilog sinks.
+    /// </para>
+    /// <para>
+    /// Host sinks are registered explicitly in <see cref="BackFillerFileLogging.ConfigureLogger"/>
+    /// (Native AOT / single-file safe). <c>Serilog.Settings.Configuration</c> is not used.
     /// </para>
     /// <para>
     /// Console formatting is owned by Serilog. journald collects Serilog console stdout under
@@ -83,26 +91,11 @@ public static partial class BackFillerLoggingExtensions
         builder.Services.RemoveAll<ILoggerFactory>();
         builder.Services.RemoveAll<ILoggerProvider>();
 
-        BackFillerFileLogging.BindResolvedFilePath(builder.Configuration);
-
         builder.Services.AddSerilog(
             (services, loggerConfiguration) =>
             {
-                loggerConfiguration
-                    .ReadFrom.Configuration(builder.Configuration)
-                    .ReadFrom.Services(services)
-                    .Enrich.FromLogContext()
-                    .Enrich.WithProperty("Application", BackFillerFileLogging.ApplicationName);
-
-                // Ensure a console sink exists even if configuration omits WriteTo,
-                // so interactive and systemd journal collection always have an output path.
-                if (!builder.Configuration.GetSection("Serilog:WriteTo").GetChildren().Any())
-                {
-                    loggerConfiguration.WriteTo.Console(
-                        restrictedToMinimumLevel: BackFillerFileLogging.ConsoleMinimumLevel,
-                        outputTemplate: ConsoleOutputTemplate);
-                }
-
+                BackFillerFileLogging.ConfigureLogger(loggerConfiguration, builder.Configuration);
+                loggerConfiguration.ReadFrom.Services(services);
                 configure?.Invoke(loggerConfiguration);
             },
             preserveStaticLogger: false,

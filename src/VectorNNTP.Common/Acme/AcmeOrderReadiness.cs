@@ -86,7 +86,7 @@ internal static class AcmeOrderReadiness
     /// <summary>
     /// Polls until the order is ready, invalid, the timeout elapses, or cancellation is requested.
     /// </summary>
-    /// <param name="pollAsync">Fetches the current order/authz view (Certes Resource() mapping).</param>
+    /// <param name="pollAsync">Fetches the current order/authz view.</param>
     /// <param name="timeout">Overall readiness deadline.</param>
     /// <param name="interval">Delay between polls.</param>
     /// <param name="cancellationToken">Caller cancellation.</param>

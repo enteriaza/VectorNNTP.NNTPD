@@ -447,24 +447,24 @@ public sealed class Dns01Solver
 
     private static void WriteJournalEntry(string journalDir, JournalEntry entry)
     {
-        var payload = new Dictionary<string, object?>
+        var payload = new Dns01ChallengeJournalPayload
         {
-            ["version"] = 1,
-            ["entry_id"] = entry.EntryId,
-            ["phase"] = entry.Phase,
-            ["zone_id"] = entry.ZoneId,
-            ["name"] = entry.Name,
-            ["content"] = entry.Content,
-            ["record_id"] = entry.RecordId,
-            ["fqdn"] = entry.Fqdn,
-            ["transaction_id"] = entry.TransactionId,
+            Version = 1,
+            EntryId = entry.EntryId,
+            Phase = entry.Phase,
+            ZoneId = entry.ZoneId,
+            Name = entry.Name,
+            Content = entry.Content,
+            RecordId = entry.RecordId,
+            Fqdn = entry.Fqdn,
+            TransactionId = entry.TransactionId,
         };
         var path = Path.Combine(journalDir, entry.EntryId + ".json");
         AtomicFile.WriteText(
             path,
             System.Text.Json.JsonSerializer.Serialize(
                 payload,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+                AcmeJsonSerializerContext.Default.Dns01ChallengeJournalPayload)
             + Environment.NewLine);
     }
 

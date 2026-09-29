@@ -78,7 +78,10 @@ public static class BackFillerServiceCollectionExtensions
                 {
                     BackFillerAcmeCloudflareOptionsAdapter.Apply(acme, backfiller.Value, configuration);
                 })
-            .ValidateDataAnnotations()
+            // DataAnnotations on AcmeCloudflareOptions are enforced by the registered
+            // IValidateOptions implementations (AcmeCloudflareOptionsValidator /
+            // TlsOnlyAcmeCloudflareOptionsValidator). Do not call ValidateDataAnnotations():
+            // that extension uses reflection and is incompatible with Native AOT.
             .ValidateOnStart()
             .PostConfigure<IBackFillerStartupJournal>(
                 static (acme, journal) =>

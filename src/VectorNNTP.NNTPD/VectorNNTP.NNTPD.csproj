@@ -22,7 +22,6 @@
 
   <ItemGroup>
     <PackageReference Include="Blake3" Version="2.2.1" />
-    <PackageReference Include="Certes" Version="3.0.4" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="Serilog.Sinks.Async" Version="2.1.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />

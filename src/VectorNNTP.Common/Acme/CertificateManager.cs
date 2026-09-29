@@ -34,7 +34,7 @@ public sealed class CertificateManager
     /// <param name="journal">
     /// Optional shared transaction journal. When omitted, this manager creates one
     /// for <paramref name="fqdn"/>. Production wiring shares the instance with
-    /// <see cref="Dns01Solver"/> and <see cref="CertesAcmeIssuer"/>.
+    /// <see cref="Dns01Solver"/> and <see cref="AcmeIssuer"/>.
     /// </param>
     public CertificateManager(
         string fqdn,

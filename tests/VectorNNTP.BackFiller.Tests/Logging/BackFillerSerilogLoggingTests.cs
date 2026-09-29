@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
@@ -44,7 +43,7 @@ public sealed class BackFillerSerilogLoggingTests
         var logger = factory.CreateLogger("VectorNNTP.BackFiller.Hosting");
 
         Assert.True(logger.IsEnabled(LogLevel.Debug));
-        Assert.Equal(LogEventLevel.Debug, BackFillerFileLogging.ConsoleMinimumLevel);
+        Assert.Equal(LogEventLevel.Debug, BackFillerFileLogging.SinkMinimumLevel);
         Assert.Equal("Debug", ProductionSerilogSection()["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"]);
     }
 
@@ -104,27 +103,18 @@ public sealed class BackFillerSerilogLoggingTests
     }
 
     [Fact]
-    public void BindResolvedFilePath_OverwritesPlaceholder_FromLogDirectory()
+    public void EnsureRollingFilePath_CreatesDirectory_FromLogDirectory()
     {
         var logDir = CreateTempLogDir();
         try
         {
             var configuration = new ConfigurationManager();
-            foreach (var pair in BackFillerFileLogging.AsyncFileWriteToKeys())
-            {
-                configuration[pair.Key] = pair.Value;
-            }
-
             configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
-            BackFillerFileLogging.BindResolvedFilePath(configuration);
 
             var expected = BackFillerFileLogging.RollingFilePath(logDir, BackFillerFileLogging.ApplicationName);
-            Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
+            Assert.Equal(expected, BackFillerFileLogging.EnsureRollingFilePath(configuration));
             Assert.True(Directory.Exists(logDir));
-            Assert.DoesNotContain(
-                "logs/VectorNNTP.BackFiller-.log",
-                configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"],
-                StringComparison.Ordinal);
+            Assert.DoesNotContain("logs/VectorNNTP.BackFiller-.log", expected, StringComparison.Ordinal);
         }
         finally
         {
@@ -133,7 +123,7 @@ public sealed class BackFillerSerilogLoggingTests
     }
 
     [Fact]
-    public void ProductionAppsettings_DeclaresNntpdEquivalentAsyncFileSink()
+    public void ProductionAppsettings_DeclaresOperationalSerilogContract()
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(FindProductionAppsettings()));
         var serilog = doc.RootElement.GetProperty("Serilog");
@@ -143,55 +133,62 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.Contains("Serilog.Sinks.Async", usingNames);
         Assert.Contains("Serilog.Sinks.File.Archive", usingNames);
 
+        Assert.Equal("Information", serilog.GetProperty("MinimumLevel").GetProperty("Default").GetString());
+        var overrides = serilog.GetProperty("MinimumLevel").GetProperty("Override");
+        Assert.Equal("Warning", overrides.GetProperty("Microsoft").GetString());
+        Assert.Equal("Information", overrides.GetProperty("Microsoft.Hosting.Lifetime").GetString());
+        Assert.Equal("Warning", overrides.GetProperty("System").GetString());
+        Assert.Equal("Debug", overrides.GetProperty("VectorNNTP.BackFiller").GetString());
+
         var console = serilog.GetProperty("WriteTo")[0];
         Assert.Equal("Console", console.GetProperty("Name").GetString());
         Assert.Equal("Debug", console.GetProperty("Args").GetProperty("restrictedToMinimumLevel").GetString());
+        Assert.Equal(
+            BackFillerFileLogging.SinkOutputTemplate,
+            console.GetProperty("Args").GetProperty("outputTemplate").GetString());
 
         var async = serilog.GetProperty("WriteTo")[1];
         Assert.Equal("Async", async.GetProperty("Name").GetString());
-        Assert.Equal(50000, async.GetProperty("Args").GetProperty("bufferSize").GetInt32());
-        Assert.True(async.GetProperty("Args").GetProperty("blockWhenFull").GetBoolean());
+        Assert.Equal(BackFillerFileLogging.AsyncBufferSize, async.GetProperty("Args").GetProperty("bufferSize").GetInt32());
+        Assert.Equal(BackFillerFileLogging.AsyncBlockWhenFull, async.GetProperty("Args").GetProperty("blockWhenFull").GetBoolean());
         var file = async.GetProperty("Args").GetProperty("configure")[0];
         Assert.Equal("File", file.GetProperty("Name").GetString());
         var args = file.GetProperty("Args");
         Assert.Equal("Debug", args.GetProperty("restrictedToMinimumLevel").GetString());
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
-        Assert.Equal(1, args.GetProperty("retainedFileCountLimit").GetInt32());
-        Assert.True(args.GetProperty("buffered").GetBoolean());
-        Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
+        Assert.Equal(BackFillerFileLogging.RetainedFileCountLimit, args.GetProperty("retainedFileCountLimit").GetInt32());
+        Assert.Equal(BackFillerFileLogging.FileBuffered, args.GetProperty("buffered").GetBoolean());
+        Assert.Equal(BackFillerFileLogging.RollOnFileSizeLimit, args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
         Assert.Equal("logs/VectorNNTP.BackFiller-.log", args.GetProperty("path").GetString());
+        Assert.Equal(
+            BackFillerFileLogging.SinkOutputTemplate,
+            args.GetProperty("outputTemplate").GetString());
         Assert.Equal(
             "VectorNNTP.BackFiller.Logging.BackFillerSerilogHooks::DailyGzipFastest, VectorNNTP.BackFiller",
             args.GetProperty("hooks").GetString());
     }
 
     [Fact]
-    public void ProductionJson_BindsUnlimitedDailyAsyncGzipFileSink()
+    public void ExplicitConfiguration_BuildsUnlimitedDailyAsyncGzipFileSink()
     {
         var logDir = CreateTempLogDir();
         try
         {
             var configuration = new ConfigurationManager();
-            configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
-            configuration.AddInMemoryCollection(
-                new Dictionary<string, string?>
-                {
-                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir,
-                });
-            BackFillerFileLogging.BindResolvedFilePath(configuration);
+            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
 
-            using var logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(configuration)
-                .CreateLogger();
+            var loggerConfiguration = new LoggerConfiguration();
+            BackFillerFileLogging.ConfigureLogger(loggerConfiguration, configuration);
+            using var built = loggerConfiguration.CreateLogger();
 
-            var sinks = WalkLogEventSinks(logger).ToArray();
+            var sinks = WalkLogEventSinks(built).ToArray();
             var fileSink = Assert.Single(
                 sinks,
                 static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
-            Assert.Equal(1, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
+            Assert.Equal(BackFillerFileLogging.RetainedFileCountLimit, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
             Assert.Same(BackFillerSerilogHooks.DailyGzipFastest, ReadInstanceField(fileSink, "_hooks"));
 
@@ -203,7 +200,13 @@ public sealed class BackFillerSerilogLoggingTests
                         ?? throw new InvalidOperationException("BackgroundWorkerSink._queue was not found.");
             var boundedCapacity = queue.GetType().GetProperty("BoundedCapacity")?.GetValue(queue)
                                   ?? throw new InvalidOperationException("BoundedCapacity was not found.");
-            Assert.Equal(50000, Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
+            Assert.Equal(
+                BackFillerFileLogging.AsyncBufferSize,
+                Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
+
+            Assert.Contains(
+                sinks,
+                static n => n.GetType().Name.Contains("Console", StringComparison.Ordinal));
         }
         finally
         {
@@ -222,7 +225,9 @@ public sealed class BackFillerSerilogLoggingTests
         try
         {
             Console.SetOut(captured);
-            host = CreateLoggingHost(logDir);
+            host = CreateLoggingHost(
+                logDir,
+                configure: static lc => lc.MinimumLevel.Override("VectorNNTP.BackFiller", LogEventLevel.Verbose));
             var logger = host.Services.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("VectorNNTP.BackFiller");
 
@@ -282,7 +287,7 @@ public sealed class BackFillerSerilogLoggingTests
     }
 
     [Fact]
-    public void ProductionAssembly_ReferencesArchiveHooksAndConsole()
+    public void ProductionAssembly_ReferencesSinkPackages_NotSettingsConfiguration()
     {
         var names = typeof(BackFillerLoggingExtensions).Assembly
             .GetReferencedAssemblies()
@@ -290,7 +295,46 @@ public sealed class BackFillerSerilogLoggingTests
             .ToHashSet(StringComparer.Ordinal);
         Assert.Contains("Serilog.Sinks.Console", names);
         Assert.Contains("Serilog.Sinks.File.Archive", names);
+        Assert.Contains("Serilog.Sinks.Async", names);
+        Assert.DoesNotContain("Serilog.Settings.Configuration", names);
         Assert.NotNull(BackFillerSerilogHooks.DailyGzipFastest);
+    }
+
+    [Fact]
+    public void HostLogger_DoesNotRequireSerilogWriteToConfigurationKeys()
+    {
+        var logDir = CreateTempLogDir();
+        IHost? host = null;
+        try
+        {
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                ContentRootPath = AppContext.BaseDirectory,
+            });
+            builder.Configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir,
+                });
+            builder.ConfigureBackFillerLogging();
+            host = builder.Build();
+
+            var logger = host.Services.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("VectorNNTP.BackFiller");
+            logger.LogInformation("no-serilog-writeto-keys-marker");
+            host.Dispose();
+            host = null;
+            Log.CloseAndFlush();
+
+            Assert.Contains(
+                Directory.GetFiles(logDir, "VectorNNTP.BackFiller-*.log"),
+                path => File.ReadAllText(path).Contains("no-serilog-writeto-keys-marker", StringComparison.Ordinal));
+        }
+        finally
+        {
+            host?.Dispose();
+            TryDelete(logDir);
+        }
     }
 
     private static IHost CreateLoggingHost(string? logDir = null, Action<LoggerConfiguration>? configure = null)
@@ -299,17 +343,19 @@ public sealed class BackFillerSerilogLoggingTests
         {
             ContentRootPath = AppContext.BaseDirectory,
         });
-        var settings = ProductionSerilogSection();
-        settings[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] =
-            logDir ?? CreateTempLogDir();
-        builder.Configuration.AddInMemoryCollection(settings);
+        builder.Configuration.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] =
+                    logDir ?? CreateTempLogDir(),
+            });
         builder.ConfigureBackFillerLogging(configure);
         return builder.Build();
     }
 
     private static Dictionary<string, string?> ProductionSerilogSection()
     {
-        var section = new Dictionary<string, string?>
+        return new Dictionary<string, string?>
         {
             ["Serilog:Using:0"] = "Serilog.Sinks.Console",
             ["Serilog:Using:1"] = "Serilog.Sinks.File",
@@ -319,19 +365,26 @@ public sealed class BackFillerSerilogLoggingTests
             ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
             ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",
             ["Serilog:MinimumLevel:Override:System"] = "Warning",
-            ["Serilog:MinimumLevel:Override:VectorNNTP.BackFiller"] = "Verbose",
+            ["Serilog:MinimumLevel:Override:VectorNNTP.BackFiller"] = "Debug",
             ["Serilog:WriteTo:0:Name"] = "Console",
             ["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Debug",
-            ["Serilog:WriteTo:0:Args:outputTemplate"] = BackFillerLoggingExtensions.ConsoleOutputTemplate,
+            ["Serilog:WriteTo:0:Args:outputTemplate"] = BackFillerFileLogging.SinkOutputTemplate,
             ["Serilog:Enrich:0"] = "FromLogContext",
             ["Serilog:Properties:Application"] = BackFillerFileLogging.ApplicationName,
+            ["Serilog:WriteTo:1:Name"] = "Async",
+            ["Serilog:WriteTo:1:Args:bufferSize"] = BackFillerFileLogging.AsyncBufferSize.ToString(CultureInfo.InvariantCulture),
+            ["Serilog:WriteTo:1:Args:blockWhenFull"] = "true",
+            ["Serilog:WriteTo:1:Args:configure:0:Name"] = "File",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:path"] = "logs/VectorNNTP.BackFiller-.log",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:outputTemplate"] = BackFillerFileLogging.SinkOutputTemplate,
+            ["Serilog:WriteTo:1:Args:configure:0:Args:buffered"] = "true",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:rollingInterval"] = "Day",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:retainedFileCountLimit"] = "1",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:hooks"] =
+                "VectorNNTP.BackFiller.Logging.BackFillerSerilogHooks::DailyGzipFastest, VectorNNTP.BackFiller",
         };
-        foreach (var pair in BackFillerFileLogging.AsyncFileWriteToKeys())
-        {
-            section[pair.Key] = pair.Value;
-        }
-
-        return section;
     }
 
     private static string CreateTempLogDir()

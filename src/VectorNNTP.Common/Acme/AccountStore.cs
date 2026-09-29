@@ -11,12 +11,6 @@ namespace VectorNNTP.NNTPD.Acme;
 /// </remarks>
 public sealed class AccountStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
-
     private readonly string _stateDir;
 
     /// <summary>Initializes a new instance of the <see cref="AccountStore"/> class.</summary>
@@ -101,15 +95,16 @@ public sealed class AccountStore
         try
         {
             AtomicFile.WriteBytes(keyPath, state.PrivateKeyDer);
-            var payload = new Dictionary<string, string>
+            var payload = new AcmeAccountRegistrationPayload
             {
-                ["account_uri"] = state.AccountUri,
-                ["directory_url"] = state.DirectoryUrl,
-                ["registration_body"] = state.RegistrationBody ?? string.Empty,
+                AccountUri = state.AccountUri,
+                DirectoryUrl = state.DirectoryUrl,
+                RegistrationBody = state.RegistrationBody ?? string.Empty,
             };
             AtomicFile.WriteText(
                 AcmePaths.AccountMetaPath(_stateDir),
-                JsonSerializer.Serialize(payload, JsonOptions) + Environment.NewLine);
+                JsonSerializer.Serialize(payload, AcmeJsonSerializerContext.Default.AcmeAccountRegistrationPayload)
+                + Environment.NewLine);
         }
         catch (IOException ex)
         {
@@ -255,14 +250,15 @@ public sealed class AccountStore
     {
         AcmePaths.EnsureStateLayout(_stateDir);
         AtomicFile.WriteBytes(AcmePaths.AccountPendingKeyPath(_stateDir), privateKeyDer);
-        var payload = new Dictionary<string, object>
+        var payload = new AcmeAccountPendingPayload
         {
-            ["version"] = 1,
-            ["directory_url"] = directoryUrl,
+            Version = 1,
+            DirectoryUrl = directoryUrl,
         };
         AtomicFile.WriteText(
             AcmePaths.AccountPendingMetaPath(_stateDir),
-            JsonSerializer.Serialize(payload, JsonOptions) + Environment.NewLine);
+            JsonSerializer.Serialize(payload, AcmeJsonSerializerContext.Default.AcmeAccountPendingPayload)
+            + Environment.NewLine);
     }
 
     private void ClearPendingRegistration()
