@@ -27,7 +27,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 /// length and may remain larger until <see cref="CheckpointTruncateCommitted"/>.
 /// </para>
 /// </remarks>
-public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDisposable
+public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDisposable
 {
     /// <summary>Engine-owned journal filename beneath ControlDir.</summary>
     public const string JournalFileName = "article.journal";
@@ -38,9 +38,11 @@ public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDis
     private readonly object _gate = new();
     private readonly Dictionary<ulong, SequenceState> _bySequence = new();
     private readonly Dictionary<ArticleId, ulong> _outstandingArtIdToSequence = new();
+    private readonly Dictionary<ulong, CompactionState> _compactions = new();
     private readonly string _journalPath;
     private FileStream _stream;
     private ulong _nextSequence = 1;
+    private ulong _nextCompactionId = 1;
     private long _outstandingRecoverableBytes;
     private StorageWritePressure _lastLoggedPressure = (StorageWritePressure)byte.MaxValue;
     private bool _disposed;
@@ -395,7 +397,8 @@ public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDis
                 .Where(static kv => kv.Value.IndexCommitted)
                 .Select(static kv => kv.Key)
                 .ToArray();
-            if (committedKeys.Length == 0)
+            var hasRetiredCompaction = _compactions.Values.Any(static c => c.Retired is not null);
+            if (committedKeys.Length == 0 && !hasRetiredCompaction)
             {
                 return 0;
             }
@@ -406,6 +409,15 @@ public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDis
             foreach (var key in committedKeys)
             {
                 _ = _bySequence.Remove(key);
+            }
+
+            // Drop retired compactions after durable rewrite omitted them.
+            foreach (var retiredId in _compactions
+                         .Where(static kv => kv.Value.Retired is not null)
+                         .Select(static kv => kv.Key)
+                         .ToArray())
+            {
+                _ = _compactions.Remove(retiredId);
             }
 
             var released = Math.Max(0L, before - _stream.Length);
@@ -476,22 +488,42 @@ public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDis
                     span,
                     out var type,
                     out var frameLength,
-                    out var accept,
-                    out var physicalWritten,
-                    out var indexCommitted,
-                    out var sequenceFence,
+                    out var decoded,
                     out var error))
             {
                 HandleDecodeFailureUnlocked(offset, frameLength, buffer.Length, error);
                 break;
             }
 
-            ApplyFrameUnlocked(type, accept, physicalWritten, indexCommitted, sequenceFence);
+            ApplyDecodedFrameUnlocked(decoded);
             offset += frameLength;
         }
 
         _stream.Seek(0, SeekOrigin.End);
     }
+
+    private void ApplyDecodedFrameUnlocked(in ArticleJournalDecodedFrame decoded)
+    {
+        switch (decoded.Type)
+        {
+            case ArticleJournalFrameType.Accept:
+            case ArticleJournalFrameType.PhysicalWritten:
+            case ArticleJournalFrameType.IndexCommitted:
+            case ArticleJournalFrameType.SequenceFence:
+                ApplyFrameUnlocked(
+                    decoded.Type,
+                    decoded.Accept,
+                    decoded.PhysicalWritten,
+                    decoded.IndexCommitted,
+                    decoded.SequenceFence);
+                break;
+            default:
+                ApplyCompactionFrameUnlocked(decoded);
+                break;
+        }
+    }
+
+    // Accept-path ApplyFrameUnlocked retained below.
 
     private void HandleDecodeFailureUnlocked(
         long offset,
@@ -726,6 +758,9 @@ public sealed class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDis
                         temp.Write(pwFrame, 0, pwFrame.Length);
                     }
                 }
+
+                // Retain open compaction state until CompactionRetired (Phase 4B.1 checkpoint rule).
+                WriteOpenCompactionFramesUnlocked(temp);
 
                 temp.Flush(flushToDisk: true);
             }

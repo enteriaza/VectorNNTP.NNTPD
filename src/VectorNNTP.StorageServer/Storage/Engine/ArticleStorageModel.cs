@@ -331,19 +331,17 @@ public readonly record struct JournalIncompleteSequence(
     JournalPhysicalWrittenRecord? PhysicalWritten);
 
 /// <summary>
-/// Intended durable compaction protocol (not implemented in Phase 1.5).
+/// Intended durable compaction protocol (Phase 4B.1 design; journal frames in Phase 4B.2).
 /// </summary>
 /// <remarks>
 /// <para>
-/// CompactionBegin → copy live bytes into new segment(s) → validate → apply individual
-/// <see cref="IArticleIndex.TryRelocate"/> calls → durable CompactionIndexCommitted →
-/// durable CompactionRetired → only then may source segments become reclaimable.
+/// CompactionBegin → RelocationIntent → durable destination append → RelocationWritten →
+/// <see cref="IArticleIndex.TryRelocate"/> → (repeat) → CompactionCommitted →
+/// CompactionRetired (physical retirement is a later phase).
 /// </para>
 /// <para>
-/// CompactionIndexCommitted is the durable statement that the complete relocation set has
-/// successfully been applied. It does not make a batch of TryRelocate calls magically atomic;
-/// each TryRelocate remains individually correct/idempotent. Source segments stay valid until
-/// CompactionRetired.
+/// CompactionCommitted asserts logical source exhaustion (no Present index entry references
+/// the source segment). It does not rename or delete the source file.
 /// </para>
 /// </remarks>
 public static class ArticleCompactionProtocol
@@ -351,9 +349,73 @@ public static class ArticleCompactionProtocol
     /// <summary>Documentation anchor for CompactionBegin.</summary>
     public const string Begin = "CompactionBegin";
 
-    /// <summary>Documentation anchor for CompactionIndexCommitted.</summary>
-    public const string IndexCommitted = "CompactionIndexCommitted";
+    /// <summary>Documentation anchor for RelocationIntent.</summary>
+    public const string RelocationIntent = "RelocationIntent";
 
-    /// <summary>Documentation anchor for CompactionRetired.</summary>
+    /// <summary>Documentation anchor for RelocationWritten.</summary>
+    public const string RelocationWritten = "RelocationWritten";
+
+    /// <summary>Documentation anchor for CompactionCommitted (logical exhaustion).</summary>
+    public const string Committed = "CompactionCommitted";
+
+    /// <summary>Documentation anchor for CompactionRetired (physical retirement later).</summary>
     public const string Retired = "CompactionRetired";
+
+    /// <summary>Legacy alias for <see cref="Committed"/>.</summary>
+    public const string IndexCommitted = Committed;
 }
+
+/// <summary>Opens a compaction against one Closed source segment generation.</summary>
+/// <param name="Version">Schema version. Current is <c>1</c>.</param>
+/// <param name="CompactionId">Globally monotonic compaction identity.</param>
+/// <param name="SourceSegmentId">Closed source segment.</param>
+/// <param name="SourceGeneration">Catalogue generation fence for the source.</param>
+public readonly record struct JournalCompactionBeginRecord(
+    int Version,
+    ulong CompactionId,
+    SegmentId SourceSegmentId,
+    ulong SourceGeneration);
+
+/// <summary>Durable intent to relocate one Present article from an exact source location.</summary>
+/// <param name="Version">Schema version. Current is <c>1</c>.</param>
+/// <param name="CompactionId">Owning compaction.</param>
+/// <param name="RelocationId">Unique within <paramref name="CompactionId"/>.</param>
+/// <param name="ArtId">Article identity.</param>
+/// <param name="ArtHash">Expected ArtHash.</param>
+/// <param name="ArtSize">Expected ArtSize.</param>
+/// <param name="ExpectedSourceLocation">CAS key for <see cref="IArticleIndex.TryRelocate"/>.</param>
+public readonly record struct JournalRelocationIntentRecord(
+    int Version,
+    ulong CompactionId,
+    ulong RelocationId,
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize,
+    StoredArticleLocation ExpectedSourceLocation);
+
+/// <summary>Destination physical record has been durably written (index not yet implied).</summary>
+/// <param name="Version">Schema version. Current is <c>1</c>.</param>
+/// <param name="CompactionId">Owning compaction.</param>
+/// <param name="RelocationId">Matching intent id.</param>
+/// <param name="DestinationLocation">Durable destination extent.</param>
+public readonly record struct JournalRelocationWrittenRecord(
+    int Version,
+    ulong CompactionId,
+    ulong RelocationId,
+    StoredArticleLocation DestinationLocation);
+
+/// <summary>Logical source exhaustion: no Present index entry references the source segment.</summary>
+/// <param name="Version">Schema version. Current is <c>1</c>.</param>
+/// <param name="CompactionId">Owning compaction.</param>
+public readonly record struct JournalCompactionCommittedRecord(int Version, ulong CompactionId);
+
+/// <summary>Source segment retired under generation fence (physical op is a later phase).</summary>
+/// <param name="Version">Schema version. Current is <c>1</c>.</param>
+/// <param name="CompactionId">Owning compaction.</param>
+/// <param name="SourceSegmentId">Retired source segment.</param>
+/// <param name="ExpectedGeneration">Catalogue generation expected at retire.</param>
+public readonly record struct JournalCompactionRetiredRecord(
+    int Version,
+    ulong CompactionId,
+    SegmentId SourceSegmentId,
+    ulong ExpectedGeneration);

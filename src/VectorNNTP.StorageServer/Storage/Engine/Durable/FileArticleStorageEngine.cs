@@ -270,7 +270,133 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
         }
 
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
+        var abandonedDestinations = RecoverCompactions();
         RebuildSegmentAccountingFromIndex();
+        foreach (var dest in abandonedDestinations)
+        {
+            MarkAbandonedDestinationDead(dest);
+        }
+    }
+
+    /// <summary>
+    /// Recovers open compaction journal state without scanning SATA or inventing destinations.
+    /// </summary>
+    /// <remarks>
+    /// Phase 4B.2: Intent-only Present@source remains retryable for a later RelocateArticle.
+    /// Written destinations are proven; TryRelocate is retried when index still points at source.
+    /// Evicted/Invalid never resurrect. Abandoned destination extents are returned so callers can
+    /// mark them dead after Phase 4A index accounting rebuild.
+    /// </remarks>
+    private List<StoredArticleLocation> RecoverCompactions()
+    {
+        var abandoned = new List<StoredArticleLocation>();
+        foreach (var compaction in _journal.EnumerateOpenCompactions())
+        {
+            var sourceId = compaction.Begin.SourceSegmentId;
+            foreach (var relocation in compaction.Relocations)
+            {
+                if (RecoverOneRelocation(in compaction, in relocation, out var abandonedDest))
+                {
+                    abandoned.Add(abandonedDest);
+                }
+            }
+
+            if (compaction.Committed)
+            {
+                continue;
+            }
+
+            var sourceStillPresent = _index.Snapshot()
+                .Any(m => m.State == ArticleStorageState.Present
+                          && m.Location.SegmentId.Value == sourceId.Value);
+            if (!sourceStillPresent)
+            {
+                _ = _journal.AppendCompactionCommittedAsync(
+                        new JournalCompactionCommittedRecord(1, compaction.Begin.CompactionId),
+                        CancellationToken.None)
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+        }
+
+        return abandoned;
+    }
+
+    private bool RecoverOneRelocation(
+        in CompactionJournalSnapshot compaction,
+        in CompactionRelocationSnapshot relocation,
+        out StoredArticleLocation abandonedDestination)
+    {
+        abandonedDestination = default;
+        var intent = relocation.Intent;
+        if (relocation.Written is null)
+        {
+            // Intent-only: abandon without resurrection, or leave Present@source retryable.
+            return false;
+        }
+
+        var written = relocation.Written.Value;
+        if (!_segments.TryReadProven(
+                written.DestinationLocation,
+                intent.ArtId,
+                intent.ArtHash,
+                intent.ArtSize,
+                out _))
+        {
+            throw new InvalidOperationException(
+                $"Compaction RelocationWritten destination failed integrity proof " +
+                $"(compaction={intent.CompactionId}, relocation={intent.RelocationId}).");
+        }
+
+        if (!_index.TryGet(intent.ArtId, out var indexMeta)
+            || indexMeta.State != ArticleStorageState.Present)
+        {
+            abandonedDestination = written.DestinationLocation;
+            return true;
+        }
+
+        if (LocationsEqual(indexMeta.Location, written.DestinationLocation))
+        {
+            return false;
+        }
+
+        if (LocationsEqual(indexMeta.Location, intent.ExpectedSourceLocation))
+        {
+            var outcome = _index.TryRelocate(
+                intent.ArtId,
+                intent.ExpectedSourceLocation,
+                written.DestinationLocation,
+                intent.ArtHash,
+                intent.ArtSize);
+            if (outcome is ArticleRelocateOutcome.Relocated or ArticleRelocateOutcome.IdempotentNoOp)
+            {
+                return false;
+            }
+
+            abandonedDestination = written.DestinationLocation;
+            return true;
+        }
+
+        abandonedDestination = written.DestinationLocation;
+        return true;
+    }
+
+    private void MarkAbandonedDestinationDead(in StoredArticleLocation destination)
+    {
+        try
+        {
+            // After index rebuild, Present live is correct; orphan Written extents are unreferenced
+            // and should count as DeadBytes only (not subtract Live again).
+            Catalogue.ApplyLiveDeadDelta(
+                destination.SegmentId,
+                liveDelta: 0,
+                deadDelta: destination.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            // Catalogue may lack the segment in unit tests; index remains authoritative.
+        }
     }
 
     /// <summary>
