@@ -388,11 +388,12 @@ public sealed class RabbitMqServiceTests
     }
 
     [Fact]
-    public void Common_assembly_does_not_contain_backfiller_storage_or_article_work_types()
+    public void Common_assembly_does_not_contain_article_work_types_or_legacy_backfiller_storage()
     {
         var common = typeof(RabbitMqService).Assembly;
         Assert.Null(common.GetType("VectorNNTP.BackFiller.ArticleWork.ArticleWorkConsumerService"));
         Assert.Null(common.GetType("VectorNNTP.Common.Messaging.RabbitMq.BackFillerArticleWorkTopology"));
+        Assert.NotNull(common.GetType("VectorNNTP.Common.Messaging.Cache.CacheFleetTopology"));
         Assert.DoesNotContain(
             common.GetManifestResourceNames(),
             static name => name.Contains("backfiller.storage", StringComparison.OrdinalIgnoreCase));
@@ -405,7 +406,9 @@ public sealed class RabbitMqServiceTests
                 | System.Reflection.BindingFlags.Instance))
             .Where(static field => field.FieldType == typeof(string) && field.IsLiteral)
             .Select(static field => field.GetRawConstantValue() as string)
-            .Where(static value => !string.IsNullOrEmpty(value));
+            .Where(static value => !string.IsNullOrEmpty(value))
+            .ToArray();
+        Assert.Contains(topologyNames, static value => value == "cache.requests");
         Assert.DoesNotContain(topologyNames, static value => value == "backfiller.storage");
     }
 

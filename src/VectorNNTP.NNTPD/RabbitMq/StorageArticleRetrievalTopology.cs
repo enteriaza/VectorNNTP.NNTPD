@@ -1,33 +1,25 @@
+using VectorNNTP.Common.Messaging.Cache;
+
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Internal storage article-retrieval request topology.
+/// Constants for the StorageServer fleet article-presence lookup path.
 /// </summary>
 /// <remarks>
-/// <para>
-/// This is not a BackFiller backbone. Entity names are exactly <c>backfiller.storage</c>
-/// after <see cref="RabbitMqTopologyNames"/> normalization. The name lives in the
-/// <c>backfiller.*</c> namespace but is not generated from the provider list.
-/// </para>
-/// <para>
-/// Broker semantics match the BackFiller article-retrieval endpoints: durable fanout,
-/// durable non-exclusive non-auto-delete quorum queue (<c>x-queue-type=quorum</c>),
-/// bound with the same name as the routing key. NNTPD does not consume this queue.
-/// The sequential Backfill Scheduler only targets provider queues with active consumers;
-/// storage is not selected unless a consumer appears.
-/// </para>
+/// <c>cache.requests</c> is a fanout exchange only. There is no shared quorum work queue
+/// and no BackFiller provider semantics. See <see cref="CacheRequestsTopology"/>.
 /// </remarks>
 internal static class StorageArticleRetrievalTopology
 {
-    /// <summary>Exchange, queue, and routing-key name for storage retrieval requests.</summary>
-    internal const string EntityName = "backfiller.storage";
+    /// <summary>Fanout exchange name for fleet article-presence lookups.</summary>
+    internal const string ExchangeName = CacheFleetTopology.RequestsExchangeName;
+
+    /// <summary>Alias for <see cref="ExchangeName"/> used by older ArticleWork test fixtures.</summary>
+    internal const string EntityName = ExchangeName;
 
     /// <summary>
-    /// JSON <c>backbone</c> for storage publications. This is not a BackFiller provider identifier.
+    /// Historical JSON <c>backbone</c> label used only in ArticleWork tests that assert
+    /// Storage is not a BackFiller provider. Not a BackFiller backbone identifier.
     /// </summary>
     internal const string Backbone = "Storage";
-
-    /// <summary>Single storage request endpoint.</summary>
-    internal static RabbitMqArticleRetrievalEndpoint Definition { get; } =
-        RabbitMqArticleRetrievalEndpoints.CreateFanoutQuorumBinding(EntityName);
 }

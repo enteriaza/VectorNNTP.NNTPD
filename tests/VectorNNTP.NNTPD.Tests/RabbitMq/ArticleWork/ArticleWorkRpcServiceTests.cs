@@ -78,8 +78,8 @@ public sealed class ArticleWorkRpcServiceTests
         Assert.False(string.IsNullOrWhiteSpace(rpc.CurrentReplyTo));
         await Assert.ThrowsAsync<ObjectDisposedException>(
             () => firstPublish.PublishAsync(
-                "backfiller.storage",
-                "backfiller.storage",
+                "cache.requests",
+                "cache.requests",
                 Guid.NewGuid().ToString("D"),
                 Guid.NewGuid().ToString("D"),
                 firstReplyTo!,
@@ -217,10 +217,12 @@ public sealed class ArticleWorkRpcServiceTests
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
         Assert.Equal(typeof(RabbitMqTopologyService), services[3].GetType());
-        Assert.Equal(typeof(ArticleWorkRpcService), services[4].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageServerFleetConsumerService), services[4].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageArticleLookupService), services[5].GetType());
+        Assert.Equal(typeof(ArticleWorkRpcService), services[6].GetType());
         Assert.Same(
             host.Services.GetRequiredService<IArticleWorkRpcClient>(),
-            services[4]);
+            services[6]);
     }
 
     private static ArticleWorkRpcService CreateRpcService(

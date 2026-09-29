@@ -26,6 +26,7 @@ using VectorNNTP.NNTPD.SessionState.BytesAccounting;
 using VectorNNTP.NNTPD.SessionState.RateLimiting;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
@@ -289,7 +290,9 @@ public static class NntpdServiceCollectionExtensions
 
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
-        // RabbitMQ topology (hard dep; backfiller.storage + overviewdb.queue) →
+        // RabbitMQ topology (hard dep; cache.requests fanout + cache.broadcast + overviewdb.queue) →
+        // StorageServer fleet consumer (hard dep; cache.<fqdn> + in-memory registry) →
+        // StorageServer article lookup (hard dep; cache.requests publish + reply consumer) →
         // RabbitMQ article-work RPC (hard dep; reply consumer + request orchestration) →
         // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
@@ -325,6 +328,19 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqTopologyService>(static sp =>
                 sp.GetRequiredService<RabbitMqTopologyService>()));
+
+        services.TryAddSingleton<IStorageServerRegistry, StorageServerRegistry>();
+        services.TryAddSingleton<StorageServerFleetConsumerService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageServerFleetConsumerService>(static sp =>
+                sp.GetRequiredService<StorageServerFleetConsumerService>()));
+
+        services.TryAddSingleton<StorageArticleLookupService>();
+        services.TryAddSingleton<IStorageArticleLookupClient>(
+            static sp => sp.GetRequiredService<StorageArticleLookupService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageArticleLookupService>(static sp =>
+                sp.GetRequiredService<StorageArticleLookupService>()));
 
         services.TryAddSingleton<VatpConnectionPool>();
         services.TryAddSingleton<IVatpArticleClient, VatpArticleClient>();

@@ -9,7 +9,7 @@ public sealed class BackFillerRabbitMqTopologyTests
     {
         Assert.Equal("backfiller.giganews", BackFillerRabbitMqTopology.ComposeProviderEntity("Giganews"));
         Assert.Equal("backfiller.usenetnode1", BackFillerRabbitMqTopology.ComposeProviderEntity(" UsenetNode1 "));
-        Assert.Equal("backfiller.storage", BackFillerRabbitMqTopology.StorageEntity);
+        Assert.Equal("cache.requests", BackFillerRabbitMqTopology.StorageEntity);
         Assert.DoesNotContain(
             BackFillerRabbitMqTopology.ProviderBackbones,
             static backbone => backbone.Contains("storage", StringComparison.OrdinalIgnoreCase));

@@ -2,13 +2,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Messaging.Cache;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.RabbitMq;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
-using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 
@@ -16,7 +18,7 @@ namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 public sealed class RabbitMqTopologyServiceTests
 {
     [Fact]
-    public async Task StartAsync_DeclaresThirteenEndpoints_IncludingStorageRequests()
+    public async Task StartAsync_DeclaresCacheFanoutExchanges_AndOverviewQueue_WithoutSharedRequestsQueue()
     {
         var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMqService(factory);
@@ -93,7 +95,7 @@ public sealed class RabbitMqTopologyServiceTests
     {
         var factory = new FakeRabbitMqConnectionFactory
         {
-            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'backfiller.storage'"),
+            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'overviewdb.queue'"),
         };
         await using var rabbit = CreateRabbitMqService(factory);
         var topology = new RabbitMqTopologyService(rabbit, NullLogger<RabbitMqTopologyService>.Instance);
@@ -160,7 +162,9 @@ public sealed class RabbitMqTopologyServiceTests
 
         Assert.Equal(typeof(RabbitMqService), services[2].GetType());
         Assert.Equal(typeof(RabbitMqTopologyService), services[3].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[4].GetType());
+        Assert.Equal(typeof(StorageServerFleetConsumerService), services[4].GetType());
+        Assert.Equal(typeof(StorageArticleLookupService), services[5].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[6].GetType());
         Assert.Equal(1, services.Count(static s => s is RabbitMqTopologyService));
         Assert.Same(
             host.Services.GetRequiredService<RabbitMqTopologyService>(),
@@ -181,72 +185,49 @@ public sealed class RabbitMqTopologyServiceTests
 
     private static void AssertDeclaredTopology(FakeRabbitMqConnection connection, int expectedPasses)
     {
-        var definitions = ArticleRetrievalTopology.Required;
-        _ = Assert.Single(definitions);
-        Assert.Equal(1 * expectedPasses, connection.ExchangeDeclarations.Count);
-        Assert.Equal(2 * expectedPasses, connection.QueueDeclarations.Count);
-        Assert.Equal(1 * expectedPasses, connection.BindingDeclarations.Count);
-        Assert.Equal("backfiller.storage", definitions[0].ExchangeName);
-        Assert.Equal("backfiller.storage", definitions[0].QueueName);
-        Assert.Equal("backfiller.storage", definitions[0].RoutingKey);
-        Assert.All(
-            definitions,
-            static definition =>
-            {
-                Assert.StartsWith("backfiller.", definition.ExchangeName, StringComparison.Ordinal);
-                Assert.DoesNotContain("storage.requests", definition.ExchangeName, StringComparison.Ordinal);
-                Assert.DoesNotContain("grabbers.", definition.ExchangeName, StringComparison.Ordinal);
-            });
+        Assert.Empty(ArticleRetrievalTopology.Required);
+        // Per pass: cache.requests + cache.broadcast exchanges; overviewdb.queue only.
+        Assert.Equal(2 * expectedPasses, connection.ExchangeDeclarations.Count);
+        Assert.Equal(1 * expectedPasses, connection.QueueDeclarations.Count);
+        Assert.Empty(connection.BindingDeclarations);
 
         for (var pass = 0; pass < expectedPasses; pass++)
         {
-            var endpointOffset = pass * definitions.Count;
-            var queueOffset = pass * (definitions.Count + 1);
-            for (var i = 0; i < definitions.Count; i++)
-            {
-                var definition = definitions[i];
-                var exchange = connection.ExchangeDeclarations[endpointOffset + i];
-                Assert.Equal(definition.ExchangeName, exchange.Name);
-                Assert.Equal(definition.ExchangeType, exchange.Type);
-                Assert.Equal("fanout", exchange.Type);
-                Assert.True(exchange.Durable);
-                Assert.False(exchange.AutoDelete);
-                Assert.Null(exchange.Arguments);
+            var exchangeOffset = pass * 2;
+            var requests = connection.ExchangeDeclarations[exchangeOffset];
+            Assert.Equal(CacheRequestsTopology.ExchangeName, requests.Name);
+            Assert.Equal("fanout", requests.Type);
+            Assert.True(requests.Durable);
+            Assert.False(requests.AutoDelete);
 
-                var queue = connection.QueueDeclarations[queueOffset + i];
-                Assert.Equal(definition.QueueName, queue.Name);
-                Assert.True(queue.Durable);
-                Assert.False(queue.Exclusive);
-                Assert.False(queue.AutoDelete);
-                AssertQuorumQueueArguments(queue.Arguments);
+            var broadcast = connection.ExchangeDeclarations[exchangeOffset + 1];
+            Assert.Equal(CacheBroadcastTopology.ExchangeName, broadcast.Name);
+            Assert.Equal("fanout", broadcast.Type);
+            Assert.True(broadcast.Durable);
+            Assert.False(broadcast.AutoDelete);
 
-                var binding = connection.BindingDeclarations[endpointOffset + i];
-                Assert.Equal(definition.QueueName, binding.Queue);
-                Assert.Equal(definition.ExchangeName, binding.Exchange);
-                Assert.Equal(definition.RoutingKey, binding.RoutingKey);
-                Assert.Null(binding.Arguments);
-            }
-
-            var overview = connection.QueueDeclarations[queueOffset + definitions.Count];
+            var overview = connection.QueueDeclarations[pass];
             Assert.Equal(OverviewDbTopology.QueueName, overview.Name);
             Assert.True(overview.Durable);
             Assert.False(overview.Exclusive);
             Assert.False(overview.AutoDelete);
             AssertQuorumQueueArguments(overview.Arguments);
-            Assert.DoesNotContain(
-                connection.BindingDeclarations.Skip(endpointOffset).Take(definitions.Count + 1),
-                static binding => binding.Queue == OverviewDbTopology.QueueName);
-            Assert.DoesNotContain(
-                connection.ExchangeDeclarations.Skip(endpointOffset).Take(definitions.Count),
-                static exchange => exchange.Name == OverviewDbTopology.QueueName);
         }
 
         Assert.DoesNotContain(
-            connection.ExchangeDeclarations,
-            static exchange => exchange.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
+            connection.QueueDeclarations,
+            static queue => queue.Name == CacheFleetTopology.RequestsExchangeName);
         Assert.DoesNotContain(
             connection.QueueDeclarations,
-            static queue => queue.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
+            static queue =>
+                queue.Name == CacheFleetTopology.RequestsExchangeName
+                && queue.Durable
+                && queue.Arguments is not null
+                && queue.Arguments.TryGetValue("x-queue-type", out var type)
+                && Equals(type, "quorum"));
+        Assert.DoesNotContain(
+            connection.ExchangeDeclarations,
+            static exchange => exchange.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
     }
 
     private static void AssertQuorumQueueArguments(

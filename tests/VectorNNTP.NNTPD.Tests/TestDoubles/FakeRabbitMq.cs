@@ -1,5 +1,6 @@
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
@@ -1110,6 +1111,36 @@ internal sealed class FakeRabbitMqManualAckChannel : IRabbitMqManualAckChannel
         cancellationToken.ThrowIfCancellationRequested();
         Nacks.Add((deliveryTag, requeue));
         return Task.CompletedTask;
+    }
+
+    /// <summary>Delivers one message to the registered manual-ack consumer.</summary>
+    public Task DeliverAsync(
+        ulong deliveryTag,
+        ReadOnlyMemory<byte> body,
+        string? contentType = StorageServerAdvertisementWireProtocol.JsonContentType,
+        string? exchange = CacheFleetTopology.BroadcastExchangeName,
+        string? routingKey = "",
+        string? correlationId = null,
+        string? replyTo = null)
+    {
+        if (DeliveryHandler is null)
+        {
+            throw new InvalidOperationException("No manual-ack consumer is registered.");
+        }
+
+        var delivery = new RabbitMqManualAckDelivery(
+            deliveryTag,
+            body.ToArray(),
+            correlationId,
+            replyTo,
+            contentType,
+            RequestIdHeader: null,
+            Redelivered: false,
+            routingKey,
+            exchange,
+            ConsumerTag: "fake-manual-ack-consumer",
+            Generation);
+        return DeliveryHandler(delivery);
     }
 
     /// <inheritdoc />

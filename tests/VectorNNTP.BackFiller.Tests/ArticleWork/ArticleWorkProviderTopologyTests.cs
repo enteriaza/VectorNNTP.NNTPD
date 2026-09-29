@@ -203,7 +203,7 @@ public sealed class ArticleWorkProviderTopologyTests
             .ToArray();
         Assert.Equal(["backfiller.eweka", "backfiller.giganews"], declared);
         Assert.DoesNotContain("backfiller.abavia", declared);
-        Assert.DoesNotContain("backfiller.storage", declared);
+        Assert.DoesNotContain("cache.requests", declared);
 
         await consumer.DisposeAsync();
         await connections.DisposeAsync();

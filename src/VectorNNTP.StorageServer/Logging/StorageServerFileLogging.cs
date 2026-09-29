@@ -5,11 +5,11 @@ using VectorNNTP.StorageServer.Configuration;
 namespace VectorNNTP.StorageServer.Logging;
 
 /// <summary>
-/// Resolves <see cref="StorageServerOptions.LogDirectory"/> into the Serilog File path before
+/// Resolves <see cref="StorageServerOptions.LogDir"/> into the Serilog File path before
 /// <c>ReadFrom.Configuration</c>. Operational File/Async settings live in <c>appsettings.json</c>.
 /// </summary>
 /// <remarks>
-/// Serilog.Settings.Configuration cannot expand <c>StorageServer:LogDirectory</c> into <c>path</c>.
+/// Serilog.Settings.Configuration cannot expand <c>StorageServer:LogDir</c> into <c>path</c>.
 /// This type creates the directory and overwrites the File sink path so the JSON
 /// placeholder is never the runtime directory. It does not add a second File sink.
 /// </remarks>
@@ -31,29 +31,29 @@ internal static class StorageServerFileLogging
     public const Serilog.Events.LogEventLevel ConsoleMinimumLevel = Serilog.Events.LogEventLevel.Debug;
 
     /// <summary>
-    /// Resolves <paramref name="logDirectory"/> through Common
+    /// Resolves <paramref name="logDir"/> through Common
     /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
     /// <paramref name="applicationBaseDirectory"/> (default
     /// <see cref="AppContext.BaseDirectory"/>). Absolute paths stay absolute.
     /// </summary>
-    public static string ResolveDirectory(string? logDirectory, string? applicationBaseDirectory = null)
+    public static string ResolveDirectory(string? logDir, string? applicationBaseDirectory = null)
     {
-        var configured = string.IsNullOrWhiteSpace(logDirectory)
-            ? StorageServerOptions.DefaultLogDirectory
-            : logDirectory.Trim();
+        var configured = string.IsNullOrWhiteSpace(logDir)
+            ? StorageServerOptions.DefaultLogDir
+            : logDir.Trim();
         return ApplicationLocalPath.ResolveApplicationLocalPath(
             configured,
             applicationBaseDirectory ?? AppContext.BaseDirectory);
     }
 
     /// <summary>
-    /// Builds the Serilog rolling path <c>{logDirectory}/{applicationName}-.log</c>.
+    /// Builds the Serilog rolling path <c>{logDir}/{applicationName}-.log</c>.
     /// </summary>
-    public static string RollingFilePath(string logDirectory, string applicationName)
+    public static string RollingFilePath(string logDir, string applicationName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDir);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationName);
-        return Path.Combine(logDirectory, applicationName.Trim() + RollingPathSuffix);
+        return Path.Combine(logDir, applicationName.Trim() + RollingPathSuffix);
     }
 
     /// <summary>
@@ -63,7 +63,7 @@ internal static class StorageServerFileLogging
         Path.GetFileName(rolledLogPath) + GzipArchiveSuffix;
 
     /// <summary>
-    /// Creates <see cref="StorageServerOptions.LogDirectory"/> and binds the resolved File path over the JSON placeholder.
+    /// Creates <see cref="StorageServerOptions.LogDir"/> and binds the resolved File path over the JSON placeholder.
     /// </summary>
     public static void BindResolvedFilePath(
         ConfigurationManager configuration,
@@ -72,7 +72,7 @@ internal static class StorageServerFileLogging
         ArgumentNullException.ThrowIfNull(configuration);
 
         var logDir = ResolveDirectory(
-            configuration[$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDirectory)}"],
+            configuration[$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDir)}"],
             applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
 
@@ -122,7 +122,7 @@ internal static class StorageServerFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:bufferSize"] = "50000",
         [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "logs/VectorNNTP.StorageServer-.log",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "/logs/VectorNNTP.StorageServer-.log",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",

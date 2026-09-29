@@ -123,7 +123,7 @@ public sealed class SerilogLoggingTests
             configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    ["StorageServer:LogDirectory"] = logDir,
+                    ["StorageServer:LogDir"] = logDir,
                     ["StorageServer:ApplicationName"] = StorageServerFileLogging.ApplicationName,
                 });
             StorageServerFileLogging.BindResolvedFilePath(configuration);

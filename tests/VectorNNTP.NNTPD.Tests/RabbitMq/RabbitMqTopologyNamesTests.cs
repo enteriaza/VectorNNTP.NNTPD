@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
@@ -6,8 +7,8 @@ public sealed class RabbitMqTopologyNamesTests
 {
     [Theory]
     [InlineData("  BackFiller.Abavia  ", "backfiller.abavia")]
-    [InlineData("  BackFiller.Storage  ", "backfiller.storage")]
-    [InlineData(" BACKFILLER.STORAGE ", "backfiller.storage")]
+    [InlineData("  cache.requests  ", "cache.requests")]
+    [InlineData(" cache.requests ", "cache.requests")]
     [InlineData("Abavia", "abavia")]
     public void Normalize_TrimsAndUsesInvariantLowerCase(string input, string expected)
     {
@@ -35,19 +36,11 @@ public sealed class RabbitMqTopologyNamesTests
     }
 
     [Fact]
-    public void RequiredTopology_IsStorageOnly_AndNoGrabbersPrefix()
+    public void RequiredTopology_HasNoSharedCacheRequestsQuorumQueue()
     {
-        var storage = Assert.Single(ArticleRetrievalTopology.Required);
-        Assert.Equal("backfiller.storage", storage.ExchangeName);
-        Assert.Equal("backfiller.storage", storage.QueueName);
-        Assert.Equal("backfiller.storage", storage.RoutingKey);
-        Assert.Equal(storage.ExchangeName, storage.QueueName);
-        Assert.Equal(storage.QueueName, storage.RoutingKey);
-        Assert.Equal(storage.ExchangeName, RabbitMqTopologyNames.Normalize(storage.ExchangeName));
-        Assert.DoesNotContain("storage.requests", storage.ExchangeName, StringComparison.Ordinal);
-        Assert.DoesNotContain("grabbers.", storage.ExchangeName, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            ArticleRetrievalTopology.Required,
-            static endpoint => endpoint.ExchangeName.StartsWith("backfiller.giganews", StringComparison.Ordinal));
+        Assert.Empty(ArticleRetrievalTopology.Required);
+        Assert.Equal(CacheFleetTopology.RequestsExchangeName, CacheRequestsTopology.ExchangeName);
+        Assert.DoesNotContain("grabbers.", CacheRequestsTopology.ExchangeName, StringComparison.Ordinal);
+        Assert.DoesNotContain("backfiller.storage", CacheRequestsTopology.ExchangeName, StringComparison.Ordinal);
     }
 }

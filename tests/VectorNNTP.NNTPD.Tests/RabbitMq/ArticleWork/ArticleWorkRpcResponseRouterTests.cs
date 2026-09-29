@@ -17,7 +17,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var requestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 2);
+        router.Register(correlationId, operation, "cache.requests", generation: 2);
 
         router.Dispatch(correlationId, SuccessBody(requestId), requestId.ToString("D"), deliveryGeneration: 1);
         Assert.False(operation.IsCompleted);
@@ -26,7 +26,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         router.Dispatch(correlationId, SuccessBody(requestId), requestId.ToString("D"), deliveryGeneration: 2);
         Assert.True(operation.TryGetResult(out var result));
         Assert.Equal(ArticleWorkOutcome.Success, result.Outcome);
-        Assert.Equal("backfiller.storage", result.SourceExchange);
+        Assert.Equal("cache.requests", result.SourceExchange);
         Assert.Equal(0, router.OutstandingCount);
     }
 
@@ -38,7 +38,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var first = Guid.NewGuid().ToString("D");
         var second = Guid.NewGuid().ToString("D");
-        router.Register(first, operation, "backfiller.storage", generation: 0);
+        router.Register(first, operation, "cache.requests", generation: 0);
         router.Register(second, operation, "backfiller.eweka", generation: 0);
         Assert.Equal(2, router.OutstandingCount);
 
@@ -55,7 +55,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var requestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 0);
+        router.Register(correlationId, operation, "cache.requests", generation: 0);
 
         operation.TryComplete(ArticleWorkRpcResult.NotFound(requestId, MessageId, "deadline"));
         router.UnregisterAll(operation);
@@ -101,7 +101,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var requestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 0);
+        router.Register(correlationId, operation, "cache.requests", generation: 0);
 
         router.Dispatch(correlationId, SuccessBody(requestId), Guid.NewGuid().ToString("D"), deliveryGeneration: 0);
         Assert.False(operation.IsCompleted);
@@ -115,7 +115,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var requestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 0);
+        router.Register(correlationId, operation, "cache.requests", generation: 0);
 
         router.Dispatch(correlationId, SuccessBody(requestId), amqpRequestId: null, deliveryGeneration: 0);
         Assert.False(operation.IsCompleted);
@@ -129,7 +129,7 @@ public sealed class ArticleWorkRpcResponseRouterTests
         var otherRequestId = Guid.NewGuid();
         var operation = new ArticleWorkLookupOperation(requestId, MessageId);
         var correlationId = Guid.NewGuid().ToString("D");
-        router.Register(correlationId, operation, "backfiller.storage", generation: 0);
+        router.Register(correlationId, operation, "cache.requests", generation: 0);
 
         router.Dispatch(correlationId, SuccessBody(otherRequestId), requestId.ToString("D"), deliveryGeneration: 0);
         Assert.False(operation.IsCompleted);

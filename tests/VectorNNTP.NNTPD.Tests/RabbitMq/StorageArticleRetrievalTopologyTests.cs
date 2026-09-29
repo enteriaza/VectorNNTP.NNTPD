@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
@@ -5,68 +6,44 @@ namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 public sealed class StorageArticleRetrievalTopologyTests
 {
     [Fact]
-    public void Definition_IsBackfillerStorage_FanoutClassicBinding()
+    public void CacheRequests_IsFanoutExchangeOnly_NotSharedQuorumQueue()
     {
-        var definition = StorageArticleRetrievalTopology.Definition;
-
-        Assert.Equal("backfiller.storage", StorageArticleRetrievalTopology.EntityName);
-        Assert.Equal("backfiller.storage", RabbitMqTopologyNames.Normalize("  BackFiller.Storage  "));
-        Assert.Equal("backfiller.storage", RabbitMqTopologyNames.Normalize("  BACKFILLER.STORAGE "));
-        Assert.Equal("backfiller.storage", definition.ExchangeName);
-        Assert.Equal("backfiller.storage", definition.QueueName);
-        Assert.Equal("backfiller.storage", definition.RoutingKey);
-        Assert.Equal(definition.ExchangeName, definition.QueueName);
-        Assert.Equal(definition.QueueName, definition.RoutingKey);
-        Assert.Equal("fanout", definition.ExchangeType);
-        Assert.True(definition.ExchangeDurable);
-        Assert.False(definition.ExchangeAutoDelete);
-        Assert.True(definition.QueueDurable);
-        Assert.False(definition.QueueExclusive);
-        Assert.False(definition.QueueAutoDelete);
-        Assert.NotNull(definition.QueueArguments);
-        Assert.True(definition.QueueArguments.TryGetValue(
-            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
-            out var queueType));
-        Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
-        Assert.False(definition.QueueArguments.ContainsKey("x-message-ttl"));
-        Assert.False(definition.QueueArguments.ContainsKey("x-expires"));
-        Assert.Single(definition.QueueArguments);
-        Assert.DoesNotContain("storage.requests", definition.ExchangeName, StringComparison.Ordinal);
-        Assert.DoesNotContain("grabbers.", definition.ExchangeName, StringComparison.Ordinal);
+        Assert.Equal("cache.requests", StorageArticleRetrievalTopology.EntityName);
+        Assert.Equal("cache.requests", StorageArticleRetrievalTopology.ExchangeName);
+        Assert.Equal(CacheFleetTopology.RequestsExchangeName, CacheRequestsTopology.ExchangeName);
+        Assert.Equal("fanout", CacheRequestsTopology.ExchangeTypeName);
+        Assert.True(CacheRequestsTopology.ExchangeDurable);
+        Assert.False(CacheRequestsTopology.ExchangeAutoDelete);
+        Assert.Equal("1000", CacheRequestsTopology.ExpirationMilliseconds);
+        Assert.Empty(ArticleRetrievalTopology.Required);
+        Assert.DoesNotContain("backfiller.storage", StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal);
     }
 
     [Fact]
     public void StorageEndpoint_IsNotABackFillerProvider()
     {
         Assert.Equal(12, BackfillArticleRetrievalTopology.Providers.Length);
-        Assert.Equal(12, BackfillArticleRetrievalTopology.Definitions.Count);
         Assert.DoesNotContain("storage", BackfillArticleRetrievalTopology.Providers, StringComparer.OrdinalIgnoreCase);
-        Assert.DoesNotContain("storage.requests", BackfillArticleRetrievalTopology.Providers, StringComparer.OrdinalIgnoreCase);
-        Assert.StartsWith("backfiller.", StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal);
-        Assert.Equal("backfiller.storage", StorageArticleRetrievalTopology.EntityName);
-        Assert.DoesNotContain("storage.requests", StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal);
-        Assert.DoesNotContain("grabbers.", StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RequiredTopology_IsStorageOnly_NotProviderQueues()
-    {
-        var storage = Assert.Single(ArticleRetrievalTopology.Required);
-        Assert.Equal(StorageArticleRetrievalTopology.Definition, storage);
-        Assert.Equal("backfiller.storage", storage.ExchangeName);
-        Assert.Equal("backfiller.storage", storage.QueueName);
-        Assert.Equal("backfiller.storage", storage.RoutingKey);
-        Assert.DoesNotContain(
-            ArticleRetrievalTopology.Required,
-            static endpoint =>
-                endpoint.ExchangeName != "backfiller.storage"
-                && endpoint.ExchangeName.StartsWith("backfiller.", StringComparison.Ordinal));
-        Assert.Equal(12, BackfillArticleRetrievalTopology.Definitions.Count);
+        Assert.Equal("Storage", StorageArticleRetrievalTopology.Backbone);
         Assert.All(
             BackfillArticleRetrievalTopology.Definitions,
             static definition =>
-                Assert.DoesNotContain(
-                    ArticleRetrievalTopology.Required,
-                    endpoint => endpoint.ExchangeName == definition.ExchangeName));
+                Assert.NotEqual(CacheFleetTopology.RequestsExchangeName, definition.ExchangeName));
+    }
+
+    [Fact]
+    public void StorageServerRequestQueues_ArePerInstance_AndIndependent()
+    {
+        var q1 = CacheFleetTopology.BuildStorageServerRequestQueueName("cache01.usenet.ninja");
+        var q2 = CacheFleetTopology.BuildStorageServerRequestQueueName("cache02.usenet.ninja");
+        var q3 = CacheFleetTopology.BuildStorageServerRequestQueueName("cache03.usenet.ninja");
+        Assert.Equal("cache.cache01.usenet.ninja", q1);
+        Assert.Equal("cache.cache02.usenet.ninja", q2);
+        Assert.Equal("cache.cache03.usenet.ninja", q3);
+        Assert.NotEqual(q1, q2);
+        Assert.NotEqual(q2, q3);
+        Assert.NotEqual(
+            CacheFleetTopology.BuildNntpdBroadcastQueueName("nntpd01.usenet.ninja"),
+            q1);
     }
 }

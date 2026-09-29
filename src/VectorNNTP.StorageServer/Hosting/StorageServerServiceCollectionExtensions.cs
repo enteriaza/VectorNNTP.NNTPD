@@ -12,6 +12,7 @@ using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Listener;
+using VectorNNTP.StorageServer.Storage;
 
 namespace VectorNNTP.StorageServer.Hosting;
 
@@ -103,12 +104,24 @@ public static class StorageServerServiceCollectionExtensions
                     sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Fqdn)));
         builder.Services.AddRabbitMqInfrastructure();
 
-        // Startup order: Cloudflare → RabbitMQ → ACME → Listener.
+        builder.Services.TryAddSingleton<IStorageCapacityReader>(static sp =>
+            new CacheDirectoryCapacityReader(sp.GetRequiredService<StorageServerRuntimeOptions>().CacheDir));
+        builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
+        builder.Services.TryAddSingleton<IStorageArticlePresence>(static _ => NullStorageArticlePresence.Instance);
+        builder.Services.TryAddSingleton<StorageArticleLookupConsumerService>();
+
+        // Startup order: Cloudflare → RabbitMQ → AdvertisementPublisher → LookupConsumer → ACME → Listener.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
                 sp.GetRequiredService<RabbitMqService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageServerAdvertisementPublisherService>(static sp =>
+                sp.GetRequiredService<StorageServerAdvertisementPublisherService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageArticleLookupConsumerService>(static sp =>
+                sp.GetRequiredService<StorageArticleLookupConsumerService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
         builder.Services.AddSingleton(static provider => new StorageVatpListenerService(

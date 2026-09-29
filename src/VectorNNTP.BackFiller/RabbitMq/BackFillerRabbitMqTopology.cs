@@ -6,7 +6,8 @@ namespace VectorNNTP.BackFiller.RabbitMq;
 /// <remarks>
 /// BackFiller declares durable fanout exchanges and quorum queues for each backbone that
 /// becomes usable. This type does not declare, bind, or delete broker entities.
-/// <c>backfiller.storage</c> is NNTPD-internal and is not a BackFiller consume target.
+/// <c>cache.requests</c> is the NNTPD→StorageServer fleet article-presence fanout exchange
+/// (not a BackFiller consume target and not a shared work queue).
 /// Legacy <c>grabbers.*</c> names are out of scope.
 /// </remarks>
 public static class BackFillerRabbitMqTopology
@@ -14,8 +15,10 @@ public static class BackFillerRabbitMqTopology
     /// <summary>Topology namespace prefix.</summary>
     public const string Prefix = "backfiller";
 
-    /// <summary>NNTPD-internal storage path. Not consumed by BackFiller.</summary>
-    public const string StorageEntity = "backfiller.storage";
+    /// <summary>
+    /// NNTPD StorageServer lookup fanout exchange name. Not consumed by BackFiller.
+    /// </summary>
+    public const string StorageEntity = "cache.requests";
 
     /// <summary>
     /// Provider backbone labels used to compose <c>backfiller.&lt;backbone&gt;</c> entity names.

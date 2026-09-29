@@ -48,12 +48,17 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(4, application.Length);
+        Assert.Equal(6, application.Length);
         Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
         Assert.IsType<RabbitMqService>(application[1]);
-        Assert.IsType<AcmeCertificateApplicationService>(application[2]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[3]);
+        Assert.IsType<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>(application[2]);
+        Assert.IsType<VectorNNTP.StorageServer.Storage.StorageArticleLookupConsumerService>(application[3]);
+        Assert.IsType<AcmeCertificateApplicationService>(application[4]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[5]);
         Assert.IsType<NullStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
+        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.IStorageCapacityReader>());
+        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.IStorageArticlePresence>());
+        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>());
     }
 
     [Fact]
@@ -106,9 +111,11 @@ public sealed class StorageServerHostCompositionTests
             var application = host.Services.GetServices<IApplicationService>().ToArray();
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
             Assert.IsType<RabbitMqService>(application[1]);
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[2]);
+            Assert.IsType<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>(application[2]);
+            Assert.IsType<VectorNNTP.StorageServer.Storage.StorageArticleLookupConsumerService>(application[3]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[3]);
+            Assert.Same(listener, application[5]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
         }
@@ -123,12 +130,13 @@ public sealed class StorageServerHostCompositionTests
     }
 
     [Fact]
-    public void Common_assembly_does_not_contain_nntpd_topology_types()
+    public void Common_assembly_contains_shared_cache_fleet_contract_not_nntpd_topology_types()
     {
         var common = typeof(RabbitMqService).Assembly;
         Assert.Null(common.GetType("VectorNNTP.NNTPD.RabbitMq.OverviewDbTopology"));
         Assert.Null(common.GetType("VectorNNTP.NNTPD.RabbitMq.BackfillArticleRetrievalTopology"));
         Assert.Null(common.GetType("VectorNNTP.Common.Messaging.RabbitMq.OverviewDbTopology"));
+        Assert.NotNull(common.GetType("VectorNNTP.Common.Messaging.Cache.CacheFleetTopology"));
         Assert.DoesNotContain(
             common.GetManifestResourceNames(),
             static name => name.Contains("backfiller.storage", StringComparison.OrdinalIgnoreCase));
@@ -141,7 +149,10 @@ public sealed class StorageServerHostCompositionTests
                 | System.Reflection.BindingFlags.Instance))
             .Where(static field => field.FieldType == typeof(string) && field.IsLiteral)
             .Select(static field => field.GetRawConstantValue() as string)
-            .Where(static value => !string.IsNullOrEmpty(value));
+            .Where(static value => !string.IsNullOrEmpty(value))
+            .ToArray();
+        Assert.Contains(topologyNames, static value => value == "cache.requests");
+        Assert.Contains(topologyNames, static value => value == "cache.broadcast");
         Assert.DoesNotContain(topologyNames, static value => value == "backfiller.storage");
     }
 

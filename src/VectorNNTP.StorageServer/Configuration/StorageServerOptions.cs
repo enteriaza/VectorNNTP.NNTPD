@@ -34,8 +34,11 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>Default DNS suffix when the key is omitted.</summary>
     public const string DefaultDnsSuffix = "usenet.ninja";
 
-    /// <summary>Default relative log directory.</summary>
-    public const string DefaultLogDirectory = "logs";
+    /// <summary>Default application log directory.</summary>
+    public const string DefaultLogDir = "/logs";
+
+    /// <summary>Default relative article storage cache directory.</summary>
+    public const string DefaultCacheDir = "cache/";
 
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
@@ -127,7 +130,18 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>
     /// Gets or sets the directory used for application log files.
     /// </summary>
-    public string LogDirectory { get; set; } = DefaultLogDirectory;
+    public string LogDir { get; set; } = DefaultLogDir;
+
+    /// <summary>
+    /// Gets or sets the root filesystem directory used for the article storage cache.
+    /// </summary>
+    /// <remarks>
+    /// Relative paths resolve through Common
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
+    /// <see cref="AppContext.BaseDirectory"/>. Distinct from <see cref="LogDir"/>.
+    /// Does not imply any on-disk layout under this root.
+    /// </remarks>
+    public string CacheDir { get; set; } = DefaultCacheDir;
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.

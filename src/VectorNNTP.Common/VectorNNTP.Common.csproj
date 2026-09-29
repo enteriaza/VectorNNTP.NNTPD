@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>VectorNNTP.Common</RootNamespace>
     <AssemblyName>VectorNNTP.Common</AssemblyName>
-    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, byte-oriented article parsing, yEnc validation, canonical article materialization, Vector Article Transfer Protocol (VATP) framing, and RabbitMQ connectivity (connection lifecycle, channels) for VectorNNTP applications. RabbitMQ topology, ArticleWork, and Management HTTP remain application-owned.</Description>
+    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, StorageServer cache-fleet advertisement JSON contract and topology name constants, byte-oriented article parsing, yEnc validation, canonical article materialization, Vector Article Transfer Protocol (VATP) framing, and RabbitMQ connectivity (connection lifecycle, channels) for VectorNNTP applications. RabbitMQ topology declaration, ArticleWork, and Management HTTP remain application-owned.</Description>
     <IsPackable>false</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>

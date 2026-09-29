@@ -1,36 +1,26 @@
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.NNTPD.Core;
 
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Declares NNTPD-owned RabbitMQ topology: internal storage article-retrieval and OverviewDB.
+/// Declares NNTPD-owned RabbitMQ topology: cache fleet exchanges and OverviewDB.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This service owns NNTPD-specific topology only: the internal <c>backfiller.storage</c>
-/// endpoint and the one-way OverviewDB ingest queue <c>overviewdb.queue</c>. Per-backbone
-/// <c>backfiller.*</c> provider exchanges and queues are declared by VectorNNTP.BackFiller
-/// when a backbone becomes usable. Article-work RPC reply queues are owned by
-/// <c>ArticleWorkRpcService</c> (exclusive, auto-delete, non-durable classic).
-/// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
-/// topology service obtains the current generation through
-/// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel for the
-/// startup pass.
+/// Declares the durable <c>cache.requests</c> fanout exchange (no shared work queue),
+/// the durable <c>cache.broadcast</c> fanout exchange, and the OverviewDB ingest queue
+/// <c>overviewdb.queue</c>. Per-backbone <c>backfiller.*</c> provider topology is declared
+/// by VectorNNTP.BackFiller. Per-NNTPD broadcast queues and StorageServer request queues
+/// are ephemeral and owned by their respective consumers. Article-work and storage-lookup
+/// reply queues are exclusive auto-delete non-durable classic queues owned by their RPC
+/// services.
 /// </para>
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
 /// entities are never deleted, purged, or mutated. An incompatible existing entity
-/// fails startup. Current VectorNNTP-owned durable application work queues are quorum
-/// (<c>x-queue-type=quorum</c>). Exclusive auto-delete ArticleWork RPC reply queues
-/// remain non-durable classic.
-/// </para>
-/// <para>
-/// Topology is established during <see cref="StartAsync"/> and is required before
-/// NNTPD reports <c>RUNNING</c>. After a later connection-generation replacement,
-/// broker-side durable topology is assumed to remain. This phase does not subscribe
-/// to <see cref="IRabbitMqService.ConnectionReplaced"/> and does not run a second
-/// recovery loop.
+/// fails startup.
 /// </para>
 /// </remarks>
 public sealed class RabbitMqTopologyService : IApplicationService
@@ -84,17 +74,11 @@ public sealed class RabbitMqTopologyService : IApplicationService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Declares the internal <c>backfiller.storage</c> endpoint and the OverviewDB
-    /// <c>overviewdb.queue</c> durable quorum queue.
+    /// Declares <c>cache.requests</c>, <c>cache.broadcast</c>, and <c>overviewdb.queue</c>.
     /// </summary>
-    /// <param name="cancellationToken">Token used to cancel declaration.</param>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when no current RabbitMQ connection is available.
-    /// </exception>
     internal async Task DeclareRequiredTopologyAsync(CancellationToken cancellationToken)
     {
-        var definitions = ArticleRetrievalTopology.Required;
-        RabbitMqTopologyLogMessages.Establishing(_logger, definitions.Count);
+        RabbitMqTopologyLogMessages.Establishing(_logger, ExchangeCount: 2);
 
         if (!_rabbitMq.TryGetCurrent(out var handle))
         {
@@ -103,23 +87,39 @@ public sealed class RabbitMqTopologyService : IApplicationService
         }
 
         IRabbitMqTopologyChannel? channel = null;
-        RabbitMqArticleRetrievalEndpoint? current = null;
         try
         {
             channel = await handle.Connection
                 .CreateTopologyChannelAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            for (var i = 0; i < definitions.Count; i++)
-            {
-                current = definitions[i];
-                await DeclareEndpointAsync(channel, current, cancellationToken).ConfigureAwait(false);
-            }
+            await DeclareFanoutExchangeAsync(
+                    channel,
+                    CacheRequestsTopology.ExchangeName,
+                    CacheRequestsTopology.ExchangeDurable,
+                    CacheRequestsTopology.ExchangeAutoDelete,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
-            current = null;
+            await DeclareFanoutExchangeAsync(
+                    channel,
+                    CacheBroadcastTopology.ExchangeName,
+                    CacheBroadcastTopology.ExchangeDurable,
+                    CacheBroadcastTopology.ExchangeAutoDelete,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
             await DeclareOverviewDbQueueAsync(channel, cancellationToken).ConfigureAwait(false);
 
-            RabbitMqTopologyLogMessages.Established(_logger, definitions.Count, handle.Generation);
+            RabbitMqTopologyLogMessages.Established(_logger, ExchangeCount: 2, handle.Generation);
+            RabbitMqTopologyLogMessages.CacheRequestsDeclared(
+                _logger,
+                CacheRequestsTopology.ExchangeName,
+                handle.Generation);
+            RabbitMqTopologyLogMessages.CacheBroadcastDeclared(
+                _logger,
+                CacheBroadcastTopology.ExchangeName,
+                handle.Generation);
             RabbitMqTopologyLogMessages.OverviewQueueDeclared(_logger, OverviewDbTopology.QueueName, handle.Generation);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -127,9 +127,9 @@ public sealed class RabbitMqTopologyService : IApplicationService
             RabbitMqTopologyLogMessages.DeclarationFailed(
                 _logger,
                 ex,
-                current?.ExchangeName ?? OverviewDbTopology.QueueName,
-                current?.ExchangeName ?? OverviewDbTopology.DefaultExchange,
-                current?.QueueName ?? OverviewDbTopology.QueueName);
+                CacheFleetTopology.RequestsExchangeName,
+                CacheFleetTopology.RequestsExchangeName,
+                OverviewDbTopology.QueueName);
             throw;
         }
         finally
@@ -141,34 +141,19 @@ public sealed class RabbitMqTopologyService : IApplicationService
         }
     }
 
-    private static async Task DeclareEndpointAsync(
+    private static Task DeclareFanoutExchangeAsync(
         IRabbitMqTopologyChannel channel,
-        RabbitMqArticleRetrievalEndpoint definition,
-        CancellationToken cancellationToken)
-    {
-        await channel.ExchangeDeclareAsync(
-            definition.ExchangeName,
-            definition.ExchangeType,
-            definition.ExchangeDurable,
-            definition.ExchangeAutoDelete,
+        string exchange,
+        bool durable,
+        bool autoDelete,
+        CancellationToken cancellationToken) =>
+        channel.ExchangeDeclareAsync(
+            exchange,
+            CacheFleetTopology.FanoutExchangeType,
+            durable,
+            autoDelete,
             arguments: null,
-            cancellationToken).ConfigureAwait(false);
-
-        await channel.QueueDeclareAsync(
-            definition.QueueName,
-            definition.QueueDurable,
-            definition.QueueExclusive,
-            definition.QueueAutoDelete,
-            definition.QueueArguments,
-            cancellationToken).ConfigureAwait(false);
-
-        await channel.QueueBindAsync(
-            definition.QueueName,
-            definition.ExchangeName,
-            definition.RoutingKey,
-            arguments: null,
-            cancellationToken).ConfigureAwait(false);
-    }
+            cancellationToken);
 
     private static Task DeclareOverviewDbQueueAsync(
         IRabbitMqTopologyChannel channel,

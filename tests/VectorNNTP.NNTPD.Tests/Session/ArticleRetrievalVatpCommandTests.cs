@@ -268,7 +268,7 @@ public sealed class ArticleRetrievalVatpCommandTests
                 Uri: uri,
                 ArticleId: articleId,
                 Error: outcome == ArticleWorkOutcome.Success ? null : "missing",
-                SourceExchange: outcome == ArticleWorkOutcome.Success ? "backfiller.storage" : null));
+                SourceExchange: outcome == ArticleWorkOutcome.Success ? "cache.requests" : null));
         }
     }
 

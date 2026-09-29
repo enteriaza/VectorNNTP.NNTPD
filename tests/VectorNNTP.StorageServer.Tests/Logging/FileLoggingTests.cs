@@ -38,7 +38,7 @@ public sealed class FileLoggingTests
         Assert.Equal(
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
-        Assert.Equal("logs/storage/VectorNNTP.StorageServer-.log", args.GetProperty("path").GetString());
+        Assert.Equal("/logs/VectorNNTP.StorageServer-.log", args.GetProperty("path").GetString());
         Assert.DoesNotContain("NNTPD", args.GetProperty("path").GetString(), StringComparison.Ordinal);
 
         var usingNames = doc.RootElement.GetProperty("Serilog").GetProperty("Using")
@@ -48,11 +48,11 @@ public sealed class FileLoggingTests
         Assert.Contains("Serilog.Sinks.File.Archive", usingNames);
         Assert.Equal("-.log", StorageServerFileLogging.RollingPathSuffix);
         Assert.Equal(".gz", StorageServerFileLogging.GzipArchiveSuffix);
-        Assert.Equal("logs/storage", StorageServerOptions.DefaultLogDirectory);
+        Assert.Equal("/logs", StorageServerOptions.DefaultLogDir);
     }
 
     [Fact]
-    public void BindResolvedFilePath_OverwritesProductionJsonPlaceholderFromLogDirectory()
+    public void BindResolvedFilePath_OverwritesProductionJsonPlaceholderFromLogDir()
     {
         var logDir = CreateTempLogDir();
         try
@@ -62,7 +62,7 @@ public sealed class FileLoggingTests
             configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDirectory)}"] = logDir,
+                    [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDir)}"] = logDir,
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.ApplicationName)}"] =
                         StorageServerFileLogging.ApplicationName,
                 });
@@ -72,7 +72,6 @@ public sealed class FileLoggingTests
             var expected = StorageServerFileLogging.RollingFilePath(logDir, StorageServerFileLogging.ApplicationName);
             Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
             Assert.True(Directory.Exists(logDir));
-            Assert.Contains("storage", expected, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("NNTPD", expected, StringComparison.Ordinal);
         }
         finally
@@ -82,18 +81,24 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
-    public void ResolveDirectory_UsesDefaultLogsStorageAgainstApplicationBase()
+    public void ResolveDirectory_UsesDefaultLogsAgainstApplicationBase()
     {
-        var relative = StorageServerFileLogging.ResolveDirectory(StorageServerOptions.DefaultLogDirectory);
+        var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-log-base", Guid.NewGuid().ToString("N"));
+        var resolved = StorageServerFileLogging.ResolveDirectory(StorageServerOptions.DefaultLogDir, baseDir);
         Assert.Equal(
             ApplicationLocalPath.ResolveApplicationLocalPath(
-                StorageServerOptions.DefaultLogDirectory,
-                AppContext.BaseDirectory),
-            relative);
-        Assert.EndsWith(
-            Path.Combine("logs", "storage"),
-            relative,
-            StringComparison.OrdinalIgnoreCase);
+                StorageServerOptions.DefaultLogDir,
+                baseDir),
+            resolved);
+        Assert.Equal("/logs", StorageServerOptions.DefaultLogDir);
+        Assert.True(Path.IsPathRooted(resolved));
+        // Absolute /logs must not be rewritten under the application base directory.
+        var normalizedBase = Path.GetFullPath(baseDir)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        Assert.False(
+            resolved.StartsWith(normalizedBase + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || resolved.StartsWith(normalizedBase + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(resolved, normalizedBase, StringComparison.OrdinalIgnoreCase));
 
         var absolute = Path.Combine(Path.GetTempPath(), "vectornntp-ss-logdir-abs");
         Assert.Equal(Path.GetFullPath(absolute), StorageServerFileLogging.ResolveDirectory(absolute));
@@ -102,8 +107,8 @@ public sealed class FileLoggingTests
     [Fact]
     public void RollingFilePath_UsesStorageServerApplicationName()
     {
-        var path = StorageServerFileLogging.RollingFilePath("C:\\logs\\storage", "VectorNNTP.StorageServer");
-        Assert.Equal(Path.Combine("C:\\logs\\storage", "VectorNNTP.StorageServer-.log"), path);
+        var path = StorageServerFileLogging.RollingFilePath("/logs", "VectorNNTP.StorageServer");
+        Assert.Equal(Path.Combine("/logs", "VectorNNTP.StorageServer-.log"), path);
         Assert.DoesNotContain("NNTPD", path, StringComparison.Ordinal);
     }
 
@@ -118,7 +123,7 @@ public sealed class FileLoggingTests
             configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDirectory)}"] = logDir,
+                    [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDir)}"] = logDir,
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.ApplicationName)}"] =
                         StorageServerFileLogging.ApplicationName,
                 });
@@ -169,7 +174,7 @@ public sealed class FileLoggingTests
                 builder.Configuration[pair.Key] = pair.Value;
             }
 
-            builder.Configuration[$"{StorageServerOptions.SectionName}:LogDirectory"] = logDir;
+            builder.Configuration[$"{StorageServerOptions.SectionName}:LogDir"] = logDir;
             builder.Configuration[$"{StorageServerOptions.SectionName}:ApplicationName"] =
                 StorageServerFileLogging.ApplicationName;
             foreach (var pair in StorageServerFileLogging.AsyncFileWriteToKeys())

@@ -144,9 +144,38 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
 
     private static void ValidateDirectories(StorageServerOptions options, List<string> failures)
     {
-        if (string.IsNullOrWhiteSpace(options.LogDirectory))
+        ValidateFilesystemPath(
+            options.LogDir,
+            "StorageServer:LogDir",
+            failures);
+        ValidateFilesystemPath(
+            options.CacheDir,
+            "StorageServer:CacheDir",
+            failures);
+    }
+
+    private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)
+    {
+        if (string.IsNullOrWhiteSpace(path))
         {
-            failures.Add("StorageServer:LogDirectory is required and cannot be empty.");
+            failures.Add($"{configurationKey} is required and cannot be empty.");
+            return;
+        }
+
+        var trimmed = path.Trim();
+        if (trimmed.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+        {
+            failures.Add($"{configurationKey} contains invalid path characters.");
+            return;
+        }
+
+        try
+        {
+            _ = Path.GetFullPath(trimmed);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            failures.Add($"{configurationKey} is not a valid filesystem path.");
         }
     }
 

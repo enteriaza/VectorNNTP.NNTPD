@@ -31,12 +31,12 @@ internal sealed record RabbitMqArticleRetrievalEndpoint(
     IReadOnlyDictionary<string, object?> QueueArguments);
 
 /// <summary>
-/// Shared factory for NNTPD article-retrieval broker entities.
+/// Shared factory for NNTPD/BackFiller article-retrieval broker entities.
 /// </summary>
 /// <remarks>
-/// BackFiller backbone endpoints and the internal <c>backfiller.storage</c> endpoint share
-/// these broker semantics. Storage is not a BackFiller provider. Exclusive auto-delete
-/// ArticleWork RPC reply queues are declared separately and remain non-durable classic.
+/// Used by BackFiller provider endpoints. Storage fleet lookup uses
+/// <see cref="CacheRequestsTopology"/> (fanout exchange only) and is not declared through
+/// this factory.
 /// </remarks>
 internal static class RabbitMqArticleRetrievalEndpoints
 {
@@ -71,18 +71,15 @@ internal static class RabbitMqArticleRetrievalEndpoints
 }
 
 /// <summary>
-/// Complete article-retrieval topology declared by <see cref="RabbitMqTopologyService"/>.
+/// NNTPD-owned BackFiller-compatible article-retrieval endpoints declared at topology start.
 /// </summary>
 /// <remarks>
-/// NNTPD owns only the internal <c>backfiller.storage</c> endpoint. Per-backbone
-/// <c>backfiller.*</c> provider topology is declared by VectorNNTP.BackFiller when a
-/// backbone becomes usable.
+/// Empty: per-backbone <c>backfiller.*</c> topology is declared by BackFiller.
+/// Storage fleet lookup declares only the <c>cache.requests</c> fanout exchange (no shared queue).
 /// </remarks>
 internal static class ArticleRetrievalTopology
 {
-    /// <summary>Required NNTPD-owned article-retrieval endpoints (storage only).</summary>
+    /// <summary>NNTPD-owned BackFiller-style article-retrieval endpoints declared at startup.</summary>
     internal static IReadOnlyList<RabbitMqArticleRetrievalEndpoint> Required { get; } =
-        [
-            StorageArticleRetrievalTopology.Definition,
-        ];
+        Array.Empty<RabbitMqArticleRetrievalEndpoint>();
 }
