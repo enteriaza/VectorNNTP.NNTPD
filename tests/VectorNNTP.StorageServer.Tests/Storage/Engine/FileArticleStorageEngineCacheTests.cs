@@ -12,7 +12,8 @@ using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
-/// Phase 3B/3C: RAM cache integration on durable FileArticleStorageEngine read and write paths.
+/// Phase 3B/3C/3D: RAM cache integration on durable FileArticleStorageEngine
+/// (read path, write-path populate, eviction/invalidation coherence).
 /// </summary>
 public sealed class FileArticleStorageEngineCacheTests
 {
@@ -824,6 +825,275 @@ public sealed class FileArticleStorageEngineCacheTests
         Assert.True(cache.HitCount >= 1);
     }
 
+    // --- Phase 3D: eviction / invalidation coherence ---
+
+    [Fact]
+    public async Task Coherence_A_Evict_RemovesCacheEntry()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-a@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out _));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var before));
+        Assert.Equal(ArticleStorageState.Present, before.State);
+
+        cache.ResetCounters();
+        Assert.True(engine.TryEvict(record.ArtId));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var after));
+        Assert.Equal(ArticleStorageState.Evicted, after.State);
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+        Assert.Equal(0, cache.Count);
+        Assert.True(cache.RemoveCount >= 1);
+        Assert.Equal(0, cache.PutCount);
+    }
+
+    [Fact]
+    public async Task Coherence_B_Invalidate_RemovesCacheEntry()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-b@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out _));
+
+        cache.ResetCounters();
+        Assert.True(engine.TryInvalidate(record.ArtId));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var after));
+        Assert.Equal(ArticleStorageState.Invalid, after.State);
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+        Assert.Equal(0, cache.PutCount);
+    }
+
+    [Fact]
+    public async Task Coherence_CD_EngineGet_DoesNotReturnStaleAfterDeath()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var evicted = CreateRecord("<coh-c@cache.test>");
+        var invalid = CreateRecord("<coh-d@cache.test>");
+        await AcceptAndDrainAsync(engine, evicted);
+        await AcceptAndDrainAsync(engine, invalid);
+
+        Assert.True(engine.TryEvict(evicted.ArtId));
+        Assert.False(engine.TryRead(evicted.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(evicted.ArtId, out _));
+
+        Assert.True(engine.TryInvalidate(invalid.ArtId));
+        Assert.False(engine.TryRead(invalid.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(invalid.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Coherence_E_FailedEvict_LeavesCacheIntact()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-e@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.Equal(1, cache.Count);
+
+        cache.ResetCounters();
+        engine.TestFailNextLogicalDeath = true;
+        Assert.False(engine.TryEvict(record.ArtId));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(0, cache.RemoveCount);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out var cached));
+        Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.True(engine.TryRead(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Coherence_F_FailedInvalidate_LeavesCacheIntact()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-f@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+
+        cache.ResetCounters();
+        engine.TestFailNextLogicalDeath = true;
+        Assert.False(engine.TryInvalidate(record.ArtId));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(0, cache.RemoveCount);
+        Assert.True(engine.TryRead(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Coherence_G_ReAcceptAfterEvict_RepopulatesOnlyAfterDurableSuccess()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-g@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(engine.TryEvict(record.ArtId));
+        Assert.Equal(0, cache.Count);
+
+        // Inject stale cache content while durable remains Evicted — must not be served.
+        Assert.Equal(ArticleMemoryCachePutOutcome.Inserted, cache.Put(in record));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+
+        cache.ResetCounters();
+        engine.SuspendBackgroundPersist = true;
+        var accept = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, accept.Outcome);
+        Assert.Equal(0, cache.PutCount); // journal Accept alone — not yet IndexCommitted
+        Assert.False(engine.TryRead(record.ArtId, out _)); // still Evicted until recovery completes
+
+        await engine.RecoverAsync(CancellationToken.None);
+        Assert.True(cache.PutCount >= 1);
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out var cached));
+        Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Coherence_H_Invalid_CannotBypassViaCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-h@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(engine.TryInvalidate(record.ArtId));
+        Assert.Equal(0, cache.Count);
+
+        Assert.Equal(ArticleMemoryCachePutOutcome.Inserted, cache.Put(in record));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+
+        // Legitimate re-Accept of Invalid → new Present (existing contract).
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Coherence_RemoveThrow_DoesNotFailDurableEvict()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new ThrowingRemoveCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-rm@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out _));
+
+        Assert.True(engine.TryEvict(record.ArtId));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Evicted, meta.State);
+        Assert.False(engine.TryRead(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Coherence_EvictInvalidate_DoNotPut()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var a = CreateRecord("<coh-noput-a@cache.test>");
+        var b = CreateRecord("<coh-noput-b@cache.test>");
+        await AcceptAndDrainAsync(engine, a);
+        await AcceptAndDrainAsync(engine, b);
+        cache.ResetCounters();
+
+        Assert.True(engine.TryEvict(a.ArtId));
+        Assert.True(engine.TryInvalidate(b.ArtId));
+        Assert.Equal(0, cache.PutCount);
+        Assert.True(cache.RemoveCount >= 2);
+    }
+
+    [Fact]
+    public async Task Coherence_ConcurrentGetAndEvict_NoStaleAfterEvictReturns()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-race@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+
+        using var start = new Barrier(9);
+        var readers = new Task[8];
+        for (var i = 0; i < readers.Length; i++)
+        {
+            readers[i] = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                for (var n = 0; n < 200; n++)
+                {
+                    _ = engine.TryRead(record.ArtId, out _);
+                }
+            });
+        }
+
+        var evict = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            Assert.True(engine.TryEvict(record.ArtId));
+        });
+
+        await Task.WhenAll(readers.Append(evict));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Evicted, meta.State);
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Coherence_ConcurrentGetAndInvalidate_NoStaleAfterInvalidateReturns()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<coh-race-inv@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+
+        using var start = new Barrier(9);
+        var readers = new Task[8];
+        for (var i = 0; i < readers.Length; i++)
+        {
+            readers[i] = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                for (var n = 0; n < 200; n++)
+                {
+                    _ = engine.TryRead(record.ArtId, out _);
+                }
+            });
+        }
+
+        var invalidate = Task.Run(() =>
+        {
+            start.SignalAndWait();
+            Assert.True(engine.TryInvalidate(record.ArtId));
+        });
+
+        await Task.WhenAll(readers.Append(invalidate));
+
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Invalid, meta.State);
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+    }
+
     private static async Task AcceptAndDrainAsync(FileArticleStorageEngine engine, ArticleRecord record)
     {
         var accept = await engine.AcceptAsync(record, CancellationToken.None);
@@ -989,5 +1259,31 @@ public sealed class FileArticleStorageEngineCacheTests
         public void Clear()
         {
         }
+    }
+
+    /// <summary>Remove throws; Clear succeeds — exercises best-effort salvage after durable death.</summary>
+    private sealed class ThrowingRemoveCache : IArticleMemoryCache
+    {
+        public ThrowingRemoveCache(IArticleMemoryCache inner)
+        {
+            Inner = inner;
+        }
+
+        public IArticleMemoryCache Inner { get; }
+
+        public long MaxBytes => Inner.MaxBytes;
+
+        public long CurrentBytes => Inner.CurrentBytes;
+
+        public int Count => Inner.Count;
+
+        public bool TryGet(ArticleId artId, out ArticleRecord record) => Inner.TryGet(artId, out record);
+
+        public ArticleMemoryCachePutOutcome Put(in ArticleRecord record) => Inner.Put(in record);
+
+        public bool Remove(ArticleId artId) =>
+            throw new InvalidOperationException("test: Remove must not fail durable death.");
+
+        public void Clear() => Inner.Clear();
     }
 }

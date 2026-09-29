@@ -27,9 +27,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// and leaves the sequence outstanding (no false Present).
 /// </para>
 /// <para>
-/// Optional <see cref="IArticleMemoryCache"/> accelerates <see cref="TryRead"/> only (Phase 3B).
-/// Cache hits are memory-local; misses use the durable index + segment path and populate the
-/// cache only after successful validation. Accept / recovery / checkpoint are unchanged.
+/// Optional <see cref="IArticleMemoryCache"/> accelerates reads (Phase 3B) and is populated
+/// after durable IndexCommitted (Phase 3C). Durable index state remains authoritative: after
+/// successful Evict/Invalidate the cache entry is removed (Phase 3D), and a cache hit for an
+/// ArtId whose durable state is Evicted/Invalid is dropped rather than returned.
 /// </para>
 /// </remarks>
 public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
@@ -110,6 +111,12 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
 
     /// <summary>Optional one-shot persist fault (cleared when consumed). Tests only.</summary>
     internal PersistFaultPoint TestFaultPoint { get; set; }
+
+    /// <summary>
+    /// When true, the next <see cref="TryEvict"/> / <see cref="TryInvalidate"/> on a Present
+    /// article returns false before durable <c>TrySetState</c> (tests only; auto-cleared).
+    /// </summary>
+    internal bool TestFailNextLogicalDeath { get; set; }
 
     /// <summary>
     /// Opens journal, segment store, and index under <paramref name="options"/> and starts
@@ -300,9 +307,17 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
     {
         result = default;
 
-        // Phase 3B: memory-local acceleration. Hit skips index + segment IO.
+        // Phase 3B: memory-local acceleration. Hit skips segment IO.
+        // Phase 3D: if durable index knows the ArtId and it is not Present, drop stale cache.
         if (_articleCache.TryGet(artId, out var cached))
         {
+            if (_index.TryGet(artId, out var cachedIndexMeta)
+                && cachedIndexMeta.State != ArticleStorageState.Present)
+            {
+                BestEffortCacheRemove(artId);
+                return false;
+            }
+
             result = new ArticleReadResult(
                 new StoredArticleMetadata(
                     cached.ArtId,
@@ -606,7 +621,7 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
         if (existing.State == state)
         {
             // Ensure RAM cannot serve a logically dead article.
-            _ = _articleCache.Remove(artId);
+            BestEffortCacheRemove(artId);
             return true;
         }
 
@@ -615,8 +630,15 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
             return false;
         }
 
+        if (TestFailNextLogicalDeath)
+        {
+            TestFailNextLogicalDeath = false;
+            return false;
+        }
+
         if (!_index.TrySetState(artId, state, _timeProvider.GetUtcNow()))
         {
+            // Durable transition failed — leave cache untouched.
             return false;
         }
 
@@ -633,8 +655,33 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
             // Catalogue entry may be absent in edge tests; logical index transition still stands.
         }
 
-        _ = _articleCache.Remove(artId);
+        // Durable success first; cache cleanup is best-effort and must not fail the operation.
+        BestEffortCacheRemove(artId);
         return true;
+    }
+
+    /// <summary>
+    /// Removes <paramref name="artId"/> from the process-local cache without affecting durable
+    /// outcomes. On unexpected failure, clears the whole cache as a coherence salvage.
+    /// </summary>
+    private void BestEffortCacheRemove(ArticleId artId)
+    {
+        try
+        {
+            _ = _articleCache.Remove(artId);
+        }
+        catch (Exception)
+        {
+            try
+            {
+                _articleCache.Clear();
+            }
+            catch (Exception)
+            {
+                // Cache is non-authoritative; durable state already reflects logical death when
+                // this runs after TrySetState. TryRead also drops Evicted/Invalid cache hits.
+            }
+        }
     }
 
     /// <summary>
