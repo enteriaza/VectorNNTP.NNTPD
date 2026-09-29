@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
@@ -24,12 +26,18 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// because the journal forbids superseding PhysicalWritten, an unusable location fails closed
 /// and leaves the sequence outstanding (no false Present).
 /// </para>
+/// <para>
+/// Optional <see cref="IArticleMemoryCache"/> accelerates <see cref="TryRead"/> only (Phase 3B).
+/// Cache hits are memory-local; misses use the durable index + segment path and populate the
+/// cache only after successful validation. Accept / recovery / checkpoint are unchanged.
+/// </para>
 /// </remarks>
 public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
 {
     private readonly FileArticleJournal _journal;
     private readonly FileSegmentStore _segments;
     private readonly FileArticleIndex _index;
+    private readonly IArticleMemoryCache _articleCache;
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
     private readonly object _gate = new();
@@ -45,12 +53,14 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
         FileArticleJournal journal,
         FileSegmentStore segments,
         FileArticleIndex index,
+        IArticleMemoryCache articleCache,
         ILogger logger,
         TimeProvider timeProvider)
     {
         _journal = journal;
         _segments = segments;
         _index = index;
+        _articleCache = articleCache;
         _logger = logger;
         _timeProvider = timeProvider;
         _worker = Task.Run(() => RunPhysicalWorkerAsync(_workerCts.Token));
@@ -79,6 +89,9 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
     /// <summary>Gets the durable index.</summary>
     public FileArticleIndex Index => _index;
 
+    /// <summary>Gets the process-local article memory cache (may be disabled via MaxBytes = 0).</summary>
+    public IArticleMemoryCache ArticleCache => _articleCache;
+
     /// <summary>Gets the segment catalogue owned by the segment store.</summary>
     public FileSegmentCatalogue Catalogue => _segments.Catalogue;
 
@@ -103,10 +116,18 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
     /// the background persist worker. Does not run recovery; callers that need crash recovery
     /// must invoke <see cref="RecoverAsync"/>.
     /// </summary>
+    /// <param name="options">Validated control/segment directory bounds.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="timeProvider">Optional time provider.</param>
+    /// <param name="articleCache">
+    /// Optional process-local cache for <see cref="TryRead"/>. When null, a disabled cache
+    /// (<c>MaxBytes = 0</c>) is used.
+    /// </param>
     public static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         ILogger? logger = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IArticleMemoryCache? articleCache = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -125,6 +146,7 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
                 journal,
                 segments,
                 index,
+                articleCache ?? new ArticleMemoryCache(maxBytes: 0),
                 log,
                 timeProvider ?? TimeProvider.System);
             journal = null;
@@ -275,6 +297,22 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
     public bool TryRead(ArticleId artId, out ArticleReadResult result)
     {
         result = default;
+
+        // Phase 3B: memory-local acceleration. Hit skips index + segment IO.
+        if (_articleCache.TryGet(artId, out var cached))
+        {
+            result = new ArticleReadResult(
+                new StoredArticleMetadata(
+                    cached.ArtId,
+                    cached.ArtHash,
+                    cached.ArtSize,
+                    default,
+                    ArticleStorageState.Present,
+                    _timeProvider.GetUtcNow()),
+                cached.ArtData);
+            return true;
+        }
+
         if (!_index.TryGet(artId, out var metadata) || metadata.State != ArticleStorageState.Present)
         {
             return false;
@@ -305,6 +343,13 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
 
         _ = _index.TryGet(artId, out metadata);
         result = new ArticleReadResult(metadata, artData);
+
+        // Best-effort populate; Put rejection must not fail the durable read.
+        if (TryCreateCacheRecord(in metadata, artData, out var cacheRecord))
+        {
+            _ = _articleCache.Put(in cacheRecord);
+        }
+
         return true;
     }
 
@@ -534,6 +579,8 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
 
         if (existing.State == state)
         {
+            // Ensure RAM cannot serve a logically dead article.
+            _ = _articleCache.Remove(artId);
             return true;
         }
 
@@ -560,6 +607,40 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
             // Catalogue entry may be absent in edge tests; logical index transition still stands.
         }
 
+        _ = _articleCache.Remove(artId);
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a CanonicalV1 <see cref="ArticleRecord"/> for cache insertion from durable bytes.
+    /// </summary>
+    private static bool TryCreateCacheRecord(
+        in StoredArticleMetadata metadata,
+        ReadOnlyMemory<byte> artData,
+        out ArticleRecord record)
+    {
+        record = default;
+        if (artData.Length != metadata.ArtSize
+            || !ArticleStorageIntegrity.TryProve(
+                artData.Span,
+                metadata.ArtId,
+                metadata.ArtHash,
+                metadata.ArtSize))
+        {
+            return false;
+        }
+
+        var bytes = artData.ToArray();
+        var fields = ArticleFieldTable.Locate(bytes, NntpArticleHeaderName.Date);
+        record = new ArticleRecord(
+            metadata.ArtId,
+            metadata.ArtHash,
+            default,
+            artLines: 0,
+            canonicalUtc: default,
+            ArticleParseStatus.CanonicalV1,
+            bytes,
+            fields);
         return true;
     }
 
