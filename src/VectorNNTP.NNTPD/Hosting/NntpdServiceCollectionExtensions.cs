@@ -264,7 +264,7 @@ public static class NntpdServiceCollectionExtensions
 
         // Startup order (sequential ApplicationServiceManager):
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
-        // RabbitMQ topology (hard dep; BackFiller + backfiller.storage declare) →
+        // RabbitMQ topology (hard dep; backfiller.storage + overviewdb.queue) →
         // RabbitMQ article-work RPC (hard dep; reply consumer + request orchestration) →
         // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →

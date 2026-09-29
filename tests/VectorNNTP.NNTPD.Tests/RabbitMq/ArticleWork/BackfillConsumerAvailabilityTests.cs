@@ -55,7 +55,9 @@ public sealed class BackfillConsumerAvailabilityTests
 
         var probesAfterFirst = CountPassiveDeclares(factory.LastConnection!);
         Assert.Equal(BackfillArticleRetrievalTopology.Definitions.Count, probesAfterFirst);
-        Assert.Single(factory.LastConnection!.TopologyChannels);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection!.TopologyChannels.Count);
 
         for (var i = 0; i < 20; i++)
         {
@@ -64,7 +66,9 @@ public sealed class BackfillConsumerAvailabilityTests
         }
 
         Assert.Equal(probesAfterFirst, CountPassiveDeclares(factory.LastConnection));
-        Assert.Single(factory.LastConnection.TopologyChannels);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection.TopologyChannels.Count);
     }
 
     [Fact]
@@ -91,14 +95,18 @@ public sealed class BackfillConsumerAvailabilityTests
         var stillCached = availability.GetEligibleBackbones();
         Assert.Single(stillCached);
         Assert.Equal("Giganews", stillCached[0].Backbone);
-        Assert.Single(factory.LastConnection.TopologyChannels);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection.TopologyChannels.Count);
 
         time.Advance(TimeSpan.FromMilliseconds(1));
         var refreshed = availability.GetEligibleBackbones();
         Assert.Single(refreshed);
         Assert.Equal("Eweka", refreshed[0].Backbone);
         Assert.Equal(25, refreshed[0].ConsumerCount);
-        Assert.Equal(2, factory.LastConnection.TopologyChannels.Count);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count * 2,
+            factory.LastConnection.TopologyChannels.Count);
         Assert.Equal(
             BackfillArticleRetrievalTopology.Definitions.Count * 2,
             CountPassiveDeclares(factory.LastConnection));
@@ -122,10 +130,95 @@ public sealed class BackfillConsumerAvailabilityTests
         Assert.DoesNotContain(
             eligible,
             static b => b.QueueName.Equals(StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal));
-        var channel = Assert.Single(factory.LastConnection!.TopologyChannels);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection!.TopologyChannels.Count);
         Assert.DoesNotContain(
-            channel.PassiveDeclareQueues,
+            factory.LastConnection.TopologyChannels.SelectMany(static c => c.PassiveDeclareQueues),
             static q => q.Equals(StorageArticleRetrievalTopology.EntityName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Missing_provider_queue_is_not_eligible_and_does_not_fail_probe_pass()
+    {
+        var time = new FakeTimeProvider();
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMqService(factory);
+        await rabbit.StartAsync(CancellationToken.None);
+        factory.LastConnection!.QueueDeclarePassiveException =
+            new InvalidOperationException("NOT_FOUND - no queue 'backfiller.giganews'");
+        await using var availability = new BackfillConsumerAvailabilityService(
+            rabbit,
+            NullLogger.Instance,
+            time);
+
+        var eligible = availability.GetEligibleBackbones();
+
+        Assert.Empty(eligible);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection.TopologyChannels.Count);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            CountPassiveDeclares(factory.LastConnection));
+    }
+
+    [Fact]
+    public async Task Existing_provider_queue_with_zero_consumers_is_not_eligible()
+    {
+        var time = new FakeTimeProvider();
+        var factory = new FakeRabbitMqConnectionFactory();
+        SeedConsumers(factory, ("Giganews", 0u), ("Eweka", 7u));
+        await using var rabbit = CreateRabbitMqService(factory);
+        await rabbit.StartAsync(CancellationToken.None);
+        await using var availability = new BackfillConsumerAvailabilityService(
+            rabbit,
+            NullLogger.Instance,
+            time);
+
+        var eligible = availability.GetEligibleBackbones();
+
+        Assert.DoesNotContain(eligible, static b => b.Backbone == "Giganews");
+        Assert.Contains(eligible, static b => b.Backbone == "Eweka" && b.ConsumerCount == 7);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            CountPassiveDeclares(factory.LastConnection!));
+    }
+
+    [Fact]
+    public async Task Missing_early_provider_queues_do_not_poison_later_eligible_probes()
+    {
+        var time = new FakeTimeProvider();
+        var factory = new FakeRabbitMqConnectionFactory();
+        SeedConsumers(factory, ("Giganews", 100u), ("Eweka", 50u));
+        await using var rabbit = CreateRabbitMqService(factory);
+        await rabbit.StartAsync(CancellationToken.None);
+        foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
+        {
+            if (definition.Provider is "Giganews" or "Eweka")
+            {
+                continue;
+            }
+
+            factory.LastConnection!.PassiveDeclareNotFoundQueues.Add(definition.QueueName);
+        }
+
+        await using var availability = new BackfillConsumerAvailabilityService(
+            rabbit,
+            NullLogger.Instance,
+            time);
+
+        var eligible = availability.GetEligibleBackbones();
+
+        Assert.Equal(2, eligible.Count);
+        Assert.Contains(eligible, static b => b.Backbone == "Giganews" && b.ConsumerCount == 100);
+        Assert.Contains(eligible, static b => b.Backbone == "Eweka" && b.ConsumerCount == 50);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            factory.LastConnection!.TopologyChannels.Count);
+        Assert.Equal(
+            BackfillArticleRetrievalTopology.Definitions.Count,
+            CountPassiveDeclares(factory.LastConnection));
     }
 
     private static void SeedConsumers(FakeRabbitMqConnectionFactory factory, params (string Backbone, uint Count)[] counts)

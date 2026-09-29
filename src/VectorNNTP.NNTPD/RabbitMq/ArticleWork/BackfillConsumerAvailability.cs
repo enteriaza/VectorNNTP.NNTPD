@@ -9,6 +9,10 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// Refreshes on a fixed interval rather than per selection when the snapshot is still
 /// fresh. When a refresh is due, selection waits for that probe so the first lookup after
 /// start (or after the interval) does not observe an empty snapshot spuriously.
+/// A missing provider queue (passive declare failure) means that backbone is not eligible;
+/// it is not an NNTPD topology startup failure. Queues with <c>ConsumerCount == 0</c> are
+/// likewise ineligible. Each queue is probed on its own topology channel so a broker
+/// channel closure after <c>NOT_FOUND</c> cannot skip later provider probes.
 /// </remarks>
 internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAvailability, IAsyncDisposable
 {
@@ -108,15 +112,19 @@ internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAva
 
         try
         {
-            await using var channel = await handle.Connection
-                .CreateTopologyChannelAsync(cancellationToken)
-                .ConfigureAwait(false);
             var builder = ImmutableArray.CreateBuilder<BackfillEligibleBackbone>();
             foreach (var definition in BackfillArticleRetrievalTopology.Definitions)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // One channel per queue: RabbitMQ closes the channel on passive-declare
+                // NOT_FOUND, and a shared channel would poison later provider probes.
+                IRabbitMqTopologyChannel? channel = null;
                 try
                 {
+                    channel = await handle.Connection
+                        .CreateTopologyChannelAsync(cancellationToken)
+                        .ConfigureAwait(false);
                     var ok = await channel.QueueDeclarePassiveAsync(definition.QueueName, cancellationToken)
                         .ConfigureAwait(false);
                     var consumers = checked((int)ok.ConsumerCount);
@@ -136,6 +144,13 @@ internal sealed class BackfillConsumerAvailabilityService : IBackfillConsumerAva
                         _logger,
                         ex,
                         definition.QueueName);
+                }
+                finally
+                {
+                    if (channel is not null)
+                    {
+                        await channel.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
             }
 

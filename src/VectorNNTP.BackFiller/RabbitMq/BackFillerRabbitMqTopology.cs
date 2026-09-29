@@ -1,13 +1,13 @@
 namespace VectorNNTP.BackFiller.RabbitMq;
 
 /// <summary>
-/// Canonical <c>backfiller.*</c> topology names consumed by later Article Work.
+/// Canonical <c>backfiller.*</c> topology names consumed by Article Work.
 /// </summary>
 /// <remarks>
-/// Locked NNTPD already declares these durable fanout exchanges and classic queues.
-/// This type does not declare, bind, or delete broker entities. Legacy <c>grabbers.*</c>
-/// names are out of scope. <c>backfiller.storage</c> is NNTPD-internal and is not a
-/// BackFiller consume target.
+/// BackFiller declares durable fanout exchanges and classic queues for each backbone that
+/// becomes usable. This type does not declare, bind, or delete broker entities.
+/// <c>backfiller.storage</c> is NNTPD-internal and is not a BackFiller consume target.
+/// Legacy <c>grabbers.*</c> names are out of scope.
 /// </remarks>
 public static class BackFillerRabbitMqTopology
 {

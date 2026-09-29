@@ -119,6 +119,12 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
 
     public Exception? CreatePublishChannelException { get; set; }
 
+    /// <summary>
+    /// When set, the next channel created via <see cref="CreateChannelAsync"/> receives this
+    /// as <see cref="FakeBackFillerRabbitMqChannel.QueueDeclareException"/> (once).
+    /// </summary>
+    public Exception? NextChannelQueueDeclareException { get; set; }
+
     public TaskCompletionSource? CreatePublishChannelStarted { get; set; }
 
     public TaskCompletionSource? BlockCreatePublishChannel { get; set; }
@@ -140,6 +146,12 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
         }
 
         var channel = new FakeBackFillerRabbitMqChannel(generation);
+        if (NextChannelQueueDeclareException is not null)
+        {
+            channel.QueueDeclareException = NextChannelQueueDeclareException;
+            NextChannelQueueDeclareException = null;
+        }
+
         Channels.Add(channel);
         return Task.FromResult<IBackFillerRabbitMqChannel>(channel);
     }
@@ -221,6 +233,18 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
 
     public List<FakeRabbitMqSettlement> Settlements { get; } = [];
 
+    public List<(string Name, string Type, bool Durable, bool AutoDelete)> ExchangeDeclarations { get; } = [];
+
+    public List<(string Name, bool Durable, bool Exclusive, bool AutoDelete, IReadOnlyDictionary<string, object?>? Arguments)> QueueDeclarations { get; } = [];
+
+    public List<(string Queue, string Exchange, string RoutingKey)> BindingDeclarations { get; } = [];
+
+    public Exception? ExchangeDeclareException { get; set; }
+
+    public Exception? QueueDeclareException { get; set; }
+
+    public Exception? QueueBindException { get; set; }
+
     public Exception? ConsumeException { get; set; }
 
     public Exception? AckException { get; set; }
@@ -230,6 +254,65 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
     public TaskCompletionSource? AckStarted { get; set; }
 
     public TaskCompletionSource? AckGate { get; set; }
+
+    public Task ExchangeDeclareAsync(
+        string exchange,
+        string type,
+        bool durable,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ExchangeDeclareException is not null)
+        {
+            throw ExchangeDeclareException;
+        }
+
+        ExchangeDeclarations.Add((exchange, type, durable, autoDelete));
+        return Task.CompletedTask;
+    }
+
+    public Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueueDeclareException is not null)
+        {
+            throw QueueDeclareException;
+        }
+
+        QueueDeclarations.Add((queue, durable, exclusive, autoDelete, arguments));
+        return Task.CompletedTask;
+    }
+
+    public Task QueueBindAsync(
+        string queue,
+        string exchange,
+        string routingKey,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
+        ArgumentNullException.ThrowIfNull(routingKey);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueueBindException is not null)
+        {
+            throw QueueBindException;
+        }
+
+        BindingDeclarations.Add((queue, exchange, routingKey));
+        return Task.CompletedTask;
+    }
 
     public Task<string> BasicConsumeAsync(
         string queue,

@@ -92,7 +92,7 @@ public sealed class RabbitMqTopologyServiceTests
     {
         var factory = new FakeRabbitMqConnectionFactory
         {
-            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'backfiller.abavia'"),
+            QueueDeclareException = new InvalidOperationException("PRECONDITION_FAILED - inequivalent arg 'x-queue-type' for queue 'backfiller.storage'"),
         };
         await using var rabbit = CreateRabbitMqService(factory);
         var topology = new RabbitMqTopologyService(rabbit, NullLogger<RabbitMqTopologyService>.Instance);
@@ -181,14 +181,13 @@ public sealed class RabbitMqTopologyServiceTests
     private static void AssertDeclaredTopology(FakeRabbitMqConnection connection, int expectedPasses)
     {
         var definitions = ArticleRetrievalTopology.Required;
-        Assert.Equal(13, definitions.Count);
-        Assert.Equal(13 * expectedPasses, connection.ExchangeDeclarations.Count);
-        Assert.Equal(14 * expectedPasses, connection.QueueDeclarations.Count);
-        Assert.Equal(13 * expectedPasses, connection.BindingDeclarations.Count);
-        Assert.Equal("backfiller.abavia", definitions[0].ExchangeName);
-        Assert.Equal("backfiller.storage", definitions[^1].ExchangeName);
-        Assert.Equal("backfiller.storage", definitions[^1].QueueName);
-        Assert.Equal("backfiller.storage", definitions[^1].RoutingKey);
+        _ = Assert.Single(definitions);
+        Assert.Equal(1 * expectedPasses, connection.ExchangeDeclarations.Count);
+        Assert.Equal(2 * expectedPasses, connection.QueueDeclarations.Count);
+        Assert.Equal(1 * expectedPasses, connection.BindingDeclarations.Count);
+        Assert.Equal("backfiller.storage", definitions[0].ExchangeName);
+        Assert.Equal("backfiller.storage", definitions[0].QueueName);
+        Assert.Equal("backfiller.storage", definitions[0].RoutingKey);
         Assert.All(
             definitions,
             static definition =>
@@ -240,6 +239,13 @@ public sealed class RabbitMqTopologyServiceTests
                 connection.ExchangeDeclarations.Skip(endpointOffset).Take(definitions.Count),
                 static exchange => exchange.Name == OverviewDbTopology.QueueName);
         }
+
+        Assert.DoesNotContain(
+            connection.ExchangeDeclarations,
+            static exchange => exchange.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
+        Assert.DoesNotContain(
+            connection.QueueDeclarations,
+            static queue => queue.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
     }
 
     private static void AssertClassicQueueArguments(

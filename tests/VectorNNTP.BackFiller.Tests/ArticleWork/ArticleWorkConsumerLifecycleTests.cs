@@ -127,10 +127,17 @@ public sealed class ArticleWorkConsumerLifecycleTests
         Assert.Equal(new[] { 1, 2 }, consumer.Sessions.Select(static session => session.ConnectionNumber).OrderBy(static n => n));
         Assert.All(consumer.Sessions, static session => Assert.Equal(ArticleWorkConsumerState.Running, session.State));
         Assert.All(consumer.Sessions, static session => Assert.Equal("Giganews", session.Backbone));
-        Assert.Equal(2, factory.LastConnection!.Channels.Count);
+        Assert.Equal(3, factory.LastConnection!.Channels.Count);
+        var topologyChannel = factory.LastConnection.Channels[0];
+        Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.ExchangeDeclarations).Name);
+        Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.QueueDeclarations).Name);
+        Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Durable);
+        Assert.False(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.ContainsKey("x-queue-type"));
+        Assert.Equal(1, topologyChannel.DisposeCount);
+        Assert.Equal(0, topologyChannel.ConsumeCount);
         Assert.Equal(1, factory.ConnectCount);
         Assert.All(
-            factory.LastConnection.Channels,
+            factory.LastConnection.Channels.Skip(1),
             static channel => Assert.Equal("backfiller.giganews", channel.LastQueue));
 
         await consumer.DisposeAsync();

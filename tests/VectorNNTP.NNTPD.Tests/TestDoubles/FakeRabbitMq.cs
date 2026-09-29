@@ -184,6 +184,15 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// </summary>
     public Dictionary<string, uint> PassiveConsumerCounts { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>When set, <see cref="IRabbitMqTopologyChannel.QueueDeclarePassiveAsync"/> throws on new topology channels.</summary>
+    public Exception? QueueDeclarePassiveException { get; set; }
+
+    /// <summary>
+    /// Queue names for which passive declare throws <c>NOT_FOUND</c> on each new topology channel
+    /// (simulates missing provider queues under BackFiller-owned topology).
+    /// </summary>
+    public HashSet<string> PassiveDeclareNotFoundQueues { get; } = new(StringComparer.Ordinal);
+
     /// <inheritdoc />
     public Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
     {
@@ -203,10 +212,16 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
             ExchangeDeclareException = ExchangeDeclareException,
             QueueDeclareException = QueueDeclareException,
             QueueBindException = QueueBindException,
+            QueueDeclarePassiveException = QueueDeclarePassiveException,
         };
         foreach (var pair in PassiveConsumerCounts)
         {
             channel.PassiveConsumerCounts[pair.Key] = pair.Value;
+        }
+
+        foreach (var queue in PassiveDeclareNotFoundQueues)
+        {
+            channel.PassiveDeclareNotFoundQueues.Add(queue);
         }
 
         TopologyChannels.Add(channel);
@@ -314,6 +329,9 @@ internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
     /// <summary>When set, <see cref="QueueDeclarePassiveAsync"/> throws this exception.</summary>
     public Exception? QueueDeclarePassiveException { get; set; }
 
+    /// <summary>Queues that throw a broker-style NOT_FOUND on passive declare.</summary>
+    public HashSet<string> PassiveDeclareNotFoundQueues { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Number of passive queue declares performed on this channel.</summary>
     public int PassiveDeclareCount { get; private set; }
 
@@ -372,13 +390,18 @@ internal sealed class FakeRabbitMqTopologyChannel : IRabbitMqTopologyChannel
     public Task<RabbitMqQueueStats> QueueDeclarePassiveAsync(string queue, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        PassiveDeclareCount++;
+        PassiveDeclareQueues.Add(queue);
         if (QueueDeclarePassiveException is not null)
         {
             throw QueueDeclarePassiveException;
         }
 
-        PassiveDeclareCount++;
-        PassiveDeclareQueues.Add(queue);
+        if (PassiveDeclareNotFoundQueues.Contains(queue))
+        {
+            throw new InvalidOperationException($"NOT_FOUND - no queue '{queue}' in vhost '/'");
+        }
+
         PassiveConsumerCounts.TryGetValue(queue, out var consumers);
         return Task.FromResult(new RabbitMqQueueStats(MessageCount: 0, ConsumerCount: consumers));
     }

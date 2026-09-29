@@ -132,4 +132,20 @@ internal static partial class ArticleWorkLogMessages
         Level = LogLevel.Information,
         Message = "Article Work consumer reconcile completed sessions={SessionCount}")]
     public static partial void ConsumerReconcileCompleted(ILogger logger, int SessionCount);
+
+    [LoggerMessage(
+        EventId = 5319,
+        Level = LogLevel.Information,
+        Message = "Article Work provider topology declared backbone={Backbone} queue={Queue}")]
+    public static partial void ProviderTopologyDeclared(ILogger logger, string Backbone, string Queue);
+
+    [LoggerMessage(
+        EventId = 5320,
+        Level = LogLevel.Error,
+        Message = "Article Work provider topology declaration failed backbone={Backbone} queue={Queue}: {Reason}")]
+    public static partial void ProviderTopologyDeclareFailed(
+        ILogger logger,
+        string Backbone,
+        string Queue,
+        string Reason);
 }

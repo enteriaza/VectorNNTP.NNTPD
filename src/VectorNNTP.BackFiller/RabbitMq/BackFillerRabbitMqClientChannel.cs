@@ -31,6 +31,67 @@ internal sealed class BackFillerRabbitMqClientChannel : IBackFillerRabbitMqChann
     public bool IsOpen => _channel.IsOpen;
 
     /// <inheritdoc />
+    public Task ExchangeDeclareAsync(
+        string exchange,
+        string type,
+        bool durable,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        return _channel.ExchangeDeclareAsync(
+            exchange,
+            type,
+            durable,
+            autoDelete,
+            ToMutable(arguments),
+            cancellationToken: cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        _ = await _channel.QueueDeclareAsync(
+            queue,
+            durable,
+            exclusive,
+            autoDelete,
+            ToMutable(arguments),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public Task QueueBindAsync(
+        string queue,
+        string exchange,
+        string routingKey,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exchange);
+        ArgumentNullException.ThrowIfNull(routingKey);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        return _channel.QueueBindAsync(
+            queue,
+            exchange,
+            routingKey,
+            ToMutable(arguments),
+            cancellationToken: cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<string> BasicConsumeAsync(
         string queue,
         ushort prefetchCount,
@@ -146,5 +207,15 @@ internal sealed class BackFillerRabbitMqClientChannel : IBackFillerRabbitMqChann
             ReadOnlyMemory<byte> memory => Encoding.UTF8.GetString(memory.Span),
             _ => null,
         };
+    }
+
+    private static IDictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+        {
+            return null;
+        }
+
+        return new Dictionary<string, object?>(arguments, StringComparer.Ordinal);
     }
 }

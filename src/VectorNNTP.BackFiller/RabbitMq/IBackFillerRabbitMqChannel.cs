@@ -17,9 +17,43 @@ public interface IBackFillerRabbitMqChannel : IAsyncDisposable
     bool IsOpen { get; }
 
     /// <summary>
+    /// Declares an exchange. Idempotent for compatible existing entities; incompatible
+    /// existing entities fail closed (never deleted or mutated).
+    /// </summary>
+    Task ExchangeDeclareAsync(
+        string exchange,
+        string type,
+        bool durable,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Declares a queue. Idempotent for compatible existing entities; incompatible
+    /// existing entities fail closed (never deleted or mutated).
+    /// </summary>
+    Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken);
+
+    /// <summary>Binds <paramref name="queue"/> to <paramref name="exchange"/>.</summary>
+    Task QueueBindAsync(
+        string queue,
+        string exchange,
+        string routingKey,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Starts a manual-ack consumer on <paramref name="queue"/> with the given prefetch.
     /// </summary>
-    /// <param name="queue">Existing <c>backfiller.*</c> queue. Must not be declared here.</param>
+    /// <param name="queue">
+    /// <c>backfiller.*</c> queue previously declared for an active backbone.
+    /// </param>
     /// <param name="prefetchCount">Per-channel prefetch. Phase 3 uses 1 unless configured.</param>
     /// <param name="onDelivery">Invoked for each delivery. The callback must settle or the session must retire.</param>
     /// <param name="cancellationToken">Token used to cancel consumer start.</param>

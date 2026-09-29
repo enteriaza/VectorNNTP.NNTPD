@@ -79,15 +79,15 @@ internal static class RabbitMqArticleRetrievalEndpoints
 /// Complete article-retrieval topology declared by <see cref="RabbitMqTopologyService"/>.
 /// </summary>
 /// <remarks>
-/// Twelve BackFiller <c>backfiller.*</c> provider endpoints plus one internal
-/// <c>backfiller.storage</c> endpoint. Storage is not a BackFiller provider.
+/// NNTPD owns only the internal <c>backfiller.storage</c> endpoint. Per-backbone
+/// <c>backfiller.*</c> provider topology is declared by VectorNNTP.BackFiller when a
+/// backbone becomes usable.
 /// </remarks>
 internal static class ArticleRetrievalTopology
 {
-    /// <summary>Required endpoints in declaration order: 12 BackFiller, then storage.</summary>
+    /// <summary>Required NNTPD-owned article-retrieval endpoints (storage only).</summary>
     internal static IReadOnlyList<RabbitMqArticleRetrievalEndpoint> Required { get; } =
         [
-            ..BackfillArticleRetrievalTopology.Definitions.Select(static definition => definition.ToEndpoint()),
             StorageArticleRetrievalTopology.Definition,
         ];
 }

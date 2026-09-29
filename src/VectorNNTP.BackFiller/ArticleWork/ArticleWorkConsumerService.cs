@@ -6,7 +6,8 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
 /// Hosts one consume session per desired NNTP slot when that backbone has usable NNTP capacity.
-/// Does not own the RabbitMQ connection and does not consume topology names that lack capacity.
+/// Does not own the RabbitMQ connection. Declares per-backbone ArticleWork topology only for
+/// backbones that currently have usable capacity, immediately before consumers start.
 /// </summary>
 public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposable, IArticleWorkConsumerReconciliation
 {
@@ -321,6 +322,27 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
             await session.DisposeAsync().ConfigureAwait(false);
         }
 
+        if (desired.Count > 0)
+        {
+            var readyBackbones = await EnsureProviderTopologyAsync(
+                    desired.Values.Select(static item => item.Backbone),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (readyBackbones.Count == 0)
+            {
+                ArticleWorkLogMessages.ConsumerReconcileCompleted(_logger, Sessions.Count);
+                return;
+            }
+
+            foreach (var pair in desired.ToArray())
+            {
+                if (!readyBackbones.Contains(pair.Value.Backbone))
+                {
+                    desired.Remove(pair.Key);
+                }
+            }
+        }
+
         try
         {
             foreach (var identity in desired.Values.OrderBy(static item => item.Backbone, StringComparer.OrdinalIgnoreCase)
@@ -373,6 +395,96 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
         }
 
         ArticleWorkLogMessages.ConsumerReconcileCompleted(_logger, Sessions.Count);
+    }
+
+    /// <summary>
+    /// Declares classic durable fanout topology for each backbone that is about to receive
+    /// consumers. Topology is never deleted when capacity later drops to zero.
+    /// </summary>
+    private async Task<HashSet<string>> EnsureProviderTopologyAsync(
+        IEnumerable<string> backbones,
+        CancellationToken cancellationToken)
+    {
+        var ready = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var backbone in backbones)
+        {
+            if (!string.IsNullOrWhiteSpace(backbone))
+            {
+                unique.Add(backbone);
+            }
+        }
+
+        if (unique.Count == 0)
+        {
+            return ready;
+        }
+
+        if (!_connections.TryGetCurrent(out var handle))
+        {
+            foreach (var backbone in unique)
+            {
+                ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
+                    _logger,
+                    backbone,
+                    BackFillerRabbitMqTopology.ComposeProviderEntity(backbone),
+                    "RabbitMQ connection is not ready for topology declaration.");
+            }
+
+            return ready;
+        }
+
+        IBackFillerRabbitMqChannel? channel = null;
+        try
+        {
+            channel = await handle.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var backbone in unique.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var queue = BackFillerRabbitMqTopology.ComposeProviderEntity(backbone);
+                try
+                {
+                    await BackFillerArticleWorkTopology
+                        .DeclareProviderEndpointAsync(channel, backbone, cancellationToken)
+                        .ConfigureAwait(false);
+                    ready.Add(backbone);
+                    ArticleWorkLogMessages.ProviderTopologyDeclared(_logger, backbone, queue);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
+                        _logger,
+                        backbone,
+                        queue,
+                        ex.Message);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            foreach (var backbone in unique)
+            {
+                if (ready.Contains(backbone))
+                {
+                    continue;
+                }
+
+                ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
+                    _logger,
+                    backbone,
+                    BackFillerRabbitMqTopology.ComposeProviderEntity(backbone),
+                    ex.Message);
+            }
+        }
+        finally
+        {
+            if (channel is not null)
+            {
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        return ready;
     }
 
     private Dictionary<string, DesiredConsumer> BuildDesiredSessions()

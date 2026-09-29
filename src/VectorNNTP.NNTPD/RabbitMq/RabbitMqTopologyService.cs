@@ -3,17 +3,18 @@ using VectorNNTP.NNTPD.Core;
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// Declares the required article-retrieval exchanges, classic durable queues, and bindings.
+/// Declares NNTPD-owned RabbitMQ topology: internal storage article-retrieval and OverviewDB.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This service owns application topology declaration only: the twelve BackFiller
-/// <c>backfiller.*</c> provider endpoints, the internal <c>backfiller.storage</c>
-/// endpoint, and the one-way OverviewDB ingest queue <c>overviewdb.queue</c>.
-/// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
-/// topology service obtains the current generation through
-/// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel
-/// for the startup pass.
+/// This service owns NNTPD-specific topology only: the internal <c>backfiller.storage</c>
+/// endpoint and the one-way OverviewDB ingest queue <c>overviewdb.queue</c>. Per-backbone
+/// <c>backfiller.*</c> provider exchanges and queues are declared by VectorNNTP.BackFiller
+/// when a backbone becomes usable. Article-work RPC reply queues are owned by
+/// <c>ArticleWorkRpcService</c>. <see cref="RabbitMqService"/> remains the sole connection
+/// lifecycle owner. The topology service obtains the current generation through
+/// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel for the
+/// startup pass.
 /// </para>
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
@@ -81,8 +82,8 @@ public sealed class RabbitMqTopologyService : IApplicationService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Declares the twelve BackFiller endpoints, the internal <c>backfiller.storage</c>
-    /// endpoint, and the OverviewDB <c>overviewdb.queue</c> classic queue.
+    /// Declares the internal <c>backfiller.storage</c> endpoint and the OverviewDB
+    /// <c>overviewdb.queue</c> classic queue.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     /// <exception cref="InvalidOperationException">

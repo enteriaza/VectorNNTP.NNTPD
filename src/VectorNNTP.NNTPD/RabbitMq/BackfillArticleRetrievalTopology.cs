@@ -56,10 +56,11 @@ internal sealed record BackfillArticleRetrievalTopologyDefinition(
 /// and routing key.
 /// </para>
 /// <para>
-/// Every queue is declared as a RabbitMQ classic durable queue (no <c>x-queue-type</c>).
-/// Quorum may return later as a topology-only change after the broker is upgraded.
-/// NNTPD does not consume these queues; it publishes sequential ArticleWork RPC requests
-/// onto selected provider queues.
+/// Every queue name matches the classic durable fanout shape BackFiller declares when a
+/// backbone becomes usable (no <c>x-queue-type</c>). Quorum may return later as a
+/// topology-only change after the broker is upgraded. NNTPD does not declare or consume
+/// these queues; it publishes sequential ArticleWork RPC requests onto selected provider
+/// queues that already exist and have active consumers.
 /// </para>
 /// </remarks>
 internal static class BackfillArticleRetrievalTopology

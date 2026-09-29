@@ -30,41 +30,19 @@ public sealed class RabbitMqTopologyNamesTests
     }
 
     [Fact]
-    public void RequiredTopology_HasThirteenNormalizedEndpoints_AndNoGrabbersPrefix()
+    public void RequiredTopology_IsStorageOnly_AndNoGrabbersPrefix()
     {
-        Assert.Equal(13, ArticleRetrievalTopology.Required.Count);
-        Assert.All(
+        var storage = Assert.Single(ArticleRetrievalTopology.Required);
+        Assert.Equal("backfiller.storage", storage.ExchangeName);
+        Assert.Equal("backfiller.storage", storage.QueueName);
+        Assert.Equal("backfiller.storage", storage.RoutingKey);
+        Assert.Equal(storage.ExchangeName, storage.QueueName);
+        Assert.Equal(storage.QueueName, storage.RoutingKey);
+        Assert.Equal(storage.ExchangeName, RabbitMqTopologyNames.Normalize(storage.ExchangeName));
+        Assert.DoesNotContain("storage.requests", storage.ExchangeName, StringComparison.Ordinal);
+        Assert.DoesNotContain("grabbers.", storage.ExchangeName, StringComparison.Ordinal);
+        Assert.DoesNotContain(
             ArticleRetrievalTopology.Required,
-            static endpoint =>
-            {
-                Assert.Equal(endpoint.ExchangeName, endpoint.QueueName);
-                Assert.Equal(endpoint.QueueName, endpoint.RoutingKey);
-                Assert.Equal(endpoint.ExchangeName, RabbitMqTopologyNames.Normalize(endpoint.ExchangeName));
-                Assert.StartsWith("backfiller.", endpoint.ExchangeName, StringComparison.Ordinal);
-                Assert.DoesNotContain("storage.requests", endpoint.ExchangeName, StringComparison.Ordinal);
-                Assert.DoesNotContain("storage.requests", endpoint.QueueName, StringComparison.Ordinal);
-                Assert.DoesNotContain("storage.requests", endpoint.RoutingKey, StringComparison.Ordinal);
-                Assert.DoesNotContain("grabbers.", endpoint.ExchangeName, StringComparison.Ordinal);
-                Assert.DoesNotContain("grabbers.", endpoint.QueueName, StringComparison.Ordinal);
-                Assert.DoesNotContain("grabbers.", endpoint.RoutingKey, StringComparison.Ordinal);
-            });
-
-        Assert.Equal(
-            [
-                "backfiller.abavia",
-                "backfiller.altopia",
-                "backfiller.baseip",
-                "backfiller.eweka",
-                "backfiller.elbracht",
-                "backfiller.giganews",
-                "backfiller.gtt",
-                "backfiller.highwinds",
-                "backfiller.itshosted",
-                "backfiller.novia",
-                "backfiller.uexpress",
-                "backfiller.usenetnode1",
-                "backfiller.storage",
-            ],
-            ArticleRetrievalTopology.Required.Select(static endpoint => endpoint.ExchangeName));
+            static endpoint => endpoint.ExchangeName.StartsWith("backfiller.giganews", StringComparison.Ordinal));
     }
 }
