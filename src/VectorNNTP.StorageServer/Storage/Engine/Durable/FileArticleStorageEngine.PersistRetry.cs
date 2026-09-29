@@ -10,11 +10,13 @@ public sealed partial class FileArticleStorageEngine
     private static readonly TimeSpan PersistRetryMaxDelay = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Conservatively treats only <see cref="IOException"/> as retryable. Logical fail-closed
-    /// outcomes (<see cref="InvalidOperationException"/> for unusable PhysicalWritten, journal
-    /// conflicts, index conflicts) are not requeued. ENOSPC is not classified separately.
+    /// Conservatively treats <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>
+    /// as retryable (transient filesystem conditions). Logical fail-closed outcomes
+    /// (<see cref="InvalidOperationException"/> for unusable/rejected PhysicalWritten, journal
+    /// conflicts handled elsewhere, catalogue/integrity failures) are not requeued.
     /// </summary>
-    private static bool IsRetryablePersistFailure(Exception ex) => ex is IOException;
+    private static bool IsRetryablePersistFailure(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException;
 
     private void EnqueuePersistWorkUnlocked(ulong sequence)
     {

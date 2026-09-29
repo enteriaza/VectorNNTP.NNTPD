@@ -48,11 +48,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// </para>
 /// <para>
 /// Phase 5F.1a: <c>_pendingSequences</c> is a transient execution queue over durable incomplete
-/// journal work. Retryable persist failures (conservatively <see cref="IOException"/>) requeue
-/// with backoff without releasing article capacity reservations. Non-retryable fail-closed
-/// outcomes (e.g. unusable PhysicalWritten) are not requeued. After <see cref="RecoverAsync"/>,
-/// any still-incomplete sequences are re-linked into the pending queue when background persist
-/// is enabled.
+/// journal work. Retryable persist failures (<see cref="IOException"/>,
+/// <see cref="UnauthorizedAccessException"/>) requeue with backoff without releasing article
+/// capacity reservations. Non-retryable fail-closed outcomes (e.g. unusable PhysicalWritten,
+/// PhysicalWritten rejected, catalogue/integrity failures) are not requeued. After
+/// <see cref="RecoverAsync"/>, any still-incomplete sequences are re-linked into the pending
+/// queue when background persist is enabled.
 /// </para>
 /// </remarks>
 public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
@@ -212,6 +213,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     internal PersistFaultPoint TestFaultPoint { get; set; }
 
     /// <summary>
+    /// Exception type thrown by <see cref="TestFaultPoint"/> (default <see cref="IOException"/>).
+    /// Tests only.
+    /// </summary>
+    internal PersistFaultExceptionKind TestPersistFaultExceptionKind { get; set; }
+
+    /// <summary>
     /// When set, overrides computed persist-retry backoff (use <see cref="TimeSpan.Zero"/> to
     /// avoid wall-clock delays in tests). Tests only.
     /// </summary>
@@ -221,10 +228,39 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     internal long PersistRetryScheduledCount => Volatile.Read(ref _persistRetryScheduledCount);
 
     /// <summary>
+    /// Invoked after Accept-only SATA append and before <c>AppendPhysicalWrittenAsync</c>.
+    /// Receives the sequence and destination location. Tests only; cleared after invoke.
+    /// </summary>
+    internal Action<ulong, StoredArticleLocation>? TestHookAfterSataBeforePhysicalWritten { get; set; }
+
+    /// <summary>
+    /// Optional one-shot rewrite of the Accept-only SATA location before PhysicalWritten
+    /// (tests only; cleared after invoke). Used to force <see cref="JournalAppendOutcome.Rejected"/>.
+    /// </summary>
+    internal Func<StoredArticleLocation, StoredArticleLocation>? TestRewritePhysicalLocationAfterAppend
+    {
+        get;
+        set;
+    }
+
+    /// <summary>
     /// When true, the next <see cref="TryEvict"/> / <see cref="TryInvalidate"/> on a Present
     /// article returns false before durable <c>TrySetState</c> (tests only; auto-cleared).
     /// </summary>
     internal bool TestFailNextLogicalDeath { get; set; }
+
+    /// <summary>Exception kind for <see cref="TestFaultPoint"/> (tests).</summary>
+    internal enum PersistFaultExceptionKind : byte
+    {
+        /// <summary>Throw <see cref="IOException"/> (default; retryable).</summary>
+        IoException = 0,
+
+        /// <summary>Throw <see cref="UnauthorizedAccessException"/> (retryable after 5F.1c).</summary>
+        UnauthorizedAccess = 1,
+
+        /// <summary>Throw <see cref="InvalidOperationException"/> (non-retryable).</summary>
+        InvalidOperation = 2,
+    }
 
     /// <summary>
     /// Opens journal, segment store, and index under <paramref name="options"/> and starts
@@ -774,20 +810,75 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             accept.ArtId.ToString() ?? string.Empty);
         var location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
         ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, accept.Sequence);
-        var pw = new JournalPhysicalWrittenRecord(1, accept.Sequence, location);
-        ThrowIfTestFault(PersistFaultPoint.BeforePhysicalWritten, accept.Sequence);
-        var pwOutcome = await _journal.AppendPhysicalWrittenAsync(pw, cancellationToken).ConfigureAwait(false);
-        if (pwOutcome == JournalAppendOutcome.Conflict)
+
+        var rewrite = TestRewritePhysicalLocationAfterAppend;
+        TestRewritePhysicalLocationAfterAppend = null;
+        if (rewrite is not null)
         {
-            throw new InvalidOperationException(
-                $"PhysicalWritten conflict for sequence {accept.Sequence} during recovery.");
+            location = rewrite(location);
         }
 
-        // Physical extent is durable; process-local reservation may release (idempotent after restart).
-        ReleaseCapacityReservation(accept.Sequence);
+        var afterSataHook = TestHookAfterSataBeforePhysicalWritten;
+        TestHookAfterSataBeforePhysicalWritten = null;
+        afterSataHook?.Invoke(accept.Sequence, location);
 
-        ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
-        await CompleteFromPhysicalWrittenAsync(accept, pw, cancellationToken).ConfigureAwait(false);
+        var pwCandidate = new JournalPhysicalWrittenRecord(1, accept.Sequence, location);
+        ThrowIfTestFault(PersistFaultPoint.BeforePhysicalWritten, accept.Sequence);
+        var pwOutcome = await _journal
+            .AppendPhysicalWrittenAsync(pwCandidate, cancellationToken)
+            .ConfigureAwait(false);
+
+        switch (pwOutcome)
+        {
+            case JournalAppendOutcome.Applied:
+            case JournalAppendOutcome.IdempotentNoOp:
+                // Durable PW owns physical capacity; release before index work.
+                ReleaseCapacityReservation(accept.Sequence);
+                ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
+                await CompleteFromPhysicalWrittenAsync(accept, pwCandidate, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+
+            case JournalAppendOutcome.Conflict:
+                // Existing durable PW at a different location — never supersede; complete via it.
+                if (!TryGetDurablePhysicalWritten(accept.Sequence, out var existingPw))
+                {
+                    throw new InvalidOperationException(
+                        $"PhysicalWritten conflict for sequence {accept.Sequence} " +
+                        "but no durable PhysicalWritten was found.");
+                }
+
+                ReleaseCapacityReservation(accept.Sequence);
+                await CompleteFromPhysicalWrittenAsync(accept, existingPw, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+
+            case JournalAppendOutcome.Rejected:
+                // Unknown sequence or location length < ArtSize — not PhysicalWritten.
+                // Do not release reservation; do not Present/IndexCommitted.
+                throw new InvalidOperationException(
+                    $"PhysicalWritten rejected for sequence {accept.Sequence} " +
+                    "(prerequisite missing or location length below ArtSize).");
+
+            default:
+                throw new InvalidOperationException(
+                    $"Unexpected PhysicalWritten outcome {pwOutcome} for sequence {accept.Sequence}.");
+        }
+    }
+
+    private bool TryGetDurablePhysicalWritten(ulong sequence, out JournalPhysicalWrittenRecord written)
+    {
+        foreach (var item in _journal.EnumerateIncomplete())
+        {
+            if (item.Accept.Sequence == sequence && item.PhysicalWritten is { } pw)
+            {
+                written = pw;
+                return true;
+            }
+        }
+
+        written = default;
+        return false;
     }
 
     private void ReleaseCapacityReservation(ulong sequence)
@@ -1125,7 +1216,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
 
         TestFaultPoint = PersistFaultPoint.None;
-        var ex = new IOException($"Injected persist fault at {point} for sequence {sequence}.");
+        var kind = TestPersistFaultExceptionKind;
+        TestPersistFaultExceptionKind = PersistFaultExceptionKind.IoException;
+        Exception ex = kind switch
+        {
+            PersistFaultExceptionKind.UnauthorizedAccess =>
+                new UnauthorizedAccessException($"Injected persist fault at {point} for sequence {sequence}."),
+            PersistFaultExceptionKind.InvalidOperation =>
+                new InvalidOperationException($"Injected persist fault at {point} for sequence {sequence}."),
+            _ => new IOException($"Injected persist fault at {point} for sequence {sequence}."),
+        };
         FileArticleStorageEngineLogMessages.PersistStageFailed(_logger, sequence, point.ToString(), ex);
         throw ex;
     }
