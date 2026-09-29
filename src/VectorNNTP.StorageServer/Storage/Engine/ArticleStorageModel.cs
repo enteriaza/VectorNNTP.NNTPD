@@ -234,6 +234,52 @@ public readonly record struct ArticleCompactionResult(
     bool CompactionCommittedAppended,
     string? Reason = null);
 
+/// <summary>
+/// Outcome of durable segment retirement after CompactionCommitted
+/// (<c>RetireCompactedSegmentAsync</c>).
+/// </summary>
+public enum ArticleSegmentRetirementOutcome : byte
+{
+    /// <summary>CompactionRetired is durable and catalogue/file lifecycle is Retired.</summary>
+    Retired = 1,
+
+    /// <summary>Already CompactionRetired + catalogue Retired (idempotent).</summary>
+    IdempotentNoOp = 2,
+
+    /// <summary>Unknown CompactionId.</summary>
+    RejectedUnknownCompaction = 3,
+
+    /// <summary>CompactionBegin present but CompactionCommitted missing.</summary>
+    RejectedNotCommitted = 4,
+
+    /// <summary>Present ArticleIndex entries still reference the source segment.</summary>
+    RejectedPresentRemain = 5,
+
+    /// <summary>Source is Active or otherwise not Closed for first-time retirement.</summary>
+    RejectedSourceNotClosed = 6,
+
+    /// <summary>Source missing from the catalogue.</summary>
+    RejectedSourceMissing = 7,
+
+    /// <summary>Journal/catalogue conflict or protocol failure.</summary>
+    Failed = 8,
+}
+
+/// <summary>Result of <c>FileArticleStorageEngine.RetireCompactedSegmentAsync</c>.</summary>
+/// <param name="Outcome">Retirement outcome.</param>
+/// <param name="CompactionId">Compaction identity.</param>
+/// <param name="SourceSegmentId">Source segment from CompactionBegin (default when unknown).</param>
+/// <param name="SourceGeneration">Durable Begin generation (0 when unknown).</param>
+/// <param name="CompactionRetiredAppended">True when this call appended CompactionRetired.</param>
+/// <param name="Reason">Optional diagnostic reason.</param>
+public readonly record struct ArticleSegmentRetirementResult(
+    ArticleSegmentRetirementOutcome Outcome,
+    ulong CompactionId,
+    SegmentId SourceSegmentId,
+    ulong SourceGeneration,
+    bool CompactionRetiredAppended,
+    string? Reason = null);
+
 /// <summary>Opaque segment identity.</summary>
 /// <param name="Value">Monotonic or generated segment number.</param>
 public readonly record struct SegmentId(ulong Value)

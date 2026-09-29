@@ -101,6 +101,7 @@ public sealed class FileArticleCompactionJournalTests
         using (var journal = FileArticleJournal.Open(dir.Options))
         {
             _ = journal.AppendCompactionBeginAsync(new JournalCompactionBeginRecord(1, 4, new SegmentId(8), 6), CancellationToken.None);
+            _ = journal.AppendCompactionCommittedAsync(new JournalCompactionCommittedRecord(1, 4), CancellationToken.None);
             Assert.Equal(JournalAppendOutcome.Applied, await journal.AppendCompactionRetiredAsync(
                     new JournalCompactionRetiredRecord(1, 4, new SegmentId(8), 6),
                     CancellationToken.None));

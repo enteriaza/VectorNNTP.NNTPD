@@ -58,6 +58,21 @@ public sealed partial class FileArticleJournal
         }
     }
 
+    /// <summary>
+    /// Enumerates every known compaction including retired (recovery / diagnostics).
+    /// </summary>
+    public IReadOnlyList<CompactionJournalSnapshot> EnumerateCompactions()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _compactions.Values
+                .OrderBy(static s => s.Begin.CompactionId)
+                .Select(static s => s.ToSnapshot())
+                .ToArray();
+        }
+    }
+
     /// <summary>Appends CompactionBegin. Does not affect Accept recoverable bytes.</summary>
     public ValueTask<JournalAppendOutcome> AppendCompactionBeginAsync(
         JournalCompactionBeginRecord record,
@@ -225,6 +240,11 @@ public sealed partial class FileArticleJournal
                 return ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
+            if (!compaction.Committed)
+            {
+                return ValueTask.FromResult(JournalAppendOutcome.Rejected);
+            }
+
             if (compaction.Begin.SourceSegmentId.Value != record.SourceSegmentId.Value
                 || compaction.Begin.SourceGeneration != record.ExpectedGeneration)
             {
@@ -367,6 +387,19 @@ public sealed partial class FileArticleJournal
             }
 
             return;
+        }
+
+        if (!compaction.Committed)
+        {
+            throw new ArticleJournalCorruptException(
+                $"CompactionRetired without CompactionCommitted for CompactionId {record.CompactionId}.");
+        }
+
+        if (compaction.Begin.SourceSegmentId.Value != record.SourceSegmentId.Value
+            || compaction.Begin.SourceGeneration != record.ExpectedGeneration)
+        {
+            throw new ArticleJournalCorruptException(
+                $"CompactionRetired source/generation mismatch for CompactionId {record.CompactionId}.");
         }
 
         compaction.Retired = record;

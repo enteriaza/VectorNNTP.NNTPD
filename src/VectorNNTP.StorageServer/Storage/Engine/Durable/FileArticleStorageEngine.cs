@@ -271,6 +271,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
         var abandonedDestinations = RecoverCompactions();
+        ApplyRetiredCompactionsFromJournal();
         RebuildSegmentAccountingFromIndex();
         foreach (var dest in abandonedDestinations)
         {
