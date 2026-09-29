@@ -8,6 +8,7 @@ namespace VectorNNTP.BackFiller.Retention;
 /// <summary>
 /// In-memory retention authority. One process-wide owner of retained CanonicalV1 article lifetime.
 /// The sole retained byte representation is <see cref="ArticleRecord.ArtData"/>.
+/// Openable RequestIds pin an entry against FIFO capacity reclaim until OPEN, cancel, TTL, or dispose.
 /// </summary>
 public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsyncDisposable
 {
@@ -20,6 +21,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     private readonly ILogger _logger;
     private readonly long _maximumBytes;
     private readonly TimeSpan _ttl;
+    private readonly int _maxOpenableRequestIdsPerArticle;
     private readonly string _fqdn;
     private readonly int _bindPort;
     private long _retainedBytes;
@@ -69,12 +71,20 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             throw new ArgumentOutOfRangeException(nameof(retention), "SweepInterval must be greater than zero.");
         }
 
+        if (retention.MaxOpenableRequestIdsPerArticle is < 1 or > 256)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(retention),
+                "MaxOpenableRequestIdsPerArticle must be between 1 and 256.");
+        }
+
         ArgumentOutOfRangeException.ThrowIfLessThan(bindPort, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(bindPort, 65535);
 
         _maximumBytes = retention.MaximumRetainedPayloadBytes;
         _ttl = retention.RetentionTtl;
         SweepInterval = retention.SweepInterval;
+        _maxOpenableRequestIdsPerArticle = retention.MaxOpenableRequestIdsPerArticle;
         _fqdn = fqdn;
         _bindPort = bindPort;
         _time = time;
@@ -180,8 +190,17 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 }
                 else
                 {
-                    // First-wins: keep the retained ArticleRecord; only refresh the pending RequestId.
-                    AttachPendingRequestLocked(existing, requestId);
+                    // First-wins ArtData: keep the retained ArticleRecord; add RequestId as another
+                    // openable capability. Never revoke an existing RequestId to admit a newer one.
+                    if (!AttachRequestIdLocked(existing, requestId))
+                    {
+                        return RejectLocked(
+                            ArticleRetentionKind.OpenableRequestIdLimitExceeded,
+                            existing.Identity,
+                            artData.Length,
+                            0);
+                    }
+
                     return new ArticleRetentionResult(
                         ArticleRetentionKind.AlreadyPresent,
                         existing.Identity,
@@ -221,7 +240,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             entry.Node = _insertionOrder.AddLast(entry);
             _byMessageId[messageId] = entry;
             _messageIdByArticleId[identity.ArticleIdHex] = messageId;
-            AttachPendingRequestLocked(entry, requestId);
+            AttachRequestIdLocked(entry, requestId);
             AddBytesLocked(artData.Length);
             _physicalCount++;
             ArticleRetentionLogMessages.Retained(_logger, identity.ArticleIdHex, artData.Length, _retainedBytes);
@@ -235,7 +254,10 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     }
 
     /// <inheritdoc />
-    public VatpOpenResult TryOpenTransfer(Guid requestId, ArticleId expectedArticleId)
+    public VatpOpenResult TryOpenTransfer(
+        Guid requestId,
+        ArticleId expectedArticleId,
+        Func<int, bool>? tryReserveOutboundBytes = null)
     {
         if (requestId == Guid.Empty)
         {
@@ -268,12 +290,20 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 return VatpOpenResult.Rejected();
             }
 
+            // Acquire the transfer reader lease before reservation so a failed reservation can
+            // roll back without consuming RequestId. Only this RequestId is detached after both succeed.
             if (!entry.TryAcquire())
             {
                 return VatpOpenResult.Rejected();
             }
 
-            ClearPendingRequestLocked(entry);
+            if (tryReserveOutboundBytes is not null && !tryReserveOutboundBytes(record.ArtSize))
+            {
+                _ = entry.TryRelease();
+                return VatpOpenResult.Rejected();
+            }
+
+            _ = DetachRequestIdLocked(entry, requestId);
             var lease = new VatpTransferLease(
                 record,
                 selectedDate,
@@ -300,8 +330,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 return false;
             }
 
-            ClearPendingRequestLocked(entry);
-            return true;
+            return DetachRequestIdLocked(entry, requestId);
         }
     }
 
@@ -374,18 +403,22 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
     }
 
+    /// <summary>
+    /// Reclaims space for a new admission: TTL-expired entries first, then oldest FIFO
+    /// entries that have no openable RequestIds. Entries with openable Success capabilities
+    /// are skipped so published RequestIds remain OPEN-able until OPEN, cancel, TTL, or shutdown.
+    /// </summary>
     private long ReclaimForAdmissionLocked(int requiredBytes, DateTimeOffset now)
     {
         var released = ExpireEligibleLocked(now);
         while (_retainedBytes + requiredBytes > _maximumBytes)
         {
-            var node = _insertionOrder.First;
-            if (node is null)
+            var candidate = FindOldestFifoReclaimableLocked();
+            if (candidate is null)
             {
                 break;
             }
 
-            var candidate = node.Value;
             UnindexLocked(candidate);
             if (DisposePhysicallyLocked(candidate))
             {
@@ -394,6 +427,23 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
 
         return released;
+    }
+
+    /// <summary>
+    /// Oldest insertion-order entry with zero openable RequestIds (unpinned).
+    /// Entries that still carry Success capabilities are not FIFO-reclaimable.
+    /// </summary>
+    private RetainedEntry? FindOldestFifoReclaimableLocked()
+    {
+        for (var node = _insertionOrder.First; node is not null; node = node.Next)
+        {
+            if (node.Value.OpenableRequestIdCount == 0)
+            {
+                return node.Value;
+            }
+        }
+
+        return null;
     }
 
     private long ExpireEligibleLocked(DateTimeOffset now)
@@ -440,7 +490,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         _byMessageId.Remove(entry.Identity.MessageId);
         _messageIdByArticleId.Remove(entry.Identity.ArticleIdHex);
-        ClearPendingRequestLocked(entry);
+        ClearAllRequestIdsLocked(entry);
         if (entry.Node is not null)
         {
             _insertionOrder.Remove(entry.Node);
@@ -448,22 +498,27 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
     }
 
-    private void AttachPendingRequestLocked(RetainedEntry entry, Guid requestId)
+    /// <summary>
+    /// Adds <paramref name="requestId"/> as an openable capability for <paramref name="entry"/>.
+    /// Idempotent when already attached. Returns <see langword="false"/> when the bound is full.
+    /// </summary>
+    private bool AttachRequestIdLocked(RetainedEntry entry, Guid requestId)
     {
-        if (entry.PendingRequestId is { } prior && prior != requestId)
+        if (!entry.TryAddOpenableRequestId(requestId, _maxOpenableRequestIdsPerArticle))
         {
-            _byRequestId.Remove(prior);
+            return false;
         }
 
-        entry.PendingRequestId = requestId;
         _byRequestId[requestId] = entry;
+        return true;
     }
 
-    private void ClearPendingRequestLocked(RetainedEntry entry)
+    /// <summary>Removes one openable RequestId from the entry and reverse map.</summary>
+    private bool DetachRequestIdLocked(RetainedEntry entry, Guid requestId)
     {
-        if (entry.PendingRequestId is not { } requestId)
+        if (!entry.RemoveOpenableRequestId(requestId))
         {
-            return;
+            return false;
         }
 
         if (_byRequestId.TryGetValue(requestId, out var owner) && ReferenceEquals(owner, entry))
@@ -471,7 +526,19 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             _byRequestId.Remove(requestId);
         }
 
-        entry.PendingRequestId = null;
+        return true;
+    }
+
+    /// <summary>Removes every openable RequestId for an entry (TTL / unindex / dispose).</summary>
+    private void ClearAllRequestIdsLocked(RetainedEntry entry)
+    {
+        foreach (var requestId in entry.TakeAllOpenableRequestIds())
+        {
+            if (_byRequestId.TryGetValue(requestId, out var owner) && ReferenceEquals(owner, entry))
+            {
+                _byRequestId.Remove(requestId);
+            }
+        }
     }
 
     private static bool TryGetOwnedArtData(in ArticleRecord record, out byte[] payload)
@@ -526,6 +593,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     {
         private ArticleRecord? _record;
         private NntpArticleHeaderName? _selectedDateHeaderName;
+        private readonly HashSet<Guid> _openableRequestIds = [];
         private int _readers;
         private int _logicallyRemoved;
         private int _physicallyDisposed;
@@ -563,7 +631,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         internal LinkedListNode<RetainedEntry>? Node { get; set; }
 
-        internal Guid? PendingRequestId { get; set; }
+        internal int OpenableRequestIdCount => _openableRequestIds.Count;
 
         internal ArticleRecord? Record => _record;
 
@@ -572,6 +640,36 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         internal bool IsLogicallyRemoved => Volatile.Read(ref _logicallyRemoved) == 1;
 
         internal bool WasPhysicallyDisposedThisRemoval { get; set; }
+
+        internal bool TryAddOpenableRequestId(Guid requestId, int maximum)
+        {
+            if (_openableRequestIds.Contains(requestId))
+            {
+                return true;
+            }
+
+            if (_openableRequestIds.Count >= maximum)
+            {
+                return false;
+            }
+
+            return _openableRequestIds.Add(requestId);
+        }
+
+        internal bool RemoveOpenableRequestId(Guid requestId) => _openableRequestIds.Remove(requestId);
+
+        internal Guid[] TakeAllOpenableRequestIds()
+        {
+            if (_openableRequestIds.Count == 0)
+            {
+                return [];
+            }
+
+            var ids = new Guid[_openableRequestIds.Count];
+            _openableRequestIds.CopyTo(ids);
+            _openableRequestIds.Clear();
+            return ids;
+        }
 
         internal bool TryAcquire()
         {

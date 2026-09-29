@@ -296,7 +296,8 @@ public sealed class NntpArticleWorkIntegrationTests
             new BackFiller.Configuration.BackFillerArticleRetentionRuntimeOptions(
                 maxBytes,
                 TimeSpan.FromMinutes(1),
-                TimeSpan.FromSeconds(1)),
+                TimeSpan.FromSeconds(1),
+                MaxOpenableRequestIdsPerArticle: 16),
             "backfiller.test",
             1190,
             TimeProvider.System,

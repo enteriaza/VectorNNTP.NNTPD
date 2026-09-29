@@ -487,6 +487,17 @@ Example (no secrets):
 
 Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via `VECTOR__RABBITMQ__USERNAME` and `VECTOR__RABBITMQ__PASSWORD`, or user secrets.
 
+## BackFiller article retention (`BackFiller:ArticleRetention`)
+
+In-memory retention holds CanonicalV1 `ArtData` between ArticleWork Success and VATP OPEN. A published Success RequestId is a hard OPEN capability until OPEN consumes it, cancel, `RetentionTtlSeconds` expiry, or process dispose. FIFO reclaim under `MaximumRetainedPayloadGigabytes` skips entries that still have openable RequestIds; capacity pressure rejects new admissions (`CapacityUnavailable`) instead of invalidating those capabilities. See `docs/vatp.md`.
+
+| Key | Type | Default | Range | Description |
+|-----|------|---------|-------|-------------|
+| `MaximumRetainedPayloadGigabytes` | int | `4` | `1`–80% of physical RAM (and supported ceiling) | Retained ArtData byte budget |
+| `RetentionTtlSeconds` | int | `60` | `1–60` | Maximum entry lifetime from insertion |
+| `MaxOpenableRequestIdsPerArticle` | int | `16` | `1–256` | Bound on concurrent openable Success RequestIds per Message-ID |
+| `SweepIntervalSeconds` | int | `1` | `>0` | TTL sweep cadence |
+
 ## NntpDB (`ConnectionStrings:NntpDB` and `NntpDb`)
 
 **NNTPD owns the database service and lifecycle; MySqlConnector owns physical connection pooling.** There is no application-owned connection pool.

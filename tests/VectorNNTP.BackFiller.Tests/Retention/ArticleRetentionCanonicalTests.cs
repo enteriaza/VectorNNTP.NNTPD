@@ -84,7 +84,7 @@ public sealed class ArticleRetentionCanonicalTests
     }
 
     [Fact]
-    public void Multiple_request_ids_for_same_article_id_follow_already_present_semantics()
+    public void Multiple_request_ids_for_same_article_id_remain_independently_openable()
     {
         var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
         var first = RetentionTestArticles.Create("<reqids@example.test>", "body-a\r\n");
@@ -96,14 +96,15 @@ public sealed class ArticleRetentionCanonicalTests
         Assert.Equal(ArticleRetentionKind.AlreadyPresent, authority.RetainCanonical(
             second.MessageId, second.RequestId, second.Record, second.SelectedDateHeaderName).Kind);
 
-        using (var stale = authority.TryOpenTransfer(first.RequestId, first.Record.ArtId))
+        using (var openA = authority.TryOpenTransfer(first.RequestId, first.Record.ArtId))
         {
-            Assert.Equal(VatpOpenKind.Rejected, stale.Kind);
+            Assert.Equal(VatpOpenKind.Opened, openA.Kind);
+            Assert.True(openA.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
         }
 
-        using var open = authority.TryOpenTransfer(second.RequestId, first.Record.ArtId);
-        Assert.Equal(VatpOpenKind.Opened, open.Kind);
-        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
+        using var openB = authority.TryOpenTransfer(second.RequestId, first.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, openB.Kind);
+        Assert.True(openB.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
     }
 
     [Fact]

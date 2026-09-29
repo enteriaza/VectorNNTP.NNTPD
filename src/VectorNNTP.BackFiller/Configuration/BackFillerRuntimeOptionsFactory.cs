@@ -140,7 +140,8 @@ public static class BackFillerRuntimeOptionsFactory
             ArticleRetention: new BackFillerArticleRetentionRuntimeOptions(
                 checked(retention.MaximumRetainedPayloadGigabytes * BackFillerArticleRetentionOptions.BytesPerGibibyte),
                 TimeSpan.FromSeconds(retention.RetentionTtlSeconds),
-                TimeSpan.FromSeconds(retention.SweepIntervalSeconds)),
+                TimeSpan.FromSeconds(retention.SweepIntervalSeconds),
+                retention.MaxOpenableRequestIdsPerArticle),
             RabbitMq: new BackFillerRabbitMqRuntimeOptions(
                 Hosts: hosts,
                 Port: rabbit.Port ?? 0,

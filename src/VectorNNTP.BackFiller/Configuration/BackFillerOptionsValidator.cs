@@ -230,6 +230,11 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
             failures.Add("BackFiller:ArticleRetention:RetentionTtlSeconds must be between 1 and 60.");
         }
 
+        if (retention.MaxOpenableRequestIdsPerArticle is < 1 or > 256)
+        {
+            failures.Add("BackFiller:ArticleRetention:MaxOpenableRequestIdsPerArticle must be between 1 and 256.");
+        }
+
         if (retention.SweepIntervalSeconds is < 1 or > 60)
         {
             failures.Add("BackFiller:ArticleRetention:SweepIntervalSeconds must be between 1 and 60.");

@@ -205,8 +205,19 @@ semantics; there is no legacy MD5 cache-transfer fallback.
 Canonical articles enter retention via `IArticleRetentionAuthority.RetainCanonical`
 (RequestId + `ArticleRecord`). The sole retained byte representation is
 `ArticleRecord.ArtData`. On AlreadyPresent, the existing record wins (first-wins);
-only the pending RequestId is refreshed. VATP OPEN resolves RequestId, verifies
-ArticleId, acquires a transfer lease, then streams META / DATA / END under
+the new RequestId is added as an additional openable VATP capability and does **not**
+revoke prior RequestIds. Each successful ArticleWork RequestId remains independently
+valid for one VATP OPEN until that RequestId is consumed, cancelled, the retained
+entry reaches `RetentionTtlSeconds`, or the BackFiller process disposes retention.
+FIFO capacity reclaim under `MaximumRetainedPayloadGigabytes` **skips** entries that
+still have openable RequestIds; pressure may reject **new** ArticleWork admissions
+(`CapacityUnavailable`) rather than invalidate already-published Success capabilities.
+TTL remains the maximum lifetime and may expire an entry (clearing remaining RequestIds)
+even while capabilities were still openable. A configured per-article bound
+(`BackFiller:ArticleRetention:MaxOpenableRequestIdsPerArticle`, default 16) rejects
+further AlreadyPresent attachments without removing existing RequestIds or ArtData.
+VATP OPEN resolves RequestId, verifies ArticleId, reserves outbound bytes, consumes
+only that RequestId, acquires a transfer lease, then streams META / DATA / END under
 per-stream WINDOW credit and round-robin DATA scheduling.
 
 ## NNTPD Phase 3 client

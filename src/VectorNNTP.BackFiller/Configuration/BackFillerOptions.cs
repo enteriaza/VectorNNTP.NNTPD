@@ -295,11 +295,24 @@ public sealed class BackFillerArticleRetentionOptions
     /// <summary>Fraction of physical memory allowed for retained payloads.</summary>
     public const double PhysicalMemoryCeilingRatio = 0.80;
 
-    /// <summary>Maximum retained payload capacity in GiB.</summary>
+    /// <summary>
+    /// Maximum retained payload capacity in GiB.
+    /// Under pressure, FIFO reclaim skips entries that still have openable Success RequestIds;
+    /// new admissions may then fail with capacity unavailable instead of invalidating those capabilities.
+    /// </summary>
     public int MaximumRetainedPayloadGigabytes { get; set; } = 4;
 
-    /// <summary>Absolute retention TTL in seconds from insertion.</summary>
+    /// <summary>
+    /// Maximum retention lifetime in seconds from insertion.
+    /// TTL expiry removes the entry and clears remaining openable RequestIds.
+    /// </summary>
     public int RetentionTtlSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Maximum concurrently openable VATP RequestIds attached to one retained Message-ID.
+    /// AlreadyPresent attachments beyond this limit are rejected without revoking existing RequestIds.
+    /// </summary>
+    public int MaxOpenableRequestIdsPerArticle { get; set; } = 16;
 
     /// <summary>Sweep cadence in seconds.</summary>
     public int SweepIntervalSeconds { get; set; } = 1;

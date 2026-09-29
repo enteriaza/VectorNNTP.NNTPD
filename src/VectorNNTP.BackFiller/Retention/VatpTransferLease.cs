@@ -8,12 +8,12 @@ namespace VectorNNTP.BackFiller.Retention;
 /// </summary>
 public enum VatpOpenKind : byte
 {
-    /// <summary>RequestId+ArticleId matched; lease acquired; RequestId consumed.</summary>
+    /// <summary>RequestId+ArticleId matched; lease acquired; that RequestId consumed.</summary>
     Opened = 0,
 
     /// <summary>
-    /// OPEN rejected (unknown/expired/cancelled/consumed/wrong ArticleId).
-    /// Wrong ArticleId does not consume RequestId.
+    /// OPEN rejected (unknown/expired/cancelled/consumed/wrong ArticleId/reservation failed).
+    /// Wrong ArticleId and reservation failure do not consume RequestId.
     /// </summary>
     Rejected = 1,
 }

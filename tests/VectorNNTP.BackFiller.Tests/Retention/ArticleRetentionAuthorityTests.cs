@@ -110,7 +110,7 @@ public sealed class ArticleRetentionAuthorityTests
     }
 
     [Fact]
-    public void Insufficient_remaining_capacity_evicts_oldest_then_admits()
+    public void Insufficient_remaining_capacity_reclaims_unpinned_oldest_then_admits()
     {
         var one = RetentionTestArticles.Create("<one@b>", "11111\r\n");
         var two = RetentionTestArticles.Create("<two@b>", "22222\r\n");
@@ -121,6 +121,9 @@ public sealed class ArticleRetentionAuthorityTests
             "<one@b>", one.RequestId, one.Record, one.SelectedDateHeaderName).Kind);
         Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
             "<two@b>", two.RequestId, two.Record, two.SelectedDateHeaderName).Kind);
+        // Unpin oldest so FIFO reclaim may take it; two stays pinned by its Success RequestId.
+        Assert.True(authority.TryCancelPendingRequest(one.RequestId));
+
         var third = authority.RetainCanonical(
             "<three@b>", three.RequestId, three.Record, three.SelectedDateHeaderName);
         Assert.Equal(ArticleRetentionKind.Retained, third.Kind);
@@ -129,7 +132,35 @@ public sealed class ArticleRetentionAuthorityTests
             Assert.Equal(VatpOpenKind.Rejected, missing.Kind);
         }
 
+        using (var stillOpenable = authority.TryOpenTransfer(two.RequestId, two.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Opened, stillOpenable.Kind);
+        }
+
         Assert.Equal(two.Record.ArtSize + three.Record.ArtSize, authority.RetainedPayloadBytes);
+    }
+
+    [Fact]
+    public void Insufficient_remaining_capacity_with_all_pinned_rejects_without_evicting()
+    {
+        var one = RetentionTestArticles.Create("<one-pin@b>", "11111\r\n");
+        var two = RetentionTestArticles.Create("<two-pin@b>", "22222\r\n");
+        var three = RetentionTestArticles.Create("<three-pin@b>", "333\r\n");
+        var maxBytes = one.Record.ArtSize + two.Record.ArtSize;
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: maxBytes);
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<one-pin@b>", one.RequestId, one.Record, one.SelectedDateHeaderName).Kind);
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<two-pin@b>", two.RequestId, two.Record, two.SelectedDateHeaderName).Kind);
+
+        var rejected = authority.RetainCanonical(
+            "<three-pin@b>", three.RequestId, three.Record, three.SelectedDateHeaderName);
+        Assert.Equal(ArticleRetentionKind.CapacityUnavailable, rejected.Kind);
+        using var openOne = authority.TryOpenTransfer(one.RequestId, one.Record.ArtId);
+        using var openTwo = authority.TryOpenTransfer(two.RequestId, two.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, openOne.Kind);
+        Assert.Equal(VatpOpenKind.Opened, openTwo.Kind);
+        Assert.Equal(one.Record.ArtSize + two.Record.ArtSize, authority.RetainedPayloadBytes);
     }
 
     [Fact]
@@ -265,12 +296,14 @@ public sealed class ArticleRetentionAuthorityTests
         TimeProvider time,
         int maxBytes,
         TimeSpan? ttl = null,
-        TimeSpan? sweep = null) =>
+        TimeSpan? sweep = null,
+        int maxOpenableRequestIdsPerArticle = 16) =>
         new(
             new BackFillerArticleRetentionRuntimeOptions(
                 maxBytes,
                 ttl ?? TimeSpan.FromSeconds(60),
-                sweep ?? TimeSpan.FromSeconds(1)),
+                sweep ?? TimeSpan.FromSeconds(1),
+                maxOpenableRequestIdsPerArticle),
             "backfiller.test",
             1190,
             time,

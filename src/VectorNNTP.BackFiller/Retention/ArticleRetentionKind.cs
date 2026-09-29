@@ -21,7 +21,11 @@ public enum ArticleRetentionKind
     /// <summary>The single ArtData buffer is larger than the entire configured capacity.</summary>
     PayloadExceedsCapacity = 3,
 
-    /// <summary>Remaining capacity is insufficient after TTL reclaim and FIFO pressure eviction.</summary>
+    /// <summary>
+    /// Remaining capacity is insufficient after TTL reclaim and FIFO reclaim of entries with
+    /// no openable RequestIds. Entries that still have openable Success capabilities are not
+    /// FIFO-evicted to make room.
+    /// </summary>
     CapacityUnavailable = 4,
 
     /// <summary>ArtData is empty or otherwise invalid for retention.</summary>
@@ -29,4 +33,10 @@ public enum ArticleRetentionKind
 
     /// <summary>Admission is closed because the authority is shutting down.</summary>
     ShuttingDown = 6,
+
+    /// <summary>
+    /// The per-article openable RequestId bound was reached. Existing RequestIds are preserved;
+    /// the new RequestId is not attached and must not receive ArticleWork Success.
+    /// </summary>
+    OpenableRequestIdLimitExceeded = 7,
 }

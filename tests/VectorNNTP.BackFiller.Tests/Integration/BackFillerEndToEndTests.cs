@@ -187,7 +187,7 @@ public sealed class BackFillerEndToEndTests
     }
 
     [Fact]
-    public async Task Multiple_request_ids_for_same_article_follow_already_present_semantics()
+    public async Task Multiple_request_ids_for_same_article_remain_independently_openable()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
         var first = RetentionTestArticles.Create("<multi-req@example.invalid>", "canonical-one\r\n");
@@ -197,15 +197,58 @@ public sealed class BackFillerEndToEndTests
         Assert.Equal(ArticleRetentionKind.AlreadyPresent, harness.Retention.RetainCanonical(
             second.MessageId, second.RequestId, second.Record, second.SelectedDateHeaderName).Kind);
 
-        using (var stale = harness.Retention.TryOpenTransfer(first.RequestId, first.Record.ArtId))
+        using (var openA = harness.Retention.TryOpenTransfer(first.RequestId, first.Record.ArtId))
         {
-            Assert.Equal(VatpOpenKind.Rejected, stale.Kind);
+            Assert.Equal(VatpOpenKind.Opened, openA.Kind);
+            Assert.True(openA.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
         }
 
-        using var open = harness.Retention.TryOpenTransfer(second.RequestId, first.Record.ArtId);
-        Assert.Equal(VatpOpenKind.Opened, open.Kind);
-        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
+        using var openB = harness.Retention.TryOpenTransfer(second.RequestId, first.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, openB.Kind);
+        Assert.True(openB.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
         Assert.Equal(first.Record.ArtSize, harness.Retention.RetainedPayloadBytes);
+    }
+
+    [Fact]
+    public async Task Published_article_work_success_survives_fifo_capacity_pressure()
+    {
+        await using var probe = await BackFillerPipelineHarness.StartAsync();
+        probe.EnqueueArticle(CanonicalPayload);
+        Assert.Equal(ArticleWorkOutcome.Success, await probe.ProcessCanonicalAsync(new FakeBackFillerRabbitMqChannel(1)));
+        var successBytes = probe.Retention.RetainedPayloadBytes;
+        Assert.True(successBytes > 0);
+        await probe.DisposeAsync();
+
+        var filler = RetentionTestArticles.Create("<fifo-fill@example.invalid>", "shared-body\r\n");
+        var pressure = RetentionTestArticles.Create("<fifo-pres@example.invalid>", "shared-body\r\n");
+        Assert.Equal(filler.Record.ArtSize, pressure.Record.ArtSize);
+
+        await using var harness = await BackFillerPipelineHarness.StartAsync(
+            maxRetainedPayloadBytes: checked((int)(successBytes + filler.Record.ArtSize)));
+        harness.EnqueueArticle(CanonicalPayload);
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+        Assert.Equal(ArticleWorkOutcome.Success, await harness.ProcessCanonicalAsync(channel));
+        Assert.Equal(ArticleRetentionKind.Retained, harness.Handler.LastRetentionKind);
+        Assert.Single(harness.PublishChannel.Publications);
+        Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+
+        Assert.Equal(
+            ArticleRetentionKind.Retained,
+            harness.Retention.RetainCanonical(
+                filler.MessageId, filler.RequestId, filler.Record, filler.SelectedDateHeaderName).Kind);
+        Assert.True(harness.Retention.TryCancelPendingRequest(filler.RequestId));
+
+        Assert.Equal(
+            ArticleRetentionKind.Retained,
+            harness.Retention.RetainCanonical(
+                pressure.MessageId, pressure.RequestId, pressure.Record, pressure.SelectedDateHeaderName).Kind);
+
+        var requestId = Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId);
+        var articleId = harness.Handler.LastRecord!.Value.ArtId;
+        using var open = harness.Retention.TryOpenTransfer(requestId, articleId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(harness.Handler.LastPayload!));
+        Assert.Equal(successBytes + pressure.Record.ArtSize, harness.Retention.RetainedPayloadBytes);
     }
 
     [Fact]

@@ -29,6 +29,22 @@ public sealed class VatpListenerSession : IAsyncDisposable
     private bool _serverHelloSent;
     private CancellationTokenSource? _runCts;
     private int _disposed;
+    private int _terminating;
+
+    /// <summary>Gets the number of active send streams (test observation).</summary>
+    internal int ActiveStreamCount
+    {
+        get
+        {
+            lock (_streamGate)
+            {
+                return _streams.Count;
+            }
+        }
+    }
+
+    /// <summary>Gets reserved outbound/found payload bytes (test observation).</summary>
+    internal long ReservedFoundPayloadBytes => Volatile.Read(ref _reservedFoundPayloadBytes);
 
     /// <summary>Initializes a VATP session over an established transport.</summary>
     public VatpListenerSession(
@@ -65,11 +81,28 @@ public sealed class VatpListenerSession : IAsyncDisposable
         var writer = RunWriterAsync(token);
         try
         {
-            await RunReadLoopAsync(token).ConfigureAwait(false);
+            try
+            {
+                await RunReadLoopAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Session or host termination unblocked the reader / QueueFrameAsync.
+            }
+            catch (ChannelClosedException)
+            {
+                // Outbound completed while a producer awaited capacity.
+            }
         }
         finally
         {
-            _outbound.Writer.TryComplete();
+            // Complete outbound so the writer can drain (e.g. queued FAIL) or exit.
+            // Do not cancel here: cancellation is reserved for half-failure paths that must
+            // unblock a live reader / QueueFrameAsync. Cancelling before drain would drop
+            // protocol responses the peer is still entitled to observe.
+            _ = _outbound.Writer.TryComplete();
+
+            Exception? writerError = null;
             try
             {
                 await writer.ConfigureAwait(false);
@@ -77,11 +110,21 @@ public sealed class VatpListenerSession : IAsyncDisposable
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
             }
+            catch (Exception ex)
+            {
+                // Preserve the transport fault for the caller, but never skip stream/lease cleanup.
+                writerError = ex;
+            }
 
             DisposeAllStreams();
             VatpListenerLogMessages.ConnectionClosed(_logger);
             linked.Dispose();
             _runCts = null;
+
+            if (writerError is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(writerError);
+            }
         }
     }
 
@@ -89,6 +132,22 @@ public sealed class VatpListenerSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return;
+        }
+
+        RequestSessionTermination();
+        DisposeAllStreams();
+        await _transport.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Idempotent session terminal transition: cancel the session token and complete the outbound
+    /// channel so reader, writer, and blocked <see cref="QueueFrameAsync"/> producers all exit.
+    /// </summary>
+    private void RequestSessionTermination()
+    {
+        if (Interlocked.Exchange(ref _terminating, 1) == 1)
         {
             return;
         }
@@ -101,9 +160,7 @@ public sealed class VatpListenerSession : IAsyncDisposable
         {
         }
 
-        _outbound.Writer.TryComplete();
-        DisposeAllStreams();
-        await _transport.DisposeAsync().ConfigureAwait(false);
+        _ = _outbound.Writer.TryComplete();
     }
 
     private async Task RunReadLoopAsync(CancellationToken cancellationToken)
@@ -121,9 +178,20 @@ public sealed class VatpListenerSession : IAsyncDisposable
                     bytesRead = await _transport.ReadAsync(readBuffer.AsMemory(0, readBuffer.Length), cancellationToken)
                         .ConfigureAwait(false);
                 }
-                catch (TimeoutException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     return;
+                }
+                catch (TimeoutException)
+                {
+                    // Reader-side terminal I/O failure: stop the whole session.
+                    RequestSessionTermination();
+                    return;
+                }
+                catch (Exception)
+                {
+                    RequestSessionTermination();
+                    throw;
                 }
 
                 if (bytesRead == 0)
@@ -302,7 +370,9 @@ public sealed class VatpListenerSession : IAsyncDisposable
             return true;
         }
 
-        var openResult = _retention.TryOpenTransfer(open.RequestId, open.ArticleId);
+        // Reservation is attempted inside TryOpenTransfer under the retention gate so a temporary
+        // MaxQueuedFoundPayloadBytes failure does not consume the Success RequestId.
+        var openResult = _retention.TryOpenTransfer(open.RequestId, open.ArticleId, TryReserveFoundBytes);
         if (openResult.Kind != VatpOpenKind.Opened || openResult.Lease is null)
         {
             openResult.Dispose();
@@ -315,12 +385,6 @@ public sealed class VatpListenerSession : IAsyncDisposable
         var record = lease.Record;
         var meta = ArticleCanonicalTransferMeta.FromRecord(in record, lease.SelectedDateHeaderName);
         var artSize = record.ArtSize;
-        if (!TryReserveFoundBytes(artSize))
-        {
-            lease.Dispose();
-            await QueueFailAsync(streamId, VatpErrorCode.OpenRejected, cancellationToken).ConfigureAwait(false);
-            return true;
-        }
 
         var metaBytes = VatpMetaCodec.Encode(in meta);
         var stream = new SendStream(
@@ -334,6 +398,8 @@ public sealed class VatpListenerSession : IAsyncDisposable
 
         lock (_streamGate)
         {
+            // Stream-table capacity was checked before OPEN commit; a concurrent OPEN on the same
+            // connection cannot steal this streamId without racing the single-threaded read loop.
             _streams[streamId] = stream;
         }
 
@@ -424,46 +490,60 @@ public sealed class VatpListenerSession : IAsyncDisposable
 
     private async Task RunWriterAsync(CancellationToken cancellationToken)
     {
-        var waitToRead = _outbound.Reader.WaitToReadAsync(cancellationToken);
-        while (true)
+        try
         {
-            if (!await waitToRead.ConfigureAwait(false))
+            var waitToRead = _outbound.Reader.WaitToReadAsync(cancellationToken);
+            while (true)
             {
-                break;
-            }
-
-            while (_outbound.Reader.TryRead(out var item))
-            {
-                if (item.Kind == OutboundItemKind.ScheduleData)
+                if (!await waitToRead.ConfigureAwait(false))
                 {
-                    continue;
+                    break;
                 }
 
-                await WriteEncodedFrameAsync(item.Frame!.Value, cancellationToken).ConfigureAwait(false);
-                HandlePostWrite(item.Frame!.Value);
+                while (_outbound.Reader.TryRead(out var item))
+                {
+                    if (item.Kind == OutboundItemKind.ScheduleData)
+                    {
+                        continue;
+                    }
+
+                    await WriteEncodedFrameAsync(item.Frame!.Value, cancellationToken).ConfigureAwait(false);
+                    HandlePostWrite(item.Frame!.Value);
+                }
+
+                while (TryTakeDataFrame(out var dataFrame, out var completedStreamId))
+                {
+                    await WriteEncodedFrameAsync(dataFrame, cancellationToken).ConfigureAwait(false);
+                    if (completedStreamId is { } streamId)
+                    {
+                        await WriteEncodedFrameAsync(VatpFrameEncoder.EncodeEnd(streamId), cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                waitToRead = _outbound.Reader.WaitToReadAsync(cancellationToken);
             }
 
-            while (TryTakeDataFrame(out var dataFrame, out var completedStreamId))
+            while (TryTakeDataFrame(out var trailing, out var trailingCompleted))
             {
-                await WriteEncodedFrameAsync(dataFrame, cancellationToken).ConfigureAwait(false);
-                if (completedStreamId is { } streamId)
+                await WriteEncodedFrameAsync(trailing, cancellationToken).ConfigureAwait(false);
+                if (trailingCompleted is { } streamId)
                 {
                     await WriteEncodedFrameAsync(VatpFrameEncoder.EncodeEnd(streamId), cancellationToken)
                         .ConfigureAwait(false);
                 }
             }
-
-            waitToRead = _outbound.Reader.WaitToReadAsync(cancellationToken);
         }
-
-        while (TryTakeDataFrame(out var trailing, out var trailingCompleted))
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await WriteEncodedFrameAsync(trailing, cancellationToken).ConfigureAwait(false);
-            if (trailingCompleted is { } streamId)
-            {
-                await WriteEncodedFrameAsync(VatpFrameEncoder.EncodeEnd(streamId), cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            RequestSessionTermination();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            VatpListenerLogMessages.WriterTransportFailed(_logger, ex);
+            RequestSessionTermination();
+            throw;
         }
     }
 

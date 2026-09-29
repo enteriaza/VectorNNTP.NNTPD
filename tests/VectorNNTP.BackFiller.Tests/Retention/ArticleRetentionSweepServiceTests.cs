@@ -53,7 +53,8 @@ public sealed class ArticleRetentionSweepServiceTests
 
         public VatpOpenResult TryOpenTransfer(
             Guid requestId,
-            VectorNNTP.Common.Articles.ArticleId expectedArticleId) =>
+            VectorNNTP.Common.Articles.ArticleId expectedArticleId,
+            Func<int, bool>? tryReserveOutboundBytes = null) =>
             VatpOpenResult.Rejected();
 
         public bool TryCancelPendingRequest(Guid requestId) => false;

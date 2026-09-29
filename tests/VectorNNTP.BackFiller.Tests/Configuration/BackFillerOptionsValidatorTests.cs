@@ -115,6 +115,21 @@ public sealed class BackFillerOptionsValidatorTests
         Assert.False(result.Failed);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(257)]
+    public void Validate_fails_for_max_openable_request_ids_outside_1_to_256(int value)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.ArticleRetention.MaxOpenableRequestIdsPerArticle = value;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("MaxOpenableRequestIdsPerArticle", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_fails_when_retention_exceeds_physical_memory_ceiling()
     {

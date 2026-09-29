@@ -79,12 +79,13 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
     public static async Task<BackFillerPipelineHarness> StartAsync(
         FakePublishConfirmBehavior confirm = FakePublishConfirmBehavior.Confirm,
         TimeSpan? retentionTtl = null,
-        int? maxArticleBytes = null)
+        int? maxArticleBytes = null,
+        int? maxRetainedPayloadBytes = null)
     {
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero));
         var retention = ArticleRetentionAuthorityTests.Create(
             time,
-            maxBytes: 1024 * 1024,
+            maxBytes: maxRetainedPayloadBytes ?? (1024 * 1024),
             ttl: retentionTtl ?? TimeSpan.FromSeconds(60));
         var accounts = new FakeProviderAccountSource();
         var catalog = new ProviderConfigurationCatalog();

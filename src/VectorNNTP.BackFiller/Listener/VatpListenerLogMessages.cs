@@ -44,4 +44,10 @@ internal static partial class VatpListenerLogMessages
         Level = LogLevel.Debug,
         Message = "VATP listener connection closed")]
     public static partial void ConnectionClosed(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 5457,
+        Level = LogLevel.Debug,
+        Message = "VATP listener writer transport failed")]
+    public static partial void WriterTransportFailed(ILogger logger, Exception exception);
 }

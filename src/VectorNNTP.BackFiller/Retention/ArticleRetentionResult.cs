@@ -19,5 +19,7 @@ public readonly record struct ArticleRetentionResult(
 
     /// <summary>Returns whether admission failed because of capacity.</summary>
     public bool IsCapacityRejected =>
-        Kind is ArticleRetentionKind.PayloadExceedsCapacity or ArticleRetentionKind.CapacityUnavailable;
+        Kind is ArticleRetentionKind.PayloadExceedsCapacity
+            or ArticleRetentionKind.CapacityUnavailable
+            or ArticleRetentionKind.OpenableRequestIdLimitExceeded;
 }
