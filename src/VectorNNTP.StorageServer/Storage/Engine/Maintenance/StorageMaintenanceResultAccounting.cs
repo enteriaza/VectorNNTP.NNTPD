@@ -38,6 +38,26 @@ internal static class StorageMaintenanceResultAccounting
         long reclaimedSegmentSizeBytes) =>
         result with { ReclaimedSegmentSizeBytes = reclaimedSegmentSizeBytes };
 
+    public static StorageMaintenanceResult WithCapacityPressure(
+        this StorageMaintenanceResult result,
+        in CapacityAdmissionPressureSnapshot pressure)
+    {
+        if (!pressure.CapacityAdmissionEnabled)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            AdmissionPressure = pressure.IsUnderAdmissionPressure,
+            AdmissionRecoveryTargetBytes = pressure.AdmissionRecoveryTargetBytes,
+            CapacityUsedBytes = pressure.UsedBytes,
+            CapacityTotalBytes = pressure.TotalBytes,
+            CapacityArticleReservedBytes = pressure.ArticleReservedBytes,
+            CapacityCompactionReservedBytes = pressure.CompactionReservedBytes,
+        };
+    }
+
     private static double ComputeDeadRatio(long sizeBytes, long deadBytes) =>
         sizeBytes > 0 ? (double)deadBytes / sizeBytes : 0d;
 }

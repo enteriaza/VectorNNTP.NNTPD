@@ -1,10 +1,12 @@
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 
 /// <summary>
 /// Deterministic, read-only selection of compaction and reclamation victims from catalogue
-/// snapshots (Phase 5A). Does not mutate storage, journal, index, or cache.
+/// snapshots (Phase 5A / 5F.2). Does not mutate storage, journal, index, or cache.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -13,9 +15,14 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// <c>DeadBytes &gt;= MinimumDeadBytes</c> AND dead-ratio ≥ <c>MinimumDeadRatio</c>.
 /// </para>
 /// <para>
-/// Compaction victim ordering among eligible segments:
+/// Normal compaction victim ordering among eligible segments:
 /// highest dead ratio, then highest <see cref="SegmentInfo.DeadBytes"/>, then lowest
 /// <see cref="SegmentId"/>.
+/// </para>
+/// <para>
+/// Under admission pressure, ordering prefers highest <see cref="SegmentInfo.SizeBytes"/>
+/// (physical recovery potential after retire+reclaim), then highest DeadBytes, then lowest
+/// SegmentId — only among candidates that pass compaction headroom feasibility.
 /// </para>
 /// <para>
 /// Reclamation victims are Retired segments only, ordered by lowest <see cref="SegmentId"/>.
@@ -221,6 +228,103 @@ public sealed class ArticleSegmentPolicy
     }
 
     /// <summary>
+    /// Selects a Closed compaction victim under admission pressure: eligible + compaction-headroom
+    /// feasible, ordered by physical recovery potential (<see cref="SegmentInfo.SizeBytes"/>).
+    /// </summary>
+    public bool TrySelectPressureReliefCompactionVictim(
+        IReadOnlyList<SegmentInfo> snapshot,
+        in CapacityAdmissionPressureSnapshot pressure,
+        out SegmentInfo victim)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var selection = SelectPressureReliefCompactionVictim(snapshot, in pressure);
+        victim = selection.Victim;
+        return selection.Selected;
+    }
+
+    /// <summary>
+    /// Selects a Closed compaction victim under admission pressure using
+    /// <see cref="ISegmentCatalogue.Snapshot"/>.
+    /// </summary>
+    public bool TrySelectPressureReliefCompactionVictim(
+        ISegmentCatalogue catalogue,
+        in CapacityAdmissionPressureSnapshot pressure,
+        out SegmentInfo victim)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        return TrySelectPressureReliefCompactionVictim(catalogue.Snapshot(), in pressure, out victim);
+    }
+
+    /// <summary>
+    /// Pressure-aware compaction victim selection with feasibility against MaxUtil + Headroom.
+    /// </summary>
+    public CompactionVictimSelection SelectPressureReliefCompactionVictim(
+        IReadOnlyList<SegmentInfo> snapshot,
+        in CapacityAdmissionPressureSnapshot pressure)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        SegmentInfo? best = null;
+        CompactionEligibility bestEligibility = default;
+
+        foreach (var entry in snapshot)
+        {
+            var eligibility = EvaluateCompaction(in entry);
+            if (!eligibility.IsEligible)
+            {
+                continue;
+            }
+
+            if (!IsCompactionFeasibleUnderHeadroom(in entry, in pressure))
+            {
+                continue;
+            }
+
+            if (best is null || ComparePressureReliefCandidates(entry, best.Value) < 0)
+            {
+                best = entry;
+                bestEligibility = eligibility;
+            }
+        }
+
+        if (best is null)
+        {
+            return new CompactionVictimSelection(Selected: false, Victim: default, Eligibility: default);
+        }
+
+        return new CompactionVictimSelection(Selected: true, Victim: best.Value, Eligibility: bestEligibility);
+    }
+
+    /// <summary>
+    /// Catalogue-only preflight: whether relocating this Closed segment's live bytes can make
+    /// useful progress under MaxUtil + CompactionHeadroom given current Used/reservations.
+    /// Does not reserve bytes. Zero-live Closed segments are feasible (commit/retire/reclaim only).
+    /// </summary>
+    public static bool IsCompactionFeasibleUnderHeadroom(
+        in SegmentInfo segment,
+        in CapacityAdmissionPressureSnapshot pressure)
+    {
+        if (!pressure.CapacityAdmissionEnabled)
+        {
+            return true;
+        }
+
+        if (segment.LiveBytes <= 0)
+        {
+            return true;
+        }
+
+        var ceilingUtilization = pressure.MaximumUtilization + pressure.CompactionHeadroom;
+        return ProcessLocalCapacityLedger.WouldFit(
+            pressure.UsedBytes,
+            pressure.ArticleReservedBytes,
+            pressure.CompactionReservedBytes,
+            pressure.TotalBytes,
+            segment.LiveBytes,
+            ceilingUtilization);
+    }
+
+    /// <summary>
     /// Selects at most one Retired reclamation victim from a coherent catalogue snapshot
     /// (lowest <see cref="SegmentId"/>).
     /// </summary>
@@ -311,6 +415,27 @@ public sealed class ArticleSegmentPolicy
         if (ratioCmp != 0)
         {
             return ratioCmp;
+        }
+
+        var deadCmp = right.DeadBytes.CompareTo(left.DeadBytes);
+        if (deadCmp != 0)
+        {
+            return deadCmp;
+        }
+
+        return left.SegmentId.Value.CompareTo(right.SegmentId.Value);
+    }
+
+    /// <summary>
+    /// Pressure-relief ordering: higher SizeBytes (physical reclaim potential), then higher
+    /// DeadBytes, then lower SegmentId. Returns negative when <paramref name="left"/> should win.
+    /// </summary>
+    internal static int ComparePressureReliefCandidates(in SegmentInfo left, in SegmentInfo right)
+    {
+        var sizeCmp = right.SizeBytes.CompareTo(left.SizeBytes);
+        if (sizeCmp != 0)
+        {
+            return sizeCmp;
         }
 
         var deadCmp = right.DeadBytes.CompareTo(left.DeadBytes);

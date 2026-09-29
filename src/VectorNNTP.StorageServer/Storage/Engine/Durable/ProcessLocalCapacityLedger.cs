@@ -38,12 +38,35 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>Alias for <see cref="ArticleReservationCount"/> (Phase 5E.1 tests).</summary>
     public int ReservationCount => ArticleReservationCount;
 
+    /// <summary>Scaled integer factor shared by ceiling / WouldFit arithmetic (no floating multiply).</summary>
+    internal const long UtilizationScale = 1_000_000L;
+
+    /// <summary>
+    /// Returns whether <paramref name="requiredBytes"/> fits under
+    /// <c>(used + articleReserved + compactionReserved + required) ≤ ceilingUtilization × total</c>
+    /// using this ledger's current reservation counters.
+    /// </summary>
+    public bool WouldFit(
+        long usedBytes,
+        long totalBytes,
+        long requiredBytes,
+        double ceilingUtilization) =>
+        WouldFit(
+            usedBytes,
+            _articleReservedBytes,
+            _compactionReservedBytes,
+            totalBytes,
+            requiredBytes,
+            ceilingUtilization);
+
     /// <summary>
     /// Returns whether <paramref name="requiredBytes"/> fits under
     /// <c>(used + articleReserved + compactionReserved + required) ≤ ceilingUtilization × total</c>.
     /// </summary>
-    public bool WouldFit(
+    public static bool WouldFit(
         long usedBytes,
+        long articleReservedBytes,
+        long compactionReservedBytes,
         long totalBytes,
         long requiredBytes,
         double ceilingUtilization)
@@ -55,8 +78,8 @@ internal sealed class ProcessLocalCapacityLedger
 
         if (totalBytes <= 0
             || usedBytes < 0
-            || _articleReservedBytes < 0
-            || _compactionReservedBytes < 0)
+            || articleReservedBytes < 0
+            || compactionReservedBytes < 0)
         {
             return false;
         }
@@ -65,31 +88,106 @@ internal sealed class ProcessLocalCapacityLedger
         try
         {
             projected = checked(
-                usedBytes + _articleReservedBytes + _compactionReservedBytes + requiredBytes);
+                usedBytes + articleReservedBytes + compactionReservedBytes + requiredBytes);
         }
         catch (OverflowException)
         {
             return false;
         }
 
-        const long scale = 1_000_000L;
-        var utilScaled = (long)decimal.Round(
-            (decimal)ceilingUtilization * scale,
-            MidpointRounding.AwayFromZero);
-        if (utilScaled <= 0 || utilScaled >= scale)
+        var utilScaled = ScaleUtilization(ceilingUtilization);
+        if (utilScaled <= 0 || utilScaled >= UtilizationScale)
         {
             return false;
         }
 
         try
         {
-            return checked(projected * scale) <= checked(totalBytes * utilScaled);
+            return checked(projected * UtilizationScale) <= checked(totalBytes * utilScaled);
         }
         catch (OverflowException)
         {
             return (decimal)projected <= (decimal)totalBytes * (decimal)ceilingUtilization;
         }
     }
+
+    /// <summary>
+    /// Floor ceiling bytes for <paramref name="ceilingUtilization"/> × <paramref name="totalBytes"/>
+    /// using the same scaled-integer rounding as
+    /// <see cref="WouldFit(long, long, long, long, long, double)"/>.
+    /// </summary>
+    public static long ComputeCeilingBytes(long totalBytes, double ceilingUtilization)
+    {
+        if (totalBytes <= 0)
+        {
+            return 0;
+        }
+
+        var utilScaled = ScaleUtilization(ceilingUtilization);
+        if (utilScaled <= 0 || utilScaled >= UtilizationScale)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return checked(totalBytes * utilScaled) / UtilizationScale;
+        }
+        catch (OverflowException)
+        {
+            return (long)decimal.Floor((decimal)totalBytes * (decimal)ceilingUtilization);
+        }
+    }
+
+    /// <summary>
+    /// Physical <c>UsedBytes</c> that must disappear before a minimum-size article admission can
+    /// succeed under <paramref name="maximumUtilization"/>, accounting for outstanding reservations.
+    /// Zero when admission already fits.
+    /// </summary>
+    public static long ComputeAdmissionRecoveryTargetBytes(
+        long usedBytes,
+        long articleReservedBytes,
+        long compactionReservedBytes,
+        long totalBytes,
+        double maximumUtilization,
+        long minimumRequiredBytes)
+    {
+        if (minimumRequiredBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minimumRequiredBytes));
+        }
+
+        if (WouldFit(
+                usedBytes,
+                articleReservedBytes,
+                compactionReservedBytes,
+                totalBytes,
+                minimumRequiredBytes,
+                maximumUtilization))
+        {
+            return 0;
+        }
+
+        var ceilingBytes = ComputeCeilingBytes(totalBytes, maximumUtilization);
+        long occupied;
+        try
+        {
+            occupied = checked(
+                usedBytes + articleReservedBytes + compactionReservedBytes + minimumRequiredBytes);
+        }
+        catch (OverflowException)
+        {
+            return long.MaxValue;
+        }
+
+        var deficit = occupied - ceilingBytes;
+        return deficit > 0 ? deficit : 0;
+    }
+
+    private static long ScaleUtilization(double ceilingUtilization) =>
+        (long)decimal.Round(
+            (decimal)ceilingUtilization * UtilizationScale,
+            MidpointRounding.AwayFromZero);
 
     /// <summary>
     /// Tentatively includes <paramref name="requiredBytes"/> in <see cref="ArticleReservedBytes"/>
@@ -158,7 +256,8 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>
     /// Binds a compaction destination reservation to <paramref name="compactionId"/> /
     /// <paramref name="relocationId"/> and increments <see cref="CompactionReservedBytes"/>.
-    /// Caller must have already verified <see cref="WouldFit"/>.
+    /// Caller must have already verified
+    /// <see cref="WouldFit(long, long, long, double)"/>.
     /// </summary>
     public void ReserveCompaction(ulong compactionId, ulong relocationId, long requiredBytes)
     {

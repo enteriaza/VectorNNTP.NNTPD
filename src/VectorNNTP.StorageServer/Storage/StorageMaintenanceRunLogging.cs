@@ -24,7 +24,12 @@ internal static class StorageMaintenanceRunLogging
                     durationMs,
                     result.SegmentId.Value,
                     result.CompactionId,
-                    result.SkipReason);
+                    result.SkipReason,
+                    result.AdmissionPressure,
+                    result.AdmissionRecoveryTargetBytes,
+                    result.CapacityUsedBytes,
+                    result.CapacityArticleReservedBytes,
+                    result.CapacityCompactionReservedBytes);
                 return;
 
             case StorageMaintenanceOutcome.Failed:
@@ -63,6 +68,12 @@ internal static class StorageMaintenanceRunLogging
                     result.SourceDeadBytes,
                     result.SourceDeadRatio,
                     result.ReclaimedSegmentSizeBytes,
+                    result.AdmissionPressure,
+                    result.AdmissionRecoveryTargetBytes,
+                    result.CapacityUsedBytes,
+                    result.CapacityTotalBytes,
+                    result.CapacityArticleReservedBytes,
+                    result.CapacityCompactionReservedBytes,
                     result.SkipReason);
                 return;
         }

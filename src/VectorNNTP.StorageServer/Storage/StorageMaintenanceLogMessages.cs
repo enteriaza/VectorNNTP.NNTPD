@@ -30,19 +30,24 @@ internal static partial class StorageMaintenanceLogMessages
     [LoggerMessage(
         EventId = 3018,
         Level = LogLevel.Debug,
-        Message = "Storage maintenance skipped (MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, SkipReason={SkipReason})")]
+        Message = "Storage maintenance skipped (MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, SkipReason={SkipReason}, AdmissionPressure={AdmissionPressure}, AdmissionRecoveryTargetBytes={AdmissionRecoveryTargetBytes}, CapacityUsedBytes={CapacityUsedBytes}, CapacityArticleReservedBytes={CapacityArticleReservedBytes}, CapacityCompactionReservedBytes={CapacityCompactionReservedBytes})")]
     public static partial void RunSkipped(
         ILogger logger,
         ulong MaintenanceRunId,
         double DurationMs,
         ulong SegmentId,
         ulong CompactionId,
-        string? SkipReason);
+        string? SkipReason,
+        bool? AdmissionPressure,
+        long? AdmissionRecoveryTargetBytes,
+        long? CapacityUsedBytes,
+        long? CapacityArticleReservedBytes,
+        long? CapacityCompactionReservedBytes);
 
     [LoggerMessage(
         EventId = 3019,
         Level = LogLevel.Information,
-        Message = "Storage maintenance summary (Outcome={Outcome}, MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocatedArticles={RelocatedArticles}, CompactionAttempted={CompactionAttempted}, CompactionCommitted={CompactionCommitted}, RetirementAttempted={RetirementAttempted}, Retired={Retired}, ReclamationAttempted={ReclamationAttempted}, Reclaimed={Reclaimed}, SourceSizeBytes={SourceSizeBytes}, SourceLiveBytes={SourceLiveBytes}, SourceDeadBytes={SourceDeadBytes}, SourceDeadRatio={SourceDeadRatio}, ReclaimedSegmentSizeBytes={ReclaimedSegmentSizeBytes}, Detail={Detail})")]
+        Message = "Storage maintenance summary (Outcome={Outcome}, MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocatedArticles={RelocatedArticles}, CompactionAttempted={CompactionAttempted}, CompactionCommitted={CompactionCommitted}, RetirementAttempted={RetirementAttempted}, Retired={Retired}, ReclamationAttempted={ReclamationAttempted}, Reclaimed={Reclaimed}, SourceSizeBytes={SourceSizeBytes}, SourceLiveBytes={SourceLiveBytes}, SourceDeadBytes={SourceDeadBytes}, SourceDeadRatio={SourceDeadRatio}, ReclaimedSegmentSizeBytes={ReclaimedSegmentSizeBytes}, AdmissionPressure={AdmissionPressure}, AdmissionRecoveryTargetBytes={AdmissionRecoveryTargetBytes}, CapacityUsedBytes={CapacityUsedBytes}, CapacityTotalBytes={CapacityTotalBytes}, CapacityArticleReservedBytes={CapacityArticleReservedBytes}, CapacityCompactionReservedBytes={CapacityCompactionReservedBytes}, Detail={Detail})")]
     public static partial void RunOperationalSummary(
         ILogger logger,
         ulong MaintenanceRunId,
@@ -62,6 +67,12 @@ internal static partial class StorageMaintenanceLogMessages
         long? SourceDeadBytes,
         double? SourceDeadRatio,
         long? ReclaimedSegmentSizeBytes,
+        bool? AdmissionPressure,
+        long? AdmissionRecoveryTargetBytes,
+        long? CapacityUsedBytes,
+        long? CapacityTotalBytes,
+        long? CapacityArticleReservedBytes,
+        long? CapacityCompactionReservedBytes,
         string? Detail);
 
     [LoggerMessage(

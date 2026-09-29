@@ -8,6 +8,7 @@ using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 
@@ -197,6 +198,35 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 return _capacityLedger.CompactionReservationCount;
             }
         }
+    }
+
+    /// <summary>
+    /// Observes current DriveInfo capacity and process-local reservations for maintenance
+    /// pressure decisions (Phase 5F.2). Does not mutate reservations. Capacity read is outside
+    /// <c>_gate</c>; reservation counters are sampled under the gate.
+    /// </summary>
+    internal CapacityAdmissionPressureSnapshot ObserveCapacityAdmissionPressure()
+    {
+        if (!_capacityAdmissionEnabled || _capacityReader is null)
+        {
+            return CapacityAdmissionPressureSnapshot.Disabled;
+        }
+
+        var snap = _capacityReader.Read();
+        long articleReserved;
+        long compactionReserved;
+        lock (_gate)
+        {
+            articleReserved = _capacityLedger.ArticleReservedBytes;
+            compactionReserved = _capacityLedger.CompactionReservedBytes;
+        }
+
+        return CapacityAdmissionPressureSnapshot.FromCapacityState(
+            in snap,
+            articleReserved,
+            compactionReserved,
+            _capacityMaximumUtilization,
+            _capacityCompactionHeadroom);
     }
 
     /// <summary>

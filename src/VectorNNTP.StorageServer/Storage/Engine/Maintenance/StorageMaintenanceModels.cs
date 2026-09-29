@@ -49,6 +49,16 @@ public enum StorageMaintenanceOutcome : byte
 /// <param name="ReclaimedSegmentSizeBytes">
 /// Catalogue size of a reclaimed segment captured before physical delete when already available.
 /// </param>
+/// <param name="AdmissionPressure">
+/// True when article admission was under MaximumUtilization pressure at observation time.
+/// </param>
+/// <param name="AdmissionRecoveryTargetBytes">
+/// Physical UsedBytes that must disappear before minimum-size admission can succeed.
+/// </param>
+/// <param name="CapacityUsedBytes">Observed DriveInfo UsedBytes when capacity admission is enabled.</param>
+/// <param name="CapacityTotalBytes">Observed DriveInfo TotalBytes when capacity admission is enabled.</param>
+/// <param name="CapacityArticleReservedBytes">Observed process-local article reservations.</param>
+/// <param name="CapacityCompactionReservedBytes">Observed process-local compaction reservations.</param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -65,4 +75,10 @@ public readonly record struct StorageMaintenanceResult(
     long? SourceLiveBytes = null,
     long? SourceDeadBytes = null,
     double? SourceDeadRatio = null,
-    long? ReclaimedSegmentSizeBytes = null);
+    long? ReclaimedSegmentSizeBytes = null,
+    bool? AdmissionPressure = null,
+    long? AdmissionRecoveryTargetBytes = null,
+    long? CapacityUsedBytes = null,
+    long? CapacityTotalBytes = null,
+    long? CapacityArticleReservedBytes = null,
+    long? CapacityCompactionReservedBytes = null);

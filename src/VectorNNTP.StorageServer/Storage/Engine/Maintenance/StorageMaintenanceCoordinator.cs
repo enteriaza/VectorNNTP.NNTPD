@@ -19,8 +19,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <para>
 /// Ordering: existing Retired physical reclaim first; then finish CompactionCommitted
 /// pending retirement; then continue an open uncommitted compaction; then select a new
-/// Closed victim via policy. Policy selection is a hint — every destructive step is
-/// revalidated against current catalogue/index state.
+/// Closed victim via policy. Under article admission pressure (Phase 5F.2), Closed-victim
+/// selection prefers physical recovery potential and compaction-headroom feasibility;
+/// pressure is recomputed each invocation and is not a persistent mode.
+/// Policy selection is a hint — every destructive step is revalidated against current
+/// catalogue/index state.
 /// </para>
 /// </remarks>
 public sealed class StorageMaintenanceCoordinator
@@ -61,51 +64,129 @@ public sealed class StorageMaintenanceCoordinator
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var pressure = _engine.ObserveCapacityAdmissionPressure();
+
         // 1) Physical reclaim of existing Retired garbage (no new compaction).
         if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retiredVictim))
         {
             TestHookAfterReclamationVictimSelected?.Invoke(retiredVictim.SegmentId);
-            return await TryReclaimRetiredAsync(retiredVictim, cancellationToken)
+            var reclaimed = await TryReclaimRetiredAsync(retiredVictim, cancellationToken)
                 .ConfigureAwait(false);
+            // Re-observe after reclaim so recovery target reflects reduced UsedBytes when the
+            // capacity reader tracks deletions (tests / DriveInfo).
+            return AttachPressure(reclaimed, _engine.ObserveCapacityAdmissionPressure());
         }
 
         // 2) Finish CompactionCommitted → Retire → Reclaim (partial progress).
         if (TryFindCommittedPendingRetirement(out var committed))
         {
-            return await FinishCommittedCompactionAsync(committed, cancellationToken)
-                .ConfigureAwait(false);
+            return AttachPressure(
+                await FinishCommittedCompactionAsync(committed, cancellationToken)
+                    .ConfigureAwait(false),
+                pressure);
         }
 
         // 3) Continue open uncommitted compaction (no competing Begin).
         if (TryFindOpenUncommitted(out var open))
         {
-            return await CompactThenFinishAsync(
-                    open.Begin.SourceSegmentId,
-                    requirePolicyEligibility: false,
-                    sourceAccountingHint: null,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            return AttachPressure(
+                await CompactThenFinishAsync(
+                        open.Begin.SourceSegmentId,
+                        requirePolicyEligibility: false,
+                        sourceAccountingHint: null,
+                        continuingOpenCompaction: true,
+                        cancellationToken)
+                    .ConfigureAwait(false),
+                pressure);
         }
 
-        // 4) Select a new Closed compaction victim.
+        // 4) Select a new Closed compaction victim (pressure-aware when under admission pressure).
+        if (pressure.IsUnderAdmissionPressure)
+        {
+            // Revalidate pressure immediately before victim selection / execution.
+            pressure = _engine.ObserveCapacityAdmissionPressure();
+            if (!pressure.IsUnderAdmissionPressure)
+            {
+                // Pressure cleared between observation and selection — fall through to normal.
+            }
+            else if (!_policy.TrySelectPressureReliefCompactionVictim(
+                         _engine.Catalogue,
+                         in pressure,
+                         out var pressureVictim))
+            {
+                return AttachPressure(
+                    Skipped(
+                        default,
+                        compactionId: 0,
+                        StorageMaintenanceSkipReasons.CapacityPressureNoFeasibleCandidate),
+                    pressure);
+            }
+            else
+            {
+                // Stale feasibility: re-observe and re-check before SATA work.
+                pressure = _engine.ObserveCapacityAdmissionPressure();
+                if (!pressure.IsUnderAdmissionPressure)
+                {
+                    // Fall through to normal selection below.
+                }
+                else if (!ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(
+                             in pressureVictim,
+                             in pressure))
+                {
+                    return AttachPressure(
+                        Skipped(
+                            pressureVictim.SegmentId,
+                            compactionId: 0,
+                            StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom),
+                        pressure);
+                }
+                else
+                {
+                    TestHookAfterCompactionVictimSelected?.Invoke(pressureVictim.SegmentId);
+
+                    if (!TryRevalidateCompactionCandidate(pressureVictim.SegmentId, out var pressureSkip))
+                    {
+                        return AttachPressure(
+                            Skipped(pressureVictim.SegmentId, compactionId: 0, pressureSkip),
+                            pressure);
+                    }
+
+                    return AttachPressure(
+                        await CompactThenFinishAsync(
+                                pressureVictim.SegmentId,
+                                requirePolicyEligibility: true,
+                                sourceAccountingHint: pressureVictim,
+                                continuingOpenCompaction: false,
+                                cancellationToken)
+                            .ConfigureAwait(false),
+                        pressure);
+                }
+            }
+        }
+
         if (!_policy.TrySelectCompactionVictim(_engine.Catalogue, out var closedVictim))
         {
-            return NoWork();
+            return AttachPressure(NoWork(), pressure);
         }
 
         TestHookAfterCompactionVictimSelected?.Invoke(closedVictim.SegmentId);
 
         if (!TryRevalidateCompactionCandidate(closedVictim.SegmentId, out var skipReason))
         {
-            return Skipped(closedVictim.SegmentId, compactionId: 0, skipReason);
+            return AttachPressure(
+                Skipped(closedVictim.SegmentId, compactionId: 0, skipReason),
+                pressure);
         }
 
-        return await CompactThenFinishAsync(
-                closedVictim.SegmentId,
-                requirePolicyEligibility: true,
-                sourceAccountingHint: closedVictim,
-                cancellationToken)
-            .ConfigureAwait(false);
+        return AttachPressure(
+            await CompactThenFinishAsync(
+                    closedVictim.SegmentId,
+                    requirePolicyEligibility: true,
+                    sourceAccountingHint: closedVictim,
+                    continuingOpenCompaction: false,
+                    cancellationToken)
+                .ConfigureAwait(false),
+            pressure);
     }
 
     private async Task<StorageMaintenanceResult> TryReclaimRetiredAsync(
@@ -153,6 +234,7 @@ public sealed class StorageMaintenanceCoordinator
         SegmentId sourceSegmentId,
         bool requirePolicyEligibility,
         SegmentInfo? sourceAccountingHint,
+        bool continuingOpenCompaction,
         CancellationToken cancellationToken)
     {
         if (requirePolicyEligibility
@@ -181,16 +263,20 @@ public sealed class StorageMaintenanceCoordinator
 
             case ArticleCompactionOutcome.Incomplete:
                 // Capacity policy denial before any successful relocation → Skipped (not Failed).
+                // Distinguish open soft-spin from new-compaction headroom denial.
                 if (compact.RelocatedCount == 0
                     && compact.AbandonedCount == 0
                     && compact.Reason is not null
                     && compact.Reason.StartsWith("capacity", StringComparison.Ordinal))
                 {
+                    var capacitySkip = continuingOpenCompaction
+                        ? StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress
+                        : StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom;
                     return EnrichCompactionResult(
                         Skipped(
                             compact.SourceSegmentId,
                             compact.CompactionId,
-                            compact.Reason),
+                            capacitySkip),
                         compact,
                         sourceAccountingHint);
                 }
@@ -640,6 +726,11 @@ public sealed class StorageMaintenanceCoordinator
                 SkipReason: reclaim.Reason ?? reclaim.Outcome.ToString()),
         };
     }
+
+    private static StorageMaintenanceResult AttachPressure(
+        StorageMaintenanceResult result,
+        in CapacityAdmissionPressureSnapshot pressure) =>
+        result.WithCapacityPressure(in pressure);
 
     private static StorageMaintenanceResult NoWork() =>
         new(
