@@ -34,8 +34,12 @@ internal static class StorageServerTestOptions
     {
         var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-logs", Guid.NewGuid().ToString("N"));
         var acmeDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-acme", Guid.NewGuid().ToString("N"));
+        var cacheDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-cache", Guid.NewGuid().ToString("N"));
+        var controlDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-control", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(logDir);
         Directory.CreateDirectory(acmeDir);
+        Directory.CreateDirectory(cacheDir);
+        Directory.CreateDirectory(controlDir);
 
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -52,6 +56,8 @@ internal static class StorageServerTestOptions
             ["StorageServer:AcmeStateDir"] = acmeDir,
             ["StorageServer:CertificateDirectory"] = acmeDir,
             ["StorageServer:GracefulShutdownTimeout"] = "00:00:30",
+            ["StorageServer:CacheDir"] = cacheDir,
+            ["StorageServer:Storage:ControlDir"] = controlDir,
             ["AcmeCertificatePassword"] = SecretPfx,
             ["CloudFlareApiKey"] = SecretToken,
             ["RabbitMQ:Hosts:0"] = "127.0.0.1",

@@ -26,7 +26,8 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// Cloudflare DNS → RabbitMQ (connectivity only) → ACME → VATP listener.
+    /// StorageEngine → Cloudflare DNS → RabbitMQ (connectivity only) → AdvertisementPublisher →
+    /// LookupConsumer → ACME → VATP listener.
     /// Topology, queues, and consumers are not registered here.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
@@ -110,7 +111,16 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IStorageArticlePresence>(static _ => NullStorageArticlePresence.Instance);
         builder.Services.TryAddSingleton<StorageArticleLookupConsumerService>();
 
-        // Startup order: Cloudflare → RabbitMQ → AdvertisementPublisher → LookupConsumer → ACME → Listener.
+        // Owns Open+Recover+Dispose. Resolve via this singleton only (no second engine factory).
+        builder.Services.AddSingleton<StorageEngineApplicationService>();
+        builder.Services.AddSingleton(static sp =>
+            sp.GetRequiredService<StorageEngineApplicationService>().Engine);
+
+        // Startup order: StorageEngine → Cloudflare → RabbitMQ → AdvertisementPublisher →
+        // LookupConsumer → ACME → Listener. Storage is first so reverse-stop disposes it last.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageEngineApplicationService>(static sp =>
+                sp.GetRequiredService<StorageEngineApplicationService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
