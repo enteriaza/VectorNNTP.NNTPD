@@ -1,3 +1,4 @@
+using System.Globalization;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -125,8 +126,24 @@ internal sealed class RabbitMqClientAsyncConfirmPublishChannel : IRabbitMqAsyncC
             Persistent = true,
             Headers = new Dictionary<string, object?>
             {
-                [Constants.PublishSequenceNumberHeader] = publishSequenceNumber,
+                // RabbitMQ.Client 7.2.2 rejects UInt64 as an AMQP table value
+                // (WireFormattingException). Invariant decimal string is supported
+                // on write and is what HandleReturn parses for values that do not
+                // fit in Int64; broker Basic.Return typically echoes longstr as byte[].
+                [Constants.PublishSequenceNumberHeader] =
+                    FormatPublishSequenceNumberHeader(publishSequenceNumber),
             },
         };
     }
+
+    /// <summary>
+    /// Formats a publish sequence number for <see cref="Constants.PublishSequenceNumberHeader"/>.
+    /// </summary>
+    /// <remarks>
+    /// Must be an AMQP-supported table value. <see cref="ulong"/> is not supported by
+    /// RabbitMQ.Client 7.2.2 wire formatting; invariant decimal digits are lossless for
+    /// the full <see cref="ulong"/> range and parseable on Basic.Return.
+    /// </remarks>
+    internal static string FormatPublishSequenceNumberHeader(ulong publishSequenceNumber) =>
+        publishSequenceNumber.ToString(CultureInfo.InvariantCulture);
 }

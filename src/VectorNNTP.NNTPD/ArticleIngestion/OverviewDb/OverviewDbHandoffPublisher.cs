@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Options;
 using RabbitMQ.Client;
@@ -368,7 +370,14 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
         }
     }
 
-    private static bool TryReadPublishSequence(IReadOnlyBasicProperties? properties, out ulong sequence)
+    /// <summary>
+    /// Recovers the publish sequence from Basic.Return headers.
+    /// </summary>
+    /// <remarks>
+    /// Matches RabbitMQ.Client 7.2.2 <c>HandleReturn</c> representations:
+    /// <c>long</c>, decimal <c>string</c>, and longstr <c>byte[]</c> (ASCII digits).
+    /// </remarks>
+    internal static bool TryReadPublishSequence(IReadOnlyBasicProperties? properties, out ulong sequence)
     {
         sequence = 0;
         if (properties?.Headers is null
@@ -378,22 +387,38 @@ internal sealed class OverviewDbHandoffPublisher : IOverviewDbHandoffPublisher, 
             return false;
         }
 
+        return TryParsePublishSequenceNumberHeader(raw, out sequence);
+    }
+
+    /// <summary>
+    /// Parses an AMQP table value written for <see cref="Constants.PublishSequenceNumberHeader"/>.
+    /// </summary>
+    internal static bool TryParsePublishSequenceNumberHeader(object raw, out ulong sequence)
+    {
         switch (raw)
         {
-            case ulong u:
-                sequence = u;
-                return true;
             case long l when l >= 0:
                 sequence = (ulong)l;
                 return true;
             case int i when i >= 0:
                 sequence = (ulong)i;
                 return true;
-            case byte[] bytes when bytes.Length == 8:
-                sequence = BitConverter.ToUInt64(bytes, 0);
-                return true;
+            case string s:
+                return ulong.TryParse(
+                    s,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out sequence);
+            case byte[] bytes:
+                // Wire longstr ('S') for a decimal string arrives as UTF-8/ASCII bytes.
+                return ulong.TryParse(
+                    Encoding.ASCII.GetString(bytes),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out sequence);
             default:
-                return ulong.TryParse(raw.ToString(), out sequence);
+                sequence = 0;
+                return false;
         }
     }
 }

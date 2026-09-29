@@ -364,11 +364,13 @@ internal sealed class OverviewDbPublisherPool
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Shutdown: do not retry forever; abandon this item.
-            OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
+            // Shutdown: abandon in-flight work. Do not claim the OverviewDB work queue
+            // is unavailable — cancellation is not a queue-admission failure.
         }
         catch (Exception ex)
         {
+            // Local serialization / publish-write failures (e.g. WireFormattingException)
+            // never reached the broker; treat as publish failure + in-memory requeue.
             OverviewDbHandoffLogMessages.PublishFailed(_logger, ex, item.MessageId, item.ByteLength);
             await TryRequeueFailureAsync(item).ConfigureAwait(false);
         }
@@ -403,7 +405,18 @@ internal sealed class OverviewDbPublisherPool
             return;
         }
 
-        OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
+        if (result == ArticleEnqueueResult.Unavailable)
+        {
+            OverviewDbHandoffLogMessages.RequeueUnavailable(_logger, item.MessageId);
+            return;
+        }
+
+        // Rejected (e.g. oversized) — not an OverviewDB work-queue unavailable condition.
+        OverviewDbHandoffLogMessages.PublishFailed(
+            _logger,
+            new InvalidOperationException($"OverviewDB work-queue rejected requeue ({result})."),
+            item.MessageId,
+            item.ByteLength);
     }
 
     private void PublishPoolObservation()

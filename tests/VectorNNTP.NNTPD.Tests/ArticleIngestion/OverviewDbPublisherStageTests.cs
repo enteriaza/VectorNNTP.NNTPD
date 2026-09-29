@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using RabbitMQ.Client.Exceptions;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
@@ -95,6 +97,115 @@ public sealed class OverviewDbPublisherStageTests
         Assert.Single(publisher.Payloads);
 
         work.Complete();
+        await cts.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task PublisherPool_WireFormattingException_IsPublishFailure_NotQueueUnavailable()
+    {
+        var work = new OverviewDbWorkQueue(memoryLimitBytes: 1024 * 1024);
+        var publisher = new RecordingOverviewDbHandoffPublisher
+        {
+            RemainingFailures = 1,
+            TransientPublishException = new WireFormattingException(
+                "Value of type 'UInt64' cannot appear as table value"),
+        };
+        var logger = new CollectingLogger();
+        var options = new ArticleIngestionOptions
+        {
+            OverviewDbMinPublisherWorkers = 1,
+            OverviewDbMaxPublisherWorkers = 1,
+            ScaleIntervalSeconds = 3600,
+        };
+
+        using var cts = new CancellationTokenSource();
+        var pool = new OverviewDbPublisherPool(work, publisher, options, logger);
+        var run = pool.RunAsync(cts.Token);
+
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await work.EnqueueAsync(
+                new OverviewDbWorkItem("wire"u8.ToArray(), "<wire@test>"),
+                CancellationToken.None));
+
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (publisher.Payloads.Count < 1)
+        {
+            wait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, wait.Token);
+        }
+
+        Assert.Equal(2, publisher.AttemptCount);
+        Assert.Contains(
+            logger.Messages,
+            m => m.Contains("OverviewDB RabbitMQ handoff failed", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            logger.Messages,
+            m => m.Contains("queue is unavailable", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Messages,
+            m => m.Contains("was requeued", StringComparison.Ordinal));
+
+        work.Complete();
+        await cts.CancelAsync();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task PublisherPool_RequeueUnavailable_OnlyWhenWorkQueueUnavailable()
+    {
+        var work = new OverviewDbWorkQueue(memoryLimitBytes: 1024 * 1024);
+        var publisher = new RecordingOverviewDbHandoffPublisher
+        {
+            RemainingFailures = 1,
+            TransientPublishException = new WireFormattingException("local serialize failure"),
+            BlockOnFailure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var logger = new CollectingLogger();
+        var options = new ArticleIngestionOptions
+        {
+            OverviewDbMinPublisherWorkers = 1,
+            OverviewDbMaxPublisherWorkers = 1,
+            ScaleIntervalSeconds = 3600,
+        };
+
+        using var cts = new CancellationTokenSource();
+        var pool = new OverviewDbPublisherPool(work, publisher, options, logger);
+        var run = pool.RunAsync(cts.Token);
+
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await work.EnqueueAsync(
+                new OverviewDbWorkItem("gone"u8.ToArray(), "<gone@test>"),
+                CancellationToken.None));
+
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (publisher.AttemptCount < 1)
+        {
+            wait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, wait.Token);
+        }
+
+        // Complete the work queue before the publish failure requeue runs.
+        work.Complete();
+        publisher.BlockOnFailure.TrySetResult();
+
+        using var logWait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!logger.Messages.Exists(
+                   m => m.Contains("queue is unavailable", StringComparison.Ordinal)))
+        {
+            logWait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, logWait.Token);
+        }
+
+        Assert.Contains(
+            logger.Messages,
+            m => m.Contains("OverviewDB RabbitMQ handoff failed", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Messages,
+            m => m.Contains("queue is unavailable", StringComparison.Ordinal));
+
         await cts.CancelAsync();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
     }
@@ -199,6 +310,31 @@ public sealed class OverviewDbPublisherStageTests
 
         public void AbandonOutstanding()
         {
+        }
+    }
+
+    private sealed class CollectingLogger : ILogger
+    {
+        private readonly object _gate = new();
+
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                Messages.Add(formatter(state, exception));
+            }
         }
     }
 }

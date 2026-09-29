@@ -885,7 +885,10 @@ internal sealed class FakeRabbitMqAsyncConfirmPublishChannel : IRabbitMqAsyncCon
         {
             Headers = new Dictionary<string, object?>
             {
-                [Constants.PublishSequenceNumberHeader] = publishSequenceNumber,
+                // Mirror production AMQP table representation (invariant decimal string).
+                [Constants.PublishSequenceNumberHeader] =
+                    RabbitMqClientAsyncConfirmPublishChannel.FormatPublishSequenceNumberHeader(
+                        publishSequenceNumber),
             },
         };
         return _returns?.Invoke(

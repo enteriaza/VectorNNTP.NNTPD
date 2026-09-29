@@ -77,7 +77,92 @@ public sealed class OverviewDbHandoffPublisherTests
         Assert.Equal(DeliveryModes.Persistent, properties.DeliveryMode);
         Assert.True(properties.Persistent);
         Assert.NotNull(properties.Headers);
-        Assert.Equal(42UL, properties.Headers[Constants.PublishSequenceNumberHeader]);
+        // UInt64 is not a valid AMQP table value in RabbitMQ.Client 7.2.2.
+        Assert.IsType<string>(properties.Headers[Constants.PublishSequenceNumberHeader]);
+        Assert.Equal("42", properties.Headers[Constants.PublishSequenceNumberHeader]);
+    }
+
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(1UL)]
+    [InlineData(42UL)]
+    [InlineData(9_007_199_254_740_992UL)] // 2^53 — past float mantissa exactness
+    [InlineData(ulong.MaxValue)]
+    public void PublishSequenceHeader_RoundTripsLosslessThroughAmqpSupportedRepresentations(
+        ulong sequence)
+    {
+        var formatted = RabbitMqClientAsyncConfirmPublishChannel.FormatPublishSequenceNumberHeader(
+            sequence);
+        Assert.Equal(sequence.ToString(System.Globalization.CultureInfo.InvariantCulture), formatted);
+
+        var properties = RabbitMqClientAsyncConfirmPublishChannel.CreateHandoffProperties(
+            "11111111-1111-1111-1111-111111111111",
+            "nntpd01.usenet.ninja",
+            OverviewDbTopology.ExpirationMilliseconds,
+            sequence);
+        Assert.True(OverviewDbHandoffPublisher.TryReadPublishSequence(properties, out var fromString));
+        Assert.Equal(sequence, fromString);
+
+        // Broker Basic.Return typically echoes longstr ('S') as byte[].
+        var asBytes = System.Text.Encoding.ASCII.GetBytes(formatted);
+        Assert.True(
+            OverviewDbHandoffPublisher.TryParsePublishSequenceNumberHeader(asBytes, out var fromBytes));
+        Assert.Equal(sequence, fromBytes);
+
+        // RabbitMQ.Client HandleReturn also accepts long when the value fits.
+        if (sequence <= long.MaxValue)
+        {
+            Assert.True(
+                OverviewDbHandoffPublisher.TryParsePublishSequenceNumberHeader(
+                    (long)sequence,
+                    out var fromLong));
+            Assert.Equal(sequence, fromLong);
+        }
+    }
+
+    [Fact]
+    public void PublishSequenceHeader_UInt64IsNotUsedAsAmqpTableValue()
+    {
+        var properties = RabbitMqClientAsyncConfirmPublishChannel.CreateHandoffProperties(
+            "11111111-1111-1111-1111-111111111111",
+            "nntpd01.usenet.ninja",
+            OverviewDbTopology.ExpirationMilliseconds,
+            ulong.MaxValue);
+
+        var header = Assert.IsType<string>(
+            properties.Headers![Constants.PublishSequenceNumberHeader]);
+        Assert.Equal("18446744073709551615", header);
+        Assert.NotEqual(typeof(ulong), header.GetType());
+    }
+
+    [Fact]
+    public async Task BasicReturn_WithStringSequenceHeader_CorrelatesCorrectWorkItem()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMqService(factory);
+        await rabbit.StartAsync(CancellationToken.None);
+        factory.LastConnection!.ConfigureAsyncConfirmPublishChannel = c => c.AutoAck = false;
+
+        await using var publisher = new OverviewDbHandoffPublisher(
+            rabbit,
+            Options.Create(TestHostFactory.CreateValidOptions()),
+            Options.Create(RabbitMqOptionsTests.CreateValid()));
+
+        var first = new OverviewDbWorkItem("one"u8.ToArray(), "<one@test>");
+        var second = new OverviewDbWorkItem("two"u8.ToArray(), "<two@test>");
+        await publisher.PublishAsync(first, CancellationToken.None);
+        await publisher.PublishAsync(second, CancellationToken.None);
+
+        var channel = Assert.Single(factory.LastConnection.AsyncConfirmPublishChannels);
+        // Return only sequence 2 (string header via FakeRabbitMq); ack both.
+        await channel.RaiseReturnAsync(2, second.Payload);
+        await channel.RaiseAckAsync(1, multiple: false);
+        await channel.RaiseAckAsync(2, multiple: false);
+
+        Assert.True(publisher.TryDequeuePublishFailure(out var failed));
+        Assert.Same(second, failed);
+        Assert.False(publisher.TryDequeuePublishFailure(out _));
+        Assert.Equal(0, publisher.OutstandingCount);
     }
 
     [Fact]
