@@ -3,7 +3,7 @@ using RabbitMQ.Client;
 namespace VectorNNTP.NNTPD.RabbitMq;
 
 /// <summary>
-/// One declare-only article-retrieval exchange, classic durable queue, and binding.
+/// One declare-only article-retrieval exchange, durable quorum queue, and binding.
 /// </summary>
 /// <param name="ExchangeName">Exchange that receives article-retrieval requests.</param>
 /// <param name="ExchangeType">RabbitMQ exchange type. Article-retrieval uses fanout.</param>
@@ -15,8 +15,8 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// <param name="QueueAutoDelete">Whether the queue is auto-deleted when unused.</param>
 /// <param name="RoutingKey">Routing key used when binding the queue to the exchange.</param>
 /// <param name="QueueArguments">
-/// Queue arguments applied during declaration. Classic article-retrieval queues omit
-/// <c>x-queue-type</c> (broker default classic). Quorum may return later after broker upgrade.
+/// Queue arguments applied during declaration. Durable article-retrieval work queues
+/// require <c>x-queue-type=quorum</c>.
 /// </param>
 internal sealed record RabbitMqArticleRetrievalEndpoint(
     string ExchangeName,
@@ -35,23 +35,22 @@ internal sealed record RabbitMqArticleRetrievalEndpoint(
 /// </summary>
 /// <remarks>
 /// BackFiller backbone endpoints and the internal <c>backfiller.storage</c> endpoint share
-/// these broker semantics. Storage is not a BackFiller provider.
+/// these broker semantics. Storage is not a BackFiller provider. Exclusive auto-delete
+/// ArticleWork RPC reply queues are declared separately and remain non-durable classic.
 /// </remarks>
 internal static class RabbitMqArticleRetrievalEndpoints
 {
-    /// <summary>Broker argument that selects the RabbitMQ queue type when non-default.</summary>
+    /// <summary>Broker argument that selects the RabbitMQ queue type.</summary>
     internal const string QueueTypeArgumentName = "x-queue-type";
 
-    /// <summary>
-    /// Quorum type name retained so tests can assert article-retrieval queues do not declare it.
-    /// </summary>
+    /// <summary>Required queue type for every durable article-retrieval work queue.</summary>
     internal const string QuorumQueueType = "quorum";
 
     /// <summary>
-    /// Builds a durable fanout exchange, durable classic queue, and binding that share
+    /// Builds a durable fanout exchange, durable quorum queue, and binding that share
     /// the normalized <paramref name="entityName"/> as the exchange, queue, and routing key.
     /// </summary>
-    internal static RabbitMqArticleRetrievalEndpoint CreateFanoutClassicBinding(string entityName)
+    internal static RabbitMqArticleRetrievalEndpoint CreateFanoutQuorumBinding(string entityName)
     {
         var name = RabbitMqTopologyNames.Normalize(entityName);
         return new RabbitMqArticleRetrievalEndpoint(
@@ -64,15 +63,11 @@ internal static class RabbitMqArticleRetrievalEndpoints
             QueueExclusive: false,
             QueueAutoDelete: false,
             RoutingKey: name,
-            QueueArguments: new Dictionary<string, object?>(StringComparer.Ordinal));
+            QueueArguments: new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                [QueueTypeArgumentName] = QuorumQueueType,
+            });
     }
-
-    /// <summary>
-    /// Obsolete name retained as a redirect so call sites migrate explicitly.
-    /// </summary>
-    [Obsolete("Use CreateFanoutClassicBinding; article-retrieval queues are classic until broker upgrade.")]
-    internal static RabbitMqArticleRetrievalEndpoint CreateFanoutQuorumBinding(string entityName) =>
-        CreateFanoutClassicBinding(entityName);
 }
 
 /// <summary>

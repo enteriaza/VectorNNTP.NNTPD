@@ -24,11 +24,13 @@ public sealed class StorageArticleRetrievalTopologyTests
         Assert.False(definition.QueueExclusive);
         Assert.False(definition.QueueAutoDelete);
         Assert.NotNull(definition.QueueArguments);
-        Assert.Empty(definition.QueueArguments);
-        Assert.False(definition.QueueArguments.ContainsKey(
-            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
+        Assert.True(definition.QueueArguments.TryGetValue(
+            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
+            out var queueType));
+        Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
         Assert.False(definition.QueueArguments.ContainsKey("x-message-ttl"));
         Assert.False(definition.QueueArguments.ContainsKey("x-expires"));
+        Assert.Single(definition.QueueArguments);
         Assert.DoesNotContain("storage.requests", definition.ExchangeName, StringComparison.Ordinal);
         Assert.DoesNotContain("grabbers.", definition.ExchangeName, StringComparison.Ordinal);
     }

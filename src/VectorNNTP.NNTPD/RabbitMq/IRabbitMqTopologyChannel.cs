@@ -29,7 +29,7 @@ public interface IRabbitMqTopologyChannel : IAsyncDisposable
     /// <param name="durable"><see langword="true"/> when the queue survives broker restart.</param>
     /// <param name="exclusive"><see langword="true"/> when the queue is exclusive to one connection.</param>
     /// <param name="autoDelete"><see langword="true"/> when the queue is deleted when unused.</param>
-    /// <param name="arguments">Optional queue arguments; classic queues omit <c>x-queue-type</c>.</param>
+    /// <param name="arguments">Optional queue arguments; durable work queues include <c>x-queue-type=quorum</c>.</param>
     /// <param name="cancellationToken">Token used to cancel the declaration.</param>
     Task QueueDeclareAsync(
         string queue,

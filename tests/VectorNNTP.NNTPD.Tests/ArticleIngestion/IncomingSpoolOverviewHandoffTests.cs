@@ -44,11 +44,11 @@ public sealed class IncomingSpoolOverviewHandoffTests
         Assert.False(overview.Exclusive);
         Assert.False(overview.AutoDelete);
         var arguments = overview.Arguments ?? new Dictionary<string, object?>(StringComparer.Ordinal);
-        Assert.False(arguments.ContainsKey("x-queue-type"));
-        Assert.False(arguments.ContainsKey(RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
+        Assert.True(arguments.TryGetValue(OverviewDbTopology.QueueTypeArgumentName, out var queueType));
+        Assert.Equal(OverviewDbTopology.QuorumQueueType, queueType);
         Assert.False(arguments.ContainsKey("x-message-ttl"));
         Assert.False(arguments.ContainsKey("x-expires"));
-        Assert.Empty(arguments);
+        Assert.Single(arguments);
         Assert.DoesNotContain(connection.ExchangeDeclarations, static e => e.Name == OverviewDbTopology.QueueName);
         Assert.DoesNotContain(connection.BindingDeclarations, static b => b.Queue == OverviewDbTopology.QueueName);
     }

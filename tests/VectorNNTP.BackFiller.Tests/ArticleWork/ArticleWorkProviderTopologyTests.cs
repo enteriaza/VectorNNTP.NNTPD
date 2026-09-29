@@ -34,8 +34,10 @@ public sealed class ArticleWorkProviderTopologyTests
         Assert.False(queue.Exclusive);
         Assert.False(queue.AutoDelete);
         Assert.NotNull(queue.Arguments);
-        Assert.Empty(queue.Arguments);
-        Assert.False(queue.Arguments.ContainsKey("x-queue-type"));
+        Assert.True(queue.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var queueType));
+        Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+        Assert.False(queue.Arguments.ContainsKey("x-message-ttl"));
+        Assert.Single(queue.Arguments);
         Assert.Equal(
             ("backfiller.giganews", "backfiller.giganews", "backfiller.giganews"),
             Assert.Single(topology.BindingDeclarations));
@@ -165,7 +167,14 @@ public sealed class ArticleWorkProviderTopologyTests
             static channel => channel.ExchangeDeclarations.Any(static e => e.Name == "backfiller.giganews"));
         Assert.All(
             factory.LastConnection.Channels.SelectMany(static c => c.QueueDeclarations),
-            static queue => Assert.False((queue.Arguments ?? new Dictionary<string, object?>()).ContainsKey("x-queue-type")));
+            static queue =>
+            {
+                Assert.NotNull(queue.Arguments);
+                Assert.True(queue.Arguments.TryGetValue(
+                    BackFillerArticleWorkTopology.QueueTypeArgumentName,
+                    out var queueType));
+                Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+            });
 
         await consumer.DisposeAsync();
         await connections.DisposeAsync();
@@ -210,7 +219,12 @@ public sealed class ArticleWorkProviderTopologyTests
         Assert.Equal(2, channel.QueueDeclarations.Count);
         Assert.Equal(2, channel.BindingDeclarations.Count);
         Assert.All(channel.QueueDeclarations, static q => Assert.True(q.Durable));
-        Assert.All(channel.QueueDeclarations, static q => Assert.Empty(q.Arguments!));
+        Assert.All(channel.QueueDeclarations, static q =>
+        {
+            Assert.NotNull(q.Arguments);
+            Assert.True(q.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var type));
+            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, type);
+        });
     }
 
     private static ArticleWorkConsumerService CreateConsumer(

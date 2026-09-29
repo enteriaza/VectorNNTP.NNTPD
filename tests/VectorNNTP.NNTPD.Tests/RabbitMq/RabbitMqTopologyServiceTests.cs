@@ -217,7 +217,7 @@ public sealed class RabbitMqTopologyServiceTests
                 Assert.True(queue.Durable);
                 Assert.False(queue.Exclusive);
                 Assert.False(queue.AutoDelete);
-                AssertClassicQueueArguments(queue.Arguments);
+                AssertQuorumQueueArguments(queue.Arguments);
 
                 var binding = connection.BindingDeclarations[endpointOffset + i];
                 Assert.Equal(definition.QueueName, binding.Queue);
@@ -231,7 +231,7 @@ public sealed class RabbitMqTopologyServiceTests
             Assert.True(overview.Durable);
             Assert.False(overview.Exclusive);
             Assert.False(overview.AutoDelete);
-            AssertClassicQueueArguments(overview.Arguments);
+            AssertQuorumQueueArguments(overview.Arguments);
             Assert.DoesNotContain(
                 connection.BindingDeclarations.Skip(endpointOffset).Take(definitions.Count + 1),
                 static binding => binding.Queue == OverviewDbTopology.QueueName);
@@ -248,20 +248,16 @@ public sealed class RabbitMqTopologyServiceTests
             static queue => queue.Name is "backfiller.giganews" or "backfiller.eweka" or "backfiller.abavia");
     }
 
-    private static void AssertClassicQueueArguments(
+    private static void AssertQuorumQueueArguments(
         IReadOnlyDictionary<string, object?>? arguments)
     {
-        var effective = arguments ?? new Dictionary<string, object?>(StringComparer.Ordinal);
-        Assert.False(effective.ContainsKey("x-queue-type"));
-        Assert.False(effective.ContainsKey(RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName));
-        Assert.False(effective.ContainsKey("x-message-ttl"));
-        Assert.False(effective.ContainsKey("x-expires"));
-        Assert.DoesNotContain(
-            effective,
-            static pair => string.Equals(
-                pair.Value as string,
-                RabbitMqArticleRetrievalEndpoints.QuorumQueueType,
-                StringComparison.Ordinal));
-        Assert.Empty(effective);
+        Assert.NotNull(arguments);
+        Assert.True(arguments.TryGetValue(
+            RabbitMqArticleRetrievalEndpoints.QueueTypeArgumentName,
+            out var queueType));
+        Assert.Equal(RabbitMqArticleRetrievalEndpoints.QuorumQueueType, queueType);
+        Assert.False(arguments.ContainsKey("x-message-ttl"));
+        Assert.False(arguments.ContainsKey("x-expires"));
+        Assert.Single(arguments);
     }
 }

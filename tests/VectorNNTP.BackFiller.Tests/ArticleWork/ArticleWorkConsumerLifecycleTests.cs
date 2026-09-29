@@ -132,7 +132,10 @@ public sealed class ArticleWorkConsumerLifecycleTests
         Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.ExchangeDeclarations).Name);
         Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.QueueDeclarations).Name);
         Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Durable);
-        Assert.False(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.ContainsKey("x-queue-type"));
+        Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.TryGetValue(
+            BackFillerArticleWorkTopology.QueueTypeArgumentName,
+            out var queueType));
+        Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
         Assert.Equal(1, topologyChannel.DisposeCount);
         Assert.Equal(0, topologyChannel.ConsumeCount);
         Assert.Equal(1, factory.ConnectCount);

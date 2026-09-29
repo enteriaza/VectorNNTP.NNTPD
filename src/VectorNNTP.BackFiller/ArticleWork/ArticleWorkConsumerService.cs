@@ -398,7 +398,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
     }
 
     /// <summary>
-    /// Declares classic durable fanout topology for each backbone that is about to receive
+    /// Declares durable quorum fanout topology for each backbone that is about to receive
     /// consumers. Topology is never deleted when capacity later drops to zero.
     /// </summary>
     private async Task<HashSet<string>> EnsureProviderTopologyAsync(

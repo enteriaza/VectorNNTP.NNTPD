@@ -44,7 +44,7 @@ public static class BackFillerServiceCollectionExtensions
     /// <see cref="ArticleWorkResponsePublisher"/>,
     /// then <see cref="ArticleWorkConsumerService"/>. Article Work consume
     /// is reconciled from usable NNTP capacity. Before consumers start for a usable
-    /// backbone, BackFiller declares that backbone's classic <c>backfiller.*</c> topology.
+    /// backbone, BackFiller declares that backbone's quorum <c>backfiller.*</c> topology.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {

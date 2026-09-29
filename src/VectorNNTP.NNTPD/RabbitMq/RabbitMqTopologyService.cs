@@ -11,17 +11,18 @@ namespace VectorNNTP.NNTPD.RabbitMq;
 /// endpoint and the one-way OverviewDB ingest queue <c>overviewdb.queue</c>. Per-backbone
 /// <c>backfiller.*</c> provider exchanges and queues are declared by VectorNNTP.BackFiller
 /// when a backbone becomes usable. Article-work RPC reply queues are owned by
-/// <c>ArticleWorkRpcService</c>. <see cref="RabbitMqService"/> remains the sole connection
-/// lifecycle owner. The topology service obtains the current generation through
+/// <c>ArticleWorkRpcService</c> (exclusive, auto-delete, non-durable classic).
+/// <see cref="RabbitMqService"/> remains the sole connection lifecycle owner. The
+/// topology service obtains the current generation through
 /// <see cref="IRabbitMqService.TryGetCurrent"/> and opens one declare-only channel for the
 /// startup pass.
 /// </para>
 /// <para>
 /// Declaration uses RabbitMQ's normal idempotent declare/bind operations. Existing
 /// entities are never deleted, purged, or mutated. An incompatible existing entity
-/// fails startup. Current VectorNNTP-owned queues are durable classic (no
-/// <c>x-queue-type</c>); quorum may return later as a topology-only change after the
-/// broker is upgraded.
+/// fails startup. Current VectorNNTP-owned durable application work queues are quorum
+/// (<c>x-queue-type=quorum</c>). Exclusive auto-delete ArticleWork RPC reply queues
+/// remain non-durable classic.
 /// </para>
 /// <para>
 /// Topology is established during <see cref="StartAsync"/> and is required before
@@ -83,7 +84,7 @@ public sealed class RabbitMqTopologyService : IApplicationService
 
     /// <summary>
     /// Declares the internal <c>backfiller.storage</c> endpoint and the OverviewDB
-    /// <c>overviewdb.queue</c> classic queue.
+    /// <c>overviewdb.queue</c> durable quorum queue.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     /// <exception cref="InvalidOperationException">
@@ -176,6 +177,6 @@ public sealed class RabbitMqTopologyService : IApplicationService
             durable: true,
             exclusive: false,
             autoDelete: false,
-            arguments: null,
+            OverviewDbTopology.QueueArguments,
             cancellationToken);
 }

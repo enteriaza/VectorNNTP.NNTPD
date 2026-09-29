@@ -3,7 +3,7 @@ using RabbitMQ.Client;
 namespace VectorNNTP.BackFiller.RabbitMq;
 
 /// <summary>
-/// Declares the durable classic fanout ArticleWork topology for one BackFiller backbone.
+/// Declares the durable quorum fanout ArticleWork topology for one BackFiller backbone.
 /// </summary>
 /// <remarks>
 /// BackFiller owns per-backbone <c>backfiller.{backbone}</c> exchange, queue, and binding.
@@ -13,8 +13,14 @@ namespace VectorNNTP.BackFiller.RabbitMq;
 /// </remarks>
 public static class BackFillerArticleWorkTopology
 {
+    /// <summary>Broker argument that selects the RabbitMQ queue type.</summary>
+    public const string QueueTypeArgumentName = "x-queue-type";
+
+    /// <summary>Required queue type for durable BackFiller ArticleWork provider queues.</summary>
+    public const string QuorumQueueType = "quorum";
+
     /// <summary>
-    /// Declares the fanout exchange, durable classic queue, and binding for
+    /// Declares the fanout exchange, durable quorum queue, and binding for
     /// <paramref name="backbone"/> using existing name/routing semantics.
     /// </summary>
     /// <param name="channel">Caller-owned channel on the current connection generation.</param>
@@ -43,7 +49,10 @@ public static class BackFillerArticleWorkTopology
                 durable: true,
                 exclusive: false,
                 autoDelete: false,
-                arguments: new Dictionary<string, object?>(StringComparer.Ordinal),
+                arguments: new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    [QueueTypeArgumentName] = QuorumQueueType,
+                },
                 cancellationToken)
             .ConfigureAwait(false);
 
