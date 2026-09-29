@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 public sealed class ArticleWorkProviderTopologyTests
 {
     [Fact]
-    public async Task Active_backbone_declares_classic_fanout_topology_before_consumers()
+    public async Task Active_backbone_declares_quorum_fanout_topology_before_consumers()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
         var connections = BackFillerRabbitMqServiceTests.CreateService(factory);

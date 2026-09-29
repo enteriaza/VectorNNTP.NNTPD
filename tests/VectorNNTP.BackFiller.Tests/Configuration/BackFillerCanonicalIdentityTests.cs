@@ -27,6 +27,17 @@ public sealed class BackFillerCanonicalIdentityTests
         Assert.Null(typeof(BackFillerRuntimeOptions).GetProperty("Name"));
     }
 
+    [Fact]
+    public void TransitServer_is_not_part_of_BackFiller_configuration()
+    {
+        Assert.Null(typeof(BackFillerOptions).GetProperty("TransitServer"));
+        Assert.Null(typeof(BackFillerRuntimeOptions).GetProperty("TransitServer"));
+        Assert.Null(typeof(BackFillerOptions).Assembly.GetType(
+            "VectorNNTP.BackFiller.Configuration.BackFillerTransitServerOptions"));
+        Assert.Null(typeof(BackFillerRuntimeOptions).Assembly.GetType(
+            "VectorNNTP.BackFiller.Configuration.BackFillerTransitServerRuntimeOptions"));
+    }
+
     [Theory]
     [InlineData(1, "backfiller01.usenet.ninja")]
     [InlineData(8, "backfiller08.usenet.ninja")]

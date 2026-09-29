@@ -173,7 +173,10 @@ public sealed class BackFillerOptions
     /// </summary>
     /// <remarks>
     /// Old key: <c>DirCerts</c>. Relative paths resolve against the host content root.
-    /// The Listener loads <c>backfiller-listener.pfx</c> from this directory.
+    /// When <see cref="AcmeStateDir"/> is empty, this value is used as the ACME state
+    /// directory. Live TLS material is published through Common ACME /
+    /// <c>ITlsCertificateContextProvider</c>; the Cache Listener does not load a
+    /// fixed PFX filename from this directory.
     /// </remarks>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;
 
@@ -181,11 +184,6 @@ public sealed class BackFillerOptions
     /// Gets or sets RabbitMQ settings.
     /// </summary>
     public BackFillerRabbitMqOptions RabbitMQ { get; set; } = new();
-
-    /// <summary>
-    /// Gets or sets TransitServer connection settings.
-    /// </summary>
-    public BackFillerTransitServerOptions TransitServer { get; set; } = new();
 
     /// <summary>
     /// Gets or sets in-memory article retention settings.
@@ -300,17 +298,4 @@ public sealed class BackFillerArticleRetentionOptions
 
     /// <summary>Sweep cadence in seconds.</summary>
     public int SweepIntervalSeconds { get; set; } = 1;
-}
-
-/// <summary>Downstream TransitServer endpoint.</summary>
-public sealed class BackFillerTransitServerOptions
-{
-    /// <summary>TransitServer hostname or IP.</summary>
-    public string Host { get; set; } = "localhost";
-
-    /// <summary>TransitServer NNTP port.</summary>
-    public int Port { get; set; } = 119;
-
-    /// <summary>Whether TransitServer connections use TLS.</summary>
-    public bool UseSsl { get; set; }
 }

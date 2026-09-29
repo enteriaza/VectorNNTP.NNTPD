@@ -31,9 +31,6 @@ public static class ListenerProtocol
     /// <summary>Required NotFound reason byte.</summary>
     public const byte NotFoundReasonUnavailable = 0x00;
 
-    /// <summary>Persisted listener PFX name under <c>CertificateDirectory</c>. ACME provisioning is deferred.</summary>
-    public const string ListenerPfxFileName = "backfiller-listener.pfx";
-
     /// <summary>Maximum outstanding RequestIds per connection.</summary>
     public const int MaxOutstandingRequests = 64;
 

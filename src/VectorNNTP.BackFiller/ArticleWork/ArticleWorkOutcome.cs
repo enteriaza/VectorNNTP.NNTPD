@@ -11,13 +11,13 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </remarks>
 public enum ArticleWorkOutcome
 {
-    /// <summary>Article recovered. Phase 3 never produces this from the default handler.</summary>
+    /// <summary>Article recovered and retained for cache/VATP transfer.</summary>
     Success = 0,
 
-    /// <summary>Provider did not have the article. Not produced in Phase 3.</summary>
+    /// <summary>Provider did not have the article.</summary>
     ArticleNotFound = 1,
 
-    /// <summary>Provider returned bytes that failed article validation. Not produced in Phase 3.</summary>
+    /// <summary>Provider returned bytes that failed article or yEnc validation.</summary>
     InvalidArticle = 2,
 
     /// <summary>Malformed protocol payload or AMQP metadata.</summary>
@@ -35,7 +35,7 @@ public enum ArticleWorkOutcome
     /// <summary>
     /// Retrieval succeeded but retention could not admit the payload.
     /// Distinct from <see cref="ArticleNotFound"/> and <see cref="ProviderFailure"/>.
-    /// Phase 5 temporary settlement is NACK requeue; Phase 6 decides the final policy.
+    /// Settled as NACK requeue without a terminal RPC response.
     /// </summary>
     RetentionRejected = 7,
 }

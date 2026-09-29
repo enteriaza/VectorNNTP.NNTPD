@@ -457,7 +457,7 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 | `PoolReconnectBaseDelayMs` | int | `250` | **yes** | Application reconnect base delay (`50–60000`) |
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
 | `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
-| `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Validated; reserved for later message work (`1–4096`) |
+| `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Maximum admitted Article Work request payload bytes (`1–4096`). Consumed by VectorNNTP.BackFiller |
 | `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |
 | `MinConnections` | int | `4` | **yes** | Validated; reserved for later pool policy (`1–512`; ≤ `MaxConnections`) |
 | `MaxConnections` | int | `16` | **yes** | Validated; reserved for later pool policy (`1–512`) |
@@ -465,11 +465,11 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 | `ConnectionScaleDownIdleSeconds` | int | `300` | **yes** | Validated; reserved for later pool policy (`30–86400`) |
 | `ScaleDownCooldownSeconds` | int | `30` | **yes** | Validated; reserved for later pool policy (`0–3600`) |
 | `MinimumConnectionLifetimeSeconds` | int | `300` | **yes** | Validated; reserved for later idle-retirement (`30–86400`) |
-| `PublishConfirmTimeoutSeconds` | int | `10` | **yes** | Publisher-confirm wait used by OverviewDB handoff publications (`1–3600`) |
+| `PublishConfirmTimeoutSeconds` | int | `10` | **yes** | Publisher-confirm wait used by OverviewDB handoff and BackFiller Article Work response publication (`1–3600`) |
 | `MaximumShutdownDrainTimeoutSeconds` | int | `30` | **yes** | Validated; shutdown is cancellation-driven (`1–3600`) |
 | `DegradedThreshold` | double | `0.75` | **yes** | Validated; reserved for later health policy (`>0` and `≤1`) |
 | `UnhealthyThreshold` | int | `5` | **yes** | Validated; reserved for later health policy (`1–120`) |
-| `ConsumerPrefetchCount` | ushort | _(none)_ | no | Optional; reserved for later Basic.Qos (`1–65535`) |
+| `ConsumerPrefetchCount` | ushort | _(none)_ | no | Optional Basic.Qos prefetch. Consumed by VectorNNTP.BackFiller Article Work consumers (`1–65535`) |
 | `DiagnosticPayloadCorrelationId` | string | _(none)_ | no | Optional diagnostic gate; not used in this phase |
 
 There is no application-level RabbitMQ connection pool. One long-lived connection is owned by `RabbitMqService`. `MinConnections` / `MaxConnections` are validated for contract compatibility and are not enforced.

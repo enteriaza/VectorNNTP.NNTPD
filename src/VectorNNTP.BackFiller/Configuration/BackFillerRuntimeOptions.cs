@@ -22,7 +22,6 @@ public sealed record BackFillerRuntimeOptions(
     BackFillerShutdownRuntimeOptions Shutdown,
     BackFillerListenerRuntimeOptions Listener,
     BackFillerArticleRetentionRuntimeOptions ArticleRetention,
-    BackFillerTransitServerRuntimeOptions TransitServer,
     BackFillerRabbitMqRuntimeOptions RabbitMq,
     IReadOnlyList<string> CertificateDomainNames,
     string CertificatePassword,
@@ -60,12 +59,6 @@ public sealed record BackFillerArticleRetentionRuntimeOptions(
     long MaximumRetainedPayloadBytes,
     TimeSpan RetentionTtl,
     TimeSpan SweepInterval);
-
-/// <summary>Validated TransitServer endpoint.</summary>
-public sealed record BackFillerTransitServerRuntimeOptions(
-    string Host,
-    int Port,
-    bool UseSsl);
 
 /// <summary>Validated NntpDB projection without exposing the raw password in property names used for logs.</summary>
 /// <param name="ConnectionString">Full connection string. Secret.</param>

@@ -116,7 +116,6 @@ public static class BackFillerRuntimeOptionsFactory
         var retention = options.ArticleRetention ?? throw new InvalidOperationException("BackFiller:ArticleRetention is required.");
         var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
         var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
-        var transit = options.TransitServer ?? throw new InvalidOperationException("BackFiller:TransitServer is required.");
 
         return new BackFillerRuntimeOptions(
             ServerId: serverId,
@@ -142,10 +141,6 @@ public static class BackFillerRuntimeOptionsFactory
                 checked(retention.MaximumRetainedPayloadGigabytes * BackFillerArticleRetentionOptions.BytesPerGibibyte),
                 TimeSpan.FromSeconds(retention.RetentionTtlSeconds),
                 TimeSpan.FromSeconds(retention.SweepIntervalSeconds)),
-            TransitServer: new BackFillerTransitServerRuntimeOptions(
-                transit.Host.Trim(),
-                transit.Port,
-                transit.UseSsl),
             RabbitMq: new BackFillerRabbitMqRuntimeOptions(
                 Hosts: hosts,
                 Port: rabbit.Port ?? 0,

@@ -5,7 +5,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.BackFiller</RootNamespace>
     <AssemblyName>VectorNNTP.BackFiller</AssemblyName>
-    <Description>Usenet article recovery worker. Phase 10 configured Article Work shutdown drain semantics.</Description>
+    <Description>Usenet article recovery worker (VectorNNTP.BackFiller).</Description>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 

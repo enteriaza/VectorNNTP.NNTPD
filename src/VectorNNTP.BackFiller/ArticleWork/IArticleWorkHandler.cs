@@ -30,7 +30,7 @@ public interface IArticleWorkHandler
 }
 
 /// <summary>
-/// Phase 3 default handler. Does not invent Success. Returns <see cref="ArticleWorkOutcome.ProviderFailure"/>
+/// Test/stub handler that never invents Success. Returns <see cref="ArticleWorkOutcome.ProviderFailure"/>
 /// so the delivery is NACK-requeued without a terminal RPC response.
 /// </summary>
 public sealed class DeferredArticleWorkHandler : IArticleWorkHandler

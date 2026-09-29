@@ -38,7 +38,6 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateListener(options, failures);
         ValidateAccountRefresh(options, failures);
         ValidateArticleRetention(options, failures);
-        ValidateTransitServer(options, failures);
         ValidateRabbitMq(options, failures);
 
         return failures.Count > 0
@@ -239,32 +238,6 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         if (retention.MaximumRetainedPayloadGigabytes > maxSupportedGigabytes)
         {
             failures.Add($"BackFiller:ArticleRetention:MaximumRetainedPayloadGigabytes must be less than or equal to {maxSupportedGigabytes}.");
-        }
-    }
-
-    private static void ValidateTransitServer(BackFillerOptions options, List<string> failures)
-    {
-        var transit = options.TransitServer ?? new BackFillerTransitServerOptions();
-        if (string.IsNullOrWhiteSpace(transit.Host))
-        {
-            failures.Add("BackFiller:TransitServer:Host is required and cannot be empty.");
-        }
-        else
-        {
-            var host = transit.Host.Trim();
-            if (host.Contains("://", StringComparison.Ordinal))
-            {
-                failures.Add("BackFiller:TransitServer:Host must not include a URI scheme.");
-            }
-            else if (!IPAddress.TryParse(host, out _) && Uri.CheckHostName(host) != UriHostNameType.Dns)
-            {
-                failures.Add("BackFiller:TransitServer:Host must be a valid hostname or IP address.");
-            }
-        }
-
-        if (transit.Port is < 1 or > 65535)
-        {
-            failures.Add("BackFiller:TransitServer:Port must be between 1 and 65535.");
         }
     }
 
