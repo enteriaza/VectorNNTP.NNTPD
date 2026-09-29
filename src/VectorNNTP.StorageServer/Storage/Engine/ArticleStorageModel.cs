@@ -135,6 +135,55 @@ public enum ArticleRelocateOutcome : byte
     NotPresent = 5,
 }
 
+/// <summary>
+/// Outcome of a single-article live relocation (<c>RelocateArticleAsync</c>).
+/// </summary>
+public enum ArticleRelocationOutcome : byte
+{
+    /// <summary>Index Present at destination; source physical record remains (now dead).</summary>
+    Relocated = 1,
+
+    /// <summary>Already Present at the recorded destination (idempotent success).</summary>
+    IdempotentNoOp = 2,
+
+    /// <summary>
+    /// Relocation abandoned after durable Written (Evicted/Invalid/mismatch). Destination is dead.
+    /// </summary>
+    Abandoned = 3,
+
+    /// <summary>Source segment missing from the catalogue.</summary>
+    RejectedSourceMissing = 4,
+
+    /// <summary>Source segment is not Closed.</summary>
+    RejectedSourceNotClosed = 5,
+
+    /// <summary>Source catalogue generation does not match the request / CompactionBegin fence.</summary>
+    RejectedGenerationMismatch = 6,
+
+    /// <summary>Article missing, not Present, or not located on the source segment.</summary>
+    RejectedNotPresent = 7,
+
+    /// <summary>Source physical record failed integrity proof.</summary>
+    RejectedSourceCorrupt = 8,
+
+    /// <summary>CompactionBegin missing, retired, or source/generation conflict.</summary>
+    RejectedCompaction = 9,
+
+    /// <summary>Journal append conflict (fail-closed body mismatch).</summary>
+    Conflict = 10,
+}
+
+/// <summary>Result of <c>FileArticleStorageEngine.RelocateArticleAsync</c>.</summary>
+/// <param name="Outcome">Relocation outcome.</param>
+/// <param name="ArtId">Article identity.</param>
+/// <param name="DestinationLocation">Destination when Written/relocated; otherwise null.</param>
+/// <param name="Reason">Optional diagnostic reason.</param>
+public readonly record struct ArticleRelocationResult(
+    ArticleRelocationOutcome Outcome,
+    ArticleId ArtId,
+    StoredArticleLocation? DestinationLocation = null,
+    string? Reason = null);
+
 /// <summary>Opaque segment identity.</summary>
 /// <param name="Value">Monotonic or generated segment number.</param>
 public readonly record struct SegmentId(ulong Value)
@@ -336,8 +385,8 @@ public readonly record struct JournalIncompleteSequence(
 /// <remarks>
 /// <para>
 /// CompactionBegin → RelocationIntent → durable destination append → RelocationWritten →
-/// <see cref="IArticleIndex.TryRelocate"/> → (repeat) → CompactionCommitted →
-/// CompactionRetired (physical retirement is a later phase).
+/// <see cref="IArticleIndex.TryRelocate"/> (via <c>RelocateArticleAsync</c>) → (repeat) →
+/// CompactionCommitted → CompactionRetired (physical retirement is a later phase).
 /// </para>
 /// <para>
 /// CompactionCommitted asserts logical source exhaustion (no Present index entry references

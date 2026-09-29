@@ -39,7 +39,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// here — see <see cref="SegmentLifecycle.IsReclaimable"/>.
 /// </para>
 /// </remarks>
-public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
+public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
 {
     private readonly FileArticleJournal _journal;
     private readonly FileSegmentStore _segments;
