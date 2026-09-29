@@ -188,6 +188,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         {
             failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
         }
+
+        var articleCache = options.Storage.ArticleCache ?? new ArticleMemoryCacheOptions();
+        if (articleCache.MaxBytes < 0)
+        {
+            failures.Add("StorageServer:Storage:ArticleCache:MaxBytes must be greater than or equal to 0.");
+        }
     }
 
     private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)

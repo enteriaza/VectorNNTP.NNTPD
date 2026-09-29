@@ -16,6 +16,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(64L * 1024 * 1024, storage.JournalSoftLimitBytes);
         Assert.Equal(128L * 1024 * 1024, storage.JournalHardLimitBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
+        Assert.Equal(0, storage.ArticleCache.MaxBytes);
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
 
@@ -74,6 +75,7 @@ public sealed class ArticleStorageOptionsTests
                 ["StorageServer:Storage:JournalSoftLimitBytes"] = "10",
                 ["StorageServer:Storage:JournalHardLimitBytes"] = "20",
                 ["StorageServer:Storage:SegmentTargetSizeBytes"] = "30",
+                ["StorageServer:Storage:ArticleCache:MaxBytes"] = "4096",
             })
             .Build();
         var bound = new StorageServerOptions();
@@ -82,6 +84,19 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(10, bound.Storage.JournalSoftLimitBytes);
         Assert.Equal(20, bound.Storage.JournalHardLimitBytes);
         Assert.Equal(30, bound.Storage.SegmentTargetSizeBytes);
+        Assert.Equal(4096, bound.Storage.ArticleCache.MaxBytes);
+    }
+
+    [Fact]
+    public void Validator_rejects_negative_ArticleCache_MaxBytes()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.ArticleCache.MaxBytes = -1;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("ArticleCache:MaxBytes", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -95,5 +110,6 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(67108864, storage.GetProperty("JournalSoftLimitBytes").GetInt64());
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
         Assert.Equal(268435456, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
+        Assert.Equal(0, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
     }
 }

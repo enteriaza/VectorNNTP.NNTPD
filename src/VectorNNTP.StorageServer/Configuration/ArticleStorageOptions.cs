@@ -56,4 +56,10 @@ public sealed class ArticleStorageOptions
     /// </summary>
     [Range(1, long.MaxValue)]
     public long SegmentTargetSizeBytes { get; set; } = DefaultSegmentTargetSizeBytes;
+
+    /// <summary>
+    /// Gets or sets process-local article memory-cache bounds under
+    /// <c>StorageServer:Storage:ArticleCache</c>.
+    /// </summary>
+    public ArticleMemoryCacheOptions ArticleCache { get; set; } = new();
 }

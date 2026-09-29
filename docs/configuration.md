@@ -1270,6 +1270,7 @@ StorageServer keeps application logs, the NVMe control tier, and the SATA segmen
 | `StorageServer:Storage:JournalSoftLimitBytes` | long | `67108864` (64 MiB) | no | Journal outstanding-bytes soft limit. At or above this threshold, write pressure becomes Elevated. |
 | `StorageServer:Storage:JournalHardLimitBytes` | long | `134217728` (128 MiB) | no | Journal outstanding-bytes hard limit. At or above this threshold, write pressure is Critical and Accept rejects new writes. Must be ≥ soft limit. |
 | `StorageServer:Storage:SegmentTargetSizeBytes` | long | `268435456` (256 MiB) | no | Target closed-segment size hint for future rollover. Not enforced by Phase-1 memory fakes. |
+| `StorageServer:Storage:ArticleCache:MaxBytes` | long | `0` | no | Process-local RAM article-cache ArtData capacity. `0` disables the cache (Gets miss; Puts do not retain). Must be ≥ `0`. Non-durable; restart clears the cache. Not wired into the durable storage engine in Phase 3A. |
 
 Do not point `CacheDir` or `ControlDir` at the log directory. Do not nest logs under `cache/` or `control/` by default.
 
