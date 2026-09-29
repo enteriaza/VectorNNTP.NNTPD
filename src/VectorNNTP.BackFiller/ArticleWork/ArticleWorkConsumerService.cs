@@ -2,6 +2,8 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -14,7 +16,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
     /// <summary>Old-worker consumer reconcile cadence.</summary>
     internal static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(15);
 
-    private readonly IBackFillerRabbitMqService _connections;
+    private readonly IRabbitMqService _connections;
     private readonly BackFillerRuntimeOptions _runtime;
     private readonly IArticleWorkHandler _handler;
     private readonly IArticleWorkResponsePublisher _publisher;
@@ -43,7 +45,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
     /// <param name="catalog">Current provider snapshot. Empty when omitted.</param>
     /// <param name="capacity">Published usable NNTP capacity. Empty when omitted.</param>
     public ArticleWorkConsumerService(
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         BackFillerRuntimeOptions runtime,
         IArticleWorkHandler handler,
         IArticleWorkResponsePublisher publisher,
@@ -434,10 +436,12 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
             return ready;
         }
 
-        IBackFillerRabbitMqChannel? channel = null;
+        IRabbitMqManualAckChannel? channel = null;
         try
         {
-            channel = await handle.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+            channel = await handle.Connection
+                .CreateManualAckChannelAsync(handle.Generation, cancellationToken)
+                .ConfigureAwait(false);
             foreach (var backbone in unique.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -528,7 +532,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
         }
     }
 
-    private void OnConnectionReplaced(object? sender, BackFillerRabbitMqConnectionReplacedEventArgs eventArgs)
+    private void OnConnectionReplaced(object? sender, RabbitMqConnectionReplacedEventArgs eventArgs)
     {
         if (!eventArgs.IsReplacement)
         {

@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Messaging.RabbitMq;
 namespace VectorNNTP.NNTPD.RabbitMq.Management;
 
 /// <summary>

@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Hosting;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Redis;
@@ -38,7 +40,6 @@ using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Ninpaths;
 using VectorNNTP.NNTPD.Telemetry;
 using VectorNNTP.NNTPD.Transit;
-using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Hosting;
@@ -188,7 +189,7 @@ public static class NntpdServiceCollectionExtensions
             .BindConfiguration(RabbitMqOptions.SectionName)
             .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
             .ValidateOnStart();
-        services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
+        services.AddSingleton<IValidateOptions<RabbitMqOptions>, NntpdRabbitMqOptionsValidator>();
 
         services.AddHttpClient(RabbitMqManagementHttpClient.HttpClientName, static (sp, client) =>
             {
@@ -310,9 +311,12 @@ public static class NntpdServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, RedisService>(static sp =>
                 sp.GetRequiredService<RedisService>()));
 
-        services.TryAddSingleton<IRabbitMqConnectionFactory, RabbitMqClientConnectionFactory>();
-        services.TryAddSingleton<RabbitMqService>();
-        services.TryAddSingleton<IRabbitMqService>(static sp => sp.GetRequiredService<RabbitMqService>());
+        services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
+            new DelegateRabbitMqConnectionNameProvider(() =>
+                RabbitMqRuntimeOptions.GetDefaultConnectionName(
+                    "VectorNNTP.NNTPD",
+                    sp.GetRequiredService<IOptions<NntpdOptions>>().Value.Fqdn)));
+        services.AddRabbitMqInfrastructure();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
                 sp.GetRequiredService<RabbitMqService>()));
@@ -462,6 +466,8 @@ public static class NntpdServiceCollectionExtensions
                 ServiceDescriptor.Singleton<IApplicationService, PlaceholderApplicationService>());
         }
 
+        services.AddSingleton<IApplicationLifecycleOptions>(static sp =>
+            sp.GetRequiredService<IOptions<NntpdOptions>>().Value);
         services.AddSingleton<ApplicationServiceManager>();
         services.AddSingleton<ApplicationLifecycle>();
         services.AddSingleton<NntpdHostLifetime>();

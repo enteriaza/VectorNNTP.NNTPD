@@ -121,7 +121,7 @@ public sealed class ListenerBindStartupTests
         var managerLogger = new CapturingLogger<ApplicationServiceManager>();
         var manager = new ApplicationServiceManager(
             [service],
-            Options.Create(options),
+            options,
             managerLogger);
 
         var ex = await Assert.ThrowsAsync<SocketException>(() => manager.StartAsync(CancellationToken.None));
@@ -150,7 +150,7 @@ public sealed class ListenerBindStartupTests
         var managerLogger = new CapturingLogger<ApplicationServiceManager>();
         var manager = new ApplicationServiceManager(
             [service],
-            Options.Create(options),
+            options,
             managerLogger);
 
         var ex = await Assert.ThrowsAsync<SocketException>(() => manager.StartAsync(CancellationToken.None));
@@ -178,11 +178,11 @@ public sealed class ListenerBindStartupTests
         var hostedLogger = new CapturingLogger<NntpdHostedService>();
         var manager = new ApplicationServiceManager(
             [service],
-            Options.Create(options),
+            options,
             managerLogger);
         await using var lifecycle = new ApplicationLifecycle(
             manager,
-            Options.Create(options),
+            options,
             lifecycleLogger);
         var hosted = new NntpdHostedService(
             lifecycle,
@@ -284,11 +284,11 @@ public sealed class ListenerBindStartupTests
         var lifecycleLogger = new CapturingLogger<ApplicationLifecycle>();
         var manager = new ApplicationServiceManager(
             [service],
-            Options.Create(options),
+            options,
             managerLogger);
         await using var lifecycle = new ApplicationLifecycle(
             manager,
-            Options.Create(options),
+            options,
             lifecycleLogger);
 
         await lifecycle.StartAsync(CancellationToken.None);

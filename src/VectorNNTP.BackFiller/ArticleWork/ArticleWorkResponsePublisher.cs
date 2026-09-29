@@ -1,6 +1,8 @@
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -15,7 +17,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </remarks>
 public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher, IHostedService, IAsyncDisposable
 {
-    private readonly IBackFillerRabbitMqService _connections;
+    private readonly IRabbitMqService _connections;
     private readonly BackFillerRuntimeOptions _runtime;
     private readonly ILogger<ArticleWorkResponsePublisher> _logger;
     private readonly object _gate = new();
@@ -23,7 +25,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     private readonly SemaphoreSlim _replaceGate = new(1, 1);
     private readonly CancellationTokenSource _runCts = new();
 
-    private IBackFillerRabbitMqPublishChannel? _channel;
+    private IRabbitMqPublishChannel? _channel;
     private Task _replaceTask = Task.CompletedTask;
     private ArticleWorkResponsePublisherState _state = ArticleWorkResponsePublisherState.Created;
     private int _started;
@@ -37,7 +39,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     /// <param name="runtime">Validated runtime snapshot.</param>
     /// <param name="logger">Publisher logger.</param>
     public ArticleWorkResponsePublisher(
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         BackFillerRuntimeOptions runtime,
         ILogger<ArticleWorkResponsePublisher> logger)
     {
@@ -77,7 +79,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     }
 
     /// <summary>Gets the caller-owned publish channel while the publisher is live (tests).</summary>
-    internal IBackFillerRabbitMqPublishChannel? Channel
+    internal IRabbitMqPublishChannel? Channel
     {
         get
         {
@@ -227,7 +229,21 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
                 ArticleWorkResponseWireProtocol.ExpirationMilliseconds,
                 body);
 
-            await channel.PublishConfirmedAsync(publication, linked.Token).ConfigureAwait(false);
+            await channel.PublishConfirmedAsync(
+                    new RabbitMqConfirmedPublication(
+                        Exchange: string.Empty,
+                        RoutingKey: publication.ReplyTo,
+                        MessageId: publication.MessageId,
+                        AppId: null,
+                        CorrelationId: publication.CorrelationId,
+                        ContentType: publication.ContentType,
+                        RequestIdHeader: publication.RequestIdHeader,
+                        ExpirationMilliseconds: publication.ExpirationMilliseconds,
+                        Persistent: false,
+                        Mandatory: true,
+                        Body: publication.Body),
+                    linked.Token)
+                .ConfigureAwait(false);
 
             if (!IsPublisherGenerationCurrent(generation) || !channel.IsOpen || !ReferenceEquals(Channel, channel))
             {
@@ -262,11 +278,11 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     /// Installs <paramref name="candidate"/> only when it is not older than the current channel.
     /// A stale candidate is disposed and cannot replace or dispose a newer channel.
     /// </summary>
-    internal async Task InstallPublishChannelAsync(IBackFillerRabbitMqPublishChannel candidate)
+    internal async Task InstallPublishChannelAsync(IRabbitMqPublishChannel candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
-        IBackFillerRabbitMqPublishChannel? replaced = null;
-        IBackFillerRabbitMqPublishChannel? stale = null;
+        IRabbitMqPublishChannel? replaced = null;
+        IRabbitMqPublishChannel? stale = null;
         lock (_gate)
         {
             if (_channel is { } current && current.Generation > candidate.Generation)
@@ -292,7 +308,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
         }
     }
 
-    private void OnConnectionReplaced(object? sender, BackFillerRabbitMqConnectionReplacedEventArgs eventArgs)
+    private void OnConnectionReplaced(object? sender, RabbitMqConnectionReplacedEventArgs eventArgs)
     {
         if (!eventArgs.IsReplacement)
         {
@@ -351,7 +367,9 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
         }
 
         ArticleWorkLogMessages.PublisherStarting(_logger, handle.Generation);
-        var channel = await handle.CreatePublishChannelAsync(cancellationToken).ConfigureAwait(false);
+        var channel = await handle.Connection
+            .CreatePublishChannelAsync(handle.Generation, cancellationToken)
+            .ConfigureAwait(false);
         try
         {
             if (!handle.IsCurrent || channel.Generation != handle.Generation)
@@ -370,7 +388,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
 
     private async Task DisposeChannelAsync()
     {
-        IBackFillerRabbitMqPublishChannel? channel;
+        IRabbitMqPublishChannel? channel;
         lock (_gate)
         {
             channel = _channel;
@@ -397,7 +415,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
         }
     }
 
-    private IBackFillerRabbitMqPublishChannel CurrentOpenChannelOrThrow()
+    private IRabbitMqPublishChannel CurrentOpenChannelOrThrow()
     {
         lock (_gate)
         {

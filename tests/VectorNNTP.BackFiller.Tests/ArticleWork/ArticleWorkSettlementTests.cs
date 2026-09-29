@@ -5,6 +5,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkSettlementTests
@@ -304,7 +306,7 @@ public sealed class ArticleWorkSettlementTests
     public async Task In_flight_delivery_does_not_settle_on_a_replaced_generation()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var handler = new ControllableArticleWorkHandler
         {

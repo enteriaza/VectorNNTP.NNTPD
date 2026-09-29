@@ -17,7 +17,6 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
-    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="10.0.12" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />

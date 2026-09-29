@@ -3,6 +3,7 @@ using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -166,8 +167,14 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>Gets every async-confirm publish channel created on this connection.</summary>
     public List<FakeRabbitMqAsyncConfirmPublishChannel> AsyncConfirmPublishChannels { get; } = [];
 
+    /// <summary>Gets every manual-ack channel created on this connection.</summary>
+    public List<FakeRabbitMqManualAckChannel> ManualAckChannels { get; } = [];
+
     /// <summary>When set, <see cref="CreateRpcChannelAsync"/> throws this exception.</summary>
     public Exception? CreateRpcChannelException { get; set; }
+
+    /// <summary>When set, <see cref="CreateManualAckChannelAsync"/> throws this exception.</summary>
+    public Exception? CreateManualAckChannelException { get; set; }
 
     /// <summary>When set, <see cref="CreatePublishChannelAsync"/> throws this exception.</summary>
     public Exception? CreatePublishChannelException { get; set; }
@@ -262,6 +269,27 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     }
 
     /// <inheritdoc />
+    public Task<IRabbitMqManualAckChannel> CreateManualAckChannelAsync(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CreateManualAckChannelException is not null)
+        {
+            throw CreateManualAckChannelException;
+        }
+
+        if (!IsOpen)
+        {
+            throw new InvalidOperationException("RabbitMQ connection is not open for channel creation.");
+        }
+
+        var channel = new FakeRabbitMqManualAckChannel(generation);
+        ManualAckChannels.Add(channel);
+        return Task.FromResult<IRabbitMqManualAckChannel>(channel);
+    }
+
+    /// <inheritdoc />
     public Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -272,7 +300,7 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
 
         if (!IsOpen)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for OverviewDB publication.");
+            throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
         }
 
         var channel = new FakeRabbitMqPublishChannel(generation);
@@ -294,7 +322,7 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
 
         if (!IsOpen)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for OverviewDB publication.");
+            throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
         }
 
         var channel = new FakeRabbitMqAsyncConfirmPublishChannel(generation);
@@ -665,15 +693,35 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
     public Func<Task>? BeforeConfirmAsync { get; set; }
 
     /// <inheritdoc />
-    public async Task PublishConfirmedAsync(
+    public Task PublishConfirmedAsync(
         string exchange,
         string routingKey,
         string messageId,
         string appId,
         string expiration,
         ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken) =>
+        PublishConfirmedAsync(
+            new RabbitMqConfirmedPublication(
+                exchange,
+                routingKey,
+                messageId,
+                appId,
+                CorrelationId: null,
+                ContentType: null,
+                RequestIdHeader: null,
+                expiration,
+                Persistent: true,
+                Mandatory: true,
+                body),
+            cancellationToken);
+
+    /// <inheritdoc />
+    public async Task PublishConfirmedAsync(
+        RabbitMqConfirmedPublication publication,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(publication);
         cancellationToken.ThrowIfCancellationRequested();
         if (DisposeCount > 0)
         {
@@ -703,7 +751,7 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
         if (RemainingPublishFailures > 0)
         {
             RemainingPublishFailures--;
-            throw PublishException ?? new InvalidOperationException("RabbitMQ negatively acknowledged the OverviewDB handoff.");
+            throw PublishException ?? new InvalidOperationException("RabbitMQ negatively acknowledged the publication.");
         }
 
         if (PublishException is not null)
@@ -712,14 +760,17 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
         }
 
         Publications.Add(new FakeRabbitMqConfirmedPublication(
-            exchange,
-            routingKey,
-            messageId,
-            appId,
-            expiration,
-            Persistent: true,
-            Mandatory: OverviewDbTopology.Mandatory,
-            body.ToArray()));
+            publication.Exchange,
+            publication.RoutingKey,
+            publication.MessageId,
+            publication.AppId,
+            publication.CorrelationId,
+            publication.ContentType,
+            publication.RequestIdHeader,
+            publication.ExpirationMilliseconds,
+            publication.Persistent,
+            publication.Mandatory,
+            publication.Body.ToArray()));
     }
 
     /// <inheritdoc />
@@ -847,6 +898,9 @@ internal sealed class FakeRabbitMqAsyncConfirmPublishChannel : IRabbitMqAsyncCon
             routingKey,
             messageId,
             appId,
+            CorrelationId: null,
+            ContentType: null,
+            RequestIdHeader: null,
             expiration,
             Persistent: true,
             Mandatory: OverviewDbTopology.Mandatory,
@@ -924,12 +978,158 @@ internal sealed record FakeRabbitMqRpcPublication(
     string Expiration,
     byte[] Body);
 
-/// <summary>Recorded confirm-enabled OverviewDB publication.</summary>
+/// <summary>In-memory manual-ack RabbitMQ channel for consume/settle tests.</summary>
+internal sealed class FakeRabbitMqManualAckChannel : IRabbitMqManualAckChannel
+{
+    /// <summary>Initializes a new fake manual-ack channel.</summary>
+    public FakeRabbitMqManualAckChannel(long generation)
+    {
+        Generation = generation;
+    }
+
+    /// <inheritdoc />
+    public long Generation { get; }
+
+    /// <inheritdoc />
+    public bool IsOpen { get; set; } = true;
+
+    /// <summary>Gets recorded exchange declarations.</summary>
+    public List<FakeRabbitMqExchangeDeclaration> Exchanges { get; } = [];
+
+    /// <summary>Gets recorded queue declarations.</summary>
+    public List<FakeRabbitMqQueueDeclaration> Queues { get; } = [];
+
+    /// <summary>Gets recorded bindings.</summary>
+    public List<FakeRabbitMqBindingDeclaration> Bindings { get; } = [];
+
+    /// <summary>Gets recorded acknowledgements.</summary>
+    public List<ulong> Acks { get; } = [];
+
+    /// <summary>Gets recorded negative acknowledgements.</summary>
+    public List<(ulong DeliveryTag, bool Requeue)> Nacks { get; } = [];
+
+    /// <summary>Gets how many times the channel was disposed.</summary>
+    public int DisposeCount { get; private set; }
+
+    /// <summary>Gets the consume handler when a consumer has started.</summary>
+    public Func<RabbitMqManualAckDelivery, Task>? DeliveryHandler { get; private set; }
+
+    /// <summary>Gets the consumed queue name.</summary>
+    public string? ConsumedQueue { get; private set; }
+
+    /// <summary>Gets the configured prefetch.</summary>
+    public ushort PrefetchCount { get; private set; }
+
+    /// <inheritdoc />
+    public Task ExchangeDeclareAsync(
+        string exchange,
+        string type,
+        bool durable,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Exchanges.Add(new FakeRabbitMqExchangeDeclaration(
+            exchange,
+            type,
+            durable,
+            autoDelete,
+            arguments is null ? null : new Dictionary<string, object?>(arguments, StringComparer.Ordinal)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task QueueDeclareAsync(
+        string queue,
+        bool durable,
+        bool exclusive,
+        bool autoDelete,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Queues.Add(new FakeRabbitMqQueueDeclaration(
+            queue,
+            durable,
+            exclusive,
+            autoDelete,
+            arguments is null ? null : new Dictionary<string, object?>(arguments, StringComparer.Ordinal)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task QueueBindAsync(
+        string queue,
+        string exchange,
+        string routingKey,
+        IReadOnlyDictionary<string, object?>? arguments,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Bindings.Add(new FakeRabbitMqBindingDeclaration(
+            queue,
+            exchange,
+            routingKey,
+            arguments is null ? null : new Dictionary<string, object?>(arguments, StringComparer.Ordinal)));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<string> BasicConsumeAsync(
+        string queue,
+        ushort prefetchCount,
+        Func<RabbitMqManualAckDelivery, Task> onDelivery,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ConsumedQueue = queue;
+        PrefetchCount = prefetchCount;
+        DeliveryHandler = onDelivery;
+        return Task.FromResult("fake-manual-ack-consumer");
+    }
+
+    /// <inheritdoc />
+    public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task BasicAckAsync(ulong deliveryTag, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Acks.Add(deliveryTag);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Nacks.Add((deliveryTag, requeue));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        IsOpen = false;
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>Recorded confirm-enabled publication.</summary>
 internal sealed record FakeRabbitMqConfirmedPublication(
     string Exchange,
     string RoutingKey,
     string MessageId,
-    string AppId,
+    string? AppId,
+    string? CorrelationId,
+    string? ContentType,
+    string? RequestIdHeader,
     string Expiration,
     bool Persistent,
     bool Mandatory,

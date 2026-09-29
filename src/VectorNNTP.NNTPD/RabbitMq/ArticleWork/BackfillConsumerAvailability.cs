@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using VectorNNTP.NNTPD.RabbitMq.Management;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 

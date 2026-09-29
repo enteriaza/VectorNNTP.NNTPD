@@ -14,6 +14,7 @@ using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Hosting;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
@@ -33,8 +34,8 @@ public static class BackFillerServiceCollectionExtensions
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
     /// <remarks>
-    /// Registers <see cref="BackFillerRabbitMqService"/> as the sole RabbitMQ connection
-    /// owner and as an <see cref="IHostedService"/>. Startup fails if the initial broker
+    /// Registers Common <see cref="RabbitMqService"/> via <see cref="RabbitMqServiceHostedAdapter"/>
+    /// as an early <see cref="IHostedService"/>. Startup fails if the initial broker
     /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
     /// after the connection owner, then <see cref="NntpProviderRegistry"/>,
     /// then <see cref="BackFillerApplicationHostedService"/> (starts
@@ -46,6 +47,7 @@ public static class BackFillerServiceCollectionExtensions
     /// then <see cref="ArticleWorkConsumerService"/>. Article Work consume
     /// is reconciled from usable NNTP capacity. Before consumers start for a usable
     /// backbone, BackFiller declares that backbone's quorum <c>backfiller.*</c> topology.
+    /// RabbitMQ is not registered into BackFiller <see cref="VectorNNTP.BackFiller.Core.ApplicationServiceManager"/>.
     /// </remarks>
     public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -58,16 +60,15 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IBackFillerStartupJournal, BackFillerStartupJournal>();
 
         builder.Services
+            .AddOptions<RabbitMqOptions>()
+            .BindConfiguration(RabbitMqOptions.SectionName)
+            .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
+            .ValidateOnStart();
+        builder.Services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
+
+        builder.Services
             .AddOptions<BackFillerOptions>()
             .BindConfiguration(BackFillerOptions.SectionName)
-            .Configure<IConfiguration>(static (options, configuration) =>
-            {
-                var rabbit = configuration.GetSection("RabbitMQ").Get<BackFillerRabbitMqOptions>();
-                if (rabbit is not null)
-                {
-                    options.RabbitMQ = rabbit;
-                }
-            })
             .ValidateOnStart();
         builder.Services.AddSingleton<IValidateOptions<BackFillerOptions>, BackFillerOptionsValidator>();
 
@@ -102,10 +103,12 @@ public static class BackFillerServiceCollectionExtensions
             var options = provider.GetRequiredService<IOptions<BackFillerOptions>>().Value;
             var nntpDb = provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
             var acme = provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
+            var rabbitMq = provider.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
             return BackFillerRuntimeOptionsFactory.Create(
                 options,
                 nntpDb,
                 acme,
+                rabbitMq,
                 AppContext.BaseDirectory);
         });
 
@@ -127,15 +130,14 @@ public static class BackFillerServiceCollectionExtensions
             provider.GetRequiredService<SystemdLifecycleNotifier>());
         builder.Services.AddHostedService<SystemdWatchdogService>();
 
-        builder.Services.TryAddSingleton<IBackFillerRabbitMqConnectionFactory, BackFillerRabbitMqClientConnectionFactory>();
-        builder.Services.AddSingleton(static provider => new BackFillerRabbitMqService(
-            provider.GetRequiredService<IBackFillerRabbitMqConnectionFactory>(),
-            provider.GetRequiredService<BackFillerRuntimeOptions>(),
-            provider.GetRequiredService<ILogger<BackFillerRabbitMqService>>()));
-        builder.Services.AddSingleton<IBackFillerRabbitMqService>(static provider =>
-            provider.GetRequiredService<BackFillerRabbitMqService>());
-        builder.Services.AddSingleton<IHostedService>(static provider =>
-            provider.GetRequiredService<BackFillerRabbitMqService>());
+        builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
+            new DelegateRabbitMqConnectionNameProvider(() =>
+                RabbitMqRuntimeOptions.GetDefaultConnectionName(
+                    "VectorNNTP.BackFiller",
+                    sp.GetRequiredService<IOptions<BackFillerOptions>>().Value.Fqdn)));
+        builder.Services.AddRabbitMqInfrastructure();
+        builder.Services.AddSingleton<IHostedService>(static sp =>
+            new RabbitMqServiceHostedAdapter(sp.GetRequiredService<RabbitMqService>()));
 
         builder.Services.TryAddSingleton<IProviderAccountSource, MySqlProviderAccountSource>();
         builder.Services.AddSingleton<ProviderConfigurationCatalog>();
@@ -188,7 +190,7 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CacheListenerService>(static provider =>
                 provider.GetRequiredService<CacheListenerService>()));
-        builder.Services.AddSingleton<ApplicationServiceManager>();
+        builder.Services.AddSingleton<VectorNNTP.BackFiller.Core.ApplicationServiceManager>();
         builder.Services.AddSingleton<IHostedService, BackFillerApplicationHostedService>();
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleRetentionSweepService>());
@@ -196,7 +198,7 @@ public static class BackFillerServiceCollectionExtensions
             new NntpArticleParser(provider.GetRequiredService<BackFillerRuntimeOptions>().Fqdn));
         builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
         builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
-            provider.GetRequiredService<IBackFillerRabbitMqService>(),
+            provider.GetRequiredService<IRabbitMqService>(),
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
             provider.GetRequiredService<ILogger<ArticleWorkResponsePublisher>>()));
         builder.Services.AddSingleton<IArticleWorkResponsePublisher>(static provider =>
@@ -204,7 +206,7 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.AddSingleton<IHostedService>(static provider =>
             provider.GetRequiredService<ArticleWorkResponsePublisher>());
         builder.Services.AddSingleton(static provider => new ArticleWorkConsumerService(
-            provider.GetRequiredService<IBackFillerRabbitMqService>(),
+            provider.GetRequiredService<IRabbitMqService>(),
             provider.GetRequiredService<BackFillerRuntimeOptions>(),
             provider.GetRequiredService<IArticleWorkHandler>(),
             provider.GetRequiredService<IArticleWorkResponsePublisher>(),

@@ -8,10 +8,10 @@ namespace VectorNNTP.Common.Tests.Configuration;
 public sealed class ServerIdRulesTests
 {
     [Fact]
-    public void Bounds_are_one_through_ninety_nine()
+    public void Bounds_are_one_through_two_hundred_fifty_five()
     {
         Assert.Equal(1, ServerIdRules.MinimumInclusive);
-        Assert.Equal(99, ServerIdRules.MaximumInclusive);
+        Assert.Equal(255, ServerIdRules.MaximumInclusive);
     }
 
     [Fact]
@@ -28,6 +28,8 @@ public sealed class ServerIdRulesTests
     [InlineData(8)]
     [InlineData(50)]
     [InlineData(99)]
+    [InlineData(100)]
+    [InlineData(255)]
     public void Classify_accepts_inclusive_range(int serverId)
     {
         Assert.True(ServerIdRules.IsInRange(serverId));
@@ -38,15 +40,15 @@ public sealed class ServerIdRulesTests
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(100)]
-    [InlineData(101)]
+    [InlineData(256)]
+    [InlineData(257)]
     [InlineData(int.MaxValue)]
     public void Classify_rejects_out_of_range(int serverId)
     {
         Assert.False(ServerIdRules.IsInRange(serverId));
         Assert.Equal(ServerIdValidationStatus.OutOfRange, ServerIdRules.Classify(serverId));
         var failure = ServerIdRules.Validate(serverId, "ServerId");
-        Assert.Contains("1–99", failure, StringComparison.Ordinal);
+        Assert.Contains("1–255", failure, StringComparison.Ordinal);
     }
 
     [Fact]

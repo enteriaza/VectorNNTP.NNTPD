@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Configuration;
-using VectorNNTP.BackFiller.Core;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.NNTPD.Core;
+using BackFillerApplicationServiceManager = VectorNNTP.BackFiller.Core.ApplicationServiceManager;
 
 namespace VectorNNTP.BackFiller.Tests.Core;
 
@@ -17,10 +17,10 @@ public sealed class ApplicationServiceManagerTests
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
             BackFillerTestOptions.CreateValidNntpDb());
-        var manager = new ApplicationServiceManager(
+        var manager = new BackFillerApplicationServiceManager(
             [first, second],
             runtime,
-            NullLogger<ApplicationServiceManager>.Instance);
+            NullLogger<BackFillerApplicationServiceManager>.Instance);
 
         await manager.StartAsync(CancellationToken.None);
         Assert.Equal(["start:acme", "start:listener"], order);
@@ -40,10 +40,10 @@ public sealed class ApplicationServiceManagerTests
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
             BackFillerTestOptions.CreateValidNntpDb());
-        var manager = new ApplicationServiceManager(
+        var manager = new BackFillerApplicationServiceManager(
             [first, second],
             runtime,
-            NullLogger<ApplicationServiceManager>.Instance);
+            NullLogger<BackFillerApplicationServiceManager>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StartAsync(CancellationToken.None));
         Assert.Equal(["start:acme", "start:listener", "stop:acme"], order);

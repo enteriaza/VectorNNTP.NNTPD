@@ -1,6 +1,8 @@
 using System.Net;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Fixtures;
@@ -25,15 +27,17 @@ internal static class BackFillerTestOptions
             AcmeStateDir = "certs/",
             LogDirectory = "logs",
             CertificateDirectory = "certs",
-            RabbitMQ =
-            {
-                Hosts = ["127.0.0.1"],
-                Username = "nntparticles",
-                Password = SecretPassword,
-                EnableSsl = false,
-            },
         };
     }
+
+    internal static RabbitMqOptions CreateValidRabbitMq() =>
+        new()
+        {
+            Hosts = ["127.0.0.1"],
+            Username = "nntparticles",
+            Password = SecretPassword,
+            EnableSsl = false,
+        };
 
     internal static Dictionary<string, string?> CreateValidConfigurationPairs()
     {
@@ -106,11 +110,13 @@ internal static class BackFillerTestOptions
 
     internal static BackFillerOptionsValidator CreateValidator(
         ILocalIpAddressAssignee? assignee = null,
-        IPhysicalMemoryProvider? memory = null)
+        IPhysicalMemoryProvider? memory = null,
+        RabbitMqOptions? rabbitMq = null)
     {
         _ = assignee;
         return new BackFillerOptionsValidator(
-            memory ?? new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
+            memory ?? new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024),
+            Options.Create(rabbitMq ?? CreateValidRabbitMq()));
     }
 }
 

@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.RabbitMq.Management;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq.ArticleWork;
 
@@ -249,7 +250,7 @@ public sealed class ArticleWorkRpcServiceTests
         return new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
     }
 

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.RabbitMq.Management;
 

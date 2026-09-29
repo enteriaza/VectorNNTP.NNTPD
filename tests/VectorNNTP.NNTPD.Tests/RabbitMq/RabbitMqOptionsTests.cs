@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Hosting;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 
@@ -132,14 +133,14 @@ public sealed class RabbitMqOptionsTests
     [Fact]
     public void Validate_Succeeds_ForValidHosts()
     {
-        var result = new RabbitMqOptionsValidator().Validate(null, CreateValid());
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, CreateValid());
         Assert.True(result.Succeeded);
     }
 
     [Fact]
     public void Validate_Fails_WhenHostsMissing()
     {
-        var result = new RabbitMqOptionsValidator().Validate(null, new RabbitMqOptions());
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, new RabbitMqOptions());
         Assert.True(result.Failed);
         Assert.Contains(result.Failures, static failure => failure.Contains("Hosts", StringComparison.Ordinal));
     }
@@ -149,7 +150,7 @@ public sealed class RabbitMqOptionsTests
     {
         var options = CreateValid();
         options.Hosts = [" "];
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
     }
 
@@ -158,7 +159,7 @@ public sealed class RabbitMqOptionsTests
     {
         var options = CreateValid();
         options.Hosts = ["user:pass@broker.example.net"];
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures, static failure => failure.Contains("credentials", StringComparison.Ordinal));
     }
@@ -169,7 +170,7 @@ public sealed class RabbitMqOptionsTests
         var options = CreateValid();
         options.Username = "nntparticles";
         options.Password = null;
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures, static failure => failure.Contains("Password", StringComparison.Ordinal));
     }
@@ -181,7 +182,7 @@ public sealed class RabbitMqOptionsTests
     {
         var options = CreateValid();
         options.Port = port;
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
     }
 
@@ -191,7 +192,7 @@ public sealed class RabbitMqOptionsTests
         var options = CreateValid();
         options.MinConnections = 8;
         options.MaxConnections = 2;
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
     }
 
@@ -201,7 +202,7 @@ public sealed class RabbitMqOptionsTests
         var options = CreateValid();
         options.ChannelLeaseTimeoutSeconds = 10;
         options.RpcTimeoutSeconds = 30;
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
     }
 
@@ -319,7 +320,7 @@ public sealed class RabbitMqOptionsTests
     {
         var options = CreateValid();
         options.Management.BaseUrl = null;
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures, static failure => failure.Contains("Management:BaseUrl", StringComparison.Ordinal));
     }
@@ -329,7 +330,7 @@ public sealed class RabbitMqOptionsTests
     {
         var options = CreateValid();
         options.Management.BaseUrl = "http://127.0.0.1:15672/api";
-        var result = new RabbitMqOptionsValidator().Validate(null, options);
+        var result = new NntpdRabbitMqOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(result.Failures, static failure => failure.Contains("must not include a path", StringComparison.Ordinal));
     }
@@ -339,7 +340,7 @@ public sealed class RabbitMqOptionsTests
     {
         Assert.Equal(
             "VectorNNTP.NNTPD:nntpd01.usenet.ninja",
-            RabbitMqRuntimeOptions.GetDefaultConnectionName("nntpd01.usenet.ninja"));
+            RabbitMqRuntimeOptions.GetDefaultConnectionName("VectorNNTP.NNTPD", "nntpd01.usenet.ninja"));
     }
 
     internal static RabbitMqOptions CreateValid() =>

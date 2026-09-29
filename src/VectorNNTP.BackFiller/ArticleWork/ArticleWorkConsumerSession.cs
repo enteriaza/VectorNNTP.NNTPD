@@ -1,6 +1,8 @@
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -29,7 +31,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     private readonly string _queue;
     private readonly ushort _prefetch;
     private readonly ArticleWorkDeliveryPipeline _pipeline;
-    private readonly IBackFillerRabbitMqService _connections;
+    private readonly IRabbitMqService _connections;
     private readonly ILogger _logger;
     private readonly BackFillerShutdownRuntimeOptions _shutdown;
     private readonly object _gate = new();
@@ -37,7 +39,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     private readonly CancellationTokenSource _queueCts = new();
     private readonly CancellationTokenSource _workCts = new();
 
-    private IBackFillerRabbitMqChannel? _channel;
+    private IRabbitMqManualAckChannel? _channel;
     private string? _consumerTag;
     private int _inFlight;
     private int _active;
@@ -58,7 +60,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         string backbone,
         ushort prefetch,
         ArticleWorkDeliveryPipeline pipeline,
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         ILogger logger)
         : this(backbone, prefetch, pipeline, connections, logger, DefaultShutdown, connectionNumber: 1, connectionLimit: 1)
     {
@@ -79,7 +81,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         string backbone,
         ushort prefetch,
         ArticleWorkDeliveryPipeline pipeline,
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         ILogger logger,
         BackFillerShutdownRuntimeOptions shutdown,
         int connectionNumber = 1,
@@ -169,7 +171,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     public long Generation { get; private set; }
 
     /// <summary>Gets the caller-owned consume channel while the session is live.</summary>
-    internal IBackFillerRabbitMqChannel? Channel
+    internal IRabbitMqManualAckChannel? Channel
     {
         get
         {
@@ -219,10 +221,12 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         }
 
         ArticleWorkLogMessages.ConsumerStarting(_logger, _backbone, _queue, handle.Generation);
-        IBackFillerRabbitMqChannel? channel = null;
+        IRabbitMqManualAckChannel? channel = null;
         try
         {
-            channel = await handle.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+            channel = await handle.Connection
+                .CreateManualAckChannelAsync(handle.Generation, cancellationToken)
+                .ConfigureAwait(false);
             var tag = await channel
                 .BasicConsumeAsync(_queue, _prefetch, OnDeliveryAsync, cancellationToken)
                 .ConfigureAwait(false);
@@ -294,7 +298,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
 
     private async Task RetireCoreAsync(CancellationToken shutdownToken)
     {
-        IBackFillerRabbitMqChannel? channel;
+        IRabbitMqManualAckChannel? channel;
         string? tag;
         lock (_gate)
         {
@@ -372,7 +376,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         _workCts.Cancel();
     }
 
-    private async Task OnDeliveryAsync(BackFillerRabbitMqConsumedDelivery delivery)
+    private async Task OnDeliveryAsync(RabbitMqManualAckDelivery delivery)
     {
         if (!TryAdmit())
         {
@@ -439,9 +443,9 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         }
     }
 
-    private async Task ProcessCurrentAsync(BackFillerRabbitMqConsumedDelivery delivery, CancellationToken cancellationToken)
+    private async Task ProcessCurrentAsync(RabbitMqManualAckDelivery delivery, CancellationToken cancellationToken)
     {
-        IBackFillerRabbitMqChannel? channel;
+        IRabbitMqManualAckChannel? channel;
         lock (_gate)
         {
             channel = _channel;
@@ -478,7 +482,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         }
     }
 
-    private Task SettleCancelledAsync(BackFillerRabbitMqConsumedDelivery delivery) =>
+    private Task SettleCancelledAsync(RabbitMqManualAckDelivery delivery) =>
         ProcessCurrentAsync(delivery, new CancellationToken(canceled: true));
 
     private bool TryAdmit()

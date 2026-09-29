@@ -1,5 +1,6 @@
 using System.Net;
 using MySqlConnector;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -27,6 +28,7 @@ public static class BackFillerRuntimeOptionsFactory
     /// <remarks>
     /// The three-argument overload maps leftover BackFiller bind/certificate fields only when
     /// a shared <see cref="AcmeCloudflareOptions"/> instance is not supplied (tests).
+    /// RabbitMQ defaults are used when <see cref="RabbitMqOptions"/> is omitted.
     /// </remarks>
     public static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
@@ -50,7 +52,7 @@ public static class BackFillerRuntimeOptionsFactory
             CloudFlareZoneId = string.Empty,
             DnsSuffix = options.DnsSuffix,
         };
-        return Create(options, nntpDb, acme, contentRootPath);
+        return Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
     }
 
     /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
@@ -58,11 +60,21 @@ public static class BackFillerRuntimeOptionsFactory
         BackFillerOptions options,
         NntpDbOptions nntpDb,
         AcmeCloudflareOptions acme,
+        string? contentRootPath = null) =>
+        Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
+
+    /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
+    public static BackFillerRuntimeOptions Create(
+        BackFillerOptions options,
+        NntpDbOptions nntpDb,
+        AcmeCloudflareOptions acme,
+        RabbitMqOptions rabbitMq,
         string? contentRootPath = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(nntpDb);
         ArgumentNullException.ThrowIfNull(acme);
+        ArgumentNullException.ThrowIfNull(rabbitMq);
 
         if (options.ServerId is not { } serverId || string.IsNullOrWhiteSpace(options.Fqdn))
         {
@@ -106,13 +118,6 @@ public static class BackFillerRuntimeOptionsFactory
 
         var nntpDbBuilder = new MySqlConnectionStringBuilder(nntpDb.ConnectionString);
 
-        var rabbit = options.RabbitMQ ?? throw new InvalidOperationException("BackFiller:RabbitMQ is required.");
-        var hosts = (rabbit.Hosts ?? [])
-            .Where(static x => !string.IsNullOrWhiteSpace(x))
-            .Select(static x => x.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
         var retention = options.ArticleRetention ?? throw new InvalidOperationException("BackFiller:ArticleRetention is required.");
         var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
         var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
@@ -143,36 +148,9 @@ public static class BackFillerRuntimeOptionsFactory
                 TimeSpan.FromSeconds(retention.SweepIntervalSeconds),
                 retention.MaxOpenableRequestIdsPerArticle),
             RabbitMq: new BackFillerRabbitMqRuntimeOptions(
-                Hosts: hosts,
-                Port: rabbit.Port ?? 0,
-                Username: NullIfWhiteSpace(rabbit.Username),
-                Password: rabbit.Password,
-                VirtualHost: string.IsNullOrWhiteSpace(rabbit.VirtualHost) ? "/" : rabbit.VirtualHost.Trim(),
-                EnableSsl: rabbit.EnableSsl ?? true,
-                WorkRequestMaxPayloadBytes: rabbit.WorkRequestMaxPayloadBytes ?? 1024,
-                ChannelLeaseTimeoutSeconds: rabbit.ChannelLeaseTimeoutSeconds ?? 60,
-                RpcTimeoutSeconds: rabbit.RpcTimeoutSeconds ?? 30,
-                ConnectionBlockedTimeoutSeconds: rabbit.ConnectionBlockedTimeoutSeconds ?? 30,
-                ChannelPoolSize: rabbit.ChannelPoolSize ?? 512,
-                MinConnections: rabbit.MinConnections ?? 4,
-                MaxConnections: rabbit.MaxConnections ?? 16,
-                MaxConsecutiveRecoveryFailures: rabbit.MaxConsecutiveRecoveryFailures ?? 5,
-                MaxPendingLeaseWaiters: rabbit.MaxPendingLeaseWaiters ?? 1024,
-                ConnectionScaleDownIdleSeconds: rabbit.ConnectionScaleDownIdleSeconds ?? 300,
-                ScaleDownCooldownSeconds: rabbit.ScaleDownCooldownSeconds ?? 30,
-                NetworkRecoveryIntervalSeconds: rabbit.NetworkRecoveryIntervalSeconds ?? 5,
-                PoolReconnectBaseDelayMs: rabbit.PoolReconnectBaseDelayMs ?? 250,
-                PoolReconnectMaxDelayMs: rabbit.PoolReconnectMaxDelayMs ?? 30000,
-                MinimumConnectionLifetimeSeconds: rabbit.MinimumConnectionLifetimeSeconds ?? 300,
-                PublishConfirmTimeoutSeconds: rabbit.PublishConfirmTimeoutSeconds ?? 10,
-                MaximumShutdownDrainTimeoutSeconds: rabbit.MaximumShutdownDrainTimeoutSeconds ?? 30,
-                DegradedThreshold: rabbit.DegradedThreshold ?? 0.75,
-                UnhealthyThreshold: rabbit.UnhealthyThreshold ?? 5,
-                RequestedHeartbeatSeconds: rabbit.RequestedHeartbeatSeconds ?? 60,
-                SocketTimeoutSeconds: rabbit.SocketTimeoutSeconds ?? 30,
-                RequestedChannelMax: rabbit.RequestedChannelMax ?? 2047,
-                ConsumerPrefetchCount: rabbit.ConsumerPrefetchCount,
-                DiagnosticPayloadCorrelationId: NullIfWhiteSpace(rabbit.DiagnosticPayloadCorrelationId)),
+                WorkRequestMaxPayloadBytes: rabbitMq.WorkRequestMaxPayloadBytes ?? 1024,
+                PublishConfirmTimeoutSeconds: rabbitMq.PublishConfirmTimeoutSeconds ?? 10,
+                ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount),
             CertificateDomainNames: CertificateIdentities.ForFqdn(fqdn, acme.IncludeNewsHostnameInCertificate),
             CertificatePassword: acme.AcmeCertificatePassword,
             NntpDb: new NntpDbRuntimeOptions(
@@ -182,7 +160,4 @@ public static class BackFillerRuntimeOptionsFactory
                 nntpDbBuilder.UserID ?? string.Empty),
             AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
     }
-
-    private static string? NullIfWhiteSpace(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

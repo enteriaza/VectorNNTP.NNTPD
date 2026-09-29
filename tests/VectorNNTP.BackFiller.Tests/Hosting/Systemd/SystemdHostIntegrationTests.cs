@@ -17,6 +17,8 @@ using VectorNNTP.NNTPD.Core;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Hosting.Systemd;
 
 public sealed class SystemdHostIntegrationTests
@@ -87,7 +89,7 @@ public sealed class SystemdHostIntegrationTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<IProviderAccountSource>(new FakeProviderAccountSource());
 
         builder.ConfigureBackFillerLogging();

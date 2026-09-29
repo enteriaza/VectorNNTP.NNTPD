@@ -1,5 +1,5 @@
-using System.Net;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Configuration;
@@ -9,19 +9,26 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// </summary>
 /// <remarks>
 /// Does not bind sockets, create directories, or connect to MySQL, RabbitMQ, or Cloudflare.
-/// Failure messages never include secret values.
+/// Failure messages never include secret values. RabbitMQ connectivity is validated by
+/// Common <see cref="RabbitMqOptionsValidator"/>; this type only cross-checks shutdown
+/// grace against <see cref="RabbitMqOptions.MaximumShutdownDrainTimeoutSeconds"/>.
 /// </remarks>
 public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOptions>
 {
     private readonly IPhysicalMemoryProvider _physicalMemoryProvider;
+    private readonly IOptions<RabbitMqOptions> _rabbitMqOptions;
 
     /// <summary>
     /// Initializes a new validator.
     /// </summary>
     /// <param name="physicalMemoryProvider">Physical-memory probe for retention capacity.</param>
-    public BackFillerOptionsValidator(IPhysicalMemoryProvider physicalMemoryProvider)
+    /// <param name="rabbitMqOptions">Top-level RabbitMQ options used for grace-period cross-check.</param>
+    public BackFillerOptionsValidator(
+        IPhysicalMemoryProvider physicalMemoryProvider,
+        IOptions<RabbitMqOptions> rabbitMqOptions)
     {
         _physicalMemoryProvider = physicalMemoryProvider ?? throw new ArgumentNullException(nameof(physicalMemoryProvider));
+        _rabbitMqOptions = rabbitMqOptions ?? throw new ArgumentNullException(nameof(rabbitMqOptions));
     }
 
     /// <inheritdoc />
@@ -39,7 +46,7 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateAccountRefresh(options, failures);
         ValidateArticleRetention(options, failures);
         ValidateSystemd(options, failures);
-        ValidateRabbitMq(options, failures);
+        ValidateRabbitMqDrainAgainstGrace(options, _rabbitMqOptions.Value, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -268,163 +275,20 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private static void ValidateRabbitMq(BackFillerOptions options, List<string> failures)
+    private static void ValidateRabbitMqDrainAgainstGrace(
+        BackFillerOptions options,
+        RabbitMqOptions rabbitMq,
+        List<string> failures)
     {
-        var rabbit = options.RabbitMQ ?? new BackFillerRabbitMqOptions();
-        RequireRange(rabbit.WorkRequestMaxPayloadBytes, 1, 4096, "BackFiller:RabbitMQ:WorkRequestMaxPayloadBytes", failures);
-        RequireRange(rabbit.ChannelLeaseTimeoutSeconds, 1, 3600, "BackFiller:RabbitMQ:ChannelLeaseTimeoutSeconds", failures);
-        RequireRange(rabbit.RpcTimeoutSeconds, 1, 3600, "BackFiller:RabbitMQ:RpcTimeoutSeconds", failures);
-        RequireRange(rabbit.ConnectionBlockedTimeoutSeconds, 5, 3600, "BackFiller:RabbitMQ:ConnectionBlockedTimeoutSeconds", failures);
-
-        if (rabbit.ChannelLeaseTimeoutSeconds is { } lease
-            && rabbit.RpcTimeoutSeconds is { } rpc
-            && lease < rpc)
-        {
-            failures.Add("BackFiller:RabbitMQ:ChannelLeaseTimeoutSeconds must be greater than or equal to RpcTimeoutSeconds.");
-        }
-
-        if (rabbit.ConnectionBlockedTimeoutSeconds is { } blocked
-            && rabbit.RpcTimeoutSeconds is { } rpcTimeout
-            && blocked < rpcTimeout)
-        {
-            failures.Add("BackFiller:RabbitMQ:ConnectionBlockedTimeoutSeconds must be greater than or equal to RpcTimeoutSeconds.");
-        }
-
-        if (rabbit.Hosts is null || rabbit.Hosts.Length == 0)
-        {
-            failures.Add("BackFiller:RabbitMQ:Hosts must contain at least one entry.");
-        }
-        else
-        {
-            var normalizedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < rabbit.Hosts.Length; i++)
-            {
-                var host = rabbit.Hosts[i];
-                if (string.IsNullOrWhiteSpace(host))
-                {
-                    failures.Add($"BackFiller:RabbitMQ:Hosts[{i}] must not be empty.");
-                    continue;
-                }
-
-                var trimmedHost = host.Trim();
-                if (trimmedHost.Contains("://", StringComparison.Ordinal)
-                    || trimmedHost.Contains('@')
-                    || trimmedHost.Contains('/')
-                    || trimmedHost.Contains('?'))
-                {
-                    failures.Add($"BackFiller:RabbitMQ:Hosts[{i}] must be a hostname or IP without scheme, credentials, path, or query.");
-                    continue;
-                }
-
-                if (!IPAddress.TryParse(trimmedHost, out _) && Uri.CheckHostName(trimmedHost) != UriHostNameType.Dns)
-                {
-                    failures.Add($"BackFiller:RabbitMQ:Hosts[{i}] must be a valid hostname or IP address.");
-                    continue;
-                }
-
-                if (!normalizedHosts.Add(trimmedHost))
-                {
-                    failures.Add($"BackFiller:RabbitMQ:Hosts[{i}] duplicate host entries are not allowed.");
-                }
-            }
-        }
-
-        var hasUsername = !string.IsNullOrWhiteSpace(rabbit.Username);
-        if (rabbit.Username is not null && string.IsNullOrWhiteSpace(rabbit.Username))
-        {
-            failures.Add("BackFiller:RabbitMQ:Username must not be empty or whitespace when configured.");
-        }
-
-        if (hasUsername && string.IsNullOrWhiteSpace(rabbit.Password))
-        {
-            failures.Add("BackFiller:RabbitMQ:Password is required when Username is configured.");
-        }
-
-        if (!hasUsername && rabbit.Password is not null)
-        {
-            failures.Add("BackFiller:RabbitMQ:Username is required when Password is configured.");
-        }
-
-        if (string.IsNullOrWhiteSpace(rabbit.VirtualHost))
-        {
-            failures.Add("BackFiller:RabbitMQ:VirtualHost is required and cannot be empty.");
-        }
-        else if (rabbit.VirtualHost.Contains('\0'))
-        {
-            failures.Add("BackFiller:RabbitMQ:VirtualHost contains an invalid null character.");
-        }
-
-        if (rabbit.EnableSsl is null)
-        {
-            failures.Add("BackFiller:RabbitMQ:EnableSsl is required.");
-        }
-
-        RequireRange(rabbit.Port, 1, 65535, "BackFiller:RabbitMQ:Port", failures);
-        RequireRange(rabbit.ChannelPoolSize, 1, 8192, "BackFiller:RabbitMQ:ChannelPoolSize", failures);
-        RequireRange(rabbit.MinConnections, 1, 512, "BackFiller:RabbitMQ:MinConnections", failures);
-        RequireRange(rabbit.MaxConnections, 1, 512, "BackFiller:RabbitMQ:MaxConnections", failures);
-        RequireRange(rabbit.MaxConsecutiveRecoveryFailures, 1, 100, "BackFiller:RabbitMQ:MaxConsecutiveRecoveryFailures", failures);
-        RequireRange(rabbit.MaxPendingLeaseWaiters, 0, 65536, "BackFiller:RabbitMQ:MaxPendingLeaseWaiters", failures);
-        RequireRange(rabbit.ConnectionScaleDownIdleSeconds, 30, 86400, "BackFiller:RabbitMQ:ConnectionScaleDownIdleSeconds", failures);
-        RequireRange(rabbit.ScaleDownCooldownSeconds, 0, 3600, "BackFiller:RabbitMQ:ScaleDownCooldownSeconds", failures);
-        RequireRange(rabbit.NetworkRecoveryIntervalSeconds, 1, 3600, "BackFiller:RabbitMQ:NetworkRecoveryIntervalSeconds", failures);
-        RequireRange(rabbit.PoolReconnectBaseDelayMs, 50, 60000, "BackFiller:RabbitMQ:PoolReconnectBaseDelayMs", failures);
-        RequireRange(rabbit.PoolReconnectMaxDelayMs, 50, 300000, "BackFiller:RabbitMQ:PoolReconnectMaxDelayMs", failures);
-        RequireRange(rabbit.MinimumConnectionLifetimeSeconds, 30, 86400, "BackFiller:RabbitMQ:MinimumConnectionLifetimeSeconds", failures);
-        RequireRange(rabbit.PublishConfirmTimeoutSeconds, 1, 3600, "BackFiller:RabbitMQ:PublishConfirmTimeoutSeconds", failures);
-        RequireRange(rabbit.MaximumShutdownDrainTimeoutSeconds, 1, 3600, "BackFiller:RabbitMQ:MaximumShutdownDrainTimeoutSeconds", failures);
-        RequireRange(rabbit.UnhealthyThreshold, 1, 120, "BackFiller:RabbitMQ:UnhealthyThreshold", failures);
-        RequireRange(rabbit.RequestedHeartbeatSeconds, 0, 3600, "BackFiller:RabbitMQ:RequestedHeartbeatSeconds", failures);
-        RequireRange(rabbit.SocketTimeoutSeconds, 5, 600, "BackFiller:RabbitMQ:SocketTimeoutSeconds", failures);
-        RequireRange(rabbit.RequestedChannelMax, 1, 65535, "BackFiller:RabbitMQ:RequestedChannelMax", failures);
-
-        if (rabbit.MinConnections is { } min && rabbit.MaxConnections is { } max && min > max)
-        {
-            failures.Add("BackFiller:RabbitMQ:MinConnections must be less than or equal to MaxConnections.");
-        }
-
-        if (rabbit.PoolReconnectBaseDelayMs is { } baseDelay
-            && rabbit.PoolReconnectMaxDelayMs is { } maxDelay
-            && maxDelay < baseDelay)
-        {
-            failures.Add("BackFiller:RabbitMQ:PoolReconnectMaxDelayMs must be greater than or equal to PoolReconnectBaseDelayMs.");
-        }
-
-        if (rabbit.DegradedThreshold is null || rabbit.DegradedThreshold is <= 0d or > 1d)
-        {
-            failures.Add("BackFiller:RabbitMQ:DegradedThreshold must be greater than 0 and less than or equal to 1.");
-        }
-
-        if (rabbit.ConsumerPrefetchCount is 0)
-        {
-            failures.Add("BackFiller:RabbitMQ:ConsumerPrefetchCount must be between 1 and 65535.");
-        }
-
-        if (rabbit.MaxConnections is { } maxConnections
-            && rabbit.RequestedChannelMax is { } channelMax
-            && rabbit.ChannelPoolSize is { } poolSize)
-        {
-            try
-            {
-                var limit = checked(maxConnections * channelMax);
-                if (poolSize > limit)
-                {
-                    failures.Add("BackFiller:RabbitMQ:ChannelPoolSize must be less than or equal to MaxConnections * RequestedChannelMax.");
-                }
-            }
-            catch (OverflowException)
-            {
-                failures.Add("BackFiller:RabbitMQ:ChannelPoolSize: MaxConnections and RequestedChannelMax produce an invalid effective channel limit.");
-            }
-        }
+        ArgumentNullException.ThrowIfNull(rabbitMq);
 
         var grace = options.Shutdown?.GracePeriodSeconds ?? 0;
         if (grace > 0
-            && rabbit.MaximumShutdownDrainTimeoutSeconds is { } drain
+            && rabbitMq.MaximumShutdownDrainTimeoutSeconds is { } drain
             && drain > grace)
         {
             failures.Add(
-                "BackFiller:RabbitMQ:MaximumShutdownDrainTimeoutSeconds must be less than or equal to BackFiller:Shutdown:GracePeriodSeconds.");
+                "RabbitMQ:MaximumShutdownDrainTimeoutSeconds must be less than or equal to BackFiller:Shutdown:GracePeriodSeconds.");
         }
     }
 

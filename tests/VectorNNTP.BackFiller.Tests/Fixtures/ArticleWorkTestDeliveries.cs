@@ -2,6 +2,8 @@ using System.Text;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Fixtures;
 
 internal static class ArticleWorkTestDeliveries
@@ -29,7 +31,7 @@ internal static class ArticleWorkTestDeliveries
     internal const string CanonicalNotFoundResponseJson =
         """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}""";
 
-    internal static BackFillerRabbitMqConsumedDelivery Create(
+    internal static RabbitMqManualAckDelivery Create(
         string json,
         string? correlationId = CanonicalCorrelationId,
         string? replyTo = CanonicalReplyTo,
@@ -38,7 +40,7 @@ internal static class ArticleWorkTestDeliveries
         ulong deliveryTag = 7,
         long generation = 1)
     {
-        return new BackFillerRabbitMqConsumedDelivery(
+        return new RabbitMqManualAckDelivery(
             deliveryTag,
             Encoding.UTF8.GetBytes(json),
             correlationId,
@@ -52,7 +54,7 @@ internal static class ArticleWorkTestDeliveries
             generation);
     }
 
-    internal static BackFillerRabbitMqConsumedDelivery Canonical(
+    internal static RabbitMqManualAckDelivery Canonical(
         ulong deliveryTag = 7,
         long generation = 1,
         string? requestIdHeader = CanonicalRequestId) =>

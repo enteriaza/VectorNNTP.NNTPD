@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using VectorNNTP.NNTPD.Core;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -31,7 +32,7 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <see cref="NewsmasterPassword"/> are secrets.
 /// </para>
 /// </remarks>
-public sealed class NntpdOptions : AcmeCloudflareOptions
+public sealed class NntpdOptions : AcmeCloudflareOptions, IApplicationLifecycleOptions
 {
     /// <summary>NNTPD-specific configuration section name.</summary>
     public new const string SectionName = "Nntpd";
@@ -165,7 +166,7 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Required. No default. Must be explicitly configured as an integer in <c>1–99</c>.
+    /// Required. No default. Must be explicitly configured as an integer in <c>1–255</c>.
     /// </para>
     /// <para>
     /// Typed as <see cref="Nullable{T}"/> so a missing configuration value remains distinguishable
@@ -195,7 +196,7 @@ public sealed class NntpdOptions : AcmeCloudflareOptions
     /// <summary>
     /// Formats the generated FQDN for a validated server id and DNS suffix.
     /// </summary>
-    /// <param name="serverId">Server id in 1–99.</param>
+    /// <param name="serverId">Server id in 1–255.</param>
     /// <param name="dnsSuffix">DNS suffix without a trailing dot.</param>
     /// <returns>The FQDN string.</returns>
     public static string FormatFqdn(int serverId, string dnsSuffix) =>

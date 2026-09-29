@@ -8,6 +8,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkResponsePublicationTests
@@ -29,7 +31,7 @@ public sealed class ArticleWorkResponsePublicationTests
 
         Assert.Equal(ArticleWorkOutcome.Success, outcome);
         var publication = Assert.Single(context.PublishChannel.Publications);
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalReplyTo, publication.ReplyTo);
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalReplyTo, publication.RoutingKey);
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalCorrelationId, publication.CorrelationId);
         Assert.Equal(ArticleWorkResponseWireProtocol.JsonContentType, publication.ContentType);
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalRequestId, publication.RequestIdHeader);
@@ -341,12 +343,12 @@ public sealed class ArticleWorkResponsePublicationTests
     public async Task Startup_fails_when_a_publish_channel_cannot_be_created()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         factory.LastConnection!.CreatePublishChannelException = new InvalidOperationException("no channel");
         var publisher = new ArticleWorkResponsePublisher(
             connections,
-            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            RabbitMqServiceTests.CreateFastRuntime(),
             NullLogger<ArticleWorkResponsePublisher>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.StartAsync(CancellationToken.None));
@@ -565,7 +567,7 @@ public sealed class ArticleWorkResponsePublicationTests
     {
         private PublicationContext(
             FakeBackFillerRabbitMqConnectionFactory factory,
-            BackFillerRabbitMqService connections,
+            RabbitMqService connections,
             ArticleWorkResponsePublisher publisher)
         {
             Factory = factory;
@@ -575,7 +577,7 @@ public sealed class ArticleWorkResponsePublicationTests
 
         public FakeBackFillerRabbitMqConnectionFactory Factory { get; }
 
-        public BackFillerRabbitMqService Connections { get; }
+        public RabbitMqService Connections { get; }
 
         public ArticleWorkResponsePublisher Publisher { get; }
 
@@ -587,12 +589,12 @@ public sealed class ArticleWorkResponsePublicationTests
             ILogger<ArticleWorkResponsePublisher>? logger = null)
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
-            var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+            var connections = RabbitMqServiceTests.CreateService(factory);
             await connections.StartAsync(CancellationToken.None);
             factory.LastConnection!.DefaultPublishConfirmBehavior = behavior;
             var publisher = new ArticleWorkResponsePublisher(
                 connections,
-                BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+                RabbitMqServiceTests.CreateFastRuntime(),
                 logger ?? NullLogger<ArticleWorkResponsePublisher>.Instance);
             await publisher.StartAsync(CancellationToken.None);
             Assert.Equal(ArticleWorkResponsePublisherState.Running, publisher.State);

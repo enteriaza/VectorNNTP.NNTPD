@@ -10,6 +10,8 @@ using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
 public sealed class SharedNntpDbConfigurationTests
@@ -72,7 +74,7 @@ public sealed class SharedNntpDbConfigurationTests
             new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<VectorNNTP.BackFiller.RabbitMq.IBackFillerRabbitMqConnectionFactory>(
+        builder.Services.AddSingleton<VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
             new FakeProviderAccountSource());

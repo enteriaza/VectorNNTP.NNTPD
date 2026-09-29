@@ -1,5 +1,7 @@
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -43,9 +45,9 @@ public sealed class ArticleWorkDeliveryPipeline
     /// <param name="cancellationToken">Processing cancellation.</param>
     /// <returns>The outcome that was settled (or attempted).</returns>
     public async Task<ArticleWorkOutcome> ProcessAsync(
-        BackFillerRabbitMqConsumedDelivery delivery,
+        RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
-        IBackFillerRabbitMqChannel channel,
+        IRabbitMqManualAckChannel channel,
         Func<bool> channelStillCurrent,
         CancellationToken cancellationToken)
     {
@@ -185,7 +187,7 @@ public sealed class ArticleWorkDeliveryPipeline
 
     private async Task SettleRetryableAsync(
         ArticleWorkSettlementLease lease,
-        IBackFillerRabbitMqChannel channel,
+        IRabbitMqManualAckChannel channel,
         Func<bool> channelStillCurrent)
     {
         var retry = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
@@ -204,7 +206,7 @@ public sealed class ArticleWorkDeliveryPipeline
         ArticleWorkDisposition disposition,
         ArticleWorkOutcome outcome,
         ArticleWorkSettlementLease lease,
-        IBackFillerRabbitMqChannel channel,
+        IRabbitMqManualAckChannel channel,
         Func<bool> channelStillCurrent)
     {
         if (published == ArticleWorkPublishAttempt.Cancelled

@@ -11,17 +11,24 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
     {
         var options = BackFillerTestOptions.CreateValid();
         options.DnsSuffix = "Usenet.Ninja.";
-        options.RabbitMQ.Hosts = [" 127.0.0.1 ", "127.0.0.1"];
+        var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
+        rabbit.WorkRequestMaxPayloadBytes = 2048;
+        rabbit.PublishConfirmTimeoutSeconds = 7;
+        rabbit.ConsumerPrefetchCount = 3;
 
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             options,
-            BackFillerTestOptions.CreateValidNntpDb());
+            BackFillerTestOptions.CreateValidNntpDb(),
+            BackFillerTestOptions.CreateValidAcme(),
+            rabbit);
 
         Assert.Equal("usenet.ninja", runtime.DnsSuffix);
         Assert.Equal("backfiller01.usenet.ninja", runtime.Fqdn);
         Assert.Equal(1, runtime.ServerId);
         Assert.Equal(1190, runtime.BindPortTls);
-        Assert.Equal(["127.0.0.1"], runtime.RabbitMq.Hosts);
+        Assert.Equal(2048, runtime.RabbitMq.WorkRequestMaxPayloadBytes);
+        Assert.Equal(7, runtime.RabbitMq.PublishConfirmTimeoutSeconds);
+        Assert.Equal((ushort)3, runtime.RabbitMq.ConsumerPrefetchCount);
         Assert.True(Path.IsPathRooted(runtime.LogDirectory));
         Assert.True(Path.IsPathRooted(runtime.CertificateDirectory));
         Assert.Equal("127.0.0.1", runtime.NntpDb.Server);
@@ -29,9 +36,9 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         Assert.Equal(TimeSpan.FromSeconds(30), runtime.Shutdown.GracePeriod);
         Assert.True(runtime.Shutdown.DrainQueuedWork);
         Assert.True(runtime.Shutdown.FinishActiveArticles);
-        options.RabbitMQ.Hosts = ["203.0.113.10"];
+        rabbit.WorkRequestMaxPayloadBytes = 512;
         Assert.Equal("backfiller01.usenet.ninja", runtime.Fqdn);
-        Assert.Equal(["127.0.0.1"], runtime.RabbitMq.Hosts);
+        Assert.Equal(2048, runtime.RabbitMq.WorkRequestMaxPayloadBytes);
         Assert.Equal(4L * 1024 * 1024 * 1024, runtime.ArticleRetention.MaximumRetainedPayloadBytes);
         Assert.Equal(16, runtime.ArticleRetention.MaxOpenableRequestIdsPerArticle);
         Assert.Equal(TimeSpan.FromSeconds(60), runtime.AccountRefreshInterval);

@@ -19,6 +19,8 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Hosting;
 
 public sealed class BackFillerDnsLifecycleTests
@@ -165,7 +167,7 @@ public sealed class BackFillerDnsLifecycleTests
         builder.Services.AddSingleton<ICloudflareDnsReconciler>(reconciler);
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<IProviderAccountSource>(new FakeProviderAccountSource());
         builder.AddBackFillerHosting();
@@ -196,15 +198,15 @@ public sealed class BackFillerDnsLifecycleTests
             static service => service.GetType().Name == "CloudflareDnsReconciliationHostedService");
     }
 
-    private static ApplicationServiceManager CreateManager(params IApplicationService[] services)
+    private static VectorNNTP.BackFiller.Core.ApplicationServiceManager CreateManager(params IApplicationService[] services)
     {
         var runtime = BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
             BackFillerTestOptions.CreateValidNntpDb());
-        return new ApplicationServiceManager(
+        return new VectorNNTP.BackFiller.Core.ApplicationServiceManager(
             services,
             runtime,
-            NullLogger<ApplicationServiceManager>.Instance);
+            NullLogger<VectorNNTP.BackFiller.Core.ApplicationServiceManager>.Instance);
     }
 
     private static DnsHarness CreateDnsHarness()

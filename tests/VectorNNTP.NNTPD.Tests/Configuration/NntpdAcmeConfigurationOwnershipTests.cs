@@ -12,6 +12,7 @@ using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.Configuration;
 

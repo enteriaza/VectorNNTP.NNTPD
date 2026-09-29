@@ -12,6 +12,8 @@ using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.Common.Articles.Parsing;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Fixtures;
 
 /// <summary>
@@ -31,7 +33,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
         ManualTimeProvider time,
         ProviderArticleWorkHandler handler,
         FakeBackFillerRabbitMqConnectionFactory rabbitFactory,
-        BackFillerRabbitMqService connections,
+        RabbitMqService connections,
         ArticleWorkResponsePublisher publisher,
         ArticleWorkDeliveryPipeline pipeline)
     {
@@ -67,7 +69,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
 
     public FakeBackFillerRabbitMqConnectionFactory RabbitFactory { get; }
 
-    public BackFillerRabbitMqService Connections { get; }
+    public RabbitMqService Connections { get; }
 
     public ArticleWorkResponsePublisher Publisher { get; }
 
@@ -96,7 +98,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
             options,
             BackFillerTestOptions.CreateValidNntpDb()) with
         {
-            RabbitMq = BackFillerRabbitMqServiceTests.CreateFastRuntime().RabbitMq,
+            RabbitMq = RabbitMqServiceTests.CreateFastRuntime().RabbitMq,
         };
 
         var sessionOptions = NntpSessionOptions.Default with
@@ -132,7 +134,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
         {
             DefaultPublishConfirmBehavior = confirm,
         };
-        var connections = BackFillerRabbitMqServiceTests.CreateService(rabbitFactory);
+        var connections = RabbitMqServiceTests.CreateService(rabbitFactory);
         await connections.StartAsync(CancellationToken.None).ConfigureAwait(false);
         var publisher = new ArticleWorkResponsePublisher(
             connections,
@@ -211,7 +213,7 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
     }
 
     public Task<ArticleWorkOutcome> ProcessAsync(
-        BackFillerRabbitMqConsumedDelivery delivery,
+        RabbitMqManualAckDelivery delivery,
         FakeBackFillerRabbitMqChannel channel,
         Func<bool>? channelStillCurrent = null,
         CancellationToken cancellationToken = default) =>

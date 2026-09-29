@@ -1,5 +1,7 @@
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -7,7 +9,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 public sealed class ArticleWorkSettlementLease
 {
-    private readonly IBackFillerRabbitMqChannel _channel;
+    private readonly IRabbitMqManualAckChannel _channel;
     private readonly ulong _deliveryTag;
     private readonly long _generation;
     private int _settled;
@@ -18,7 +20,7 @@ public sealed class ArticleWorkSettlementLease
     /// <param name="channel">Original consumer channel. Must not be a replacement channel.</param>
     /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
     /// <param name="generation">Connection generation captured at admission.</param>
-    public ArticleWorkSettlementLease(IBackFillerRabbitMqChannel channel, ulong deliveryTag, long generation)
+    public ArticleWorkSettlementLease(IRabbitMqManualAckChannel channel, ulong deliveryTag, long generation)
     {
         ArgumentNullException.ThrowIfNull(channel);
         _channel = channel;
@@ -90,7 +92,7 @@ public sealed class ArticleWorkSettlementLease
     /// </summary>
     /// <param name="channel">Candidate channel.</param>
     /// <returns><see langword="true"/> when settlement may use this channel.</returns>
-    public bool IsOriginalChannel(IBackFillerRabbitMqChannel? channel) =>
+    public bool IsOriginalChannel(IRabbitMqManualAckChannel? channel) =>
         channel is not null
         && ReferenceEquals(channel, _channel)
         && channel.Generation == _generation;

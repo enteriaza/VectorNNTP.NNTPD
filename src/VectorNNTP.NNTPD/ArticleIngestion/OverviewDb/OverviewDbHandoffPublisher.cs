@@ -8,6 +8,7 @@ using RabbitMQ.Client.Events;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.RabbitMq;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 

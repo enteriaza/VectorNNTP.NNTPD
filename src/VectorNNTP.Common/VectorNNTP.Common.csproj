@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>VectorNNTP.Common</RootNamespace>
     <AssemblyName>VectorNNTP.Common</AssemblyName>
-    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, byte-oriented article parsing, yEnc validation, canonical article materialization, and Vector Article Transfer Protocol (VATP) framing for VectorNNTP applications. RabbitMQ transport remains application-owned.</Description>
+    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, byte-oriented article parsing, yEnc validation, canonical article materialization, Vector Article Transfer Protocol (VATP) framing, and RabbitMQ connectivity (connection lifecycle, channels) for VectorNNTP applications. RabbitMQ topology, ArticleWork, and Management HTTP remain application-owned.</Description>
     <IsPackable>false</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>
@@ -15,6 +15,8 @@
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.BackFiller" />
     <InternalsVisibleTo Include="VectorNNTP.BackFiller.Tests" />
+    <InternalsVisibleTo Include="VectorNNTP.StorageServer" />
+    <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,6 +32,7 @@
     <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
     <PackageReference Include="System.IO.Hashing" Version="10.0.12" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
   </ItemGroup>
 
 </Project>

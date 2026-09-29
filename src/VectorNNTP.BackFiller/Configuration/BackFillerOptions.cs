@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <remarks>
 /// <para>
 /// Property names are PascalCase. Generated <see cref="Fqdn"/> cannot be bound.
-/// Never log a complete instance: RabbitMQ secrets live here.
+/// Never log a complete instance: ACME/NntpDB secrets may appear on related options.
 /// Cloudflare and ACME PKCS#12 secrets stay on root <c>VECTOR__*</c> keys and
 /// are copied onto <see cref="AcmeCloudflareOptions"/> by
 /// <see cref="BackFillerAcmeCloudflareOptionsAdapter"/>.
@@ -23,8 +23,9 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <see cref="BindPortTls"/> only. <see cref="ServerId"/> binds from
 /// <c>BackFiller:ServerId</c> only. The FQDN is
 /// <c>backfiller{ServerId:00}.{DnsSuffix}</c>; there is no configurable Name.
-/// RabbitMQ uses
-/// <c>VECTOR__RABBITMQ__*</c>. NntpDB uses the existing
+/// RabbitMQ connectivity binds from the top-level <c>RabbitMQ</c> section /
+/// <c>VECTOR__RABBITMQ__*</c> via Common <c>RabbitMqOptions</c> (not nested under
+/// <c>BackFiller</c>). NntpDB uses the existing
 /// <c>ConnectionStrings__NntpDB</c> Generic Host mapping (same key as NNTPD).
 /// Cloudflare secrets use
 /// <c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
@@ -87,7 +88,7 @@ public sealed class BackFillerOptions
     /// </summary>
     /// <remarks>
     /// Required. No default. Must be explicitly configured as an integer in
-    /// <c>1–99</c> via <c>BackFiller:ServerId</c> (same bounds as NNTPD).
+    /// <c>1–255</c> via <c>BackFiller:ServerId</c> (same bounds as NNTPD).
     /// Typed as <see cref="Nullable{T}"/> so a missing value remains distinguishable
     /// from an explicit <c>0</c> (both fail validation).
     /// </remarks>
@@ -180,11 +181,6 @@ public sealed class BackFillerOptions
     /// fixed PFX filename from this directory.
     /// </remarks>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;
-
-    /// <summary>
-    /// Gets or sets RabbitMQ settings.
-    /// </summary>
-    public BackFillerRabbitMqOptions RabbitMQ { get; set; } = new();
 
     /// <summary>
     /// Gets or sets in-memory article retention settings.

@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.RabbitMq.Management;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq.ArticleWork;
 

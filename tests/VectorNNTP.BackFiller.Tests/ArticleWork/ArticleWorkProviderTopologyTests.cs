@@ -6,6 +6,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkProviderTopologyTests
@@ -14,7 +16,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Active_backbone_declares_quorum_fanout_topology_before_consumers()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumer(
             connections,
@@ -53,7 +55,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Topology_declare_failure_does_not_start_consumers()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         factory.LastConnection!.NextChannelQueueDeclareException = new InvalidOperationException(
             "PRECONDITION_FAILED - inequivalent arg 'x-queue-type'");
@@ -75,7 +77,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Inactive_backbone_does_not_declare_or_consume()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumer(
             connections,
@@ -95,7 +97,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Losing_capacity_retires_consumers_without_deleting_topology()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var capacity = CreateCapacity([("Giganews", 1)]);
         var consumer = CreateConsumer(
@@ -120,7 +122,7 @@ public sealed class ArticleWorkProviderTopologyTests
         Assert.Single(topology.QueueDeclarations);
         Assert.Single(topology.BindingDeclarations);
         Assert.DoesNotContain(
-            typeof(IBackFillerRabbitMqChannel).GetMethods().Select(static m => m.Name),
+            typeof(IRabbitMqManualAckChannel).GetMethods().Select(static m => m.Name),
             static name => name.Contains("Delete", StringComparison.Ordinal));
 
         await consumer.DisposeAsync();
@@ -131,7 +133,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Reactivating_backbone_redeclares_idempotently_and_starts_consumers()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var capacity = CreateCapacity([("Giganews", 1)]);
         var consumer = CreateConsumer(
@@ -184,7 +186,7 @@ public sealed class ArticleWorkProviderTopologyTests
     public async Task Only_usable_backbones_are_declared()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumer(
             connections,
@@ -228,12 +230,12 @@ public sealed class ArticleWorkProviderTopologyTests
     }
 
     private static ArticleWorkConsumerService CreateConsumer(
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         IBackFillerProviderCatalog catalog,
         BackboneUsableCapacityState capacity) =>
         new(
             connections,
-            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            RabbitMqServiceTests.CreateFastRuntime(),
             new DeferredArticleWorkHandler(),
             new RecordingArticleWorkResponsePublisher(),
             NullLogger<ArticleWorkConsumerService>.Instance,

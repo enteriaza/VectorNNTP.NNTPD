@@ -2,6 +2,8 @@ using System.Text;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkRequestParserTests
@@ -357,7 +359,7 @@ public sealed class ArticleWorkRequestParserTests
     public void Parser_does_not_decode_body_as_string_before_json()
     {
         var body = Encoding.UTF8.GetBytes(ArticleWorkTestDeliveries.CanonicalRequestJson);
-        var delivery = new VectorNNTP.BackFiller.RabbitMq.BackFillerRabbitMqConsumedDelivery(
+        var delivery = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery(
             1,
             body,
             ArticleWorkTestDeliveries.CanonicalCorrelationId,

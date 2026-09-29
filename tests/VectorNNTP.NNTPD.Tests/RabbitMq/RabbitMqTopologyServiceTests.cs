@@ -8,6 +8,7 @@ using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 
@@ -174,7 +175,7 @@ public sealed class RabbitMqTopologyServiceTests
         return new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
     }
 

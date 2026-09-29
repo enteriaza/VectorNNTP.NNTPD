@@ -7,6 +7,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkShutdownPolicyTests
@@ -333,7 +335,7 @@ public sealed class ArticleWorkShutdownPolicyTests
     public async Task Consumer_retirement_does_not_cancel_an_in_flight_mysql_refresh()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync();
-        var runtime = BackFillerRabbitMqServiceTests.CreateFastRuntime() with
+        var runtime = RabbitMqServiceTests.CreateFastRuntime() with
         {
             Shutdown = new BackFillerShutdownRuntimeOptions(TimeSpan.FromSeconds(30), DrainQueuedWork: false, FinishActiveArticles: false),
         };
@@ -453,7 +455,7 @@ public sealed class ArticleWorkShutdownPolicyTests
             Gate = NewSource(),
         };
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var giganewsPublisher = new RecordingArticleWorkResponsePublisher { CompletesSuccessPublication = true };
         var ewekaPublisher = new RecordingArticleWorkResponsePublisher { CompletesSuccessPublication = true };
@@ -586,9 +588,9 @@ public sealed class ArticleWorkShutdownPolicyTests
             Gate = NewSource(),
         };
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
-        var runtime = BackFillerRabbitMqServiceTests.CreateFastRuntime() with
+        var runtime = RabbitMqServiceTests.CreateFastRuntime() with
         {
             Shutdown = new BackFillerShutdownRuntimeOptions(TimeSpan.FromSeconds(30), DrainQueuedWork: true, FinishActiveArticles: false),
         };
@@ -675,7 +677,7 @@ public sealed class ArticleWorkShutdownPolicyTests
     private sealed class ShutdownContext : IAsyncDisposable
     {
         private ShutdownContext(
-            BackFillerRabbitMqService? connections,
+            RabbitMqService? connections,
             bool ownsConnections,
             ArticleWorkConsumerSession session,
             FakeBackFillerRabbitMqChannel channel,
@@ -688,7 +690,7 @@ public sealed class ArticleWorkShutdownPolicyTests
             Publisher = recordingPublisher ?? new RecordingArticleWorkResponsePublisher();
         }
 
-        public BackFillerRabbitMqService? Connections { get; }
+        public RabbitMqService? Connections { get; }
 
         public bool OwnsConnections { get; }
 
@@ -717,7 +719,7 @@ public sealed class ArticleWorkShutdownPolicyTests
             IArticleWorkResponsePublisher publisher,
             bool drainQueued,
             bool finishActive,
-            IBackFillerRabbitMqService? connections = null) =>
+            IRabbitMqService? connections = null) =>
             StartAsync(
                 handler,
                 publisher,
@@ -730,14 +732,14 @@ public sealed class ArticleWorkShutdownPolicyTests
             IArticleWorkResponsePublisher publisher,
             BackFillerShutdownRuntimeOptions shutdown,
             ushort prefetch = 1,
-            IBackFillerRabbitMqService? connections = null)
+            IRabbitMqService? connections = null)
         {
-            BackFillerRabbitMqService? owned = null;
-            IBackFillerRabbitMqService service;
+            RabbitMqService? owned = null;
+            IRabbitMqService service;
             if (connections is null)
             {
                 var factory = new FakeBackFillerRabbitMqConnectionFactory();
-                owned = BackFillerRabbitMqServiceTests.CreateService(factory);
+                owned = RabbitMqServiceTests.CreateService(factory);
                 await owned.StartAsync(CancellationToken.None);
                 service = owned;
             }

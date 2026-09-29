@@ -1,9 +1,9 @@
-using VectorNNTP.BackFiller.Configuration;
-using VectorNNTP.BackFiller.RabbitMq;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles;
 
-internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbitMqConnectionFactory
+/// <summary>In-memory RabbitMQ connection factory for BackFiller offline tests.</summary>
+internal sealed class FakeBackFillerRabbitMqConnectionFactory : IRabbitMqConnectionFactory
 {
     private int _connectCount;
     private int _attemptCount;
@@ -35,8 +35,8 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
 
     public TaskCompletionSource? CreatePublishChannelStarted { get; set; }
 
-    public async Task<IBackFillerRabbitMqConnection> ConnectAsync(
-        BackFillerRabbitMqRuntimeOptions options,
+    public async Task<IRabbitMqConnection> ConnectAsync(
+        RabbitMqOptions options,
         string connectionName,
         CancellationToken cancellationToken)
     {
@@ -63,11 +63,11 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
         }
 
         var count = Interlocked.Increment(ref _connectCount);
-        var hosts = options.Hosts;
+        var hosts = options.Hosts ?? [];
         var connection = new FakeBackFillerRabbitMqConnection(
-            hosts.Count > 0 ? hosts[0] : "127.0.0.1",
-            options.Port,
-            options.VirtualHost,
+            hosts.Length > 0 ? hosts[0]! : "127.0.0.1",
+            options.Port ?? 5672,
+            string.IsNullOrWhiteSpace(options.VirtualHost) ? "/" : options.VirtualHost.Trim(),
             connectionName)
         {
             IsOpen = !ReturnUnusableConnection,
@@ -83,7 +83,7 @@ internal sealed class FakeBackFillerRabbitMqConnectionFactory : IBackFillerRabbi
     }
 }
 
-internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConnection
+internal sealed class FakeBackFillerRabbitMqConnection : IRabbitMqConnection
 {
     public FakeBackFillerRabbitMqConnection(string host, int port, string virtualHost, string clientProvidedName)
     {
@@ -109,7 +109,7 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
 
     public TaskCompletionSource? BlockDispose { get; set; }
 
-    public event EventHandler<BackFillerRabbitMqConnectionLostEventArgs>? ConnectionLost;
+    public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
     public List<FakeBackFillerRabbitMqChannel> Channels { get; } = [];
 
@@ -120,8 +120,8 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
     public Exception? CreatePublishChannelException { get; set; }
 
     /// <summary>
-    /// When set, the next channel created via <see cref="CreateChannelAsync"/> receives this
-    /// as <see cref="FakeBackFillerRabbitMqChannel.QueueDeclareException"/> (once).
+    /// When set, the next manual-ack channel receives this as
+    /// <see cref="FakeBackFillerRabbitMqChannel.QueueDeclareException"/> (once).
     /// </summary>
     public Exception? NextChannelQueueDeclareException { get; set; }
 
@@ -132,7 +132,18 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
     public FakePublishConfirmBehavior DefaultPublishConfirmBehavior { get; set; } =
         FakePublishConfirmBehavior.Wait;
 
-    public Task<IBackFillerRabbitMqChannel> CreateChannelAsync(long generation, CancellationToken cancellationToken)
+    public Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("BackFiller Article Work tests use manual-ack channels for topology.");
+
+    public Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("BackFiller Article Work tests do not open RPC channels.");
+
+    public Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
+        long generation,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("BackFiller Article Work tests do not open async-confirm channels.");
+
+    public Task<IRabbitMqManualAckChannel> CreateManualAckChannelAsync(long generation, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (CreateChannelException is not null)
@@ -153,10 +164,10 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
         }
 
         Channels.Add(channel);
-        return Task.FromResult<IBackFillerRabbitMqChannel>(channel);
+        return Task.FromResult<IRabbitMqManualAckChannel>(channel);
     }
 
-    public async Task<IBackFillerRabbitMqPublishChannel> CreatePublishChannelAsync(
+    public async Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(
         long generation,
         CancellationToken cancellationToken)
     {
@@ -191,7 +202,7 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
         string initiator = "Peer")
     {
         IsOpen = false;
-        ConnectionLost?.Invoke(this, new BackFillerRabbitMqConnectionLostEventArgs(replyCode, replyText, initiator));
+        ConnectionLost?.Invoke(this, new RabbitMqConnectionLostEventArgs(replyCode, replyText, initiator));
     }
 
     public async ValueTask DisposeAsync()
@@ -209,9 +220,9 @@ internal sealed class FakeBackFillerRabbitMqConnection : IBackFillerRabbitMqConn
 
 internal readonly record struct FakeRabbitMqSettlement(ulong DeliveryTag, bool Acknowledge, bool Requeue);
 
-internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFillerRabbitMqChannel
+internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IRabbitMqManualAckChannel
 {
-    private Func<BackFillerRabbitMqConsumedDelivery, Task>? _onDelivery;
+    private Func<RabbitMqManualAckDelivery, Task>? _onDelivery;
 
     public long Generation { get; } = generation;
 
@@ -317,7 +328,7 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
     public Task<string> BasicConsumeAsync(
         string queue,
         ushort prefetchCount,
-        Func<BackFillerRabbitMqConsumedDelivery, Task> onDelivery,
+        Func<RabbitMqManualAckDelivery, Task> onDelivery,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(queue);
@@ -391,7 +402,7 @@ internal sealed class FakeBackFillerRabbitMqChannel(long generation) : IBackFill
         return Task.CompletedTask;
     }
 
-    public Task DeliverAsync(BackFillerRabbitMqConsumedDelivery delivery)
+    public Task DeliverAsync(RabbitMqManualAckDelivery delivery)
     {
         if (_onDelivery is null)
         {
@@ -420,7 +431,7 @@ internal enum FakePublishConfirmBehavior
     Unroutable = 6,
 }
 
-internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IBackFillerRabbitMqPublishChannel
+internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IRabbitMqPublishChannel
 {
     public long Generation { get; } = generation;
 
@@ -436,9 +447,32 @@ internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IB
 
     public Action? AfterEnqueue { get; set; }
 
-    public List<BackFillerRabbitMqPublication> Publications { get; } = [];
+    public List<RabbitMqConfirmedPublication> Publications { get; } = [];
 
-    public async Task PublishConfirmedAsync(BackFillerRabbitMqPublication publication, CancellationToken cancellationToken)
+    public Task PublishConfirmedAsync(
+        string exchange,
+        string routingKey,
+        string messageId,
+        string appId,
+        string expiration,
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken) =>
+        PublishConfirmedAsync(
+            new RabbitMqConfirmedPublication(
+                exchange,
+                routingKey,
+                messageId,
+                appId,
+                CorrelationId: null,
+                ContentType: null,
+                RequestIdHeader: null,
+                expiration,
+                Persistent: true,
+                Mandatory: true,
+                body),
+            cancellationToken);
+
+    public async Task PublishConfirmedAsync(RabbitMqConfirmedPublication publication, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(publication);
         cancellationToken.ThrowIfCancellationRequested();
@@ -464,7 +498,7 @@ internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IB
             case FakePublishConfirmBehavior.Nack:
                 throw new InvalidOperationException("publisher nack");
             case FakePublishConfirmBehavior.Unroutable:
-                throw new InvalidOperationException("RabbitMQ returned the Article Work response as unroutable.");
+                throw new InvalidOperationException("RabbitMQ returned the publication as unroutable.");
             case FakePublishConfirmBehavior.Timeout:
                 throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
             case FakePublishConfirmBehavior.CloseChannel:

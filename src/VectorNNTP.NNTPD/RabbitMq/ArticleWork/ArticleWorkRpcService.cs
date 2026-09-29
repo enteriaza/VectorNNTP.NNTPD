@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.RabbitMq.Management;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 

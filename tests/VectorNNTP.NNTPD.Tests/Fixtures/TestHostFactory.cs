@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Cloudflare;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.RabbitMq;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.NntpDb;
@@ -98,7 +99,7 @@ internal static class TestHostFactory
     {
         return new ApplicationServiceManager(
             services,
-            Options.Create(options ?? CreateOptions()),
+            options ?? CreateOptions(),
             NullLogger<ApplicationServiceManager>.Instance);
     }
 
@@ -110,7 +111,7 @@ internal static class TestHostFactory
         var manager = CreateServiceManager(services, options);
         return new ApplicationLifecycle(
             manager,
-            Options.Create(options),
+            options,
             NullLogger<ApplicationLifecycle>.Instance);
     }
 

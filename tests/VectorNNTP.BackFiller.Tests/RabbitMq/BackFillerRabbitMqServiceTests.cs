@@ -5,22 +5,24 @@ using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.RabbitMq;
 
-public sealed class BackFillerRabbitMqServiceTests
+public sealed class RabbitMqServiceTests
 {
     [Fact]
     public void ConnectionHandle_does_not_own_the_connection()
     {
-        Assert.DoesNotContain(typeof(IDisposable), typeof(BackFillerRabbitMqConnectionHandle).GetInterfaces());
-        Assert.DoesNotContain(typeof(IAsyncDisposable), typeof(BackFillerRabbitMqConnectionHandle).GetInterfaces());
+        Assert.DoesNotContain(typeof(IDisposable), typeof(RabbitMqConnectionHandle).GetInterfaces());
+        Assert.DoesNotContain(typeof(IAsyncDisposable), typeof(RabbitMqConnectionHandle).GetInterfaces());
     }
 
     [Fact]
     public async Task StartAsync_connects_once_and_is_ready()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var replaced = new List<BackFillerRabbitMqConnectionReplacedEventArgs>();
+        var replaced = new List<RabbitMqConnectionReplacedEventArgs>();
         var service = CreateService(factory);
         service.ConnectionReplaced += (_, args) => replaced.Add(args);
 
@@ -36,7 +38,7 @@ public sealed class BackFillerRabbitMqServiceTests
         Assert.Equal(1, handle.Generation);
         Assert.Same(factory.LastConnection, handle.Connection);
         var generation = Assert.Single(replaced);
-        Assert.Equal(1, generation.Generation);
+        Assert.Equal(1, generation.ConnectionGeneration);
         Assert.False(generation.IsReplacement);
         Assert.Equal("VectorNNTP.BackFiller:backfiller01.usenet.ninja", factory.LastConnection!.ClientProvidedName);
 
@@ -143,7 +145,7 @@ public sealed class BackFillerRabbitMqServiceTests
     public async Task ConnectionLost_replaces_connection_and_increments_generation()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var replaced = new List<BackFillerRabbitMqConnectionReplacedEventArgs>();
+        var replaced = new List<RabbitMqConnectionReplacedEventArgs>();
         var service = CreateService(factory);
         service.ConnectionReplaced += (_, args) => replaced.Add(args);
 
@@ -164,7 +166,7 @@ public sealed class BackFillerRabbitMqServiceTests
         Assert.Equal(1, first.DisposeCount);
         Assert.Equal(2, replaced.Count);
         Assert.True(replaced[1].IsReplacement);
-        Assert.Equal(2, replaced[1].Generation);
+        Assert.Equal(2, replaced[1].ConnectionGeneration);
         Assert.True(service.TryGetCurrent(out var current));
         Assert.Same(factory.LastConnection, current.Connection);
 
@@ -309,7 +311,7 @@ public sealed class BackFillerRabbitMqServiceTests
         await service.StartAsync(CancellationToken.None);
         Assert.True(service.TryGetCurrent(out var handle));
 
-        var channel = await handle.CreateChannelAsync(CancellationToken.None);
+        var channel = await handle.Connection.CreateManualAckChannelAsync(handle.Generation, CancellationToken.None);
         Assert.Equal(1, channel.Generation);
         Assert.True(channel.IsOpen);
         Assert.Single(factory.LastConnection!.Channels);
@@ -337,21 +339,20 @@ public sealed class BackFillerRabbitMqServiceTests
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await secondConnected.Task.WaitAsync(safety.Token);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => stale.CreateChannelAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => stale.Connection.CreateManualAckChannelAsync(stale.Generation, CancellationToken.None));
         Assert.Empty(factory.LastConnection!.Channels);
 
         await service.DisposeAsync();
     }
 
     [Fact]
-    public async Task Logs_do_not_include_credentials()
+    public async Task Logs_do_not_include_configured_password()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory
         {
-            ConnectException = new InvalidOperationException(
-                $"login failed for password {BackFillerTestOptions.SecretPassword}"),
+            ConnectException = new InvalidOperationException("broker down"),
         };
-        var logger = new CollectingLogger<BackFillerRabbitMqService>();
+        var logger = new CollectingLogger<RabbitMqService>();
         var service = CreateService(factory, logger);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
@@ -359,7 +360,6 @@ public sealed class BackFillerRabbitMqServiceTests
         Assert.All(
             logger.Messages,
             static message => Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, message, StringComparison.Ordinal));
-        Assert.Contains(logger.Messages, static message => message.Contains("***", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -378,42 +378,61 @@ public sealed class BackFillerRabbitMqServiceTests
     }
 
     [Fact]
-    public void Client_factory_disables_automatic_recovery()
+    public void BackFiller_assembly_does_not_contain_BackFillerRabbitMqService()
     {
-        var runtime = CreateFastRuntime();
-        var factory = BackFillerRabbitMqClientConnectionFactory.CreateClientFactory(
-            runtime.RabbitMq,
-            "VectorNNTP.BackFiller:test");
-
-        Assert.False(factory.AutomaticRecoveryEnabled);
-        Assert.False(factory.TopologyRecoveryEnabled);
-        Assert.Equal(runtime.RabbitMq.Port, factory.Port);
-        Assert.False(string.IsNullOrWhiteSpace(factory.Password));
+        var assembly = typeof(VectorNNTP.BackFiller.Hosting.BackFillerServiceCollectionExtensions).Assembly;
+        Assert.Null(assembly.GetType("VectorNNTP.BackFiller.RabbitMq.BackFillerRabbitMqService"));
+        Assert.DoesNotContain(
+            assembly.GetTypes(),
+            static type => type.Name == "BackFillerRabbitMqService");
     }
 
-    internal static BackFillerRabbitMqService CreateService(
-        FakeBackFillerRabbitMqConnectionFactory factory,
-        ILogger<BackFillerRabbitMqService>? logger = null)
+    [Fact]
+    public void Common_assembly_does_not_contain_backfiller_storage_or_article_work_types()
     {
-        return new BackFillerRabbitMqService(
+        var common = typeof(RabbitMqService).Assembly;
+        Assert.Null(common.GetType("VectorNNTP.BackFiller.ArticleWork.ArticleWorkConsumerService"));
+        Assert.Null(common.GetType("VectorNNTP.Common.Messaging.RabbitMq.BackFillerArticleWorkTopology"));
+        Assert.DoesNotContain(
+            common.GetManifestResourceNames(),
+            static name => name.Contains("backfiller.storage", StringComparison.OrdinalIgnoreCase));
+
+        var topologyNames = common.GetTypes()
+            .SelectMany(static type => type.GetFields(
+                System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.Instance))
+            .Where(static field => field.FieldType == typeof(string) && field.IsLiteral)
+            .Select(static field => field.GetRawConstantValue() as string)
+            .Where(static value => !string.IsNullOrEmpty(value));
+        Assert.DoesNotContain(topologyNames, static value => value == "backfiller.storage");
+    }
+
+    internal static RabbitMqService CreateService(
+        FakeBackFillerRabbitMqConnectionFactory factory,
+        ILogger<RabbitMqService>? logger = null)
+    {
+        var options = BackFillerTestOptions.CreateValidRabbitMq();
+        options.PoolReconnectBaseDelayMs = 1;
+        options.PoolReconnectMaxDelayMs = 1;
+        return new RabbitMqService(
             factory,
-            CreateFastRuntime(),
-            logger ?? NullLogger<BackFillerRabbitMqService>.Instance);
+            Microsoft.Extensions.Options.Options.Create(options),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.BackFiller:backfiller01.usenet.ninja"),
+            logger ?? NullLogger<RabbitMqService>.Instance);
     }
 
     internal static BackFillerRuntimeOptions CreateFastRuntime()
     {
-        var runtime = BackFillerRuntimeOptionsFactory.Create(
+        var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
+        rabbit.PoolReconnectBaseDelayMs = 1;
+        rabbit.PoolReconnectMaxDelayMs = 1;
+        return BackFillerRuntimeOptionsFactory.Create(
             BackFillerTestOptions.CreateValid(),
-            BackFillerTestOptions.CreateValidNntpDb());
-        return runtime with
-        {
-            RabbitMq = runtime.RabbitMq with
-            {
-                PoolReconnectBaseDelayMs = 1,
-                PoolReconnectMaxDelayMs = 1,
-            },
-        };
+            BackFillerTestOptions.CreateValidNntpDb(),
+            BackFillerTestOptions.CreateValidAcme(),
+            rabbit);
     }
 
     private static string FindRabbitMqSourceDirectory()

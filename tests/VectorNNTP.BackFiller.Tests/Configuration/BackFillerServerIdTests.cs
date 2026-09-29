@@ -8,6 +8,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Configuration;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
 /// <summary>
@@ -29,7 +31,7 @@ public sealed class BackFillerServerIdTests
         zero.ServerId = 0;
         var zeroResult = BackFillerTestOptions.CreateValidator().Validate(null, zero);
         Assert.True(zeroResult.Failed);
-        Assert.Contains(zeroResult.Failures!, static f => f.Contains("1–99", StringComparison.Ordinal));
+        Assert.Contains(zeroResult.Failures!, static f => f.Contains("1–255", StringComparison.Ordinal));
 
         Assert.Null(missing.ServerId);
         Assert.Equal(0, zero.ServerId);
@@ -38,6 +40,8 @@ public sealed class BackFillerServerIdTests
     [Theory]
     [InlineData(1)]
     [InlineData(99)]
+    [InlineData(100)]
+    [InlineData(255)]
     public void ServerId_ValidBoundaries_Succeed(int serverId)
     {
         var options = BackFillerTestOptions.CreateValid();
@@ -49,14 +53,14 @@ public sealed class BackFillerServerIdTests
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(100)]
+    [InlineData(256)]
     public void ServerId_OutOfRange_Fails(int serverId)
     {
         var options = BackFillerTestOptions.CreateValid();
         options.ServerId = serverId;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("1–99", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static f => f.Contains("1–255", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -222,14 +226,16 @@ public sealed class BackFillerServerIdTests
     public void Shared_rules_match_nntpd_bounds()
     {
         Assert.Equal(1, ServerIdRules.MinimumInclusive);
-        Assert.Equal(99, ServerIdRules.MaximumInclusive);
+        Assert.Equal(255, ServerIdRules.MaximumInclusive);
         Assert.Equal(ServerIdRules.MinimumInclusive, BackFillerIdentity.MinimumServerId);
         Assert.Equal(ServerIdRules.MaximumInclusive, BackFillerIdentity.MaximumServerId);
         Assert.Equal(ServerIdValidationStatus.Missing, ServerIdRules.Classify(null));
         Assert.Equal(ServerIdValidationStatus.OutOfRange, ServerIdRules.Classify(0));
         Assert.Equal(ServerIdValidationStatus.Valid, ServerIdRules.Classify(1));
         Assert.Equal(ServerIdValidationStatus.Valid, ServerIdRules.Classify(99));
-        Assert.Equal(ServerIdValidationStatus.OutOfRange, ServerIdRules.Classify(100));
+        Assert.Equal(ServerIdValidationStatus.Valid, ServerIdRules.Classify(100));
+        Assert.Equal(ServerIdValidationStatus.Valid, ServerIdRules.Classify(255));
+        Assert.Equal(ServerIdValidationStatus.OutOfRange, ServerIdRules.Classify(256));
     }
 
     private static IHost CreateHost(Dictionary<string, string?> pairs) =>
@@ -258,7 +264,7 @@ public sealed class BackFillerServerIdTests
             new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<VectorNNTP.BackFiller.RabbitMq.IBackFillerRabbitMqConnectionFactory>(
+        builder.Services.AddSingleton<VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
             new FakeProviderAccountSource());

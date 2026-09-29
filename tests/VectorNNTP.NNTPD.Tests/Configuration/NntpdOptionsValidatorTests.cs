@@ -15,6 +15,7 @@ using VectorNNTP.NNTPD.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.Configuration;
 
@@ -1244,7 +1245,7 @@ public sealed class NntpdConfigurationTests
         var zeroResult = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, zero);
         Assert.True(zeroResult.Failed);
-        Assert.Contains("1–99", NntpdOptionsValidator.JoinFailures(zeroResult), StringComparison.Ordinal);
+        Assert.Contains("1–255", NntpdOptionsValidator.JoinFailures(zeroResult), StringComparison.Ordinal);
 
         Assert.Null(missing.ServerId);
         Assert.Equal(0, zero.ServerId);
@@ -1463,6 +1464,8 @@ public sealed class NntpdConfigurationTests
     [Theory]
     [InlineData(1)]
     [InlineData(99)]
+    [InlineData(100)]
+    [InlineData(255)]
     public void ServerId_ValidBoundaries_Succeed(int serverId)
     {
         var options = TestHostFactory.CreateValidOptions();
@@ -1475,7 +1478,7 @@ public sealed class NntpdConfigurationTests
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(100)]
+    [InlineData(256)]
     public void ServerId_OutOfRange_Fails(int serverId)
     {
         var options = TestHostFactory.CreateValidOptions();
@@ -1483,7 +1486,7 @@ public sealed class NntpdConfigurationTests
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
         Assert.True(result.Failed);
-        Assert.Contains("1–99", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+        Assert.Contains("1–255", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1493,7 +1496,9 @@ public sealed class NntpdConfigurationTests
     [InlineData(1, ServerIdValidationStatus.Valid, true)]
     [InlineData(8, ServerIdValidationStatus.Valid, true)]
     [InlineData(99, ServerIdValidationStatus.Valid, true)]
-    [InlineData(100, ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(100, ServerIdValidationStatus.Valid, true)]
+    [InlineData(255, ServerIdValidationStatus.Valid, true)]
+    [InlineData(256, ServerIdValidationStatus.OutOfRange, false)]
     public void ServerId_DelegatesNumericRulesToCommon(
         int? serverId,
         ServerIdValidationStatus expectedStatus,
@@ -1509,7 +1514,7 @@ public sealed class NntpdConfigurationTests
         Assert.Equal(expectedValid, result.Succeeded);
         if (!expectedValid)
         {
-            Assert.Contains("1–99", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+            Assert.Contains("1–255", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
         }
     }
 

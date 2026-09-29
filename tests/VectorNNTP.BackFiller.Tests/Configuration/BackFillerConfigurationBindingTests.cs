@@ -73,9 +73,8 @@ public sealed class BackFillerConfigurationBindingTests
 
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        var rabbit = new BackFillerRabbitMqOptions();
+        var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
         configuration.GetSection("RabbitMQ").Bind(rabbit);
-        options.RabbitMQ = rabbit;
         var acme = new AcmeCloudflareOptions();
         configuration.Bind(acme);
         var nntpDb = BindNntpDb(configuration);
@@ -85,8 +84,8 @@ public sealed class BackFillerConfigurationBindingTests
         Assert.Equal(
             ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, 8, "usenet.ninja"),
             options.Fqdn);
-        Assert.Equal("canonical-user", options.RabbitMQ.Username);
-        Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
+        Assert.Equal("canonical-user", rabbit.Username);
+        Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
         Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
         Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
         Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);
@@ -111,8 +110,7 @@ public sealed class BackFillerConfigurationBindingTests
         var acme = new AcmeCloudflareOptions();
         configuration.Bind(acme);
 
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
+        Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
         Assert.True(string.IsNullOrWhiteSpace(acme.CloudFlareApiKey));
         Assert.True(string.IsNullOrWhiteSpace(acme.AcmeCertificatePassword));
     }
@@ -172,16 +170,15 @@ public sealed class BackFillerConfigurationBindingTests
             .Build();
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        var rabbit = new BackFillerRabbitMqOptions();
+        var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
         configuration.GetSection("RabbitMQ").Bind(rabbit);
-        options.RabbitMQ = rabbit;
         var acme = new AcmeCloudflareOptions();
         configuration.Bind(acme);
         var nntpDb = BindNntpDb(configuration);
 
         Assert.Equal(8, options.ServerId);
-        Assert.Equal("env-user", options.RabbitMQ.Username);
-        Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
+        Assert.Equal("env-user", rabbit.Username);
+        Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
         Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
         Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
         Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);

@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.RabbitMq;
 
@@ -276,7 +277,7 @@ public sealed class RabbitMqServiceTests
         var service = new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance,
             clock);
 
@@ -314,7 +315,7 @@ public sealed class RabbitMqServiceTests
         var service = new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -432,7 +433,7 @@ public sealed class RabbitMqServiceTests
         var service = new RabbitMqService(
             new FakeRabbitMqConnectionFactory(),
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             logger);
 
         await service.StartAsync(CancellationToken.None);
@@ -492,7 +493,7 @@ public sealed class RabbitMqServiceTests
         return new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
     }
 

@@ -8,6 +8,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Configuration;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Configuration;
 
 /// <summary>
@@ -126,7 +128,7 @@ public sealed class AcmeCloudflareDataAnnotationsEquivalenceTests
             new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(
             new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<VectorNNTP.BackFiller.RabbitMq.IBackFillerRabbitMqConnectionFactory>(
+        builder.Services.AddSingleton<VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqConnectionFactory>(
             new FakeBackFillerRabbitMqConnectionFactory());
         builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
             new FakeProviderAccountSource());

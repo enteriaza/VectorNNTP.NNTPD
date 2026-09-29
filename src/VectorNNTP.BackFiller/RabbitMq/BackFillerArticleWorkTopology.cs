@@ -1,5 +1,3 @@
-using RabbitMQ.Client;
-
 namespace VectorNNTP.BackFiller.RabbitMq;
 
 /// <summary>
@@ -19,15 +17,18 @@ public static class BackFillerArticleWorkTopology
     /// <summary>Required queue type for durable BackFiller ArticleWork provider queues.</summary>
     public const string QuorumQueueType = "quorum";
 
+    /// <summary>Fanout exchange type used for provider endpoints.</summary>
+    public const string FanoutExchangeType = "fanout";
+
     /// <summary>
     /// Declares the fanout exchange, durable quorum queue, and binding for
     /// <paramref name="backbone"/> using existing name/routing semantics.
     /// </summary>
-    /// <param name="channel">Caller-owned channel on the current connection generation.</param>
+    /// <param name="channel">Caller-owned manual-ack channel on the current connection generation.</param>
     /// <param name="backbone">Provider backbone label (for example <c>Giganews</c>).</param>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
     public static async Task DeclareProviderEndpointAsync(
-        IBackFillerRabbitMqChannel channel,
+        VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqManualAckChannel channel,
         string backbone,
         CancellationToken cancellationToken)
     {
@@ -37,7 +38,7 @@ public static class BackFillerArticleWorkTopology
         var name = BackFillerRabbitMqTopology.ComposeProviderEntity(backbone);
         await channel.ExchangeDeclareAsync(
                 name,
-                ExchangeType.Fanout,
+                FanoutExchangeType,
                 durable: true,
                 autoDelete: false,
                 arguments: null,

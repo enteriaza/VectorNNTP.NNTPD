@@ -8,7 +8,9 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <remarks>
 /// Produced once after successful validation. Services must not re-read
 /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> for these values.
-/// Never log a complete instance: it contains RabbitMQ, ACME, and NntpDB secrets.
+/// Never log a complete instance: it may contain ACME and NntpDB secrets.
+/// RabbitMQ broker connectivity settings live on Common <c>RabbitMqOptions</c> /
+/// <c>RabbitMqService</c>; this snapshot only carries Article Work application knobs.
 /// </remarks>
 public sealed record BackFillerRuntimeOptions(
     int ServerId,
@@ -72,36 +74,13 @@ public sealed record NntpDbRuntimeOptions(
     string Database,
     string UserId);
 
-/// <summary>Validated RabbitMQ runtime projection.</summary>
+/// <summary>
+/// Slim Article Work RabbitMQ knobs projected from Common <c>RabbitMqOptions</c>.
+/// </summary>
+/// <param name="WorkRequestMaxPayloadBytes">Maximum admitted work-request envelope size.</param>
+/// <param name="PublishConfirmTimeoutSeconds">Publisher-confirm wait for response publications.</param>
+/// <param name="ConsumerPrefetchCount">Optional Basic.Qos prefetch for Article Work consumers.</param>
 public sealed record BackFillerRabbitMqRuntimeOptions(
-    IReadOnlyList<string> Hosts,
-    int Port,
-    string? Username,
-    string? Password,
-    string VirtualHost,
-    bool EnableSsl,
     int WorkRequestMaxPayloadBytes,
-    int ChannelLeaseTimeoutSeconds,
-    int RpcTimeoutSeconds,
-    int ConnectionBlockedTimeoutSeconds,
-    int ChannelPoolSize,
-    int MinConnections,
-    int MaxConnections,
-    int MaxConsecutiveRecoveryFailures,
-    int MaxPendingLeaseWaiters,
-    int ConnectionScaleDownIdleSeconds,
-    int ScaleDownCooldownSeconds,
-    int NetworkRecoveryIntervalSeconds,
-    int PoolReconnectBaseDelayMs,
-    int PoolReconnectMaxDelayMs,
-    int MinimumConnectionLifetimeSeconds,
     int PublishConfirmTimeoutSeconds,
-    int MaximumShutdownDrainTimeoutSeconds,
-    double DegradedThreshold,
-    int UnhealthyThreshold,
-    int RequestedHeartbeatSeconds,
-    int SocketTimeoutSeconds,
-    int RequestedChannelMax,
-    ushort? ConsumerPrefetchCount,
-    string? DiagnosticPayloadCorrelationId);
-
+    ushort? ConsumerPrefetchCount);

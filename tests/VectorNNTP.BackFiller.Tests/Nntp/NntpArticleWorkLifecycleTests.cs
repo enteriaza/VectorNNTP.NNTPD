@@ -7,6 +7,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Nntp;
 
 public sealed class NntpArticleWorkLifecycleTests
@@ -208,11 +210,11 @@ public sealed class NntpArticleWorkLifecycleTests
         IBackboneUsableCapacityProvider capacity)
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var service = new ArticleWorkConsumerService(
             connections,
-            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            RabbitMqServiceTests.CreateFastRuntime(),
             new DeferredArticleWorkHandler(),
             new RecordingArticleWorkResponsePublisher(),
             NullLogger<ArticleWorkConsumerService>.Instance,
@@ -224,7 +226,7 @@ public sealed class NntpArticleWorkLifecycleTests
 
     private sealed class ConsumerHarness(
         ArticleWorkConsumerService service,
-        BackFillerRabbitMqService connections) : IAsyncDisposable
+        RabbitMqService connections) : IAsyncDisposable
     {
         public ArticleWorkConsumerService Service { get; } = service;
 

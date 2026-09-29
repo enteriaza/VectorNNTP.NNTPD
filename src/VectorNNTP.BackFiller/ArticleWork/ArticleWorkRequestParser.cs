@@ -1,6 +1,8 @@
 using System.Text.Json;
 using VectorNNTP.BackFiller.RabbitMq;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
@@ -28,7 +30,7 @@ public static class ArticleWorkRequestParser
     /// <param name="maxPayloadBytes">Maximum accepted application body size.</param>
     /// <returns>A valid request or an <see cref="ArticleWorkOutcome.InvalidRequest"/> failure.</returns>
     public static ArticleWorkParseResult Parse(
-        in BackFillerRabbitMqConsumedDelivery delivery,
+        in RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
         int maxPayloadBytes)
     {

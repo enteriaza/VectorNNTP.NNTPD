@@ -22,7 +22,7 @@ public static class ApplicationFqdn
     /// <param name="serverId">Validated server id in the shared ServerId range.</param>
     /// <returns>Lowercase host label with a two-digit id.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="prefix"/> is empty.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="serverId"/> is outside 1–99.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="serverId"/> is outside 1–255.</exception>
     public static string FormatHostLabel(string prefix, int serverId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prefix);

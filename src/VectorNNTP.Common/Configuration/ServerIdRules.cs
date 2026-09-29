@@ -15,7 +15,7 @@ public static class ServerIdRules
     public const int MinimumInclusive = 1;
 
     /// <summary>Inclusive upper bound.</summary>
-    public const int MaximumInclusive = 99;
+    public const int MaximumInclusive = 255;
 
     /// <summary>
     /// Returns whether <paramref name="serverId"/> is unset (missing configuration).
@@ -28,7 +28,7 @@ public static class ServerIdRules
     /// Returns whether a configured <paramref name="serverId"/> is inside the accepted range.
     /// </summary>
     /// <param name="serverId">Configured server id.</param>
-    /// <returns><see langword="true"/> when <paramref name="serverId"/> is 1–99 inclusive.</returns>
+    /// <returns><see langword="true"/> when <paramref name="serverId"/> is 1–255 inclusive.</returns>
     public static bool IsInRange(int serverId) =>
         serverId is >= MinimumInclusive and <= MaximumInclusive;
 
@@ -78,12 +78,12 @@ public static class ServerIdRules
 /// </summary>
 public enum ServerIdValidationStatus
 {
-    /// <summary>Configured and inside 1–99.</summary>
+    /// <summary>Configured and inside 1–255.</summary>
     Valid = 0,
 
     /// <summary>Omitted (<see langword="null"/>).</summary>
     Missing = 1,
 
-    /// <summary>Configured but outside 1–99 (including <c>0</c>).</summary>
+    /// <summary>Configured but outside 1–255 (including <c>0</c>).</summary>
     OutOfRange = 2,
 }

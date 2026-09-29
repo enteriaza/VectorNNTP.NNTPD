@@ -6,6 +6,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 
 public sealed class ArticleWorkConsumerLifecycleTests
@@ -29,7 +31,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Startup_fails_when_the_connection_is_not_ready()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         var session = CreateSession(connections, new DeferredArticleWorkHandler());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartAsync(CancellationToken.None));
@@ -41,7 +43,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Startup_fails_when_consume_cannot_be_established()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         factory.LastConnection!.CreateChannelException = new InvalidOperationException("channel refused");
         var session = CreateSession(connections, new DeferredArticleWorkHandler());
@@ -113,7 +115,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Consumer_service_starts_one_session_per_desired_nntp_slot_when_capacity_exists()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumerService(
             connections,
@@ -153,7 +155,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Consumer_service_does_not_start_topology_backbones_without_capacity()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumerService(connections, new DeferredArticleWorkHandler());
 
@@ -170,7 +172,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Consumer_service_rebuilds_after_generation_loss_without_opening_a_competing_connection()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var consumer = CreateConsumerService(
             connections,
@@ -202,7 +204,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     public async Task Stale_session_does_not_mutate_a_newer_generation()
     {
         var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+        var connections = RabbitMqServiceTests.CreateService(factory);
         await connections.StartAsync(CancellationToken.None);
         var handler = new ControllableArticleWorkHandler
         {
@@ -258,7 +260,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     }
 
     private static ArticleWorkConsumerSession CreateSession(
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         IArticleWorkHandler handler,
         RecordingArticleWorkResponsePublisher? publisher = null)
     {
@@ -271,14 +273,14 @@ public sealed class ArticleWorkConsumerLifecycleTests
     }
 
     private static ArticleWorkConsumerService CreateConsumerService(
-        IBackFillerRabbitMqService connections,
+        IRabbitMqService connections,
         IArticleWorkHandler handler,
         IBackFillerProviderCatalog? catalog = null,
         IBackboneUsableCapacityProvider? capacity = null)
     {
         return new ArticleWorkConsumerService(
             connections,
-            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            RabbitMqServiceTests.CreateFastRuntime(),
             handler,
             new RecordingArticleWorkResponsePublisher(),
             NullLogger<ArticleWorkConsumerService>.Instance,
@@ -335,7 +337,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
     {
         private ConsumerContext(
             FakeBackFillerRabbitMqConnectionFactory factory,
-            BackFillerRabbitMqService connections,
+            RabbitMqService connections,
             ArticleWorkConsumerSession session,
             RecordingArticleWorkResponsePublisher publisher)
         {
@@ -347,7 +349,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
 
         public FakeBackFillerRabbitMqConnectionFactory Factory { get; }
 
-        public BackFillerRabbitMqService Connections { get; }
+        public RabbitMqService Connections { get; }
 
         public ArticleWorkConsumerSession Session { get; }
 
@@ -356,7 +358,7 @@ public sealed class ArticleWorkConsumerLifecycleTests
         public static async Task<ConsumerContext> StartSessionAsync(IArticleWorkHandler? handler = null)
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
-            var connections = BackFillerRabbitMqServiceTests.CreateService(factory);
+            var connections = RabbitMqServiceTests.CreateService(factory);
             await connections.StartAsync(CancellationToken.None);
             var publisher = new RecordingArticleWorkResponsePublisher();
             var session = CreateSession(connections, handler ?? new DeferredArticleWorkHandler(), publisher);

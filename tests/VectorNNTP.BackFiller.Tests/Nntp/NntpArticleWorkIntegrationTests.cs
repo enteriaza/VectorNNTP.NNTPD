@@ -7,6 +7,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Nntp;
 
 public sealed class NntpArticleWorkIntegrationTests
@@ -53,12 +55,12 @@ public sealed class NntpArticleWorkIntegrationTests
         server.Respond(_ => ValidArticleResponse);
         factory.Enqueue(server);
         var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = BackFillerRabbitMqServiceTests.CreateService(rabbitFactory);
+        var connections = RabbitMqServiceTests.CreateService(rabbitFactory);
         await connections.StartAsync(CancellationToken.None);
         rabbitFactory.LastConnection!.DefaultPublishConfirmBehavior = FakePublishConfirmBehavior.Confirm;
         var publisher = new ArticleWorkResponsePublisher(
             connections,
-            BackFillerRabbitMqServiceTests.CreateFastRuntime(),
+            RabbitMqServiceTests.CreateFastRuntime(),
             NullLogger<ArticleWorkResponsePublisher>.Instance);
         await publisher.StartAsync(CancellationToken.None);
         var (handler, _, _) = CreatePipeline(factory);

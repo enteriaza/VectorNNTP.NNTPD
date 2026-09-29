@@ -14,6 +14,7 @@ using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Networking;
 using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.Cloudflare.Lifecycle;
 
@@ -135,8 +136,8 @@ public sealed class CloudflareDnsReconciliationServiceTests
             services[0].GetType().Assembly);
 
         AssertRegisteredBefore(services, typeof(CloudflareDnsReconciliationApplicationService), typeof(VectorNNTP.NNTPD.Redis.RedisService));
-        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Redis.RedisService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService));
-        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Redis.RedisService), typeof(VectorNNTP.Common.Messaging.RabbitMq.RabbitMqService));
+        AssertRegisteredBefore(services, typeof(VectorNNTP.Common.Messaging.RabbitMq.RabbitMqService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), typeof(NntpDbService));
         AssertRegisteredBefore(services, typeof(NntpDbService), typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService));

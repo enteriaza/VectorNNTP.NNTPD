@@ -32,7 +32,7 @@ public sealed class BackFillerEndToEndTests
         Assert.Equal("Success", document.RootElement.GetProperty("outcome").GetString());
         Assert.Equal(harness.Handler.LastCacheUri, document.RootElement.GetProperty("uri").GetString());
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalCorrelationId, publication.CorrelationId);
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalReplyTo, publication.ReplyTo);
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalReplyTo, publication.RoutingKey);
         Assert.Equal(ArticleWorkResponseWireProtocol.JsonContentType, publication.ContentType);
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalRequestId, publication.RequestIdHeader);
         Assert.Equal(ArticleWorkResponseWireProtocol.ExpirationMilliseconds, publication.ExpirationMilliseconds);

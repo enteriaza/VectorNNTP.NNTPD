@@ -18,6 +18,7 @@ using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.RabbitMq;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Tests.ArticleIngestion;
 
@@ -283,7 +284,7 @@ public sealed class IncomingSpoolOverviewHandoffTests
         return new RabbitMqService(
             factory,
             Options.Create(options),
-            Options.Create(TestHostFactory.CreateValidOptions()),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
     }
 

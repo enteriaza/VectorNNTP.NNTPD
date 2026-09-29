@@ -10,6 +10,8 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.NNTPD.Configuration;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Hosting;
 
 public sealed class BackFillerPlatformHostingTests
@@ -116,7 +118,7 @@ public sealed class BackFillerPlatformHostingTests
         builder.Configuration.AddInMemoryCollection(BackFillerTestOptions.CreateValidConfigurationPairs());
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
         builder.ConfigureBackFillerPlatformHosting();
         builder.AddBackFillerHosting();
         return builder.Build();

@@ -31,14 +31,14 @@ public sealed class BackFillerOptionsValidatorTests
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
-    [InlineData(100)]
-    public void Validate_fails_for_server_id_outside_1_to_99(int serverId)
+    [InlineData(256)]
+    public void Validate_fails_for_server_id_outside_1_to_255(int serverId)
     {
         var options = BackFillerTestOptions.CreateValid();
         options.ServerId = serverId;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
-        Assert.Contains(result.Failures!, static f => f.Contains("1–99", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static f => f.Contains("1–255", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -92,8 +92,9 @@ public sealed class BackFillerOptionsValidatorTests
     {
         var options = BackFillerTestOptions.CreateValid();
         options.Shutdown.GracePeriodSeconds = 30;
-        options.RabbitMQ.MaximumShutdownDrainTimeoutSeconds = 31;
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
+        rabbit.MaximumShutdownDrainTimeoutSeconds = 31;
+        var result = BackFillerTestOptions.CreateValidator(rabbitMq: rabbit).Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
@@ -216,8 +217,9 @@ public sealed class BackFillerOptionsValidatorTests
     {
         var options = BackFillerTestOptions.CreateValid();
         options.ServerId = null;
-        options.RabbitMQ.Password = BackFillerTestOptions.SecretPassword;
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
+        rabbit.Password = BackFillerTestOptions.SecretPassword;
+        var result = BackFillerTestOptions.CreateValidator(rabbitMq: rabbit).Validate(null, options);
         Assert.True(result.Failed);
         Assert.All(
             result.Failures!,
@@ -231,37 +233,39 @@ public sealed class BackFillerOptionsValidatorTests
     }
 
     [Fact]
-    public void Bind_uses_canonical_nested_rabbitmq_path()
+    public void Bind_uses_top_level_rabbitmq_path()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["BackFiller:RabbitMQ:Username"] = "canonical-user",
-                ["BackFiller:RabbitMQ:Password"] = BackFillerTestOptions.SecretPassword,
-                ["RabbitMQ:Username"] = "short-form-user",
-                ["RabbitMQ:Password"] = "short-form-password",
-            })
-            .Build();
-        var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        Assert.Equal("canonical-user", options.RabbitMQ.Username);
-        Assert.Equal(BackFillerTestOptions.SecretPassword, options.RabbitMQ.Password);
-    }
-
-    [Fact]
-    public void Bind_does_not_treat_root_rabbitmq_as_a_supported_alias()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["RabbitMQ:Username"] = "short-form-user",
+                ["BackFiller:RabbitMQ:Username"] = "nested-user",
+                ["BackFiller:RabbitMQ:Password"] = "nested-password",
+                ["RabbitMQ:Username"] = "canonical-user",
                 ["RabbitMQ:Password"] = BackFillerTestOptions.SecretPassword,
             })
             .Build();
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Username));
-        Assert.True(string.IsNullOrWhiteSpace(options.RabbitMQ.Password));
+        var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
+        configuration.GetSection("RabbitMQ").Bind(rabbit);
+        Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
+        Assert.Equal("canonical-user", rabbit.Username);
+        Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
+    }
+
+    [Fact]
+    public void Bind_does_not_map_nested_backfiller_rabbitmq_onto_backfiller_options()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["BackFiller:RabbitMQ:Username"] = "nested-user",
+                ["BackFiller:RabbitMQ:Password"] = BackFillerTestOptions.SecretPassword,
+            })
+            .Build();
+        var options = new BackFillerOptions();
+        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+        Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
     }
 
     [Fact]

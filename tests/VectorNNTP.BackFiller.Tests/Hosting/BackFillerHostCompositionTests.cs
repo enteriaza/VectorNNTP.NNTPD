@@ -23,6 +23,8 @@ using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
+using VectorNNTP.Common.Messaging.RabbitMq;
+
 namespace VectorNNTP.BackFiller.Tests.Hosting;
 
 public sealed class BackFillerHostCompositionTests
@@ -39,7 +41,7 @@ public sealed class BackFillerHostCompositionTests
         Assert.Equal(9, hosted.Length);
         Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
         Assert.IsType<SystemdWatchdogService>(hosted[1]);
-        Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[2]);
+        Assert.IsType<RabbitMqServiceHostedAdapter>(hosted[2]);
         Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[3]);
         Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[4]);
         Assert.IsType<BackFillerApplicationHostedService>(hosted[5]);
@@ -113,7 +115,7 @@ public sealed class BackFillerHostCompositionTests
         try
         {
             Assert.True(host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStarted.IsCancellationRequested);
-            var rabbit = host.Services.GetRequiredService<IBackFillerRabbitMqService>();
+            var rabbit = host.Services.GetRequiredService<IRabbitMqService>();
             Assert.True(rabbit.IsReady);
             Assert.Equal(1, rabbit.ConnectionGeneration);
             var consumer = host.Services.GetRequiredService<ArticleWorkConsumerService>();
@@ -133,9 +135,23 @@ public sealed class BackFillerHostCompositionTests
             await host.StopAsync();
         }
 
-        Assert.False(host.Services.GetRequiredService<IBackFillerRabbitMqService>().IsReady);
+        Assert.False(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
         Assert.All(factory.LastConnection!.Channels, static channel => Assert.Equal(1, channel.DisposeCount));
         Assert.All(factory.LastConnection.PublishChannels, static channel => Assert.Equal(1, channel.DisposeCount));
+    }
+
+    [Fact]
+    public void AddBackFillerHosting_registers_rabbitmq_without_connecting()
+    {
+        var factory = new FakeBackFillerRabbitMqConnectionFactory();
+        using var host = CreateHost(factory);
+
+        Assert.Equal(0, factory.ConnectCount);
+        Assert.NotNull(host.Services.GetRequiredService<IRabbitMqService>());
+        Assert.Same(
+            host.Services.GetRequiredService<RabbitMqService>(),
+            host.Services.GetRequiredService<IRabbitMqService>());
+        Assert.Equal(0, factory.ConnectCount);
     }
 
     [Fact]
@@ -185,7 +201,7 @@ public sealed class BackFillerHostCompositionTests
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
         builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<IBackFillerRabbitMqConnectionFactory>(
+        builder.Services.AddSingleton<IRabbitMqConnectionFactory>(
             factory ?? new FakeBackFillerRabbitMqConnectionFactory());
         if (injectAccountSource)
         {
