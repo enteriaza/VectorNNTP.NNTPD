@@ -72,7 +72,7 @@ public sealed class VatpTransferLease : IDisposable
     /// <summary>Gets the Date-family header name required for VATP META.</summary>
     public NntpArticleHeaderName SelectedDateHeaderName { get; }
 
-    /// <summary>Gets the Message-ID / MD5 identity.</summary>
+    /// <summary>Gets the Message-ID / ArticleId identity.</summary>
     public ArticleIdentity Identity { get; }
 
     /// <summary>Gets the cache URI for this entry.</summary>

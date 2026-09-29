@@ -1,17 +1,20 @@
 using System.Text.RegularExpressions;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.NNTPD.Transport.Vatp;
 
 /// <summary>
-/// Parses RabbitMQ Success <c>cache://</c> URIs into host, port, and MD5 path components.
+/// Parses RabbitMQ Success <c>cache://</c> URIs into host, port, and ArticleId path components.
+/// Host/port are used for VATP dialing; the path is the lowercase hexadecimal ArticleId and is
+/// not a VATP lookup key.
 /// </summary>
 public static partial class CacheArticleUriParser
 {
     /// <summary>Parsed cache URI components.</summary>
-    public readonly record struct ParsedCacheArticleUri(string Host, int Port, string Md5Hex);
+    public readonly record struct ParsedCacheArticleUri(string Host, int Port, string ArticleIdHex);
 
     /// <summary>
-    /// Attempts to parse <c>cache://{fqdn}:{port}/{32 hex md5}</c>.
+    /// Attempts to parse <c>cache://{fqdn}:{port}/{64 hex ArticleId}</c>.
     /// </summary>
     public static bool TryParse(string cacheUri, out ParsedCacheArticleUri parsed, out string error)
     {
@@ -38,7 +41,13 @@ public static partial class CacheArticleUriParser
         }
 
         var authority = withoutScheme[..slash];
-        var md5Hex = withoutScheme[(slash + 1)..].ToString();
+        var articleIdHex = withoutScheme[(slash + 1)..].ToString();
+        if (!ArticleId.TryParseLowerHex(articleIdHex, out _))
+        {
+            error = "Cache URI path is not a lowercase hexadecimal ArticleId.";
+            return false;
+        }
+
         var colon = authority.LastIndexOf(':');
         if (colon <= 0 || colon >= authority.Length - 1)
         {
@@ -53,12 +62,12 @@ public static partial class CacheArticleUriParser
             return false;
         }
 
-        parsed = new ParsedCacheArticleUri(host, port, md5Hex);
+        parsed = new ParsedCacheArticleUri(host, port, articleIdHex);
         return true;
     }
 
     [GeneratedRegex(
-        "^cache://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{32}$",
+        "^cache://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{64}$",
         RegexOptions.CultureInvariant)]
     private static partial Regex CanonicalCacheUriRegex();
 }

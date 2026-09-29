@@ -121,7 +121,7 @@ ArtId is **identity**, not a content fingerprint. Path and Date rewrites do not 
 
 [`src/VectorNNTP.NNTPD/History/HistoryDigest.cs`](../src/VectorNNTP.NNTPD/History/HistoryDigest.cs) wraps `ArticleId`. `HistoryDigest.FromMessageId` is `ArticleId.FromMessageId`. `HistoryDbTests.HistoryDigest_MatchesCommonArticleIdBytes` asserts identical 32-byte output.
 
-This is not the BackFiller MD5 `ArticleIdentity` used for cache URIs.
+This is not the BackFiller Success `cache://` URI path, which is the lowercase hexadecimal `ArticleId`.
 
 ---
 

@@ -6,13 +6,14 @@ using VectorNNTP.Common.Articles.Parsing;
 namespace VectorNNTP.BackFiller.Retention;
 
 /// <summary>
-/// In-memory retention authority. One process-wide owner of retained article lifetime.
+/// In-memory retention authority. One process-wide owner of retained CanonicalV1 article lifetime.
+/// The sole retained byte representation is <see cref="ArticleRecord.ArtData"/>.
 /// </summary>
 public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, RetainedEntry> _byMessageId = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _messageIdByMd5 = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _messageIdByArticleId = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, RetainedEntry> _byRequestId = new();
     private readonly LinkedList<RetainedEntry> _insertionOrder = [];
     private readonly TimeProvider _time;
@@ -108,103 +109,6 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     }
 
     /// <inheritdoc />
-    public ArticleRetentionResult Retain(string messageId, byte[] payload)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
-        ArgumentNullException.ThrowIfNull(payload);
-
-        if (payload.Length <= 0)
-        {
-            ArticleRetentionLogMessages.Rejected(_logger, ArticleRetentionKind.InvalidPayload, null, 0, RetainedPayloadBytes);
-            return new ArticleRetentionResult(ArticleRetentionKind.InvalidPayload, null, null, RetainedPayloadBytes, 0);
-        }
-
-        if (payload.Length > _maximumBytes)
-        {
-            ArticleRetentionLogMessages.Rejected(
-                _logger,
-                ArticleRetentionKind.PayloadExceedsCapacity,
-                null,
-                payload.Length,
-                RetainedPayloadBytes);
-            return new ArticleRetentionResult(
-                ArticleRetentionKind.PayloadExceedsCapacity,
-                null,
-                null,
-                RetainedPayloadBytes,
-                0);
-        }
-
-        var identity = ArticleIdentity.FromExactMessageId(messageId);
-        var now = _time.GetUtcNow();
-
-        lock (_gate)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_admissionClosed)
-            {
-                return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, payload.Length, 0);
-            }
-
-            if (_byMessageId.TryGetValue(messageId, out var existing))
-            {
-                if (IsExpiredLocked(existing, now))
-                {
-                    RemoveExpiredLocked(existing);
-                }
-                else
-                {
-                    return new ArticleRetentionResult(
-                        ArticleRetentionKind.AlreadyPresent,
-                        existing.Identity,
-                        existing.CacheUri,
-                        _retainedBytes,
-                        0);
-                }
-            }
-
-            if (_messageIdByMd5.TryGetValue(identity.Md5Hex, out var colliding)
-                && !string.Equals(colliding, messageId, StringComparison.Ordinal))
-            {
-                if (_byMessageId.TryGetValue(colliding, out var collidingEntry) && IsExpiredLocked(collidingEntry, now))
-                {
-                    RemoveExpiredLocked(collidingEntry);
-                }
-                else
-                {
-                    return RejectLocked(ArticleRetentionKind.Md5Collision, identity, payload.Length, 0);
-                }
-            }
-
-            var released = ReclaimForAdmissionLocked(payload.Length, now);
-            if (_retainedBytes + payload.Length > _maximumBytes)
-            {
-                return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, payload.Length, released);
-            }
-
-            var entry = new RetainedEntry(
-                identity,
-                CacheArticleUri.Create(_fqdn, _bindPort, identity),
-                payload,
-                now,
-                now + _ttl,
-                Interlocked.Increment(ref _nextGeneration));
-            entry.Node = _insertionOrder.AddLast(entry);
-            _byMessageId[messageId] = entry;
-            _messageIdByMd5[identity.Md5Hex] = messageId;
-            AddBytesLocked(payload.Length);
-            _physicalCount++;
-            ArticleRetentionLogMessages.Retained(_logger, identity.Md5Hex, payload.Length, _retainedBytes);
-            return new ArticleRetentionResult(
-                ArticleRetentionKind.Retained,
-                identity,
-                entry.CacheUri,
-                _retainedBytes,
-                released);
-        }
-    }
-
-    /// <inheritdoc />
     public ArticleRetentionResult RetainCanonical(
         string messageId,
         Guid requestId,
@@ -219,7 +123,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         if (record.ParseStatus != ArticleParseStatus.CanonicalV1
             || record.ArtSize <= 0
-            || !TryGetOwnedArtData(in record, out var payload))
+            || !TryGetOwnedArtData(in record, out var artData))
         {
             ArticleRetentionLogMessages.Rejected(
                 _logger,
@@ -235,13 +139,13 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 0);
         }
 
-        if (payload.Length > _maximumBytes)
+        if (artData.Length > _maximumBytes)
         {
             ArticleRetentionLogMessages.Rejected(
                 _logger,
                 ArticleRetentionKind.PayloadExceedsCapacity,
                 null,
-                payload.Length,
+                artData.Length,
                 RetainedPayloadBytes);
             return new ArticleRetentionResult(
                 ArticleRetentionKind.PayloadExceedsCapacity,
@@ -251,7 +155,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 0);
         }
 
-        var identity = ArticleIdentity.FromExactMessageId(messageId);
+        var identity = ArticleIdentity.From(messageId, record.ArtId);
         var now = _time.GetUtcNow();
 
         lock (_gate)
@@ -259,13 +163,13 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_admissionClosed)
             {
-                return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, payload.Length, 0);
+                return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, artData.Length, 0);
             }
 
             if (_byRequestId.TryGetValue(requestId, out var requestOwner)
                 && !string.Equals(requestOwner.Identity.MessageId, messageId, StringComparison.Ordinal))
             {
-                return RejectLocked(ArticleRetentionKind.Md5Collision, identity, payload.Length, 0);
+                return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, artData.Length, 0);
             }
 
             if (_byMessageId.TryGetValue(messageId, out var existing))
@@ -276,7 +180,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 }
                 else
                 {
-                    AttachPendingRequestLocked(existing, requestId, in record, selectedDateHeaderName);
+                    // First-wins: keep the retained ArticleRecord; only refresh the pending RequestId.
+                    AttachPendingRequestLocked(existing, requestId);
                     return new ArticleRetentionResult(
                         ArticleRetentionKind.AlreadyPresent,
                         existing.Identity,
@@ -286,7 +191,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 }
             }
 
-            if (_messageIdByMd5.TryGetValue(identity.Md5Hex, out var colliding)
+            if (_messageIdByArticleId.TryGetValue(identity.ArticleIdHex, out var colliding)
                 && !string.Equals(colliding, messageId, StringComparison.Ordinal))
             {
                 if (_byMessageId.TryGetValue(colliding, out var collidingEntry) && IsExpiredLocked(collidingEntry, now))
@@ -295,32 +200,31 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 }
                 else
                 {
-                    return RejectLocked(ArticleRetentionKind.Md5Collision, identity, payload.Length, 0);
+                    return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, artData.Length, 0);
                 }
             }
 
-            var released = ReclaimForAdmissionLocked(payload.Length, now);
-            if (_retainedBytes + payload.Length > _maximumBytes)
+            var released = ReclaimForAdmissionLocked(artData.Length, now);
+            if (_retainedBytes + artData.Length > _maximumBytes)
             {
-                return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, payload.Length, released);
+                return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, artData.Length, released);
             }
 
             var entry = new RetainedEntry(
                 identity,
                 CacheArticleUri.Create(_fqdn, _bindPort, identity),
-                payload,
+                record,
+                selectedDateHeaderName,
                 now,
                 now + _ttl,
-                Interlocked.Increment(ref _nextGeneration),
-                record,
-                selectedDateHeaderName);
+                Interlocked.Increment(ref _nextGeneration));
             entry.Node = _insertionOrder.AddLast(entry);
             _byMessageId[messageId] = entry;
-            _messageIdByMd5[identity.Md5Hex] = messageId;
-            AttachPendingRequestLocked(entry, requestId, in record, selectedDateHeaderName);
-            AddBytesLocked(payload.Length);
+            _messageIdByArticleId[identity.ArticleIdHex] = messageId;
+            AttachPendingRequestLocked(entry, requestId);
+            AddBytesLocked(artData.Length);
             _physicalCount++;
-            ArticleRetentionLogMessages.Retained(_logger, identity.Md5Hex, payload.Length, _retainedBytes);
+            ArticleRetentionLogMessages.Retained(_logger, identity.ArticleIdHex, artData.Length, _retainedBytes);
             return new ArticleRetentionResult(
                 ArticleRetentionKind.Retained,
                 identity,
@@ -402,31 +306,6 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     }
 
     /// <inheritdoc />
-    public ArticleLookupResult TryGetByMessageId(string messageId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
-        lock (_gate)
-        {
-            return _byMessageId.TryGetValue(messageId, out var entry)
-                ? TryLeaseLocked(entry)
-                : ArticleLookupResult.Missing();
-        }
-    }
-
-    /// <inheritdoc />
-    public ArticleLookupResult TryGetByMd5(string md5Hex)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(md5Hex);
-        lock (_gate)
-        {
-            return _messageIdByMd5.TryGetValue(md5Hex, out var messageId)
-                && _byMessageId.TryGetValue(messageId, out var entry)
-                ? TryLeaseLocked(entry)
-                : ArticleLookupResult.Missing();
-        }
-    }
-
-    /// <inheritdoc />
     public long SweepExpired()
     {
         lock (_gate)
@@ -477,29 +356,6 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
 
         return ValueTask.CompletedTask;
-    }
-
-    private ArticleLookupResult TryLeaseLocked(RetainedEntry entry)
-    {
-        if (IsExpiredLocked(entry, _time.GetUtcNow()))
-        {
-            RemoveExpiredLocked(entry);
-            return ArticleLookupResult.Expired();
-        }
-
-        if (!entry.TryAcquire())
-        {
-            return ArticleLookupResult.Missing();
-        }
-
-        return ArticleLookupResult.Found(new ArticleLookupLease(
-            entry.Identity,
-            entry.CacheUri,
-            entry.Payload,
-            entry.InsertedUtc,
-            entry.ExpiresUtc,
-            entry.Generation,
-            () => ReleaseLease(entry)));
     }
 
     private void ReleaseLease(RetainedEntry entry)
@@ -583,7 +439,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
 
         _byMessageId.Remove(entry.Identity.MessageId);
-        _messageIdByMd5.Remove(entry.Identity.Md5Hex);
+        _messageIdByArticleId.Remove(entry.Identity.ArticleIdHex);
         ClearPendingRequestLocked(entry);
         if (entry.Node is not null)
         {
@@ -592,18 +448,13 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         }
     }
 
-    private void AttachPendingRequestLocked(
-        RetainedEntry entry,
-        Guid requestId,
-        in ArticleRecord record,
-        NntpArticleHeaderName selectedDateHeaderName)
+    private void AttachPendingRequestLocked(RetainedEntry entry, Guid requestId)
     {
         if (entry.PendingRequestId is { } prior && prior != requestId)
         {
             _byRequestId.Remove(prior);
         }
 
-        entry.AttachCanonical(in record, selectedDateHeaderName);
         entry.PendingRequestId = requestId;
         _byRequestId[requestId] = entry;
     }
@@ -667,13 +518,12 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         int payloadBytes,
         long released)
     {
-        ArticleRetentionLogMessages.Rejected(_logger, kind, identity.Md5Hex, payloadBytes, _retainedBytes);
+        ArticleRetentionLogMessages.Rejected(_logger, kind, identity.ArticleIdHex, payloadBytes, _retainedBytes);
         return new ArticleRetentionResult(kind, identity, null, _retainedBytes, released);
     }
 
     private sealed class RetainedEntry
     {
-        private byte[]? _payload;
         private ArticleRecord? _record;
         private NntpArticleHeaderName? _selectedDateHeaderName;
         private int _readers;
@@ -683,22 +533,20 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         internal RetainedEntry(
             ArticleIdentity identity,
             string cacheUri,
-            byte[] payload,
+            ArticleRecord record,
+            NntpArticleHeaderName selectedDateHeaderName,
             DateTimeOffset insertedUtc,
             DateTimeOffset expiresUtc,
-            long generation,
-            ArticleRecord? record = null,
-            NntpArticleHeaderName? selectedDateHeaderName = null)
+            long generation)
         {
             Identity = identity;
             CacheUri = cacheUri;
-            _payload = payload;
-            PayloadBytes = payload.Length;
+            _record = record;
+            _selectedDateHeaderName = selectedDateHeaderName;
+            PayloadBytes = record.ArtSize;
             InsertedUtc = insertedUtc;
             ExpiresUtc = expiresUtc;
             Generation = generation;
-            _record = record;
-            _selectedDateHeaderName = selectedDateHeaderName;
         }
 
         internal ArticleIdentity Identity { get; }
@@ -725,24 +573,9 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         internal bool WasPhysicallyDisposedThisRemoval { get; set; }
 
-        internal ReadOnlyMemory<byte> Payload
-        {
-            get
-            {
-                var payload = _payload ?? throw new ObjectDisposedException(nameof(RetainedEntry));
-                return payload;
-            }
-        }
-
-        internal void AttachCanonical(in ArticleRecord record, NntpArticleHeaderName selectedDateHeaderName)
-        {
-            _record = record;
-            _selectedDateHeaderName = selectedDateHeaderName;
-        }
-
         internal bool TryAcquire()
         {
-            if (_logicallyRemoved == 1 || _physicallyDisposed == 1 || _payload is null)
+            if (_logicallyRemoved == 1 || _physicallyDisposed == 1 || _record is null)
             {
                 return false;
             }
@@ -777,7 +610,6 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 return false;
             }
 
-            _payload = null;
             _record = null;
             _selectedDateHeaderName = null;
             return true;

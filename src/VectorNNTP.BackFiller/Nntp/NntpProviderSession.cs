@@ -216,7 +216,9 @@ public sealed class NntpProviderSession : IAsyncDisposable
                 }
                 catch (InvalidOperationException ex) when (ex.Message.Contains("MaxArticleBytes", StringComparison.Ordinal))
                 {
-                    return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "NNTP article exceeded MaxArticleBytes.");
+                    // Destuffed size exceeded the hard ceiling: permanently unusable for Article Work.
+                    // Retire the session because the multiline response is no longer synchronized.
+                    return MarkUnhealthy(ArticleRetrievalKind.InvalidArticle, code, "NNTP article exceeded MaxArticleBytes.");
                 }
 
                 if (payload.Length == 0 || !NntpProtocolIo.HasHeaderBodySeparator(payload))

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -7,10 +8,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Abstractions;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Listener;
-using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.NNTPD.Networking.Certificates;
 
 namespace VectorNNTP.BackFiller.Tests.Listener;
@@ -45,18 +46,11 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task Tls_client_can_fetch_the_exact_retained_payload()
+    public async Task Tls_client_can_complete_vatp_hello_on_the_listener()
     {
-        var payload = new byte[] { 0x00, 0x0A, 0x0D, 0xFF, (byte)'Z' };
-        await using var context = await ListenerContext.StartAsync(payload);
-        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
-
+        await using var context = await ListenerContext.StartAsync();
         await using var client = await ConnectAsync(context);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetRequest(21, md5));
-        var found = await ReadFrameAsync(client.Stream);
-        Assert.Equal(ListenerOpcode.GetResponseFound, found.Header.Opcode);
-        Assert.Equal(payload, found.Payload);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(21));
+        await ExchangeHelloAsync(client.Stream);
     }
 
     [Fact]
@@ -222,13 +216,18 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public async Task Malformed_binary_frame_closes_the_authenticated_connection()
+    public async Task Non_vatp_first_frame_is_rejected_without_legacy_fallback()
     {
         await using var context = await ListenerContext.StartAsync();
         await using var client = await ConnectAsync(context);
-        var frame = ListenerProtocolEncoder.EncodeGetReceiptAck(4);
-        frame[0] = 0x02;
-        await client.Stream.WriteAsync(frame);
+        // Legacy cache GET framing is not a VATP HELLO; listener must not fall through.
+        var legacyLooking = new byte[16];
+        legacyLooking[0] = 0x01; // non-VATP version
+        BinaryPrimitives.WriteUInt32BigEndian(legacyLooking.AsSpan(4, 4), 1);
+        BinaryPrimitives.WriteUInt32BigEndian(legacyLooking.AsSpan(8, 4), 32);
+        await client.Stream.WriteAsync(legacyLooking);
+        var fail = await ReadVatpFrameAsync(client.Stream);
+        Assert.Equal(VatpFrameType.Fail, fail.Header.Type);
         await ArticleWorkTestDeliveries.WaitUntilAsync(
             () => context.Service.State == CacheListenerState.Running && context.Service.ActiveConnections == 0,
             TimeSpan.FromSeconds(2));
@@ -296,16 +295,32 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
 
     private static async Task AssertHandshakeProtocolAsync(SslProtocols protocol)
     {
-        var payload = "tls-protocol"u8.ToArray();
-        await using var context = await ListenerContext.StartAsync(payload);
-        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
+        await using var context = await ListenerContext.StartAsync();
         await using var client = await ConnectAsync(context, protocol);
         Assert.Equal(protocol, client.Stream.SslProtocol);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetRequest(21, md5));
-        var found = await ReadFrameAsync(client.Stream);
-        Assert.Equal(ListenerOpcode.GetResponseFound, found.Header.Opcode);
-        Assert.Equal(payload, found.Payload);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(21));
+        await ExchangeHelloAsync(client.Stream);
+    }
+
+    private static async Task ExchangeHelloAsync(SslStream stream)
+    {
+        await stream.WriteAsync(
+            VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeHello(VatpProtocol.DefaultMaxFramePayload)));
+        var hello = await ReadVatpFrameAsync(stream);
+        Assert.Equal(VatpFrameType.Hello, hello.Header.Type);
+    }
+
+    private static async Task<VatpParsedFrame> ReadVatpFrameAsync(Stream stream)
+    {
+        var headerBytes = new byte[VatpProtocol.HeaderLengthBytes];
+        await stream.ReadExactlyAsync(headerBytes);
+        var header = VatpFrameHeader.ReadFrom(headerBytes);
+        var payload = new byte[header.PayloadLength];
+        if (payload.Length > 0)
+        {
+            await stream.ReadExactlyAsync(payload);
+        }
+
+        return new VatpParsedFrame(header, new System.Buffers.ReadOnlySequence<byte>(payload));
     }
 
     private static async Task<TlsClient> ConnectAsync(
@@ -322,20 +337,6 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
             CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
         });
         return new TlsClient(tcp, ssl);
-    }
-
-    private static async Task<(ListenerFrameHeader Header, byte[] Payload)> ReadFrameAsync(Stream stream)
-    {
-        var headerBytes = new byte[ListenerProtocol.HeaderLengthBytes];
-        await stream.ReadExactlyAsync(headerBytes);
-        var header = ListenerFrameHeader.ReadFrom(headerBytes);
-        var payload = new byte[header.PayloadLength];
-        if (payload.Length > 0)
-        {
-            await stream.ReadExactlyAsync(payload);
-        }
-
-        return (header, payload);
     }
 
     private static BackFillerRuntimeOptions CreateRuntime(int port, int maxConnections = 8)
@@ -439,17 +440,10 @@ public sealed class CacheListenerServiceTests(ITestOutputHelper output)
 
         public int Port { get; }
 
-        public static async Task<ListenerContext> StartAsync(
-            byte[]? payload = null,
-            BackFillerRuntimeOptions? runtime = null)
+        public static async Task<ListenerContext> StartAsync(BackFillerRuntimeOptions? runtime = null)
         {
             runtime ??= CreateRuntime(GetFreePort());
             var authority = ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024 * 1024);
-            if (payload is not null)
-            {
-                authority.Retain(ArticleWorkTestDeliveries.CanonicalMessageId, payload);
-            }
-
             var certificates = TestListenerCertificates.CreatePublishedProvider();
             var service = new CacheListenerService(
                 runtime,

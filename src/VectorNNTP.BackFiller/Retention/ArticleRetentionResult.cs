@@ -1,6 +1,6 @@
 namespace VectorNNTP.BackFiller.Retention;
 
-/// <summary>Result of one <see cref="IArticleRetentionAuthority.Retain"/> attempt.</summary>
+/// <summary>Result of one <see cref="IArticleRetentionAuthority.RetainCanonical"/> attempt.</summary>
 /// <param name="Kind">Admission classification.</param>
 /// <param name="Identity">Computed identity when hashing ran.</param>
 /// <param name="CacheUri">URI when the article is or remains available.</param>

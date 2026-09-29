@@ -17,7 +17,10 @@ public enum ArticleWorkOutcome
     /// <summary>Provider did not have the article.</summary>
     ArticleNotFound = 1,
 
-    /// <summary>Provider returned bytes that failed article or yEnc validation.</summary>
+    /// <summary>
+    /// Provider ARTICLE is permanently unusable (parse/yEnc failure, size ceiling, Message-ID mismatch).
+    /// Terminal: publish response and ACK without requeue.
+    /// </summary>
     InvalidArticle = 2,
 
     /// <summary>Malformed protocol payload or AMQP metadata.</summary>

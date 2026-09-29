@@ -24,10 +24,11 @@ Article bytes do not travel over RabbitMQ, JSON, XML, or protobuf.
 | Control | RabbitMQ ArticleWork RPC | RequestId, Message-ID, backbone, outcome, `uri`, `articleId` |
 | Data | VATP over TLS TCP | META + ArtData (`ArticleRecord`) |
 
-Success JSON `uri` is `cache://{fqdn}:{BindPortTls}/{md5}` (routing endpoint).
-Success JSON `articleId` is the 64-character lowercase hexadecimal BLAKE3
-`ArticleId`. VATP OPEN uses **RequestId + ArticleId** together; the MD5 path
-segment is not a VATP identity.
+Success JSON `uri` is `cache://{fqdn}:{BindPortTls}/{articleIdHex}` (routing
+endpoint). The path is the 64-character lowercase hexadecimal `ArticleId`
+(same value as Success JSON `articleId`). Success JSON `articleId` is the
+64-character lowercase hexadecimal BLAKE3 `ArticleId`. VATP OPEN uses
+**RequestId + ArticleId** together; the URI path is not a VATP identity.
 
 ## Byte order and header
 
@@ -89,8 +90,8 @@ Not on the wire: ArtId, ArtType, CanonicalUtc, ParseStatus, header/body split.
 
 - `ArticleId` = BLAKE3(Message-ID value bytes). Carried on OPEN; recomputed from ArtData.
 - `ArtHash` = XxHash3-64(ArtData). Carried on META; recomputed from ArtData.
-
-MD5 / `cache://` identities are **not** part of VATP.
+- Success `cache://` URI path = lowercase hexadecimal `ArticleId` (same as Success `articleId`).
+  Host/port are for VATP dialing only; the path is not a VATP lookup key.
 
 ## Canonical transfer factory
 
@@ -196,19 +197,17 @@ Fetched Message-ID / ArticleId mismatch → `430` (never served).
 
 ## BackFiller Phase 2 server
 
-`CacheListenerService` remains the single TLS listener on `BindPortTls`. After the
-handshake it peeks the first 16-byte frame header and demultiplexes:
-
-- Type `HELLO` (`0x00`) → `VatpListenerSession` (Common VATP)
-- otherwise → legacy MD5 cache `CacheListenerSession`
-
-Both paths share TLS, connection limits, IO timeouts, and shutdown. The legacy
-cache protocol is intentionally retained until the VATP path fully replaces it.
+`CacheListenerService` is the single TLS listener on `BindPortTls`. After the
+handshake it runs `VatpListenerSession` only — VATP is the sole article data-plane
+protocol. A non-VATP first frame is handled with VATP FAIL / connection-close
+semantics; there is no legacy MD5 cache-transfer fallback.
 
 Canonical articles enter retention via `IArticleRetentionAuthority.RetainCanonical`
-(RequestId + `ArticleRecord`). VATP OPEN resolves RequestId, verifies ArticleId,
-acquires a transfer lease, then streams META / DATA / END under per-stream WINDOW
-credit and round-robin DATA scheduling.
+(RequestId + `ArticleRecord`). The sole retained byte representation is
+`ArticleRecord.ArtData`. On AlreadyPresent, the existing record wins (first-wins);
+only the pending RequestId is refreshed. VATP OPEN resolves RequestId, verifies
+ArticleId, acquires a transfer lease, then streams META / DATA / END under
+per-stream WINDOW credit and round-robin DATA scheduling.
 
 ## NNTPD Phase 3 client
 

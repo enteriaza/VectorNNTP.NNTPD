@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
@@ -110,18 +109,19 @@ public static class ArticleWorkResponseWireProtocol
                     throw new InvalidOperationException("Success response requires a cache URI from retention.");
                 }
 
-                var identity = ArticleIdentity.FromExactMessageId(intent.MessageId!);
-                if (!intent.Uri.EndsWith('/' + identity.Md5Hex, StringComparison.Ordinal)
-                    || !intent.Uri.StartsWith("cache://", StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException("Success uri must be the retention cache URI for the exact Message-ID.");
-                }
-
                 if (string.IsNullOrWhiteSpace(intent.ArticleIdHex)
                     || !ArticleId.TryParseLowerHex(intent.ArticleIdHex, out _))
                 {
                     throw new InvalidOperationException(
                         "Success response requires a 64-character lowercase hexadecimal articleId.");
+                }
+
+                if (string.IsNullOrWhiteSpace(intent.Uri)
+                    || !intent.Uri.StartsWith("cache://", StringComparison.Ordinal)
+                    || !intent.Uri.EndsWith('/' + intent.ArticleIdHex, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Success uri path must equal the Success articleId (lowercase hexadecimal ArticleId).");
                 }
 
                 if (intent.Error is not null)

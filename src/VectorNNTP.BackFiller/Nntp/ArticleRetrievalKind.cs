@@ -9,7 +9,11 @@ public enum ArticleRetrievalKind
     /// <summary>Provider reported that the article does not exist (430).</summary>
     ArticleNotFound = 1,
 
-    /// <summary>Framing completed but the destuffed payload is not a usable article.</summary>
+    /// <summary>
+    /// Destuffed ARTICLE bytes are not a usable article (missing header/body separator,
+    /// exceeded <c>MaxArticleBytes</c>, or equivalent permanent payload rejection).
+    /// Distinct from transport/protocol failures that should be retried.
+    /// </summary>
     InvalidArticle = 2,
 
     /// <summary>Transport, timeout, protocol, or remote rejection that is not a miss.</summary>

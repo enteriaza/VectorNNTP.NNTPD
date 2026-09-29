@@ -1,27 +1,26 @@
-using System.Security.Cryptography;
-using System.Text;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Retention;
 
 /// <summary>
-/// Deterministic cache identity for one exact Message-ID.
+/// Message-ID plus its canonical <see cref="ArticleId"/> hex used in Article Work Success
+/// <c>cache://</c> URI path metadata and retention collision checks.
+/// Not a VATP transfer key (VATP uses RequestId + ArticleId).
 /// </summary>
 /// <param name="MessageId">Exact Message-ID string. Not normalized.</param>
-/// <param name="Md5Hex">32-character lowercase hexadecimal MD5 of the exact ASCII Message-ID bytes.</param>
-public readonly record struct ArticleIdentity(string MessageId, string Md5Hex)
+/// <param name="ArticleIdHex">64-character lowercase hexadecimal <see cref="ArticleId"/>.</param>
+public readonly record struct ArticleIdentity(string MessageId, string ArticleIdHex)
 {
-    /// <summary>Canonical MD5 hex length.</summary>
-    public const int Md5HexLength = 32;
+    /// <summary>Canonical ArticleId hex length.</summary>
+    public const int ArticleIdHexLength = ArticleId.HexLength;
 
     /// <summary>
-    /// Creates an identity from the exact Message-ID. Does not validate, trim, case-fold, or change brackets.
+    /// Creates an identity from the exact Message-ID and an already-computed <see cref="ArticleId"/>.
+    /// Does not hash the Message-ID.
     /// </summary>
-    /// <param name="messageId">Exact Message-ID from Article Work.</param>
-    /// <returns>The identity including lowercase MD5 hex.</returns>
-    public static ArticleIdentity FromExactMessageId(string messageId)
+    public static ArticleIdentity From(string messageId, ArticleId artId)
     {
         ArgumentNullException.ThrowIfNull(messageId);
-        var digest = MD5.HashData(Encoding.ASCII.GetBytes(messageId));
-        return new ArticleIdentity(messageId, Convert.ToHexString(digest).ToLowerInvariant());
+        return new ArticleIdentity(messageId, artId.ToLowerHexString());
     }
 }

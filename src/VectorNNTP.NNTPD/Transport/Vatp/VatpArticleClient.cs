@@ -31,7 +31,7 @@ internal sealed class VatpArticleClient : IVatpArticleClient
             return VatpFetchResult.ProtocolFailure(parseError, requestId, articleId);
         }
 
-        _ = endpoint.Md5Hex;
+        _ = endpoint.ArticleIdHex;
 
         var (connection, acquireFailure) = await _pool.AcquireAsync(endpoint.Host, endpoint.Port, cancellationToken)
             .ConfigureAwait(false);

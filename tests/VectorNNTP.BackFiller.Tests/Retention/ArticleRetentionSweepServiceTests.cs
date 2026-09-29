@@ -44,9 +44,6 @@ public sealed class ArticleRetentionSweepServiceTests
 
         public int RetainedCount => 0;
 
-        public ArticleRetentionResult Retain(string messageId, byte[] payload) =>
-            new(ArticleRetentionKind.ShuttingDown, null, null, 0, 0);
-
         public ArticleRetentionResult RetainCanonical(
             string messageId,
             Guid requestId,
@@ -60,10 +57,6 @@ public sealed class ArticleRetentionSweepServiceTests
             VatpOpenResult.Rejected();
 
         public bool TryCancelPendingRequest(Guid requestId) => false;
-
-        public ArticleLookupResult TryGetByMessageId(string messageId) => ArticleLookupResult.Missing();
-
-        public ArticleLookupResult TryGetByMd5(string md5Hex) => ArticleLookupResult.Missing();
 
         public long SweepExpired()
         {

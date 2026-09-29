@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
-using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
@@ -79,7 +78,8 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
 
     public static async Task<BackFillerPipelineHarness> StartAsync(
         FakePublishConfirmBehavior confirm = FakePublishConfirmBehavior.Confirm,
-        TimeSpan? retentionTtl = null)
+        TimeSpan? retentionTtl = null,
+        int? maxArticleBytes = null)
     {
         var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero));
         var retention = ArticleRetentionAuthorityTests.Create(
@@ -98,15 +98,22 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
             RabbitMq = BackFillerRabbitMqServiceTests.CreateFastRuntime().RabbitMq,
         };
 
+        var sessionOptions = NntpSessionOptions.Default with
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(2),
+            CommandTimeout = TimeSpan.FromSeconds(2),
+            ReceiveTimeout = TimeSpan.FromSeconds(2),
+        };
+        if (maxArticleBytes is { } configuredMax)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(configuredMax, 1);
+            sessionOptions = sessionOptions with { MaxArticleBytes = configuredMax };
+        }
+
         var registry = new NntpProviderRegistry(
             catalog,
             nntp,
-            NntpSessionOptions.Default with
-            {
-                ConnectTimeout = TimeSpan.FromSeconds(2),
-                CommandTimeout = TimeSpan.FromSeconds(2),
-                ReceiveTimeout = TimeSpan.FromSeconds(2),
-            },
+            sessionOptions,
             TimeSpan.FromSeconds(2),
             NullLogger<NntpProviderRegistry>.Instance);
         var accountService = new ProviderAccountConfigurationService(
@@ -225,21 +232,6 @@ internal sealed class BackFillerPipelineHarness : IAsyncDisposable
             channel,
             channelStillCurrent,
             cancellationToken);
-
-    public static CacheListenerSession CreateListenerSession(
-        ScriptedCacheListenerTransport transport,
-        CacheListenerRetentionHandler handler,
-        BackFillerListenerRuntimeOptions? listener = null) =>
-        new(
-            transport,
-            handler,
-            listener ?? new BackFillerListenerRuntimeOptions(
-                65536,
-                TimeSpan.FromSeconds(5),
-                TimeSpan.FromSeconds(5),
-                TimeSpan.FromSeconds(5),
-                1024 * 1024,
-                8));
 
     public async ValueTask DisposeAsync()
     {

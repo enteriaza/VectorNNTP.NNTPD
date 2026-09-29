@@ -77,11 +77,11 @@ public sealed class ArticleWorkResponseWireProtocolTests
     }
 
     [Fact]
-    public void Success_rejects_a_reconstructed_uri_that_does_not_bind_the_message_id()
+    public void Success_rejects_uri_path_that_does_not_equal_article_id()
     {
         var intent = SuccessIntent() with
         {
-            Uri = "cache://backfiller01.usenet.ninja:119/ffffffffffffffffffffffffffffffff",
+            Uri = "cache://backfiller01.usenet.ninja:119/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         };
 
         Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));

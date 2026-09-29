@@ -6,14 +6,14 @@ internal static partial class ArticleRetentionLogMessages
     [LoggerMessage(
         EventId = 5500,
         Level = LogLevel.Information,
-        Message = "Article retained md5={Md5Hex} bytes={PayloadBytes} retainedBytes={RetainedPayloadBytes}")]
-    public static partial void Retained(ILogger logger, string Md5Hex, int PayloadBytes, long RetainedPayloadBytes);
+        Message = "Article retained articleId={ArticleIdHex} bytes={PayloadBytes} retainedBytes={RetainedPayloadBytes}")]
+    public static partial void Retained(ILogger logger, string ArticleIdHex, int PayloadBytes, long RetainedPayloadBytes);
 
     [LoggerMessage(
         EventId = 5501,
         Level = LogLevel.Warning,
-        Message = "Article retention rejected kind={Kind} md5={Md5Hex} bytes={PayloadBytes} retainedBytes={RetainedPayloadBytes}")]
-    public static partial void Rejected(ILogger logger, ArticleRetentionKind Kind, string? Md5Hex, int PayloadBytes, long RetainedPayloadBytes);
+        Message = "Article retention rejected kind={Kind} articleId={ArticleIdHex} bytes={PayloadBytes} retainedBytes={RetainedPayloadBytes}")]
+    public static partial void Rejected(ILogger logger, ArticleRetentionKind Kind, string? ArticleIdHex, int PayloadBytes, long RetainedPayloadBytes);
 
     [LoggerMessage(
         EventId = 5502,

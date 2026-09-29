@@ -376,7 +376,7 @@ public sealed class VatpArticleClientTests
             TestTcpConnectHost = IPAddress.Loopback.ToString(),
         };
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
-        var uri = $"cache://wrong.host.test:{server.Port}/30edc94157aa16fe644a45a1f1ffe160";
+        var uri = $"cache://wrong.host.test:{server.Port}/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
         var result = await client.FetchArticleAsync(uri, prepared.RequestId, prepared.Record.ArtId, CancellationToken.None);
         Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
     }

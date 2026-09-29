@@ -282,7 +282,7 @@ public sealed class NntpProviderSessionTests
     }
 
     [Fact]
-    public async Task Oversized_article_is_provider_failure_and_retires_the_session()
+    public async Task Oversized_article_is_invalid_article_and_retires_the_session()
     {
         var factory = new ScriptedNntpTransportFactory();
         var server = new ScriptedNntpServer();
@@ -301,7 +301,63 @@ public sealed class NntpProviderSessionTests
         Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
 
         using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
-        Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
+        Assert.Equal(ArticleRetrievalKind.InvalidArticle, result.Kind);
+        Assert.NotEqual(ArticleRetrievalKind.ProviderFailure, result.Kind);
+        Assert.False(result.SessionReusable);
+        await session.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Exactly_MaxArticleBytes_destuffed_payload_is_accepted()
+    {
+        const int maxBytes = 16;
+        var factory = new ScriptedNntpTransportFactory();
+        var server = new ScriptedNntpServer();
+        // Destuffed "A:b\r\n\r\n1234567\r\n" is exactly 16 bytes (last content CRLF included).
+        server.Respond(static _ => "220 follows\r\nA:b\r\n\r\n1234567\r\n.\r\n");
+        factory.Enqueue(server);
+        var session = new NntpProviderSession(
+            new BackFillerProviderDefinition("Giganews", "127.0.0.1", 119, false, null, null, 0, 1),
+            NntpSessionOptions.Default with
+            {
+                MaxArticleBytes = maxBytes,
+                CommandTimeout = TimeSpan.FromSeconds(2),
+                ReceiveTimeout = TimeSpan.FromSeconds(2),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+            },
+            NullLogger.Instance);
+        Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+        using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+        Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
+        Assert.True(result.SessionReusable);
+        Assert.Equal(maxBytes, result.Article!.Memory.Length);
+        await session.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task MaxArticleBytes_plus_one_is_invalid_article_and_retires_the_session()
+    {
+        const int maxBytes = 16;
+        var factory = new ScriptedNntpTransportFactory();
+        var server = new ScriptedNntpServer();
+        // Destuffed "A:b\r\n\r\n12345678\r\n" is 17 bytes and exceeds during receive.
+        server.Respond(static _ => "220 follows\r\nA:b\r\n\r\n12345678\r\n.\r\n");
+        factory.Enqueue(server);
+        var session = new NntpProviderSession(
+            new BackFillerProviderDefinition("Giganews", "127.0.0.1", 119, false, null, null, 0, 1),
+            NntpSessionOptions.Default with
+            {
+                MaxArticleBytes = maxBytes,
+                CommandTimeout = TimeSpan.FromSeconds(2),
+                ReceiveTimeout = TimeSpan.FromSeconds(2),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+            },
+            NullLogger.Instance);
+        Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+        using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+        Assert.Equal(ArticleRetrievalKind.InvalidArticle, result.Kind);
         Assert.False(result.SessionReusable);
         await session.DisposeAsync();
     }

@@ -212,7 +212,7 @@ internal static partial class ArticleWorkWireProtocol
     }
 
     [GeneratedRegex(
-        "^cache://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{32}$",
+        "^cache://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{64}$",
         RegexOptions.CultureInvariant)]
     private static partial Regex CanonicalCacheUriRegex();
 
@@ -259,6 +259,15 @@ internal static partial class ArticleWorkWireProtocol
             if (!hasArticleId || articleId is null)
             {
                 reason = "Success response payload requires a concrete 'articleId'.";
+                return false;
+            }
+
+            var slash = uri.LastIndexOf('/');
+            if (slash < 0
+                || !ArticleId.TryParseLowerHex(uri.AsSpan(slash + 1), out var pathArticleId)
+                || pathArticleId != articleId.Value)
+            {
+                reason = "Success response uri path must equal articleId.";
                 return false;
             }
 

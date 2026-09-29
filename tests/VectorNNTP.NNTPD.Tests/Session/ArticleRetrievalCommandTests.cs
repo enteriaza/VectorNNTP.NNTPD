@@ -331,7 +331,7 @@ public sealed class ArticleRetrievalCommandTests
                 Guid.NewGuid(),
                 "<12345@example.invalid>",
                 "Storage",
-                "cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160",
+                "cache://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
                 VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(
                     "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"),
                 Error: null,

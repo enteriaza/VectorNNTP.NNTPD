@@ -1,8 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Configuration;
-using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 
 namespace VectorNNTP.BackFiller.Tests.Retention;
 
@@ -11,224 +12,239 @@ public sealed class ArticleRetentionAuthorityTests
     private static readonly DateTimeOffset Start = new(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void Retain_then_lookup_exposes_owned_payload_and_uri()
+    public void RetainCanonical_then_open_exposes_owned_artdata_and_uri()
     {
         var time = new ManualTimeProvider(Start);
-        var authority = Create(time, maxBytes: 1024);
-        var payload = "From: a@b\r\n\r\nbody"u8.ToArray();
-
-        var retained = authority.Retain("<a@b>", payload);
-        using var lookup = authority.TryGetByMessageId("<a@b>");
-        using var byMd5 = authority.TryGetByMd5(retained.Identity!.Value.Md5Hex);
+        var authority = Create(time, maxBytes: 1024 * 1024);
+        var prepared = RetentionTestArticles.Create("<a@b>");
+        var retained = authority.RetainCanonical(
+            "<a@b>",
+            prepared.RequestId,
+            prepared.Record,
+            prepared.SelectedDateHeaderName);
 
         Assert.Equal(ArticleRetentionKind.Retained, retained.Kind);
-        Assert.Equal("cache://backfiller.test:1190/" + retained.Identity.Value.Md5Hex, retained.CacheUri);
-        Assert.Equal(payload.Length, authority.RetainedPayloadBytes);
+        Assert.Equal("cache://backfiller.test:1190/" + retained.Identity!.Value.ArticleIdHex, retained.CacheUri);
+        Assert.Equal(prepared.Record.ArtId.ToLowerHexString(), retained.Identity.Value.ArticleIdHex);
+        Assert.Equal(prepared.Record.ArtSize, authority.RetainedPayloadBytes);
         Assert.Equal(1, authority.RetainedCount);
-        Assert.Equal(ArticleLookupKind.Found, lookup.Kind);
-        Assert.Equal(payload, lookup.Lease!.Payload.ToArray());
-        Assert.Equal(retained.CacheUri, lookup.Lease.CacheUri);
-        Assert.Equal(ArticleLookupKind.Found, byMd5.Kind);
-    }
 
-    [Fact]
-    public void Ownership_transfers_and_survives_retrieved_article_and_session_disposal()
-    {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024);
-        var retrieved = new RetrievedArticle("From: a@b\r\n\r\nbody"u8.ToArray());
-        Assert.True(retrieved.TryDetach(out var payload));
-        retrieved.Dispose();
-        var retained = authority.Retain("<a@b>", payload);
-        Assert.True(retained.IsAvailable);
-        Assert.False(retrieved.TryDetach(out _));
-
-        using var lookup = authority.TryGetByMessageId("<a@b>");
-        Assert.Equal("From: a@b\r\n\r\nbody"u8.ToArray(), lookup.Lease!.Payload.ToArray());
-        lookup.Lease.Dispose();
-        lookup.Lease.Dispose();
-        using var again = authority.TryGetByMessageId("<a@b>");
-        Assert.Equal(ArticleLookupKind.Found, again.Kind);
+        using var open = authority.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(prepared.ArtData));
+        Assert.Equal(retained.CacheUri, open.Lease.CacheUri);
     }
 
     [Fact]
     public void Duplicate_message_id_is_first_wins_and_does_not_double_count()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024);
-        var first = "one"u8.ToArray();
-        var second = "two-bytes"u8.ToArray();
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", first).Kind);
-        var duplicate = authority.Retain("<a@b>", second);
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+        var first = RetentionTestArticles.Create("<a@b>", "one\r\n");
+        var second = RetentionTestArticles.Create("<a@b>", "two-bytes\r\n");
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<a@b>", first.RequestId, first.Record, first.SelectedDateHeaderName).Kind);
+        var duplicate = authority.RetainCanonical(
+            "<a@b>", second.RequestId, second.Record, second.SelectedDateHeaderName);
         Assert.Equal(ArticleRetentionKind.AlreadyPresent, duplicate.Kind);
-        Assert.Equal(first.Length, authority.RetainedPayloadBytes);
-        using var lookup = authority.TryGetByMessageId("<a@b>");
-        Assert.Equal(first, lookup.Lease!.Payload.ToArray());
+        Assert.Equal(first.Record.ArtSize, authority.RetainedPayloadBytes);
+        Assert.Equal(1, authority.RetainedCount);
+
+        using var open = authority.TryOpenTransfer(second.RequestId, first.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(first.ArtData));
+        Assert.False(open.Lease.Record.ArtData.Span.SequenceEqual(second.ArtData));
     }
 
     [Fact]
-    public void Lookup_after_ttl_is_expired_and_sweep_reclaims_bytes()
+    public void Open_after_ttl_is_rejected_and_sweep_reclaims_bytes()
     {
         var time = new ManualTimeProvider(Start);
-        var authority = Create(time, maxBytes: 1024, ttl: TimeSpan.FromSeconds(10));
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "payload"u8.ToArray()).Kind);
+        var authority = Create(time, maxBytes: 1024 * 1024, ttl: TimeSpan.FromSeconds(10));
+        var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
         time.Advance(TimeSpan.FromSeconds(10));
-        Assert.Equal(ArticleLookupKind.Expired, authority.TryGetByMessageId("<a@b>").Kind);
+        using (var open = authority.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Rejected, open.Kind);
+        }
+
         Assert.Equal(0, authority.RetainedPayloadBytes);
-        time.Advance(TimeSpan.FromSeconds(1));
         Assert.Equal(0, authority.SweepExpired());
-        Assert.Equal(ArticleLookupKind.Missing, authority.TryGetByMessageId("<a@b>").Kind);
+        Assert.Equal(0, authority.RetainedCount);
     }
 
     [Fact]
     public void Sweep_does_not_remove_a_newer_generation_of_the_same_identity()
     {
         var time = new ManualTimeProvider(Start);
-        var authority = Create(time, maxBytes: 1024, ttl: TimeSpan.FromSeconds(5));
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "old"u8.ToArray()).Kind);
+        var authority = Create(time, maxBytes: 1024 * 1024, ttl: TimeSpan.FromSeconds(5));
+        var old = RetentionTestArticles.RetainPrepared(authority, "<a@b>", "old\r\n");
         time.Advance(TimeSpan.FromSeconds(5));
-        Assert.Equal(ArticleLookupKind.Expired, authority.TryGetByMessageId("<a@b>").Kind);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "new-payload"u8.ToArray()).Kind);
+        using (var expired = authority.TryOpenTransfer(old.RequestId, old.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Rejected, expired.Kind);
+        }
+
+        var newer = RetentionTestArticles.RetainPrepared(authority, "<a@b>", "new-payload\r\n");
         Assert.Equal(0, authority.SweepExpired());
-        using var lookup = authority.TryGetByMessageId("<a@b>");
-        Assert.Equal("new-payload"u8.ToArray(), lookup.Lease!.Payload.ToArray());
+        using var open = authority.TryOpenTransfer(newer.RequestId, newer.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(newer.ArtData));
     }
 
     [Fact]
     public void Article_exactly_at_capacity_is_retained_and_oversize_is_rejected()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 8);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<fit@b>", "12345678"u8.ToArray()).Kind);
-        Assert.Equal(8, authority.RetainedPayloadBytes);
-        var over = authority.Retain("<big@b>", "123456789"u8.ToArray());
-        Assert.Equal(ArticleRetentionKind.PayloadExceedsCapacity, over.Kind);
-        Assert.True(over.IsCapacityRejected);
-        Assert.Equal(8, authority.RetainedPayloadBytes);
+        var fit = RetentionTestArticles.Create("<fit@b>", "x\r\n");
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: fit.Record.ArtSize);
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<fit@b>", fit.RequestId, fit.Record, fit.SelectedDateHeaderName).Kind);
+        Assert.Equal(fit.Record.ArtSize, authority.RetainedPayloadBytes);
+
+        var over = RetentionTestArticles.Create("<big@b>", "longer-body\r\n");
+        Assert.True(over.Record.ArtSize > fit.Record.ArtSize);
+        var rejected = authority.RetainCanonical(
+            "<big@b>", over.RequestId, over.Record, over.SelectedDateHeaderName);
+        Assert.Equal(ArticleRetentionKind.PayloadExceedsCapacity, rejected.Kind);
+        Assert.True(rejected.IsCapacityRejected);
+        Assert.Equal(fit.Record.ArtSize, authority.RetainedPayloadBytes);
     }
 
     [Fact]
     public void Insufficient_remaining_capacity_evicts_oldest_then_admits()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 10);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<one@b>", "12345"u8.ToArray()).Kind);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<two@b>", "67890"u8.ToArray()).Kind);
-        var third = authority.Retain("<three@b>", "abcd"u8.ToArray());
+        var one = RetentionTestArticles.Create("<one@b>", "11111\r\n");
+        var two = RetentionTestArticles.Create("<two@b>", "22222\r\n");
+        var three = RetentionTestArticles.Create("<three@b>", "333\r\n");
+        var maxBytes = one.Record.ArtSize + two.Record.ArtSize;
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: maxBytes);
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<one@b>", one.RequestId, one.Record, one.SelectedDateHeaderName).Kind);
+        Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+            "<two@b>", two.RequestId, two.Record, two.SelectedDateHeaderName).Kind);
+        var third = authority.RetainCanonical(
+            "<three@b>", three.RequestId, three.Record, three.SelectedDateHeaderName);
         Assert.Equal(ArticleRetentionKind.Retained, third.Kind);
-        Assert.Equal(ArticleLookupKind.Missing, authority.TryGetByMessageId("<one@b>").Kind);
-        Assert.Equal(9, authority.RetainedPayloadBytes);
+        using (var missing = authority.TryOpenTransfer(one.RequestId, one.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Rejected, missing.Kind);
+        }
+
+        Assert.Equal(two.Record.ArtSize + three.Record.ArtSize, authority.RetainedPayloadBytes);
     }
 
     [Fact]
-    public void Empty_payload_is_invalid_and_does_not_change_accounting()
+    public void Shutdown_rejects_insert_and_existing_open_still_works_until_dispose()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 32);
-        Assert.Equal(ArticleRetentionKind.InvalidPayload, authority.Retain("<a@b>", []).Kind);
-        Assert.Equal(0, authority.RetainedPayloadBytes);
-    }
-
-    [Fact]
-    public void Shutdown_rejects_insert_and_lookup_of_existing_still_works_until_dispose()
-    {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 32);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "keep"u8.ToArray()).Kind);
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+        var keep = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
         authority.BeginShutdown();
-        Assert.Equal(ArticleRetentionKind.ShuttingDown, authority.Retain("<b@c>", "later"u8.ToArray()).Kind);
-        Assert.Equal(ArticleLookupKind.Found, authority.TryGetByMessageId("<a@b>").Kind);
+        var later = RetentionTestArticles.Create("<b@c>");
+        Assert.Equal(ArticleRetentionKind.ShuttingDown, authority.RetainCanonical(
+            "<b@c>", later.RequestId, later.Record, later.SelectedDateHeaderName).Kind);
+        using var open = authority.TryOpenTransfer(keep.RequestId, keep.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
     }
 
     [Fact]
     public async Task Dispose_releases_entries_and_rejects_further_use()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 32);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "keep"u8.ToArray()).Kind);
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+        _ = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
         await authority.DisposeAsync();
-        Assert.Throws<ObjectDisposedException>(() => authority.Retain("<b@c>", "x"u8.ToArray()));
+        var next = RetentionTestArticles.Create("<b@c>");
+        Assert.Throws<ObjectDisposedException>(() => authority.RetainCanonical(
+            "<b@c>", next.RequestId, next.Record, next.SelectedDateHeaderName));
     }
 
     [Fact]
-    public async Task Concurrent_insert_and_lookup_keep_exact_accounting()
+    public async Task Concurrent_insert_and_open_keep_exact_accounting()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
-        var inserts = Enumerable.Range(0, 32).Select(async i =>
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 16 * 1024 * 1024);
+        var prepared = Enumerable.Range(0, 32)
+            .Select(i => RetentionTestArticles.Create($"<id{i}@b>", $"body-{i}\r\n"))
+            .ToArray();
+        var inserts = prepared.Select(async item =>
         {
             await Task.Yield();
-            return authority.Retain($"<id{i}@b>", new byte[10]);
+            return authority.RetainCanonical(
+                item.MessageId,
+                item.RequestId,
+                item.Record,
+                item.SelectedDateHeaderName);
         });
         var results = await Task.WhenAll(inserts);
         Assert.Equal(32, results.Count(static r => r.Kind == ArticleRetentionKind.Retained));
-        Assert.Equal(320, authority.RetainedPayloadBytes);
+        Assert.Equal(prepared.Sum(static p => p.Record.ArtSize), authority.RetainedPayloadBytes);
 
-        var lookups = Enumerable.Range(0, 32).Select(async i =>
+        var opens = prepared.Select(async item =>
         {
             await Task.Yield();
-            using var result = authority.TryGetByMessageId($"<id{i}@b>");
-            return result.Kind;
+            using var open = authority.TryOpenTransfer(item.RequestId, item.Record.ArtId);
+            return open.Kind;
         });
-        var kinds = await Task.WhenAll(lookups);
-        Assert.All(kinds, static kind => Assert.Equal(ArticleLookupKind.Found, kind));
+        var kinds = await Task.WhenAll(opens);
+        Assert.All(kinds, static kind => Assert.Equal(VatpOpenKind.Opened, kind));
     }
 
     [Fact]
-    public async Task Lookup_while_expiry_occurs_does_not_return_expired_bytes()
+    public async Task Open_while_expiry_occurs_does_not_return_expired_bytes()
     {
         var time = new ManualTimeProvider(Start);
-        var authority = Create(time, maxBytes: 1024, ttl: TimeSpan.FromSeconds(1));
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "payload"u8.ToArray()).Kind);
+        var authority = Create(time, maxBytes: 1024 * 1024, ttl: TimeSpan.FromSeconds(1));
+        var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var lookup = Task.Run(async () =>
+        var openTask = Task.Run(async () =>
         {
             started.TrySetResult();
             await release.Task.ConfigureAwait(false);
-            return authority.TryGetByMessageId("<a@b>");
+            return authority.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId);
         });
         await started.Task;
         time.Advance(TimeSpan.FromSeconds(1));
         release.TrySetResult();
-        using var result = await lookup;
-        Assert.NotEqual(ArticleLookupKind.Found, result.Kind);
+        using var result = await openTask;
+        Assert.Equal(VatpOpenKind.Rejected, result.Kind);
         Assert.Equal(0, authority.RetainedPayloadBytes);
-    }
-
-    [Fact]
-    public void Lease_cannot_dispose_authority_storage_for_another_caller()
-    {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 32);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "shared"u8.ToArray()).Kind);
-        var first = authority.TryGetByMessageId("<a@b>");
-        var second = authority.TryGetByMessageId("<a@b>");
-        first.Lease!.Dispose();
-        Assert.Equal("shared"u8.ToArray(), second.Lease!.Payload.ToArray());
-        second.Lease.Dispose();
-        using var still = authority.TryGetByMessageId("<a@b>");
-        Assert.Equal(ArticleLookupKind.Found, still.Kind);
     }
 
     [Fact]
     public async Task Duplicate_identity_race_keeps_one_entry_and_exact_bytes()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024);
-        var tasks = Enumerable.Range(0, 16).Select(async i =>
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+        var candidates = Enumerable.Range(0, 16)
+            .Select(i => RetentionTestArticles.Create("<same@b>", $"body-{i}\r\n"))
+            .ToArray();
+        var tasks = candidates.Select(async item =>
         {
             await Task.Yield();
-            return authority.Retain("<same@b>", new byte[] { (byte)i });
+            return authority.RetainCanonical(
+                "<same@b>",
+                item.RequestId,
+                item.Record,
+                item.SelectedDateHeaderName);
         });
         var results = await Task.WhenAll(tasks);
         Assert.Equal(1, results.Count(static r => r.Kind == ArticleRetentionKind.Retained));
         Assert.Equal(15, results.Count(static r => r.Kind == ArticleRetentionKind.AlreadyPresent));
-        Assert.Equal(1, authority.RetainedPayloadBytes);
         Assert.Equal(1, authority.RetainedCount);
+        var winner = Assert.Single(results, static r => r.Kind == ArticleRetentionKind.Retained);
+        Assert.Equal(winner.RetainedPayloadBytes, authority.RetainedPayloadBytes);
     }
 
     [Fact]
-    public void Shutdown_during_lookup_still_returns_a_live_entry()
+    public void Shutdown_during_open_still_returns_a_live_entry()
     {
-        var authority = Create(new ManualTimeProvider(Start), maxBytes: 32);
-        Assert.Equal(ArticleRetentionKind.Retained, authority.Retain("<a@b>", "keep"u8.ToArray()).Kind);
-        var lookup = authority.TryGetByMessageId("<a@b>");
+        var authority = Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+        var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
+        var open = authority.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId);
         authority.BeginShutdown();
-        Assert.Equal(ArticleLookupKind.Found, lookup.Kind);
-        Assert.Equal("keep"u8.ToArray(), lookup.Lease!.Payload.ToArray());
-        lookup.Dispose();
-        Assert.Equal(ArticleRetentionKind.ShuttingDown, authority.Retain("<c@d>", "nope"u8.ToArray()).Kind);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(prepared.ArtData));
+        open.Dispose();
+        var later = RetentionTestArticles.Create("<c@d>");
+        Assert.Equal(ArticleRetentionKind.ShuttingDown, authority.RetainCanonical(
+            "<c@d>", later.RequestId, later.Record, later.SelectedDateHeaderName).Kind);
     }
 
     [Fact]

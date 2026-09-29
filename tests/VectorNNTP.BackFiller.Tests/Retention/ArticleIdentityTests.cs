@@ -1,39 +1,32 @@
-using System.Security.Cryptography;
 using System.Text;
 using VectorNNTP.BackFiller.Retention;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Tests.Retention;
 
 public sealed class ArticleIdentityTests
 {
     [Fact]
-    public void Known_message_id_vectors_are_lowercase_md5_of_exact_ascii_bytes()
+    public void From_uses_existing_ArticleId_without_message_id_hash()
     {
-        Assert.Equal("30edc94157aa16fe644a45a1f1ffe160", ArticleIdentity.FromExactMessageId("<12345@example.invalid>").Md5Hex);
-        Assert.Equal("de438dc83d64b1fa9206cf4da9eed5cc", ArticleIdentity.FromExactMessageId("<abc@example.invalid>").Md5Hex);
-    }
-
-    [Fact]
-    public void Hash_uses_ascii_bytes_without_normalization()
-    {
-        const string messageId = "<AbC@Example.INVALID>";
-        var expected = Convert.ToHexString(MD5.HashData(Encoding.ASCII.GetBytes(messageId))).ToLowerInvariant();
-        var identity = ArticleIdentity.FromExactMessageId(messageId);
+        const string messageId = "<12345@example.invalid>";
+        var artId = ArticleId.FromMessageId(Encoding.ASCII.GetBytes(messageId));
+        var identity = ArticleIdentity.From(messageId, artId);
         Assert.Equal(messageId, identity.MessageId);
-        Assert.Equal(expected, identity.Md5Hex);
-        Assert.Equal(32, identity.Md5Hex.Length);
-        Assert.Equal(identity.Md5Hex, identity.Md5Hex.ToLowerInvariant());
+        Assert.Equal(artId.ToLowerHexString(), identity.ArticleIdHex);
+        Assert.Equal(ArticleId.HexLength, identity.ArticleIdHex.Length);
+        Assert.Equal("dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14", identity.ArticleIdHex);
     }
 
     [Fact]
-    public void Case_brackets_and_whitespace_are_not_normalized()
+    public void Distinct_message_ids_produce_distinct_article_id_hex()
     {
-        var canonical = ArticleIdentity.FromExactMessageId("<abc@example.invalid>");
-        Assert.NotEqual(canonical.Md5Hex, ArticleIdentity.FromExactMessageId("<ABC@example.invalid>").Md5Hex);
-        Assert.NotEqual(canonical.Md5Hex, ArticleIdentity.FromExactMessageId("abc@example.invalid").Md5Hex);
-        Assert.NotEqual(canonical.Md5Hex, ArticleIdentity.FromExactMessageId(" <abc@example.invalid>").Md5Hex);
-        Assert.NotEqual(canonical.Md5Hex, ArticleIdentity.FromExactMessageId("<abc@example.invalid> ").Md5Hex);
-        Assert.Equal("983057a19b5437d0330045ac8c546d67", ArticleIdentity.FromExactMessageId("<ABC@example.invalid>").Md5Hex);
-        Assert.Equal("a7ee85c34e58bc015f147f7c2bfbe85c", ArticleIdentity.FromExactMessageId("abc@example.invalid").Md5Hex);
+        var a = ArticleIdentity.From(
+            "<one@example.invalid>",
+            ArticleId.FromMessageId("<one@example.invalid>"u8));
+        var b = ArticleIdentity.From(
+            "<two@example.invalid>",
+            ArticleId.FromMessageId("<two@example.invalid>"u8));
+        Assert.NotEqual(a.ArticleIdHex, b.ArticleIdHex);
     }
 }

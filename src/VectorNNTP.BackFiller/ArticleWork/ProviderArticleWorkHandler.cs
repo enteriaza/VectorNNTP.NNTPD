@@ -8,7 +8,9 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
 /// Retrieves an ARTICLE, builds a CanonicalV1 <see cref="ArticleRecord"/>, then retains it for
-/// legacy MD5 cache GET and VATP OPEN (RequestId).
+/// VATP OPEN by RequestId. Article Work Success publishes a <c>cache://</c> URI whose path is the
+/// lowercase hexadecimal <see cref="ArticleId"/> (same value as Success <c>articleId</c>); that URI
+/// is routing metadata, not a transfer protocol.
 /// </summary>
 public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {

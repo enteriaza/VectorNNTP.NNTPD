@@ -31,7 +31,7 @@ public sealed class ArticleRetrievalVatpCommandTests
         streamingPermitted: false);
 
     private const string MessageId = "<vatp-article@example.test>";
-    private const string CacheUri = "cache://backfiller.test:119/30edc94157aa16fe644a45a1f1ffe160";
+    private const string CacheUri = "cache://backfiller.test:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Theory]
     [InlineData("ARTICLE")]

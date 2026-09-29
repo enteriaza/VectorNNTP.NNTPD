@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using VectorNNTP.BackFiller.ArticleWork;
+using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
@@ -117,6 +118,69 @@ public sealed class ArticleWorkArticlePipelineIntegrationTests
         Assert.False(settlement.Acknowledge);
         Assert.True(settlement.Requeue);
         Assert.Empty(harness.PublishChannel.Publications);
+    }
+
+    [Fact]
+    public async Task Oversized_article_acks_as_invalid_article_without_requeue_retain_or_success()
+    {
+        const int maxArticleBytes = 64;
+        await using var harness = await BackFillerPipelineHarness.StartAsync(maxArticleBytes: maxArticleBytes);
+        // Destuffed payload larger than MaxArticleBytes; receive aborts before terminator.
+        var oversized = Encoding.ASCII.GetBytes(
+            $"Date: {ArticleWorkTestArticles.ValidDate}\r\n"
+            + $"Message-ID: {ArticleWorkTestDeliveries.CanonicalMessageId}\r\n"
+            + "Newsgroups: alt.test\r\n"
+            + "From: user@example.test\r\n"
+            + "\r\n"
+            + new string('x', maxArticleBytes));
+        Assert.True(oversized.Length > maxArticleBytes);
+        harness.EnqueueArticle(oversized);
+        var channel = new FakeBackFillerRabbitMqChannel(1);
+
+        var outcome = await harness.ProcessCanonicalAsync(channel);
+
+        Assert.Equal(ArticleWorkOutcome.InvalidArticle, outcome);
+        Assert.Equal(ArticleRetrievalKind.InvalidArticle, harness.Handler.LastKind);
+        Assert.Null(harness.Handler.LastRetentionKind);
+        Assert.Equal(0, harness.Retention.RetainedCount);
+        var settlement = Assert.Single(channel.Settlements);
+        Assert.True(settlement.Acknowledge);
+        Assert.False(settlement.Requeue);
+        var publication = Assert.Single(harness.PublishChannel.Publications);
+        using var document = JsonDocument.Parse(publication.Body);
+        Assert.Equal("InvalidArticle", document.RootElement.GetProperty("outcome").GetString());
+        Assert.NotEqual("Success", document.RootElement.GetProperty("outcome").GetString());
+        Assert.False(document.RootElement.TryGetProperty("uri", out _));
+    }
+
+    [Fact]
+    public async Task Oversized_article_retires_session_but_pool_still_serves_later_work()
+    {
+        // Ceiling must remain above a normal Valid() article (~130+ bytes) so only the
+        // deliberately oversized first payload trips InvalidArticle.
+        const int maxArticleBytes = 256;
+        await using var harness = await BackFillerPipelineHarness.StartAsync(maxArticleBytes: maxArticleBytes);
+        var oversized = Encoding.ASCII.GetBytes(
+            $"Date: {ArticleWorkTestArticles.ValidDate}\r\n"
+            + $"Message-ID: {ArticleWorkTestDeliveries.CanonicalMessageId}\r\n"
+            + "Newsgroups: alt.test\r\n"
+            + "From: user@example.test\r\n"
+            + "\r\n"
+            + new string('x', maxArticleBytes));
+        Assert.True(oversized.Length > maxArticleBytes);
+        Assert.True(ArticleWorkTestArticles.Valid().Length <= maxArticleBytes);
+        harness.EnqueueArticle(oversized);
+        var firstChannel = new FakeBackFillerRabbitMqChannel(1);
+        Assert.Equal(ArticleWorkOutcome.InvalidArticle, await harness.ProcessCanonicalAsync(firstChannel));
+        Assert.True(Assert.Single(firstChannel.Settlements).Acknowledge);
+
+        harness.EnqueueArticle(ArticleWorkTestArticles.Valid());
+        var secondChannel = new FakeBackFillerRabbitMqChannel(1);
+        Assert.Equal(
+            ArticleWorkOutcome.Success,
+            await harness.ProcessCanonicalAsync(secondChannel, deliveryTag: 8, generation: 1));
+        Assert.True(Assert.Single(secondChannel.Settlements).Acknowledge);
+        Assert.Equal(1, harness.Retention.RetainedCount);
     }
 
     [Fact]

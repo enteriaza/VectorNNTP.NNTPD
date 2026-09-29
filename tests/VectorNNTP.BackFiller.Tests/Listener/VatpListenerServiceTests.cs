@@ -401,9 +401,17 @@ public sealed class VatpListenerServiceTests
         await WaitForIdleAsync(context);
         Assert.Equal(0, context.Service.ActiveConnections);
         Assert.Equal(1, context.Authority.RetainedCount);
-        using var lookup = context.Authority.TryGetByMd5(
-            ArticleIdentity.FromExactMessageId("<disconnect-mid@example.test>").Md5Hex);
-        Assert.Equal(ArticleLookupKind.Found, lookup.Kind);
+
+        // Entry remains retained; a fresh RequestId can reopen the same ArtData.
+        var reattach = RetentionTestArticles.Create("<disconnect-mid@example.test>", BuildLargeBody(128 * 1024));
+        Assert.Equal(ArticleRetentionKind.AlreadyPresent, context.Authority.RetainCanonical(
+            reattach.MessageId,
+            reattach.RequestId,
+            reattach.Record,
+            reattach.SelectedDateHeaderName).Kind);
+        using var open = context.Authority.TryOpenTransfer(reattach.RequestId, prepared.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(prepared.ExpectedArtData));
     }
 
     [Fact]
@@ -420,18 +428,21 @@ public sealed class VatpListenerServiceTests
     }
 
     [Fact]
-    public async Task Legacy_cache_get_still_works_on_same_listener()
+    public async Task Legacy_cache_get_as_first_frame_is_not_supported()
     {
-        var payload = "legacy-cache-payload"u8.ToArray();
         await using var context = await VatpListenerContext.StartAsync();
-        context.Authority.Retain(ArticleWorkTestDeliveries.CanonicalMessageId, payload);
-        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
+        _ = RetainArticle(context.Authority, ArticleWorkTestDeliveries.CanonicalMessageId);
         await using var client = await ConnectAsync(context);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetRequest(21, md5));
-        var found = await ReadLegacyFrameAsync(client.Stream);
-        Assert.Equal(ListenerOpcode.GetResponseFound, found.Header.Opcode);
-        Assert.Equal(payload, found.Payload);
-        await client.Stream.WriteAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(21));
+        // Former MD5 cache GET request bytes are not a VATP HELLO.
+        var legacyGet = new byte[VatpProtocol.HeaderLengthBytes + 32];
+        legacyGet[0] = 0x01;
+        BinaryPrimitives.WriteUInt32BigEndian(legacyGet.AsSpan(4, 4), 21);
+        BinaryPrimitives.WriteUInt32BigEndian(legacyGet.AsSpan(8, 4), 32);
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"u8.CopyTo(legacyGet.AsSpan(VatpProtocol.HeaderLengthBytes));
+        await client.Stream.WriteAsync(legacyGet);
+        var fail = await ReadVatpFrameAsync(client.Stream);
+        Assert.Equal(VatpFrameType.Fail, fail.Header.Type);
+        await WaitForIdleAsync(context);
     }
 
     [Fact]
@@ -626,20 +637,6 @@ public sealed class VatpListenerServiceTests
         }
 
         return new VatpParsedFrame(header, new ReadOnlySequence<byte>(payload));
-    }
-
-    private static async Task<(ListenerFrameHeader Header, byte[] Payload)> ReadLegacyFrameAsync(Stream stream)
-    {
-        var headerBytes = new byte[ListenerProtocol.HeaderLengthBytes];
-        await stream.ReadExactlyAsync(headerBytes);
-        var header = ListenerFrameHeader.ReadFrom(headerBytes);
-        var payload = new byte[header.PayloadLength];
-        if (payload.Length > 0)
-        {
-            await stream.ReadExactlyAsync(payload);
-        }
-
-        return (header, payload);
     }
 
     private static VatpErrorCode ReadFailCode(VatpParsedFrame frame)

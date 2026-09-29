@@ -1,9 +1,9 @@
 using VectorNNTP.BackFiller.ArticleWork;
-using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 
 namespace VectorNNTP.BackFiller.Tests.Integration;
 
@@ -204,59 +204,64 @@ public sealed class BackFillerConcurrencyIntegrationTests
     }
 
     [Fact]
-    public async Task Listener_lookup_before_and_after_expiry_follows_phase5_rules()
+    public async Task Vatp_open_before_and_after_expiry_follows_retention_ttl()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync(retentionTtl: TimeSpan.FromSeconds(10));
-        harness.Retention.Retain(ArticleWorkTestDeliveries.CanonicalMessageId, Payload);
-        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
-        var handler = new CacheListenerRetentionHandler(harness.Retention);
-        var transport = new ScriptedCacheListenerTransport();
-        await using var session = BackFillerPipelineHarness.CreateListenerSession(transport, handler);
-        var run = session.RunAsync(CancellationToken.None);
+        var prepared = RetentionTestArticles.RetainPrepared(
+            harness.Retention,
+            ArticleWorkTestDeliveries.CanonicalMessageId,
+            "ttl-body\r\n");
 
         harness.Time.Advance(TimeSpan.FromSeconds(9));
-        await transport.EnqueueAsync(ListenerProtocolEncoder.EncodeGetRequest(1, md5));
-        var found = await BackFillerEndToEndTests.WaitForFoundAsync(transport, expectedCount: 1);
-        Assert.True(found[1].AsSpan().SequenceEqual(Payload));
-        await transport.EnqueueAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(1));
-        await ArticleWorkTestDeliveries.WaitUntilAsync(() => handler.HeldLeaseCount == 0, TimeSpan.FromSeconds(2));
+        using (var open = harness.Retention.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Opened, open.Kind);
+            Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(prepared.ArtData));
+        }
+
+        // RequestId was consumed; re-attach for the post-expiry attempt.
+        var reattach = RetentionTestArticles.Create(
+            ArticleWorkTestDeliveries.CanonicalMessageId,
+            "ttl-body\r\n");
+        Assert.Equal(ArticleRetentionKind.AlreadyPresent, harness.Retention.RetainCanonical(
+            reattach.MessageId,
+            reattach.RequestId,
+            reattach.Record,
+            reattach.SelectedDateHeaderName).Kind);
 
         harness.Time.Advance(TimeSpan.FromSeconds(1));
-        await transport.EnqueueAsync(ListenerProtocolEncoder.EncodeGetRequest(2, md5));
-        await BackFillerEndToEndTests.WaitForOpcodeAsync(transport, ListenerOpcode.GetResponseNotFound);
+        using var expired = harness.Retention.TryOpenTransfer(reattach.RequestId, prepared.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Rejected, expired.Kind);
         Assert.Equal(0, harness.Retention.RetainedCount);
-        transport.CompleteInbound();
-        await run.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, harness.Retention.RetainedPayloadBytes);
     }
 
     [Fact]
-    public async Task Sweep_while_listener_holds_a_lease_does_not_drop_in_flight_bytes()
+    public async Task Sweep_while_vatp_transfer_lease_is_held_does_not_drop_in_flight_bytes()
     {
         await using var harness = await BackFillerPipelineHarness.StartAsync(retentionTtl: TimeSpan.FromSeconds(1));
-        harness.Retention.Retain(ArticleWorkTestDeliveries.CanonicalMessageId, Payload);
-        var md5 = ArticleIdentity.FromExactMessageId(ArticleWorkTestDeliveries.CanonicalMessageId).Md5Hex;
-        var handler = new CacheListenerRetentionHandler(harness.Retention);
-        var transport = new ScriptedCacheListenerTransport();
-        await using var session = BackFillerPipelineHarness.CreateListenerSession(transport, handler);
-        var run = session.RunAsync(CancellationToken.None);
-
-        await transport.EnqueueAsync(ListenerProtocolEncoder.EncodeGetRequest(5, md5));
-        var found = await BackFillerEndToEndTests.WaitForFoundAsync(transport, expectedCount: 1);
-        Assert.True(found[5].AsSpan().SequenceEqual(Payload));
-        Assert.True(handler.HoldsLease(5));
+        var prepared = RetentionTestArticles.RetainPrepared(
+            harness.Retention,
+            ArticleWorkTestDeliveries.CanonicalMessageId,
+            "lease-body\r\n");
+        var open = harness.Retention.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId);
+        Assert.Equal(VatpOpenKind.Opened, open.Kind);
+        Assert.NotNull(open.Lease);
 
         harness.Time.Advance(TimeSpan.FromSeconds(1));
         _ = harness.Retention.SweepExpired();
-        Assert.True(handler.HoldsLease(5));
-        Assert.Equal(Payload.Length, harness.Retention.RetainedPayloadBytes);
-        Assert.Equal(ArticleLookupKind.Missing, harness.Retention.TryGetByMd5(md5).Kind);
+        Assert.Equal(prepared.Record.ArtSize, harness.Retention.RetainedPayloadBytes);
+        Assert.True(open.Lease.Record.ArtData.Span.SequenceEqual(prepared.ArtData));
 
-        await transport.EnqueueAsync(ListenerProtocolEncoder.EncodeGetReceiptAck(5));
-        await ArticleWorkTestDeliveries.WaitUntilAsync(() => handler.HeldLeaseCount == 0, TimeSpan.FromSeconds(2));
+        // RequestId was consumed; a new OPEN for the same RequestId must fail while the entry is logically removed.
+        using (var second = harness.Retention.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId))
+        {
+            Assert.Equal(VatpOpenKind.Rejected, second.Kind);
+        }
+
+        open.Dispose();
         Assert.Equal(0, harness.Retention.RetainedPayloadBytes);
         Assert.Equal(0, harness.Retention.RetainedCount);
-        transport.CompleteInbound();
-        await run.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
