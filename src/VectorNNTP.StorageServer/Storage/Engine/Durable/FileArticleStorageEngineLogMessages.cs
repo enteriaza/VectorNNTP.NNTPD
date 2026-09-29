@@ -104,6 +104,32 @@ internal static partial class FileArticleStorageEngineLogMessages
     public static partial void PersistStageFailed(ILogger logger, ulong Sequence, string Stage, Exception ex);
 
     [LoggerMessage(
+        EventId = 3417,
+        Level = LogLevel.Warning,
+        Message = "Durable persist retry scheduled (sequence={Sequence}, Attempt={Attempt}, DelayMs={DelayMs})")]
+    public static partial void PersistRetryScheduled(
+        ILogger logger,
+        ulong Sequence,
+        int Attempt,
+        double DelayMs);
+
+    [LoggerMessage(
+        EventId = 3418,
+        Level = LogLevel.Information,
+        Message = "Durable persist retry succeeded (sequence={Sequence}, PriorFailures={PriorFailures})")]
+    public static partial void PersistRetrySucceeded(ILogger logger, ulong Sequence, int PriorFailures);
+
+    [LoggerMessage(
+        EventId = 3419,
+        Level = LogLevel.Error,
+        Message = "Durable persist failure is not retryable (sequence={Sequence}, ExceptionType={ExceptionType}, Detail={Detail}); leaving incomplete outstanding")]
+    public static partial void PersistNonRetryableFailure(
+        ILogger logger,
+        ulong Sequence,
+        string ExceptionType,
+        string Detail);
+
+    [LoggerMessage(
         EventId = 3409,
         Level = LogLevel.Information,
         Message = "Journal checkpoint completed (releasedBytes={ReleasedBytes})")]

@@ -46,6 +46,14 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// article index on open/recovery. Physical segment reclamation/compaction is not implemented
 /// here — see <see cref="SegmentLifecycle.IsReclaimable"/>.
 /// </para>
+/// <para>
+/// Phase 5F.1a: <c>_pendingSequences</c> is a transient execution queue over durable incomplete
+/// journal work. Retryable persist failures (conservatively <see cref="IOException"/>) requeue
+/// with backoff without releasing article capacity reservations. Non-retryable fail-closed
+/// outcomes (e.g. unusable PhysicalWritten) are not requeued. After <see cref="RecoverAsync"/>,
+/// any still-incomplete sequences are re-linked into the pending queue when background persist
+/// is enabled.
+/// </para>
 /// </remarks>
 public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
 {
@@ -62,10 +70,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly ProcessLocalCapacityLedger _capacityLedger = new();
     private readonly object _gate = new();
     private readonly Queue<ulong> _pendingSequences = new();
+    private readonly HashSet<ulong> _pendingSet = new();
+    private readonly HashSet<ulong> _persistInFlight = new();
+    private readonly Dictionary<ulong, int> _persistRetryAttempts = new();
     private readonly SemaphoreSlim _workerSignal = new(0, int.MaxValue);
     private readonly CancellationTokenSource _workerCts = new();
     private readonly Task _worker;
     private long _physicalAppendCount;
+    private long _persistRetryScheduledCount;
     private int _disposed;
     private int _suspendBackgroundPersist;
 
@@ -198,6 +210,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Optional one-shot persist fault (cleared when consumed). Tests only.</summary>
     internal PersistFaultPoint TestFaultPoint { get; set; }
+
+    /// <summary>
+    /// When set, overrides computed persist-retry backoff (use <see cref="TimeSpan.Zero"/> to
+    /// avoid wall-clock delays in tests). Tests only.
+    /// </summary>
+    internal TimeSpan? TestPersistRetryDelay { get; set; }
+
+    /// <summary>Number of persist retries scheduled (tests).</summary>
+    internal long PersistRetryScheduledCount => Volatile.Read(ref _persistRetryScheduledCount);
 
     /// <summary>
     /// When true, the next <see cref="TryEvict"/> / <see cref="TryInvalidate"/> on a Present
@@ -397,13 +418,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             if (!SuspendBackgroundPersist)
             {
-                _pendingSequences.Enqueue(journalRecord.Sequence);
+                EnqueuePersistWorkUnlocked(journalRecord.Sequence);
             }
         }
 
         if (!SuspendBackgroundPersist)
         {
-            _ = _workerSignal.Release();
+            SignalPersistWorker();
         }
 
         FileArticleStorageEngineLogMessages.Accepted(
@@ -423,7 +444,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         foreach (var item in incomplete)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await RecoverOneAsync(item, cancellationToken).ConfigureAwait(false);
+            await PersistSequenceExclusiveAsync(item.Accept.Sequence, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
@@ -434,6 +456,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         {
             MarkAbandonedDestinationDead(dest);
         }
+
+        // Durable recovery finished: re-link any still-incomplete work into the transient queue.
+        EnqueueIncompleteFromJournal();
     }
 
     /// <summary>
@@ -582,6 +607,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 await RecoverAsync(cancellationToken).ConfigureAwait(false);
                 return;
             }
+
+            // Durable incompletes may lack a transient queue entry after PersistStageFailed.
+            EnqueueIncompleteFromJournal();
 
             await Task.Delay(TimeSpan.FromMilliseconds(1), _timeProvider, cancellationToken)
                 .ConfigureAwait(false);
@@ -1052,11 +1080,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         {
                             break;
                         }
+
+                        _ = _pendingSet.Remove(sequence);
                     }
 
                     try
                     {
-                        await PersistSequenceAsync(sequence, cancellationToken).ConfigureAwait(false);
+                        await PersistSequenceExclusiveAsync(sequence, cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -1065,6 +1096,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                             sequence,
                             "persist",
                             ex);
+                        if (IsRetryablePersistFailure(ex))
+                        {
+                            SchedulePersistRetry(sequence);
+                        }
+                        else
+                        {
+                            FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
+                                _logger,
+                                sequence,
+                                ex.GetType().Name,
+                                ex.Message);
+                        }
                     }
                 }
             }
@@ -1072,17 +1115,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-    }
-
-    private async Task PersistSequenceAsync(ulong sequence, CancellationToken cancellationToken)
-    {
-        var incomplete = _journal.EnumerateIncomplete().FirstOrDefault(s => s.Accept.Sequence == sequence);
-        if (incomplete.Accept is null)
-        {
-            return;
-        }
-
-        await RecoverOneAsync(incomplete, cancellationToken).ConfigureAwait(false);
     }
 
     private void ThrowIfTestFault(PersistFaultPoint point, ulong sequence)
