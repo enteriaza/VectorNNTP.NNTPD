@@ -190,10 +190,8 @@ public sealed class StorageEngineApplicationServiceTests
     }
 
     [Fact]
-    public void O_P_Q_NoMaintenanceWorker_BoundariesUnchanged()
+    public void O_P_Q_BoundariesUnchanged()
     {
-        Assert.Null(typeof(StorageEngineApplicationService).Assembly.GetType(
-            "VectorNNTP.StorageServer.Storage.StorageMaintenanceService"));
         Assert.True(typeof(NullStorageArticleOpenBoundary).IsAssignableTo(typeof(IStorageArticleOpenBoundary)));
         Assert.Same(NullStorageArticlePresence.Instance, NullStorageArticlePresence.Instance);
     }

@@ -216,6 +216,13 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures.Add(
                 "StorageServer:Storage:Compaction:MinimumDeadRatio must be a finite value in the closed interval [0, 1].");
         }
+
+        var interval = compaction.Interval;
+        if (interval <= TimeSpan.Zero)
+        {
+            failures.Add(
+                "StorageServer:Storage:Compaction:Interval must be greater than 00:00:00 (zero and negative values are invalid).");
+        }
     }
 
     private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)

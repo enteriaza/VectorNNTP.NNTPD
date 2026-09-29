@@ -18,6 +18,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
         Assert.False(storage.Compaction.Enabled);
+        Assert.False(storage.Compaction.MaintenanceEnabled);
+        Assert.Equal(ArticleCompactionPolicyOptions.DefaultInterval, storage.Compaction.Interval);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes, storage.Compaction.MinimumDeadBytes);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio, storage.Compaction.MinimumDeadRatio);
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
@@ -80,6 +82,8 @@ public sealed class ArticleStorageOptionsTests
                 ["StorageServer:Storage:SegmentTargetSizeBytes"] = "30",
                 ["StorageServer:Storage:ArticleCache:MaxBytes"] = "4096",
                 ["StorageServer:Storage:Compaction:Enabled"] = "true",
+                ["StorageServer:Storage:Compaction:MaintenanceEnabled"] = "true",
+                ["StorageServer:Storage:Compaction:Interval"] = "00:00:30",
                 ["StorageServer:Storage:Compaction:MinimumDeadBytes"] = "1048576",
                 ["StorageServer:Storage:Compaction:MinimumDeadRatio"] = "0.25",
             })
@@ -92,8 +96,48 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(30, bound.Storage.SegmentTargetSizeBytes);
         Assert.Equal(4096, bound.Storage.ArticleCache.MaxBytes);
         Assert.True(bound.Storage.Compaction.Enabled);
+        Assert.True(bound.Storage.Compaction.MaintenanceEnabled);
+        Assert.Equal(TimeSpan.FromSeconds(30), bound.Storage.Compaction.Interval);
         Assert.Equal(1_048_576, bound.Storage.Compaction.MinimumDeadBytes);
         Assert.Equal(0.25, bound.Storage.Compaction.MinimumDeadRatio);
+    }
+
+    [Fact]
+    public void Validator_rejects_zero_Compaction_Interval()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Compaction.Interval = TimeSpan.Zero;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Compaction:Interval", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_rejects_negative_Compaction_Interval()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Compaction.Interval = TimeSpan.FromSeconds(-1);
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Compaction:Interval", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_allows_MaintenanceEnabled_with_policy_disabled_and_inverse()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Compaction.Enabled = false;
+        options.Storage.Compaction.MaintenanceEnabled = true;
+        options.Storage.Compaction.Interval = TimeSpan.FromSeconds(5);
+        Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+
+        options.Storage.Compaction.Enabled = true;
+        options.Storage.Compaction.MaintenanceEnabled = false;
+        Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
     }
 
     [Fact]
@@ -146,7 +190,23 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(0, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
         var compaction = storage.GetProperty("Compaction");
         Assert.False(compaction.GetProperty("Enabled").GetBoolean());
+        Assert.False(compaction.GetProperty("MaintenanceEnabled").GetBoolean());
+        Assert.Equal("00:01:00", compaction.GetProperty("Interval").GetString());
         Assert.Equal(67108864, compaction.GetProperty("MinimumDeadBytes").GetInt64());
         Assert.Equal(0.10, compaction.GetProperty("MinimumDeadRatio").GetDouble());
+    }
+
+    [Fact]
+    public void Configuration_rejects_malformed_Compaction_Interval()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["StorageServer:Storage:Compaction:Interval"] = "not-a-timespan",
+            })
+            .Build();
+        var bound = new StorageServerOptions();
+        Assert.ThrowsAny<Exception>(() =>
+            configuration.GetSection(StorageServerOptions.SectionName).Bind(bound));
     }
 }

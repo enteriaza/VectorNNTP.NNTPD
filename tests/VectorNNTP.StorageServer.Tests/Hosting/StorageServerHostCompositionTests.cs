@@ -15,6 +15,7 @@ using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Logging;
+using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
 
@@ -48,20 +49,22 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(7, application.Length);
-        Assert.IsType<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>(application[0]);
-        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[1]);
-        Assert.IsType<RabbitMqService>(application[2]);
-        Assert.IsType<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>(application[3]);
-        Assert.IsType<VectorNNTP.StorageServer.Storage.StorageArticleLookupConsumerService>(application[4]);
-        Assert.IsType<AcmeCertificateApplicationService>(application[5]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[6]);
+        Assert.Equal(8, application.Length);
+        Assert.IsType<StorageEngineApplicationService>(application[0]);
+        Assert.IsType<StorageMaintenanceService>(application[1]);
+        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
+        Assert.IsType<RabbitMqService>(application[3]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
+        Assert.IsType<StorageArticleLookupConsumerService>(application[5]);
+        Assert.IsType<AcmeCertificateApplicationService>(application[6]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[7]);
         Assert.IsType<NullStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
-        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.IStorageCapacityReader>());
-        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.IStorageArticlePresence>());
-        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>());
-        Assert.NotNull(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>());
-        Assert.False(host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>().IsReady);
+        Assert.NotNull(host.Services.GetRequiredService<IStorageCapacityReader>());
+        Assert.NotNull(host.Services.GetRequiredService<IStorageArticlePresence>());
+        Assert.NotNull(host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>());
+        Assert.NotNull(host.Services.GetRequiredService<StorageEngineApplicationService>());
+        Assert.NotNull(host.Services.GetRequiredService<StorageMaintenanceService>());
+        Assert.False(host.Services.GetRequiredService<StorageEngineApplicationService>().IsReady);
     }
 
     [Fact]
@@ -112,28 +115,28 @@ public sealed class StorageServerHostCompositionTests
                 ApplicationState.Running,
                 host.Services.GetRequiredService<ApplicationLifecycle>().State);
             var application = host.Services.GetServices<IApplicationService>().ToArray();
-            Assert.IsType<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>(application[0]);
-            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[1]);
-            Assert.IsType<RabbitMqService>(application[2]);
-            Assert.IsType<VectorNNTP.StorageServer.Storage.StorageServerAdvertisementPublisherService>(application[3]);
-            Assert.IsType<VectorNNTP.StorageServer.Storage.StorageArticleLookupConsumerService>(application[4]);
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[5]);
+            Assert.IsType<StorageEngineApplicationService>(application[0]);
+            Assert.IsType<StorageMaintenanceService>(application[1]);
+            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
+            Assert.IsType<RabbitMqService>(application[3]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
+            Assert.IsType<StorageArticleLookupConsumerService>(application[5]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[6]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[6]);
+            Assert.Same(listener, application[7]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
 
-            var storageService = host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>();
+            var storageService = host.Services.GetRequiredService<StorageEngineApplicationService>();
             Assert.True(storageService.IsReady);
             var engine = host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.Engine.Durable.FileArticleStorageEngine>();
             Assert.Same(storageService.Engine, engine);
             Assert.Same(
                 storageService,
-                host.Services.GetServices<IApplicationService>().OfType<VectorNNTP.StorageServer.Storage.StorageEngineApplicationService>().Single());
-            Assert.DoesNotContain(
-                typeof(StorageServerServiceCollectionExtensions).Assembly.GetTypes(),
-                static t => t.Name.Contains("MaintenanceService", StringComparison.Ordinal)
-                            && typeof(IApplicationService).IsAssignableFrom(t));
+                host.Services.GetServices<IApplicationService>().OfType<StorageEngineApplicationService>().Single());
+            Assert.Same(
+                host.Services.GetRequiredService<StorageMaintenanceService>(),
+                host.Services.GetServices<IApplicationService>().OfType<StorageMaintenanceService>().Single());
         }
         finally
         {

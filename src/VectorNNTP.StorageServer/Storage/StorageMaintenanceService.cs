@@ -1,0 +1,206 @@
+using System.Diagnostics;
+using Microsoft.Extensions.Options;
+using VectorNNTP.NNTPD.Core;
+using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
+
+namespace VectorNNTP.StorageServer.Storage;
+
+/// <summary>
+/// Periodically invokes <see cref="StorageMaintenanceCoordinator.RunOnceAsync"/> (Phase 5C).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Owns scheduling, cancellation, and recoverable error handling only. Policy, compaction,
+/// retirement, and reclamation remain in the coordinator and storage primitives.
+/// </para>
+/// <para>
+/// Must be registered after <see cref="StorageEngineApplicationService"/> so Open+Recover
+/// completes before the first coordinator resolve. Interval is a delay after each run completes
+/// (no overlapping runs, no backlog). First run is immediate when enabled.
+/// </para>
+/// </remarks>
+public sealed class StorageMaintenanceService : IApplicationService
+{
+    private readonly Func<CancellationToken, Task<StorageMaintenanceResult>> _runOnce;
+    private readonly IOptions<StorageServerOptions> _options;
+    private readonly TimeProvider _timeProvider;
+    private readonly ILogger<StorageMaintenanceService> _logger;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
+    private CancellationTokenSource? _shutdownCts;
+    private Task? _loop;
+    private int _started;
+    private long _runAttemptCount;
+
+    /// <summary>
+    /// Production constructor. <paramref name="coordinator"/> is resolved lazily on the first
+    /// maintenance run, after <see cref="StorageEngineApplicationService"/> has started.
+    /// </summary>
+    public StorageMaintenanceService(
+        Lazy<StorageMaintenanceCoordinator> coordinator,
+        IOptions<StorageServerOptions> options,
+        ILogger<StorageMaintenanceService> logger,
+        TimeProvider? timeProvider = null)
+        : this(
+            ct => coordinator.Value.RunOnceAsync(ct),
+            options,
+            logger,
+            delayAsync: null,
+            timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+    }
+
+    /// <summary>Test constructor with injectable run/delay seams.</summary>
+    internal StorageMaintenanceService(
+        Func<CancellationToken, Task<StorageMaintenanceResult>> runOnce,
+        IOptions<StorageServerOptions> options,
+        ILogger<StorageMaintenanceService> logger,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(runOnce);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+        _runOnce = runOnce;
+        _options = options;
+        _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _delayAsync = delayAsync
+            ?? ((delay, ct) => Task.Delay(delay, _timeProvider, ct));
+    }
+
+    /// <inheritdoc />
+    public string Name => "StorageMaintenance";
+
+    /// <inheritdoc />
+    public Task? Execution => _loop;
+
+    /// <summary>Number of completed RunOnce attempts (tests; includes failures).</summary>
+    internal long RunAttemptCount => Volatile.Read(ref _runAttemptCount);
+
+    /// <inheritdoc />
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Interlocked.Exchange(ref _started, 1) == 1)
+        {
+            return Task.CompletedTask;
+        }
+
+        var compaction = _options.Value.Storage?.Compaction ?? new ArticleCompactionPolicyOptions();
+        if (!compaction.MaintenanceEnabled)
+        {
+            StorageMaintenanceLogMessages.Disabled(_logger);
+            return Task.CompletedTask;
+        }
+
+        if (compaction.Interval <= TimeSpan.Zero)
+        {
+            Interlocked.Exchange(ref _started, 0);
+            throw new InvalidOperationException(
+                "StorageServer:Storage:Compaction:Interval must be greater than zero when MaintenanceEnabled is true.");
+        }
+
+        try
+        {
+            _shutdownCts = new CancellationTokenSource();
+            _loop = RunLoopAsync(compaction.Interval, _shutdownCts.Token);
+            StorageMaintenanceLogMessages.Started(_logger, compaction.Interval);
+            return Task.CompletedTask;
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _started, 0);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _ = cancellationToken;
+        StorageMaintenanceLogMessages.Stopping(_logger);
+        var cts = Interlocked.Exchange(ref _shutdownCts, null);
+        if (cts is not null)
+        {
+            await cts.CancelAsync().ConfigureAwait(false);
+            cts.Dispose();
+        }
+
+        var loop = Interlocked.Exchange(ref _loop, null);
+        if (loop is not null)
+        {
+            try
+            {
+                await loop.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        Interlocked.Exchange(ref _started, 0);
+        StorageMaintenanceLogMessages.Stopped(_logger);
+    }
+
+    private async Task RunLoopAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await RunOnceSafeAsync(cancellationToken).ConfigureAwait(false);
+
+                try
+                {
+                    await _delayAsync(interval, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RunOnceSafeAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var started = Stopwatch.GetTimestamp();
+        StorageMaintenanceLogMessages.RunStarting(_logger);
+        try
+        {
+            var result = await _runOnce(cancellationToken).ConfigureAwait(false);
+            _ = Interlocked.Increment(ref _runAttemptCount);
+
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (result.Outcome == StorageMaintenanceOutcome.NoWork)
+            {
+                StorageMaintenanceLogMessages.RunNoWork(_logger, durationMs);
+            }
+            else
+            {
+                StorageMaintenanceLogMessages.RunCompleted(
+                    _logger,
+                    result.Outcome.ToString(),
+                    result.SegmentId.Value,
+                    result.CompactionId,
+                    durationMs);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _ = Interlocked.Increment(ref _runAttemptCount);
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            StorageMaintenanceLogMessages.RunFailed(_logger, durationMs, ex);
+        }
+    }
+}

@@ -13,6 +13,8 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
+using VectorNNTP.StorageServer.Storage.Engine.Policy;
 
 namespace VectorNNTP.StorageServer.Hosting;
 
@@ -26,8 +28,8 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// StorageEngine → Cloudflare DNS → RabbitMQ (connectivity only) → AdvertisementPublisher →
-    /// LookupConsumer → ACME → VATP listener.
+    /// StorageEngine → StorageMaintenance → Cloudflare DNS → RabbitMQ (connectivity only) →
+    /// AdvertisementPublisher → LookupConsumer → ACME → VATP listener.
     /// Topology, queues, and consumers are not registered here.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
@@ -116,11 +118,27 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddSingleton(static sp =>
             sp.GetRequiredService<StorageEngineApplicationService>().Engine);
 
-        // Startup order: StorageEngine → Cloudflare → RabbitMQ → AdvertisementPublisher →
-        // LookupConsumer → ACME → Listener. Storage is first so reverse-stop disposes it last.
+        builder.Services.AddSingleton(static sp =>
+        {
+            var compaction = sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Storage.Compaction
+                ?? new ArticleCompactionPolicyOptions();
+            return new ArticleSegmentPolicy(compaction);
+        });
+        // Lazy: first resolve after StorageEngine StartAsync (registration order).
+        builder.Services.AddSingleton(static sp => new Lazy<StorageMaintenanceCoordinator>(() =>
+            new StorageMaintenanceCoordinator(
+                sp.GetRequiredService<StorageEngineApplicationService>().Engine,
+                sp.GetRequiredService<ArticleSegmentPolicy>())));
+        builder.Services.AddSingleton<StorageMaintenanceService>();
+
+        // Startup order: StorageEngine → StorageMaintenance → Cloudflare → RabbitMQ →
+        // AdvertisementPublisher → LookupConsumer → ACME → Listener.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageEngineApplicationService>(static sp =>
                 sp.GetRequiredService<StorageEngineApplicationService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageMaintenanceService>(static sp =>
+                sp.GetRequiredService<StorageMaintenanceService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
