@@ -39,6 +39,16 @@ public enum StorageMaintenanceOutcome : byte
 /// <param name="ReclamationAttempted">True when <c>ReclaimRetiredSegmentAsync</c> was invoked.</param>
 /// <param name="Reclaimed">True when physical reclamation succeeded (or was already done).</param>
 /// <param name="SkipReason">Optional reason for <see cref="StorageMaintenanceOutcome.Skipped"/> / diagnostics.</param>
+/// <param name="RelocatedArticleCount">
+/// Present articles relocated during compaction in this invocation (from compaction primitive).
+/// </param>
+/// <param name="SourceSizeBytes">Source segment size when known without an extra catalogue scan.</param>
+/// <param name="SourceLiveBytes">Source live bytes when known without an extra catalogue scan.</param>
+/// <param name="SourceDeadBytes">Source dead bytes when known without an extra catalogue scan.</param>
+/// <param name="SourceDeadRatio">Source dead ratio when accounting is present.</param>
+/// <param name="ReclaimedSegmentSizeBytes">
+/// Catalogue size of a reclaimed segment captured before physical delete when already available.
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -49,4 +59,10 @@ public readonly record struct StorageMaintenanceResult(
     bool Retired,
     bool ReclamationAttempted,
     bool Reclaimed,
-    string? SkipReason = null);
+    string? SkipReason = null,
+    int RelocatedArticleCount = 0,
+    long? SourceSizeBytes = null,
+    long? SourceLiveBytes = null,
+    long? SourceDeadBytes = null,
+    double? SourceDeadRatio = null,
+    long? ReclaimedSegmentSizeBytes = null);

@@ -31,6 +31,7 @@ public sealed class StorageMaintenanceService : IApplicationService
     private Task? _loop;
     private int _started;
     private long _runAttemptCount;
+    private ulong _nextMaintenanceRunId;
 
     /// <summary>
     /// Production constructor. <paramref name="coordinator"/> is resolved lazily on the first
@@ -170,27 +171,16 @@ public sealed class StorageMaintenanceService : IApplicationService
     private async Task RunOnceSafeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var maintenanceRunId = Interlocked.Increment(ref _nextMaintenanceRunId);
         var started = Stopwatch.GetTimestamp();
-        StorageMaintenanceLogMessages.RunStarting(_logger);
+        StorageMaintenanceLogMessages.RunStarting(_logger, maintenanceRunId);
         try
         {
             var result = await _runOnce(cancellationToken).ConfigureAwait(false);
             _ = Interlocked.Increment(ref _runAttemptCount);
 
             var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            if (result.Outcome == StorageMaintenanceOutcome.NoWork)
-            {
-                StorageMaintenanceLogMessages.RunNoWork(_logger, durationMs);
-            }
-            else
-            {
-                StorageMaintenanceLogMessages.RunCompleted(
-                    _logger,
-                    result.Outcome.ToString(),
-                    result.SegmentId.Value,
-                    result.CompactionId,
-                    durationMs);
-            }
+            StorageMaintenanceRunLogging.LogRunOutcome(_logger, maintenanceRunId, in result, durationMs);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -200,7 +190,7 @@ public sealed class StorageMaintenanceService : IApplicationService
         {
             _ = Interlocked.Increment(ref _runAttemptCount);
             var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            StorageMaintenanceLogMessages.RunFailed(_logger, durationMs, ex);
+            StorageMaintenanceLogMessages.RunFailed(_logger, maintenanceRunId, durationMs, ex);
         }
     }
 }

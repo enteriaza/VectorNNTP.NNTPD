@@ -65,7 +65,7 @@ public sealed class StorageMaintenanceCoordinator
         if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retiredVictim))
         {
             TestHookAfterReclamationVictimSelected?.Invoke(retiredVictim.SegmentId);
-            return await TryReclaimRetiredAsync(retiredVictim.SegmentId, cancellationToken)
+            return await TryReclaimRetiredAsync(retiredVictim, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -82,6 +82,7 @@ public sealed class StorageMaintenanceCoordinator
             return await CompactThenFinishAsync(
                     open.Begin.SourceSegmentId,
                     requirePolicyEligibility: false,
+                    sourceAccountingHint: null,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -102,14 +103,16 @@ public sealed class StorageMaintenanceCoordinator
         return await CompactThenFinishAsync(
                 closedVictim.SegmentId,
                 requirePolicyEligibility: true,
+                sourceAccountingHint: closedVictim,
                 cancellationToken)
             .ConfigureAwait(false);
     }
 
     private async Task<StorageMaintenanceResult> TryReclaimRetiredAsync(
-        SegmentId segmentId,
+        SegmentInfo segment,
         CancellationToken cancellationToken)
     {
+        var segmentId = segment.SegmentId;
         if (!TryRevalidateReclamationCandidate(segmentId, out var skipReason))
         {
             return Skipped(segmentId, compactionId: 0, skipReason);
@@ -120,7 +123,7 @@ public sealed class StorageMaintenanceCoordinator
             .ReclaimRetiredSegmentAsync(segmentId, cancellationToken)
             .ConfigureAwait(false);
 
-        return MapReclamationOnly(reclaim);
+        return MapReclamationOnly(reclaim, segment.SizeBytes);
     }
 
     private async Task<StorageMaintenanceResult> FinishCommittedCompactionAsync(
@@ -140,6 +143,8 @@ public sealed class StorageMaintenanceCoordinator
                 sourceId,
                 compactionAttempted: false,
                 compactionCommitted: true,
+                compactionExecution: null,
+                sourceAccountingHint: null,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -147,6 +152,7 @@ public sealed class StorageMaintenanceCoordinator
     private async Task<StorageMaintenanceResult> CompactThenFinishAsync(
         SegmentId sourceSegmentId,
         bool requirePolicyEligibility,
+        SegmentInfo? sourceAccountingHint,
         CancellationToken cancellationToken)
     {
         if (requirePolicyEligibility
@@ -168,21 +174,13 @@ public sealed class StorageMaintenanceCoordinator
                         compact.SourceSegmentId,
                         compactionAttempted: true,
                         compactionCommitted: true,
+                        compact,
+                        sourceAccountingHint,
                         cancellationToken)
                     .ConfigureAwait(false);
 
             case ArticleCompactionOutcome.Incomplete:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Incomplete,
-                    compact.SourceSegmentId,
-                    compact.CompactionId,
-                    CompactionAttempted: true,
-                    CompactionCommitted: false,
-                    RetirementAttempted: false,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: compact.Reason);
+                return IncompleteFromCompaction(compact, sourceAccountingHint);
 
             case ArticleCompactionOutcome.RejectedSourceMissing:
             case ArticleCompactionOutcome.RejectedSourceNotClosed:
@@ -193,30 +191,12 @@ public sealed class StorageMaintenanceCoordinator
 
             case ArticleCompactionOutcome.CompetingOpenCompaction:
             case ArticleCompactionOutcome.Failed:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Failed,
-                    compact.SourceSegmentId,
-                    compact.CompactionId,
-                    CompactionAttempted: true,
-                    CompactionCommitted: false,
-                    RetirementAttempted: false,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: compact.Reason);
+                return FailedFromCompaction(compact, sourceAccountingHint);
 
             default:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Failed,
-                    compact.SourceSegmentId,
-                    compact.CompactionId,
-                    CompactionAttempted: true,
-                    CompactionCommitted: false,
-                    RetirementAttempted: false,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: "unexpected-compaction-" + compact.Outcome);
+                return FailedFromCompaction(
+                    compact with { Reason = "unexpected-compaction-" + compact.Outcome },
+                    sourceAccountingHint);
         }
     }
 
@@ -225,24 +205,29 @@ public sealed class StorageMaintenanceCoordinator
         SegmentId sourceSegmentId,
         bool compactionAttempted,
         bool compactionCommitted,
+        ArticleCompactionResult? compactionExecution,
+        SegmentInfo? sourceAccountingHint,
         CancellationToken cancellationToken)
     {
         if (!TryRevalidateRetirementCandidate(compactionId, sourceSegmentId, out var skipReason))
         {
             // Compaction may already be durable; skip retirement without claiming failure of commit.
-            return new StorageMaintenanceResult(
-                compactionCommitted
-                    ? StorageMaintenanceOutcome.Compacted
-                    : StorageMaintenanceOutcome.Skipped,
-                sourceSegmentId,
-                compactionId,
-                compactionAttempted,
-                compactionCommitted,
-                RetirementAttempted: false,
-                Retired: false,
-                ReclamationAttempted: false,
-                Reclaimed: false,
-                SkipReason: skipReason);
+            return EnrichCompactionResult(
+                new StorageMaintenanceResult(
+                    compactionCommitted
+                        ? StorageMaintenanceOutcome.Compacted
+                        : StorageMaintenanceOutcome.Skipped,
+                    sourceSegmentId,
+                    compactionId,
+                    compactionAttempted,
+                    compactionCommitted,
+                    RetirementAttempted: false,
+                    Retired: false,
+                    ReclamationAttempted: false,
+                    Reclaimed: false,
+                    SkipReason: skipReason),
+                compactionExecution,
+                sourceAccountingHint);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -261,58 +246,75 @@ public sealed class StorageMaintenanceCoordinator
             case ArticleSegmentRetirementOutcome.RejectedSourceMissing:
             case ArticleSegmentRetirementOutcome.RejectedNotCommitted:
             case ArticleSegmentRetirementOutcome.RejectedUnknownCompaction:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Compacted,
-                    sourceSegmentId,
-                    compactionId,
-                    compactionAttempted,
-                    compactionCommitted,
-                    RetirementAttempted: true,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: retire.Reason ?? retire.Outcome.ToString());
+                return EnrichCompactionResult(
+                    new StorageMaintenanceResult(
+                        StorageMaintenanceOutcome.Compacted,
+                        sourceSegmentId,
+                        compactionId,
+                        compactionAttempted,
+                        compactionCommitted,
+                        RetirementAttempted: true,
+                        Retired: false,
+                        ReclamationAttempted: false,
+                        Reclaimed: false,
+                        SkipReason: retire.Reason ?? retire.Outcome.ToString()),
+                    compactionExecution,
+                    sourceAccountingHint);
 
             case ArticleSegmentRetirementOutcome.Failed:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Failed,
-                    sourceSegmentId,
-                    compactionId,
-                    compactionAttempted,
-                    compactionCommitted,
-                    RetirementAttempted: true,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: retire.Reason);
+                return EnrichCompactionResult(
+                    new StorageMaintenanceResult(
+                        StorageMaintenanceOutcome.Failed,
+                        sourceSegmentId,
+                        compactionId,
+                        compactionAttempted,
+                        compactionCommitted,
+                        RetirementAttempted: true,
+                        Retired: false,
+                        ReclamationAttempted: false,
+                        Reclaimed: false,
+                        SkipReason: retire.Reason),
+                    compactionExecution,
+                    sourceAccountingHint);
 
             default:
-                return new StorageMaintenanceResult(
-                    StorageMaintenanceOutcome.Failed,
-                    sourceSegmentId,
-                    compactionId,
-                    compactionAttempted,
-                    compactionCommitted,
-                    RetirementAttempted: true,
-                    Retired: false,
-                    ReclamationAttempted: false,
-                    Reclaimed: false,
-                    SkipReason: "unexpected-retirement-" + retire.Outcome);
+                return EnrichCompactionResult(
+                    new StorageMaintenanceResult(
+                        StorageMaintenanceOutcome.Failed,
+                        sourceSegmentId,
+                        compactionId,
+                        compactionAttempted,
+                        compactionCommitted,
+                        RetirementAttempted: true,
+                        Retired: false,
+                        ReclamationAttempted: false,
+                        Reclaimed: false,
+                        SkipReason: "unexpected-retirement-" + retire.Outcome),
+                    compactionExecution,
+                    sourceAccountingHint);
         }
+
+        long? reclaimedSize = sourceAccountingHint is { } hint
+            && hint.SegmentId == sourceSegmentId
+            ? hint.SizeBytes
+            : null;
 
         if (!TryRevalidateReclamationCandidate(sourceSegmentId, out var reclaimSkip))
         {
-            return new StorageMaintenanceResult(
-                StorageMaintenanceOutcome.Retired,
-                sourceSegmentId,
-                compactionId,
-                compactionAttempted,
-                CompactionCommitted: true,
-                RetirementAttempted: true,
-                Retired: true,
-                ReclamationAttempted: false,
-                Reclaimed: false,
-                SkipReason: reclaimSkip);
+            return EnrichCompactionResult(
+                new StorageMaintenanceResult(
+                    StorageMaintenanceOutcome.Retired,
+                    sourceSegmentId,
+                    compactionId,
+                    compactionAttempted,
+                    CompactionCommitted: true,
+                    RetirementAttempted: true,
+                    Retired: true,
+                    ReclamationAttempted: false,
+                    Reclaimed: false,
+                    SkipReason: reclaimSkip),
+                compactionExecution,
+                sourceAccountingHint);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -323,17 +325,21 @@ public sealed class StorageMaintenanceCoordinator
         if (reclaim.Outcome is ArticleSegmentReclamationOutcome.Reclaimed
             or ArticleSegmentReclamationOutcome.IdempotentAlreadyReclaimed)
         {
-            return new StorageMaintenanceResult(
-                StorageMaintenanceOutcome.CompactedAndReclaimed,
-                sourceSegmentId,
-                compactionId,
-                compactionAttempted,
-                CompactionCommitted: true,
-                RetirementAttempted: true,
-                Retired: true,
-                ReclamationAttempted: true,
-                Reclaimed: true,
-                SkipReason: reclaim.Reason);
+            return EnrichCompactionResult(
+                new StorageMaintenanceResult(
+                    StorageMaintenanceOutcome.CompactedAndReclaimed,
+                    sourceSegmentId,
+                    compactionId,
+                    compactionAttempted,
+                    CompactionCommitted: true,
+                    RetirementAttempted: true,
+                    Retired: true,
+                    ReclamationAttempted: true,
+                    Reclaimed: true,
+                    SkipReason: reclaim.Reason,
+                    ReclaimedSegmentSizeBytes: reclaimedSize),
+                compactionExecution,
+                sourceAccountingHint);
         }
 
         if (reclaim.Outcome is ArticleSegmentReclamationOutcome.RejectedPresentRemain
@@ -342,8 +348,25 @@ public sealed class StorageMaintenanceCoordinator
             or ArticleSegmentReclamationOutcome.RejectedClosed
             or ArticleSegmentReclamationOutcome.RejectedMissing)
         {
-            return new StorageMaintenanceResult(
-                StorageMaintenanceOutcome.Retired,
+            return EnrichCompactionResult(
+                new StorageMaintenanceResult(
+                    StorageMaintenanceOutcome.Retired,
+                    sourceSegmentId,
+                    compactionId,
+                    compactionAttempted,
+                    CompactionCommitted: true,
+                    RetirementAttempted: true,
+                    Retired: true,
+                    ReclamationAttempted: true,
+                    Reclaimed: false,
+                    SkipReason: reclaim.Reason ?? reclaim.Outcome.ToString()),
+                compactionExecution,
+                sourceAccountingHint);
+        }
+
+        return EnrichCompactionResult(
+            new StorageMaintenanceResult(
+                StorageMaintenanceOutcome.Failed,
                 sourceSegmentId,
                 compactionId,
                 compactionAttempted,
@@ -352,20 +375,9 @@ public sealed class StorageMaintenanceCoordinator
                 Retired: true,
                 ReclamationAttempted: true,
                 Reclaimed: false,
-                SkipReason: reclaim.Reason ?? reclaim.Outcome.ToString());
-        }
-
-        return new StorageMaintenanceResult(
-            StorageMaintenanceOutcome.Failed,
-            sourceSegmentId,
-            compactionId,
-            compactionAttempted,
-            CompactionCommitted: true,
-            RetirementAttempted: true,
-            Retired: true,
-            ReclamationAttempted: true,
-            Reclaimed: false,
-            SkipReason: reclaim.Reason ?? reclaim.Outcome.ToString());
+                SkipReason: reclaim.Reason ?? reclaim.Outcome.ToString()),
+            compactionExecution,
+            sourceAccountingHint);
     }
 
     private bool TryFindCommittedPendingRetirement(out CompactionJournalSnapshot snapshot)
@@ -572,7 +584,9 @@ public sealed class StorageMaintenanceCoordinator
             .Count(m => m.State == ArticleStorageState.Present
                         && m.Location.SegmentId.Value == segmentId.Value);
 
-    private static StorageMaintenanceResult MapReclamationOnly(ArticleSegmentReclamationResult reclaim)
+    private static StorageMaintenanceResult MapReclamationOnly(
+        ArticleSegmentReclamationResult reclaim,
+        long reclaimedSegmentSizeBytes)
     {
         return reclaim.Outcome switch
         {
@@ -588,7 +602,8 @@ public sealed class StorageMaintenanceCoordinator
                     Retired: false,
                     ReclamationAttempted: true,
                     Reclaimed: true,
-                    SkipReason: reclaim.Reason),
+                    SkipReason: reclaim.Reason,
+                    ReclaimedSegmentSizeBytes: reclaimedSegmentSizeBytes),
 
             ArticleSegmentReclamationOutcome.RejectedPresentRemain
                 or ArticleSegmentReclamationOutcome.RejectedUnexpectedPhysical
@@ -635,4 +650,58 @@ public sealed class StorageMaintenanceCoordinator
             ReclamationAttempted: false,
             Reclaimed: false,
             SkipReason: reason);
+
+    private static StorageMaintenanceResult IncompleteFromCompaction(
+        ArticleCompactionResult compact,
+        SegmentInfo? sourceAccountingHint) =>
+        EnrichCompactionResult(
+            new StorageMaintenanceResult(
+                StorageMaintenanceOutcome.Incomplete,
+                compact.SourceSegmentId,
+                compact.CompactionId,
+                CompactionAttempted: true,
+                CompactionCommitted: false,
+                RetirementAttempted: false,
+                Retired: false,
+                ReclamationAttempted: false,
+                Reclaimed: false,
+                SkipReason: compact.Reason),
+            compact,
+            sourceAccountingHint);
+
+    private static StorageMaintenanceResult FailedFromCompaction(
+        ArticleCompactionResult compact,
+        SegmentInfo? sourceAccountingHint) =>
+        EnrichCompactionResult(
+            new StorageMaintenanceResult(
+                StorageMaintenanceOutcome.Failed,
+                compact.SourceSegmentId,
+                compact.CompactionId,
+                CompactionAttempted: true,
+                CompactionCommitted: false,
+                RetirementAttempted: false,
+                Retired: false,
+                ReclamationAttempted: false,
+                Reclaimed: false,
+                SkipReason: compact.Reason),
+            compact,
+            sourceAccountingHint);
+
+    private static StorageMaintenanceResult EnrichCompactionResult(
+        StorageMaintenanceResult result,
+        ArticleCompactionResult? compactionExecution,
+        SegmentInfo? sourceAccountingHint)
+    {
+        if (sourceAccountingHint is { } hint)
+        {
+            result = result.WithSourceAccounting(in hint);
+        }
+
+        if (compactionExecution is { } compact)
+        {
+            result = result.WithCompactionExecution(in compact);
+        }
+
+        return result;
+    }
 }

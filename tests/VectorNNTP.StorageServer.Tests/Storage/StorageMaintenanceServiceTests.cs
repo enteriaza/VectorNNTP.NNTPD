@@ -140,7 +140,8 @@ public sealed class StorageMaintenanceServiceTests
         Assert.Contains(
             sink.Events,
             static e => e.Level == LogEventLevel.Error
-                && e.MessageTemplate.Text.Contains("failed", StringComparison.OrdinalIgnoreCase));
+                && e.Properties.TryGetValue("EventId", out var eventId)
+                && eventId.ToString().Contains("3015", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -405,7 +406,7 @@ public sealed class StorageMaintenanceServiceTests
 
         await service.StartAsync(CancellationToken.None);
         await WaitForAsync(
-            () => sink.Events.Any(static e => e.MessageTemplate.Text.Contains("completed", StringComparison.OrdinalIgnoreCase)),
+            () => sink.Events.Any(static e => e.MessageTemplate.Text.Contains("summary", StringComparison.OrdinalIgnoreCase)),
             TimeSpan.FromSeconds(2));
         await service.StopAsync(CancellationToken.None);
 
