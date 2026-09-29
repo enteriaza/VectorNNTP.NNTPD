@@ -74,8 +74,20 @@ internal static class StorageMaintenanceRunLogging
                     result.CapacityTotalBytes,
                     result.CapacityArticleReservedBytes,
                     result.CapacityCompactionReservedBytes,
-                    result.SkipReason);
+                    FormatDetail(in result));
                 return;
         }
+    }
+
+    private static string? FormatDetail(in StorageMaintenanceResult result)
+    {
+        if (result.DeferredOpenCompactionId is not { } deferredId)
+        {
+            return result.SkipReason;
+        }
+
+        var deferred =
+            $"deferred-open-compaction={deferredId};deferred-open-source={result.DeferredOpenSourceSegmentId?.Value};deferred-open-reason={result.DeferredOpenSkipReason}";
+        return result.SkipReason is null ? deferred : result.SkipReason + ";" + deferred;
     }
 }

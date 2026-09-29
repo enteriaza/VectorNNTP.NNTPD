@@ -22,6 +22,17 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// Closed victim via policy. Under article admission pressure (Phase 5F.2), Closed-victim
 /// selection prefers physical recovery potential and compaction-headroom feasibility;
 /// pressure is recomputed each invocation and is not a persistent mode.
+/// </para>
+/// <para>
+/// Phase 5F.3: when continuing an open compaction returns
+/// <see cref="StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress"/>, that open
+/// compaction is not abandoned — it remains durable and resumable — but the same
+/// <see cref="RunOnceAsync"/> falls through to Closed-victim selection so a capacity-blocked
+/// open compaction cannot starve other Closed work. Multiple open uncommitted compactions are
+/// still enumerated by lowest CompactionId; only the selected open is attempted before
+/// fall-through (no same-run retry of another open).
+/// </para>
+/// <para>
 /// Policy selection is a hint — every destructive step is revalidated against current
 /// catalogue/index state.
 /// </para>
@@ -86,21 +97,56 @@ public sealed class StorageMaintenanceCoordinator
                 pressure);
         }
 
-        // 3) Continue open uncommitted compaction (no competing Begin).
+        // 3) Continue open uncommitted compaction. Capacity zero-progress does not monopolize
+        // the remainder of this run (Phase 5F.3 fall-through to Closed selection).
+        StorageMaintenanceResult? deferredOpenCapacitySkip = null;
         if (TryFindOpenUncommitted(out var open))
         {
-            return AttachPressure(
-                await CompactThenFinishAsync(
-                        open.Begin.SourceSegmentId,
-                        requirePolicyEligibility: false,
-                        sourceAccountingHint: null,
-                        continuingOpenCompaction: true,
-                        cancellationToken)
-                    .ConfigureAwait(false),
-                pressure);
+            var openResult = await CompactThenFinishAsync(
+                    open.Begin.SourceSegmentId,
+                    requirePolicyEligibility: false,
+                    sourceAccountingHint: null,
+                    continuingOpenCompaction: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (IsCapacityOpenCompactionZeroProgressSkip(in openResult))
+            {
+                deferredOpenCapacitySkip = openResult;
+            }
+            else
+            {
+                return AttachPressure(openResult, pressure);
+            }
         }
 
         // 4) Select a new Closed compaction victim (pressure-aware when under admission pressure).
+        var closedResult = await SelectAndRunClosedVictimAsync(pressure, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (deferredOpenCapacitySkip is { } deferred)
+        {
+            // No Closed work available — preserve the open capacity Skip (Case A).
+            if (IsNoClosedWorkOutcome(in closedResult))
+            {
+                return AttachPressure(deferred, pressure);
+            }
+
+            // Closed path produced the primary outcome; record that an open was deferred.
+            return AttachPressure(closedResult.WithDeferredOpenCompaction(in deferred), pressure);
+        }
+
+        return AttachPressure(closedResult, pressure);
+    }
+
+    private async Task<StorageMaintenanceResult> SelectAndRunClosedVictimAsync(
+        CapacityAdmissionPressureSnapshot pressure,
+        CancellationToken cancellationToken)
+    {
+        // Closed selection must not re-pick a source that already has an open uncommitted
+        // compaction (Phase 5F.3 fall-through would otherwise reselect the capacity-blocked open).
+        var closedSnapshot = CatalogueSnapshotExcludingOpenUncommittedSources();
+
         if (pressure.IsUnderAdmissionPressure)
         {
             // Revalidate pressure immediately before victim selection / execution.
@@ -110,16 +156,14 @@ public sealed class StorageMaintenanceCoordinator
                 // Pressure cleared between observation and selection — fall through to normal.
             }
             else if (!_policy.TrySelectPressureReliefCompactionVictim(
-                         _engine.Catalogue,
+                         closedSnapshot,
                          in pressure,
                          out var pressureVictim))
             {
-                return AttachPressure(
-                    Skipped(
-                        default,
-                        compactionId: 0,
-                        StorageMaintenanceSkipReasons.CapacityPressureNoFeasibleCandidate),
-                    pressure);
+                return Skipped(
+                    default,
+                    compactionId: 0,
+                    StorageMaintenanceSkipReasons.CapacityPressureNoFeasibleCandidate);
             }
             else
             {
@@ -133,12 +177,10 @@ public sealed class StorageMaintenanceCoordinator
                              in pressureVictim,
                              in pressure))
                 {
-                    return AttachPressure(
-                        Skipped(
-                            pressureVictim.SegmentId,
-                            compactionId: 0,
-                            StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom),
-                        pressure);
+                    return Skipped(
+                        pressureVictim.SegmentId,
+                        compactionId: 0,
+                        StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom);
                 }
                 else
                 {
@@ -146,48 +188,89 @@ public sealed class StorageMaintenanceCoordinator
 
                     if (!TryRevalidateCompactionCandidate(pressureVictim.SegmentId, out var pressureSkip))
                     {
-                        return AttachPressure(
-                            Skipped(pressureVictim.SegmentId, compactionId: 0, pressureSkip),
-                            pressure);
+                        return Skipped(pressureVictim.SegmentId, compactionId: 0, pressureSkip);
                     }
 
-                    return AttachPressure(
-                        await CompactThenFinishAsync(
-                                pressureVictim.SegmentId,
-                                requirePolicyEligibility: true,
-                                sourceAccountingHint: pressureVictim,
-                                continuingOpenCompaction: false,
-                                cancellationToken)
-                            .ConfigureAwait(false),
-                        pressure);
+                    return await CompactThenFinishAsync(
+                            pressureVictim.SegmentId,
+                            requirePolicyEligibility: true,
+                            sourceAccountingHint: pressureVictim,
+                            continuingOpenCompaction: false,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
         }
 
-        if (!_policy.TrySelectCompactionVictim(_engine.Catalogue, out var closedVictim))
+        if (!_policy.TrySelectCompactionVictim(closedSnapshot, out var closedVictim))
         {
-            return AttachPressure(NoWork(), pressure);
+            return NoWork();
         }
 
         TestHookAfterCompactionVictimSelected?.Invoke(closedVictim.SegmentId);
 
         if (!TryRevalidateCompactionCandidate(closedVictim.SegmentId, out var skipReason))
         {
-            return AttachPressure(
-                Skipped(closedVictim.SegmentId, compactionId: 0, skipReason),
-                pressure);
+            return Skipped(closedVictim.SegmentId, compactionId: 0, skipReason);
         }
 
-        return AttachPressure(
-            await CompactThenFinishAsync(
-                    closedVictim.SegmentId,
-                    requirePolicyEligibility: true,
-                    sourceAccountingHint: closedVictim,
-                    continuingOpenCompaction: false,
-                    cancellationToken)
-                .ConfigureAwait(false),
-            pressure);
+        return await CompactThenFinishAsync(
+                closedVictim.SegmentId,
+                requirePolicyEligibility: true,
+                sourceAccountingHint: closedVictim,
+                continuingOpenCompaction: false,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Catalogue snapshot without Closed sources that already have an open uncommitted compaction.
+    /// </summary>
+    private IReadOnlyList<SegmentInfo> CatalogueSnapshotExcludingOpenUncommittedSources()
+    {
+        HashSet<ulong>? openSources = null;
+        foreach (var entry in _engine.Journal.EnumerateOpenCompactions())
+        {
+            if (entry.Committed || entry.Retired is not null)
+            {
+                continue;
+            }
+
+            openSources ??= new HashSet<ulong>();
+            _ = openSources.Add(entry.Begin.SourceSegmentId.Value);
+        }
+
+        var snapshot = _engine.Catalogue.Snapshot();
+        if (openSources is null || openSources.Count == 0)
+        {
+            return snapshot;
+        }
+
+        var filtered = new List<SegmentInfo>(snapshot.Count);
+        foreach (var entry in snapshot)
+        {
+            if (!openSources.Contains(entry.SegmentId.Value))
+            {
+                filtered.Add(entry);
+            }
+        }
+
+        return filtered;
+    }
+
+    private static bool IsCapacityOpenCompactionZeroProgressSkip(in StorageMaintenanceResult result) =>
+        result.Outcome == StorageMaintenanceOutcome.Skipped
+        && result.SkipReason == StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress;
+
+    /// <summary>
+    /// True when Closed selection found nothing useful to attempt (preserve deferred open Skip).
+    /// </summary>
+    private static bool IsNoClosedWorkOutcome(in StorageMaintenanceResult result) =>
+        result.Outcome == StorageMaintenanceOutcome.NoWork
+        || (result.Outcome == StorageMaintenanceOutcome.Skipped
+            && !result.CompactionAttempted
+            && result.SkipReason is StorageMaintenanceSkipReasons.CapacityPressureNoFeasibleCandidate
+                or StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom);
 
     private async Task<StorageMaintenanceResult> TryReclaimRetiredAsync(
         SegmentInfo segment,

@@ -58,6 +58,22 @@ internal static class StorageMaintenanceResultAccounting
         };
     }
 
+    /// <summary>
+    /// Records that an open compaction was deferred this run after capacity zero-progress
+    /// (Phase 5F.3), without claiming that deferred compaction as the primary outcome.
+    /// </summary>
+    public static StorageMaintenanceResult WithDeferredOpenCompaction(
+        this StorageMaintenanceResult result,
+        in StorageMaintenanceResult deferredOpenSkip)
+    {
+        return result with
+        {
+            DeferredOpenCompactionId = deferredOpenSkip.CompactionId,
+            DeferredOpenSourceSegmentId = deferredOpenSkip.SegmentId,
+            DeferredOpenSkipReason = deferredOpenSkip.SkipReason,
+        };
+    }
+
     private static double ComputeDeadRatio(long sizeBytes, long deadBytes) =>
         sizeBytes > 0 ? (double)deadBytes / sizeBytes : 0d;
 }

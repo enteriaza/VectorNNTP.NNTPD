@@ -59,6 +59,15 @@ public enum StorageMaintenanceOutcome : byte
 /// <param name="CapacityTotalBytes">Observed DriveInfo TotalBytes when capacity admission is enabled.</param>
 /// <param name="CapacityArticleReservedBytes">Observed process-local article reservations.</param>
 /// <param name="CapacityCompactionReservedBytes">Observed process-local compaction reservations.</param>
+/// <param name="DeferredOpenCompactionId">
+/// When Phase 5F.3 fall-through deferred an open compaction after capacity zero-progress,
+/// the deferred compaction id (null when none).
+/// </param>
+/// <param name="DeferredOpenSourceSegmentId">Source segment of the deferred open compaction.</param>
+/// <param name="DeferredOpenSkipReason">
+/// Skip reason from the deferred open compaction (typically
+/// <see cref="StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress"/>).
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -81,4 +90,7 @@ public readonly record struct StorageMaintenanceResult(
     long? CapacityUsedBytes = null,
     long? CapacityTotalBytes = null,
     long? CapacityArticleReservedBytes = null,
-    long? CapacityCompactionReservedBytes = null);
+    long? CapacityCompactionReservedBytes = null,
+    ulong? DeferredOpenCompactionId = null,
+    SegmentId? DeferredOpenSourceSegmentId = null,
+    string? DeferredOpenSkipReason = null);
