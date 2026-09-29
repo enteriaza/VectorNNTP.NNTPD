@@ -23,7 +23,7 @@ internal static class StorageServerTestOptions
             AcmeDirectoryUrl = StorageServerOptions.DefaultAcmeDirectoryUrl,
             AcmeRenewalThresholdDays = StorageServerOptions.DefaultAcmeRenewalThresholdDays,
             AcmeStateDir = "certs/",
-            LogDirectory = "logs",
+            LogDirectory = "logs/storage",
             CertificateDirectory = "certs",
             ApplicationName = "VectorNNTP.StorageServer",
             GracefulShutdownTimeout = TimeSpan.FromSeconds(30),

@@ -58,4 +58,34 @@ internal static partial class HostingLogMessages
         Level = LogLevel.Error,
         Message = "Application shutdown completed with failure")]
     public static partial void ShutdownCompletedWithFailure(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1209,
+        Level = LogLevel.Information,
+        Message = "Application logging initialized Application={Application} Provider={Provider} Category={Category} Environment={Environment} ContentRoot={ContentRoot}")]
+    public static partial void LoggingInitialized(
+        ILogger logger,
+        string Application,
+        string Provider,
+        string Category,
+        string Environment,
+        string ContentRoot);
+
+    [LoggerMessage(
+        EventId = 1210,
+        Level = LogLevel.Debug,
+        Message = "StorageServer bind addresses configured Tokens={Tokens} IPv4={IPv4} IPv6={IPv6}")]
+    public static partial void BindAddressesConfigured(ILogger logger, string Tokens, string IPv4, string IPv6);
+
+    [LoggerMessage(
+        EventId = 1211,
+        Level = LogLevel.Debug,
+        Message = "StorageServer TLS listener endpoints planned Endpoints={Endpoints}")]
+    public static partial void TlsListenerEndpointsPlanned(ILogger logger, string Endpoints);
+
+    [LoggerMessage(
+        EventId = 1212,
+        Level = LogLevel.Debug,
+        Message = "StorageServer Cloudflare DNS addresses A={IPv4} AAAA={IPv6}")]
+    public static partial void CloudflareDnsAddressesResolved(ILogger logger, string IPv4, string IPv6);
 }
