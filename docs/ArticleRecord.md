@@ -13,7 +13,7 @@ This document describes the **current** implementation. It does not invent APIs,
 | History identity reuse (same bytes, not a second hash) | `src/VectorNNTP.NNTPD/History/HistoryDigest.cs` |
 | OverviewDB RabbitMQ transport | `src/VectorNNTP.NNTPD/` (topology, confirms, expiration, AppId) |
 
-NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admission. The NNTPD ingestion worker encodes a compact protobuf OverviewDB handoff (`OverviewArticleV1` in `VectorNNTP.Common`) and publishes those bytes to RabbitMQ `overviewdb.queue`. RabbitMQ remains application-owned. ArticleRecord is **not** a serialization protocol of its own and is not wired into BackFiller ingestion, article-work RPC JSON, retention, storage, or transit.
+NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admission. NNTPD ingestion workers encode a compact protobuf OverviewDB handoff (`OverviewArticleV1` in `VectorNNTP.Common`) and publish those bytes to RabbitMQ `overviewdb.queue`. RabbitMQ remains application-owned. ArticleRecord is **not** a serialization protocol of its own and is not wired into BackFiller ingestion, article-work RPC JSON, retention, storage, or transit.
 
 ---
 

@@ -438,6 +438,85 @@ public sealed class NntpdOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_Succeeds_ForDefaultIngestionWorkerPoolSettings()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        var ingestion = options.ArticleIngestion;
+        Assert.Equal(ArticleIngestionOptions.DefaultMinWorkers, ingestion.MinWorkers);
+        Assert.Equal(ArticleIngestionOptions.DefaultMaxWorkers, ingestion.MaxWorkers);
+        Assert.Equal(ArticleIngestionOptions.DefaultMaxPublishConcurrency, ingestion.MaxPublishConcurrency);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenMaxWorkersLessThanMinWorkers()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.ArticleIngestion.MinWorkers = 4;
+        options.ArticleIngestion.MaxWorkers = 2;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains("MaxWorkers", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_Fails_WhenScaleUpThresholdNotGreaterThanScaleDown()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.ArticleIngestion.ScaleUpPressureThreshold = 0.2;
+        options.ArticleIngestion.ScaleDownPressureThreshold = 0.2;
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains("ScaleUpPressureThreshold", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(513)]
+    public void Validate_Fails_ForInvalidMinWorkers(int minWorkers)
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.ArticleIngestion.MinWorkers = minWorkers;
+        options.ArticleIngestion.MaxWorkers = Math.Max(minWorkers, 1);
+        var result = CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains("MinWorkers", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BindConfiguration_HonoursIngestionWorkerPoolSettings()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Nntpd:ArticleIngestion:MinWorkers"] = "3",
+                ["Nntpd:ArticleIngestion:MaxWorkers"] = "12",
+                ["Nntpd:ArticleIngestion:MaxPublishConcurrency"] = "8",
+                ["Nntpd:ArticleIngestion:ScaleIntervalSeconds"] = "5",
+                ["Nntpd:ArticleIngestion:ScaleUpPressureThreshold"] = "0.55",
+                ["Nntpd:ArticleIngestion:ScaleDownPressureThreshold"] = "0.15",
+                ["Nntpd:ArticleIngestion:ScaleUpConsecutiveIntervals"] = "4",
+                ["Nntpd:ArticleIngestion:ScaleDownConsecutiveIntervals"] = "6",
+            })
+            .Build();
+        var options = new NntpdOptions();
+        configuration.GetSection("Nntpd").Bind(options);
+        Assert.Equal(3, options.ArticleIngestion.MinWorkers);
+        Assert.Equal(12, options.ArticleIngestion.MaxWorkers);
+        Assert.Equal(8, options.ArticleIngestion.MaxPublishConcurrency);
+        Assert.Equal(5, options.ArticleIngestion.ScaleIntervalSeconds);
+        Assert.Equal(0.55, options.ArticleIngestion.ScaleUpPressureThreshold);
+        Assert.Equal(0.15, options.ArticleIngestion.ScaleDownPressureThreshold);
+        Assert.Equal(4, options.ArticleIngestion.ScaleUpConsecutiveIntervals);
+        Assert.Equal(6, options.ArticleIngestion.ScaleDownConsecutiveIntervals);
+
+        var valid = TestHostFactory.CreateValidOptions();
+        valid.ArticleIngestion = options.ArticleIngestion;
+        Assert.True(CreateValidator().Validate(null, valid).Succeeded);
+    }
+
+    [Fact]
     public void LogDir_DefaultsToLogsSlash()
     {
         Assert.Equal("logs/", NntpdOptions.DefaultLogDir);

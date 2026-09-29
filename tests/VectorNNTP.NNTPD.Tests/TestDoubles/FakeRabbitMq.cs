@@ -167,6 +167,9 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
     /// <summary>When set, <see cref="CreatePublishChannelAsync"/> throws this exception.</summary>
     public Exception? CreatePublishChannelException { get; set; }
 
+    /// <summary>Optional configurator invoked for every newly created publish channel.</summary>
+    public Action<FakeRabbitMqPublishChannel>? ConfigurePublishChannel { get; set; }
+
     /// <summary>When set, <see cref="CreateTopologyChannelAsync"/> throws this exception.</summary>
     public Exception? CreateTopologyChannelException { get; set; }
 
@@ -262,6 +265,7 @@ internal sealed class FakeRabbitMqConnection : IRabbitMqConnection
         }
 
         var channel = new FakeRabbitMqPublishChannel(generation);
+        ConfigurePublishChannel?.Invoke(channel);
         PublishChannels.Add(channel);
         return Task.FromResult<IRabbitMqPublishChannel>(channel);
     }
@@ -621,6 +625,12 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
     /// </summary>
     public bool CloseBeforePublish { get; set; }
 
+    /// <summary>
+    /// Optional await injected after open checks and before recording a successful confirm.
+    /// Used by concurrency tests to observe in-flight publishes.
+    /// </summary>
+    public Func<Task>? BeforeConfirmAsync { get; set; }
+
     /// <inheritdoc />
     public async Task PublishConfirmedAsync(
         string exchange,
@@ -650,6 +660,11 @@ internal sealed class FakeRabbitMqPublishChannel : IRabbitMqPublishChannel
         if (!IsOpen)
         {
             throw new InvalidOperationException("RabbitMQ publish channel is not open.");
+        }
+
+        if (BeforeConfirmAsync is not null)
+        {
+            await BeforeConfirmAsync().ConfigureAwait(false);
         }
 
         if (RemainingPublishFailures > 0)

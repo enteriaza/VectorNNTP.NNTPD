@@ -86,7 +86,7 @@ internal static partial class ApplicationTelemetryLogMessages
     [LoggerMessage(
         EventId = 2405,
         Level = LogLevel.Information,
-        Message = "OverviewDbHandoff gate_p95_ms={GateP95Ms} pub_p95_ms={PublishP95Ms} confirm_avg_ms={ConfirmAvgMs} confirm_p95_ms={ConfirmP95Ms} handoff_avg_ms={HandoffAvgMs} handoff_p95_ms={HandoffP95Ms} confirm_busy_pct={ConfirmBusyPct:F1} fail={ConfirmFailures} timeout={ConfirmTimeouts}")]
+        Message = "OverviewDbHandoff gate_p95_ms={GateP95Ms} pub_p95_ms={PublishP95Ms} confirm_avg_ms={ConfirmAvgMs} confirm_p95_ms={ConfirmP95Ms} handoff_avg_ms={HandoffAvgMs} handoff_p95_ms={HandoffP95Ms} confirm_busy_pct={ConfirmBusyPct:F1} fail={ConfirmFailures} timeout={ConfirmTimeouts} in_flight={InFlightPublishes} in_flight_max={MaxInFlightPublishes}")]
     public static partial void OverviewDbHandoff(
         ILogger logger,
         long GateP95Ms,
@@ -97,7 +97,9 @@ internal static partial class ApplicationTelemetryLogMessages
         long HandoffP95Ms,
         double ConfirmBusyPct,
         long ConfirmFailures,
-        long ConfirmTimeouts);
+        long ConfirmTimeouts,
+        int InFlightPublishes,
+        int MaxInFlightPublishes);
 
     [LoggerMessage(
         EventId = 2406,
@@ -117,4 +119,18 @@ internal static partial class ApplicationTelemetryLogMessages
         long BudgetWaitP95Ms,
         long BudgetWaits,
         int BudgetExhausted);
+
+    [LoggerMessage(
+        EventId = 2407,
+        Level = LogLevel.Information,
+        Message = "IngestionWorkerPool workers={Workers} min={MinWorkers} max={MaxWorkers} scale_up={ScaleUps} scale_down={ScaleDowns} queue_util={QueueUtilisation:F3} waiting={WaitingProducers}")]
+    public static partial void IngestionWorkerPool(
+        ILogger logger,
+        int Workers,
+        int MinWorkers,
+        int MaxWorkers,
+        long ScaleUps,
+        long ScaleDowns,
+        double QueueUtilisation,
+        int WaitingProducers);
 }

@@ -237,7 +237,13 @@ public sealed class IncomingSpoolOverviewHandoffTests
             persister,
             Options.Create(new NntpdOptions
             {
-                ArticleIngestion = new ArticleIngestionOptions(),
+                ArticleIngestion = new ArticleIngestionOptions
+                {
+                    MinWorkers = 1,
+                    MaxWorkers = 1,
+                    MaxPublishConcurrency = 1,
+                    ScaleIntervalSeconds = 3600,
+                },
                 Transit = new TransitOptions { WantTrash = true, LogTrash = true },
             }),
             NullLogger<IncomingSpoolWriterService>.Instance,

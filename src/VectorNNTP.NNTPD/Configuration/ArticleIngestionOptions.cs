@@ -59,4 +59,96 @@ public sealed class ArticleIngestionOptions
     /// </remarks>
     [Range(1, 100 * 1024 * 1024)]
     public int MaxArticleBytes { get; set; } = DefaultMaxArticleBytes;
+
+    /// <summary>Default minimum concurrent ingestion workers.</summary>
+    public const int DefaultMinWorkers = 2;
+
+    /// <summary>Default maximum concurrent ingestion workers.</summary>
+    public const int DefaultMaxWorkers = 32;
+
+    /// <summary>Default maximum outstanding OverviewDB publisher confirms.</summary>
+    public const int DefaultMaxPublishConcurrency = 32;
+
+    /// <summary>Default worker-pool scaling sample interval in seconds.</summary>
+    public const int DefaultScaleIntervalSeconds = 2;
+
+    /// <summary>Default sustained high-pressure threshold (byte utilisation / wait signal).</summary>
+    public const double DefaultScaleUpPressureThreshold = 0.40;
+
+    /// <summary>Default sustained low-pressure threshold.</summary>
+    public const double DefaultScaleDownPressureThreshold = 0.10;
+
+    /// <summary>Default consecutive high-pressure intervals required before +1 worker.</summary>
+    public const int DefaultScaleUpConsecutiveIntervals = 2;
+
+    /// <summary>Default consecutive low-pressure intervals required before −1 worker.</summary>
+    public const int DefaultScaleDownConsecutiveIntervals = 3;
+
+    /// <summary>
+    /// Gets or sets the minimum number of concurrent ingestion workers.
+    /// </summary>
+    /// <remarks>Valid range is <c>1–512</c>. Default is <see cref="DefaultMinWorkers"/>.</remarks>
+    [Range(1, 512)]
+    public int MinWorkers { get; set; } = DefaultMinWorkers;
+
+    /// <summary>
+    /// Gets or sets the maximum number of concurrent ingestion workers.
+    /// </summary>
+    /// <remarks>
+    /// Must be greater than or equal to <see cref="MinWorkers"/>. Valid range is <c>1–512</c>.
+    /// Default is <see cref="DefaultMaxWorkers"/>.
+    /// </remarks>
+    [Range(1, 512)]
+    public int MaxWorkers { get; set; } = DefaultMaxWorkers;
+
+    /// <summary>
+    /// Gets or sets the maximum number of outstanding OverviewDB publisher confirms.
+    /// </summary>
+    /// <remarks>
+    /// Bounds leased confirm-enabled RabbitMQ publish channels. Independent of
+    /// <see cref="MaxWorkers"/> but typically set to the same order of magnitude.
+    /// Valid range is <c>1–512</c>. Default is <see cref="DefaultMaxPublishConcurrency"/>.
+    /// </remarks>
+    [Range(1, 512)]
+    public int MaxPublishConcurrency { get; set; } = DefaultMaxPublishConcurrency;
+
+    /// <summary>
+    /// Gets or sets the worker-pool scaling sample interval in seconds.
+    /// </summary>
+    /// <remarks>Valid range is <c>1–3600</c>. Default is <see cref="DefaultScaleIntervalSeconds"/>.</remarks>
+    [Range(1, 3600)]
+    public int ScaleIntervalSeconds { get; set; } = DefaultScaleIntervalSeconds;
+
+    /// <summary>
+    /// Gets or sets the sustained pressure threshold that triggers scale-up.
+    /// </summary>
+    /// <remarks>
+    /// Pressure is the greater of queue byte utilisation and a waiting-producer
+    /// signal. Must be strictly greater than <see cref="ScaleDownPressureThreshold"/>.
+    /// Valid range is <c>0–1</c>.
+    /// </remarks>
+    [Range(0, 1)]
+    public double ScaleUpPressureThreshold { get; set; } = DefaultScaleUpPressureThreshold;
+
+    /// <summary>
+    /// Gets or sets the sustained pressure threshold that triggers scale-down.
+    /// </summary>
+    /// <remarks>
+    /// Must be strictly less than <see cref="ScaleUpPressureThreshold"/>.
+    /// Valid range is <c>0–1</c>.
+    /// </remarks>
+    [Range(0, 1)]
+    public double ScaleDownPressureThreshold { get; set; } = DefaultScaleDownPressureThreshold;
+
+    /// <summary>
+    /// Gets or sets how many consecutive high-pressure samples are required before adding one worker.
+    /// </summary>
+    [Range(1, 100)]
+    public int ScaleUpConsecutiveIntervals { get; set; } = DefaultScaleUpConsecutiveIntervals;
+
+    /// <summary>
+    /// Gets or sets how many consecutive low-pressure samples are required before removing one worker.
+    /// </summary>
+    [Range(1, 100)]
+    public int ScaleDownConsecutiveIntervals { get; set; } = DefaultScaleDownConsecutiveIntervals;
 }

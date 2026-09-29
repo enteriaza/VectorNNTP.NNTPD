@@ -131,6 +131,56 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxArticleBytes)} must be between 1 and 104857600.");
         }
+
+        if (ingestion.MinWorkers is < 1 or > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MinWorkers)} must be between 1 and 512.");
+        }
+
+        if (ingestion.MaxWorkers is < 1 or > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxWorkers)} must be between 1 and 512.");
+        }
+
+        if (ingestion.MaxWorkers < ingestion.MinWorkers)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxWorkers)} must be greater than or equal to {nameof(ArticleIngestionOptions.MinWorkers)}.");
+        }
+
+        if (ingestion.MaxPublishConcurrency is < 1 or > 512)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxPublishConcurrency)} must be between 1 and 512.");
+        }
+
+        if (ingestion.ScaleIntervalSeconds is < 1 or > 3600)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleIntervalSeconds)} must be between 1 and 3600.");
+        }
+
+        if (ingestion.ScaleUpPressureThreshold is < 0 or > 1)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleUpPressureThreshold)} must be between 0 and 1.");
+        }
+
+        if (ingestion.ScaleDownPressureThreshold is < 0 or > 1)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleDownPressureThreshold)} must be between 0 and 1.");
+        }
+
+        if (ingestion.ScaleUpPressureThreshold <= ingestion.ScaleDownPressureThreshold)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleUpPressureThreshold)} must be greater than {nameof(ArticleIngestionOptions.ScaleDownPressureThreshold)}.");
+        }
+
+        if (ingestion.ScaleUpConsecutiveIntervals is < 1 or > 100)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleUpConsecutiveIntervals)} must be between 1 and 100.");
+        }
+
+        if (ingestion.ScaleDownConsecutiveIntervals is < 1 or > 100)
+        {
+            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.ScaleDownConsecutiveIntervals)} must be between 1 and 100.");
+        }
     }
 
     private static void ValidateTransitQueueMemoryLimit(NntpdOptions options, List<string> failures)

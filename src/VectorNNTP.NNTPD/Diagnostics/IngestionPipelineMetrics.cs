@@ -43,6 +43,13 @@ public sealed class IngestionPipelineMetrics
     private int _maxQueueDepth;
     private int _maxTakeThisOccupied;
     private int _maxTakeThisProcessing;
+    private int _currentWorkers;
+    private int _minWorkers;
+    private int _maxWorkers;
+    private int _inFlightPublishes;
+    private int _maxInFlightPublishes;
+    private long _scaleUps;
+    private long _scaleDowns;
 
     /// <summary>Records time spent blocked in <c>DequeueAsync</c>.</summary>
     public void RecordDequeueWait(long startTimestamp) => _dequeueWait.Record(startTimestamp);
@@ -156,6 +163,27 @@ public sealed class IngestionPipelineMetrics
         UpdateMax(ref _maxTakeThisProcessing, processing);
     }
 
+    /// <summary>Records the configured worker-pool bounds and current worker count.</summary>
+    public void ObserveWorkerPool(int currentWorkers, int minWorkers, int maxWorkers)
+    {
+        Volatile.Write(ref _currentWorkers, Math.Max(0, currentWorkers));
+        Volatile.Write(ref _minWorkers, Math.Max(0, minWorkers));
+        Volatile.Write(ref _maxWorkers, Math.Max(0, maxWorkers));
+    }
+
+    /// <summary>Records the current number of leased OverviewDB publish slots.</summary>
+    public void ObserveInFlightPublishes(int inFlight)
+    {
+        Volatile.Write(ref _inFlightPublishes, Math.Max(0, inFlight));
+        UpdateMax(ref _maxInFlightPublishes, inFlight);
+    }
+
+    /// <summary>Records one worker-pool scale-up decision.</summary>
+    public void RecordScaleUp() => Interlocked.Increment(ref _scaleUps);
+
+    /// <summary>Records one worker-pool scale-down decision.</summary>
+    public void RecordScaleDown() => Interlocked.Increment(ref _scaleDowns);
+
     /// <summary>Captures interval totals and resets histograms and counters.</summary>
     public IngestionPipelineSnapshot CaptureInterval()
     {
@@ -170,6 +198,13 @@ public sealed class IngestionPipelineMetrics
             Interlocked.Exchange(ref _maxQueueDepth, 0),
             Interlocked.Exchange(ref _maxTakeThisOccupied, 0),
             Interlocked.Exchange(ref _maxTakeThisProcessing, 0),
+            Volatile.Read(ref _currentWorkers),
+            Volatile.Read(ref _minWorkers),
+            Volatile.Read(ref _maxWorkers),
+            Volatile.Read(ref _inFlightPublishes),
+            Interlocked.Exchange(ref _maxInFlightPublishes, 0),
+            Interlocked.Exchange(ref _scaleUps, 0),
+            Interlocked.Exchange(ref _scaleDowns, 0),
             _dequeueWait.CaptureAndReset(),
             _toPublishStart.CaptureAndReset(),
             _encode.CaptureAndReset(),
@@ -223,6 +258,13 @@ public readonly struct IngestionPipelineSnapshot
         int maxQueueDepth,
         int maxTakeThisOccupied,
         int maxTakeThisProcessing,
+        int currentWorkers,
+        int minWorkers,
+        int maxWorkers,
+        int inFlightPublishes,
+        int maxInFlightPublishes,
+        long scaleUps,
+        long scaleDowns,
         DurationSnapshot dequeueWait,
         DurationSnapshot toPublishStart,
         DurationSnapshot encode,
@@ -249,6 +291,13 @@ public readonly struct IngestionPipelineSnapshot
         MaxQueueDepth = maxQueueDepth;
         MaxTakeThisOccupied = maxTakeThisOccupied;
         MaxTakeThisProcessing = maxTakeThisProcessing;
+        CurrentWorkers = currentWorkers;
+        MinWorkers = minWorkers;
+        MaxWorkers = maxWorkers;
+        InFlightPublishes = inFlightPublishes;
+        MaxInFlightPublishes = maxInFlightPublishes;
+        ScaleUps = scaleUps;
+        ScaleDowns = scaleDowns;
         DequeueWait = dequeueWait;
         ToPublishStart = toPublishStart;
         Encode = encode;
@@ -295,6 +344,27 @@ public readonly struct IngestionPipelineSnapshot
 
     /// <summary>Gets the interval high-water concurrent ProcessArticleAsync count.</summary>
     public int MaxTakeThisProcessing { get; }
+
+    /// <summary>Gets the worker count observed at capture.</summary>
+    public int CurrentWorkers { get; }
+
+    /// <summary>Gets the configured minimum worker count.</summary>
+    public int MinWorkers { get; }
+
+    /// <summary>Gets the configured maximum worker count.</summary>
+    public int MaxWorkers { get; }
+
+    /// <summary>Gets in-flight OverviewDB publishes at capture.</summary>
+    public int InFlightPublishes { get; }
+
+    /// <summary>Gets the interval high-water in-flight OverviewDB publishes.</summary>
+    public int MaxInFlightPublishes { get; }
+
+    /// <summary>Gets scale-up events in the interval.</summary>
+    public long ScaleUps { get; }
+
+    /// <summary>Gets scale-down events in the interval.</summary>
+    public long ScaleDowns { get; }
 
     /// <summary>Gets dequeue-wait samples.</summary>
     public DurationSnapshot DequeueWait { get; }

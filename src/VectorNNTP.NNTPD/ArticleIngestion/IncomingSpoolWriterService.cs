@@ -10,33 +10,38 @@ using VectorNNTP.NNTPD.Newsgroups;
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
 /// <summary>
-/// Background application service that drains CanonicalV1 queued articles.
+/// Background application service that drains CanonicalV1 queued articles through
+/// a dynamically sized <see cref="IngestionWorkerPool"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The queue guarantee is a CanonicalV1 <c>ArticleRecord</c>. This worker does
-/// not destuff, parse, or construct records. After dequeue it publishes a compact
-/// OverviewDB protobuf message to <c>overviewdb.queue</c> and waits for a RabbitMQ
-/// publisher confirmation. On confirm it classifies <c>+</c>/<c>j</c> and emits
-/// those events through <see cref="INewsLogWriter"/> (production: Serilog), writes
-/// the canonical <c>ArticleRecord.Path</c> to the dedicated Path-survey stream
+/// The queue guarantee is a CanonicalV1 <c>ArticleRecord</c>. Workers do not
+/// destuff, parse, or construct records. After dequeue each worker publishes a
+/// compact OverviewDB protobuf message to <c>overviewdb.queue</c> and waits for a
+/// RabbitMQ publisher confirmation on a leased confirm-enabled channel. On confirm
+/// it classifies <c>+</c>/<c>j</c> and emits those events through
+/// <see cref="INewsLogWriter"/> (production: Serilog), writes the canonical
+/// <c>ArticleRecord.Path</c> to the dedicated Path-survey stream
 /// (<see cref="IPathSurveyWriter"/>), then continues to the existing
 /// <see cref="IIncomingArticlePersister"/> (/dev/null no-op). A failed confirm or
 /// publish is treated as incomplete: the article is requeued through
 /// <see cref="IArticleIngestionQueue.EnqueueAsync"/>. Rejected articles never
-/// reach this worker; <c>-</c> is emitted at the protocol decision. Moderated
+/// reach this service; <c>-</c> is emitted at the protocol decision. Moderated
 /// POST (<c>m</c>) is emitted at the moderation-success decision and never enters
 /// the queue. Path-survey observations are not written for articles that never
 /// become a CanonicalV1 queued record.
 /// </para>
 /// <para>
+/// Multiple workers may be in-flight concurrently. Outstanding OverviewDB
+/// publishes are bounded by <see cref="ArticleIngestionOptions.MaxPublishConcurrency"/>
+/// via leased RabbitMQ publish channels. Worker count scales between
+/// <see cref="ArticleIngestionOptions.MinWorkers"/> and
+/// <see cref="ArticleIngestionOptions.MaxWorkers"/> from sustained queue pressure.
 /// A news-log or Path-survey failure is reported through
 /// <see cref="SpoolLogMessages.NewsLogFailed"/> /
 /// <see cref="SpoolLogMessages.PathSurveyFailed"/> and does not re-admit,
 /// re-queue, or emit a second NNTP response. The article still proceeds to the
-/// persister after a successful OverviewDB handoff. Path observations are
-/// streamed to disk and are not retained in memory. Completed daily files are
-/// handed to background ninpaths processing after rotation. The worker never calls
+/// persister after a successful OverviewDB handoff. The worker never calls
 /// OverviewDB over RPC, HTTP, gRPC, or a database connection.
 /// </para>
 /// </remarks>
@@ -53,9 +58,11 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IFeedDiagnostics _feedDiagnostics;
     private readonly IngestionPipelineMetrics? _pipeline;
     private readonly TimeProvider _time;
+    private readonly Func<IngestionPressureSnapshot>? _samplePressure;
     private readonly CancellationTokenSource _runCts = new();
     private Task? _execution;
     private int _started;
+    private IngestionWorkerPool? _pool;
 
     /// <summary>Initializes a new instance of the <see cref="IncomingSpoolWriterService"/> class.</summary>
     public IncomingSpoolWriterService(
@@ -69,7 +76,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         TimeProvider? timeProvider = null,
         IOverviewDbHandoffPublisher? overviewHandoff = null,
         IngestionPipelineMetrics? pipelineMetrics = null,
-        IPathSurveyWriter? pathSurvey = null)
+        IPathSurveyWriter? pathSurvey = null,
+        Func<IngestionPressureSnapshot>? samplePressure = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -86,6 +94,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _time = timeProvider ?? TimeProvider.System;
         _overviewHandoff = overviewHandoff ?? NullOverviewDbHandoffPublisher.Instance;
         _pipeline = pipelineMetrics;
+        _samplePressure = samplePressure;
     }
 
     /// <inheritdoc />
@@ -93,6 +102,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
     /// <inheritdoc />
     public Task? Execution => _execution;
+
+    /// <summary>Gets the active worker pool (tests).</summary>
+    internal IngestionWorkerPool? Pool => _pool;
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -102,7 +114,23 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             return Task.CompletedTask;
         }
 
-        _execution = Task.Run(() => RunAsync(_runCts.Token), CancellationToken.None);
+        var ingestion = _options.Value.ArticleIngestion ?? new ArticleIngestionOptions();
+        SpoolLogMessages.WriterStarted(
+            _logger,
+            _queue.MemoryLimitBytes,
+            _queue.MaxArticleBytes,
+            ingestion.IncomingDirectory
+            ?? ArticleIngestionOptions.DefaultIncomingDirectory);
+
+        _pool = new IngestionWorkerPool(
+            _queue,
+            ProcessArticleAsync,
+            ingestion,
+            _logger,
+            _pipeline,
+            _samplePressure,
+            _time);
+        _execution = Task.Run(() => _pool.RunAsync(_runCts.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
@@ -146,92 +174,55 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             SpoolLogMessages.PathSurveyFlushFailed(_logger, ex);
         }
-    }
-
-    private async Task RunAsync(CancellationToken cancellationToken)
-    {
-        SpoolLogMessages.WriterStarted(
-            _logger,
-            _queue.MemoryLimitBytes,
-            _queue.MaxArticleBytes,
-            _options.Value.ArticleIngestion?.IncomingDirectory
-            ?? ArticleIngestionOptions.DefaultIncomingDirectory);
-
-        while (true)
-        {
-            InboundArticle? article;
-            var idleStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            try
-            {
-                article = await _queue.DequeueAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
-                _pipeline?.RecordDequeueWait(idleStart);
-                break;
-            }
-
-            _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
-            _pipeline?.RecordDequeueWait(idleStart);
-
-            if (article is null)
-            {
-                break;
-            }
-
-            var itemStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            _pipeline?.ObserveQueueDepth(_queue.Count + 1);
-            var persisted = false;
-            var overviewAccepted = false;
-            _feedDiagnostics.BeginSpoolWork();
-            try
-            {
-                await PublishOverviewAsync(article, itemStart, CancellationToken.None).ConfigureAwait(false);
-                overviewAccepted = true;
-                var newsStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                WriteNewsLog(article);
-                _pipeline?.RecordNews(newsStart);
-                WritePathSurvey(article);
-                var persistStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
-                _pipeline?.RecordPersist(persistStart);
-                persisted = true;
-            }
-            catch (Exception ex)
-            {
-                if (!overviewAccepted)
-                {
-                    OverviewDbHandoffLogMessages.PublishFailed(
-                        _logger,
-                        ex,
-                        article.MessageId,
-                        article.Payload.Length);
-                    await RequeueAsync(article).ConfigureAwait(false);
-                }
-                else
-                {
-                    SpoolLogMessages.PersistFailed(
-                        _logger,
-                        ex,
-                        article.MessageId,
-                        article.Payload.Length);
-                }
-            }
-            finally
-            {
-                _pipeline?.AddBusyTicks(System.Diagnostics.Stopwatch.GetTimestamp() - itemStart);
-                _pipeline?.RecordWorkerItem(itemStart);
-                _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
-            }
-
-            if (cancellationToken.IsCancellationRequested && _queue.Count == 0)
-            {
-                break;
-            }
-        }
 
         SpoolLogMessages.WriterStopped(_logger);
+    }
+
+    private async Task ProcessArticleAsync(
+        InboundArticle article,
+        long itemStart,
+        CancellationToken cancellationToken)
+    {
+        var persisted = false;
+        var overviewAccepted = false;
+        _feedDiagnostics.BeginSpoolWork();
+        try
+        {
+            await PublishOverviewAsync(article, itemStart, cancellationToken).ConfigureAwait(false);
+            overviewAccepted = true;
+            var newsStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            WriteNewsLog(article);
+            _pipeline?.RecordNews(newsStart);
+            WritePathSurvey(article);
+            var persistStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
+            _pipeline?.RecordPersist(persistStart);
+            persisted = true;
+        }
+        catch (Exception ex)
+        {
+            if (!overviewAccepted)
+            {
+                OverviewDbHandoffLogMessages.PublishFailed(
+                    _logger,
+                    ex,
+                    article.MessageId,
+                    article.Payload.Length);
+                await RequeueAsync(article).ConfigureAwait(false);
+            }
+            else
+            {
+                SpoolLogMessages.PersistFailed(
+                    _logger,
+                    ex,
+                    article.MessageId,
+                    article.Payload.Length);
+            }
+        }
+        finally
+        {
+            _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
+        }
     }
 
     /// <summary>

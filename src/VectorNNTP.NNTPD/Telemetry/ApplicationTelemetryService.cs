@@ -260,7 +260,22 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
             snapshot.Handoff.P95Ms,
             snapshot.ConfirmBusyPercent,
             snapshot.ConfirmFailures,
-            snapshot.ConfirmTimeouts);
+            snapshot.ConfirmTimeouts,
+            snapshot.InFlightPublishes,
+            snapshot.MaxInFlightPublishes);
+
+        var utilisation = _queue.MemoryLimitBytes <= 0
+            ? 0d
+            : Math.Clamp(_queue.QueuedBytes / (double)_queue.MemoryLimitBytes, 0d, 1d);
+        ApplicationTelemetryLogMessages.IngestionWorkerPool(
+            _logger,
+            snapshot.CurrentWorkers,
+            snapshot.MinWorkers,
+            snapshot.MaxWorkers,
+            snapshot.ScaleUps,
+            snapshot.ScaleDowns,
+            utilisation,
+            _queue.WaitingProducerCount);
 
         var budgetExhausted = _queue.WaitingProducerCount > 0
             || _queue.QueuedBytes >= _queue.MemoryLimitBytes

@@ -47,6 +47,14 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
+| `ArticleIngestion:MinWorkers` | int | `2` | no | Minimum concurrent ingestion workers (`1–512`) |
+| `ArticleIngestion:MaxWorkers` | int | `32` | no | Maximum concurrent ingestion workers (`1–512`; ≥ `MinWorkers`) |
+| `ArticleIngestion:MaxPublishConcurrency` | int | `32` | no | Max outstanding OverviewDB publisher confirms / leased publish channels (`1–512`) |
+| `ArticleIngestion:ScaleIntervalSeconds` | int | `2` | no | Worker-pool pressure sample interval (`1–3600`) |
+| `ArticleIngestion:ScaleUpPressureThreshold` | double | `0.4` | no | Sustained pressure that triggers scale-up (`0–1`; must be greater than scale-down threshold) |
+| `ArticleIngestion:ScaleDownPressureThreshold` | double | `0.1` | no | Sustained pressure that triggers scale-down (`0–1`; must be less than scale-up threshold) |
+| `ArticleIngestion:ScaleUpConsecutiveIntervals` | int | `2` | no | Consecutive high-pressure samples before +1 worker (`1–100`) |
+| `ArticleIngestion:ScaleDownConsecutiveIntervals` | int | `3` | no | Consecutive low-pressure samples before −1 worker (`1–100`) |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
 | `Nntpd:Transit:WantTrash` | bool | `true` | no | INN `wanttrash`. TAKETHIS/IHAVE only. When `true`, articles whose `Newsgroups:` names are all unknown or RFC 6048 `j` are accepted and treated as junk internally after dequeue. When `false`, unknown/non-carried groups are rejected before enqueue (`437`/`439`) and write a `-` news line. The original `Newsgroups:` header is not rewritten. POST is not subject to this policy. |
 | `Nntpd:Transit:LogTrash` | bool | `true` | no | INN `logtrash`. When `true`, accepted-junk events write a `j` line to `{LogDir}/news`. When `false`, junk articles are still accepted; only the junk news line is omitted. Accepted (`+`), rejected (`-`), and moderated (`m`) events are still written. Path-survey (`inpaths`) observations are independent of this setting and are still written for CanonicalV1 queued articles. |
@@ -341,11 +349,31 @@ Larger values permit more burst absorption between network ingress and downstrea
 
 `ArticleIngestion:QueueCapacity` is a leftover article-count setting retained so existing configuration files still bind. It is **not** an admission bound. The historical 256-article cap was only a memory-safety choke and has been removed.
 
+## Article ingestion worker pool (`ArticleIngestion:*`)
+
+`IncomingSpoolWriterService` remains the `IApplicationService` boundary. It owns an `IngestionWorkerPool` that concurrent-dequeues from the byte-budgeted ingestion queue.
+
+- **MinWorkers / MaxWorkers** — pool starts at `MinWorkers` and never goes below it or above `MaxWorkers`.
+- **Scaling** — every `ScaleIntervalSeconds`, pressure is sampled as `max(byte utilisation, waiting-producer signal)`. Sustained pressure ≥ `ScaleUpPressureThreshold` for `ScaleUpConsecutiveIntervals` samples adds one worker. Sustained pressure ≤ `ScaleDownPressureThreshold` for `ScaleDownConsecutiveIntervals` samples removes one worker. Instantaneous single samples do not oscillate the pool.
+- **MaxPublishConcurrency** — separate bound on outstanding OverviewDB publisher confirms. Each in-flight publish leases one confirm-enabled RabbitMQ channel until the confirm await completes (RabbitMQ.Client still treats concurrent publishes on one shared `IChannel` as unsafe for framing). Workers and publish slots are independent knobs.
+- **Backpressure** — producers still wait or reject when `TransitQueueMemoryLimit` is exhausted. Scaling workers increases drain capacity; it does not enlarge the queue budget.
+- **Shutdown** — scaling stops, the queue is Completed, workers drain remaining items, all worker tasks are awaited, then publisher channels are disposed.
+
 Example:
 
 ```json
 "Nntpd": {
-  "TransitQueueMemoryLimit": 1073741824
+  "TransitQueueMemoryLimit": 4294967296,
+  "ArticleIngestion": {
+    "MinWorkers": 2,
+    "MaxWorkers": 32,
+    "MaxPublishConcurrency": 32,
+    "ScaleIntervalSeconds": 2,
+    "ScaleUpPressureThreshold": 0.4,
+    "ScaleDownPressureThreshold": 0.1,
+    "ScaleUpConsecutiveIntervals": 2,
+    "ScaleDownConsecutiveIntervals": 3
+  }
 }
 ```
 
@@ -436,7 +464,7 @@ Top-level `RabbitMQ` section (not nested under `Nntpd`). RabbitMQ is a required 
 
 `RabbitMqTopologyService` starts immediately after `RabbitMqService` and declares NNTPD-owned topology only: the internal `backfiller.storage` fanout/quorum endpoint and the one-way OverviewDB ingest queue `overviewdb.queue`. It does **not** declare per-backbone `backfiller.<backbone>` provider queues. Those are created by VectorNNTP.BackFiller when a backbone becomes usable (usable NNTP capacity), immediately before Article Work consumers start, using the same durable fanout + durable quorum queue (`x-queue-type=quorum`) + same-name binding semantics. Inactive backbones do not declare topology; becoming inactive later stops consumers but does **not** delete exchange/queue/binding. Either NNTPD or BackFiller may start first on an empty broker. Exchange, queue, and routing-key names are trimmed and invariant-lowercased. `backfiller.storage` and `overviewdb.queue` are application constants, not configuration keys. `backfiller.storage` is not a BackFiller provider. `overviewdb.queue` is a durable, non-exclusive, non-auto-delete quorum queue (`x-queue-type=quorum`, no queue-wide `x-message-ttl`) published through the AMQP default exchange with routing key `overviewdb.queue`; no dedicated OverviewDB exchange, bind, reply queue, or RPC topology is declared. All VectorNNTP-owned durable application work queues are quorum (`x-queue-type=quorum`). Exclusive auto-delete ArticleWork RPC reply queues remain non-durable classic. Declaration is fail-closed and uses RabbitMQ's idempotent declare/bind operations; incompatible existing topology is not deleted or rewritten. Connection-generation replacement does not redeclare topology. BackFiller ArticleWork availability discovery uses the RabbitMQ Management HTTP API (GET /api/queues/{vhost} with the URL-encoded virtual host, e.g. %2F for /), refreshed approximately every 5 seconds into an in-memory snapshot. A provider queue is eligible only when Management reports consumers > 0. Missing queues and zero-consumer queues are unavailable. Availability is intentionally eventually consistent (~5 seconds normal staleness). A failed Management refresh retains the last successful snapshot (last-known-good) and does not treat the outage as all-consumers-zero. AMQP remains the ArticleWork data plane; Management is the discovery plane only. Management Basic auth uses RabbitMQ:Username / RabbitMQ:Password (never log those secrets).
 
-`IncomingSpoolWriterService` encodes one Common `OverviewArticleV1` protobuf per accepted article and publishes it to `overviewdb.queue`, waiting for a publisher confirmation before treating the worker item as complete. Each publication sets a fresh AMQP `MessageId` (UUID), `AppId` to the generated `{Fqdn}`, `Expiration=2000` (per-message TTL in milliseconds; not a queue-wide TTL and not an application timer), persistent delivery mode, and `mandatory=true` so a missing or unroutable `overviewdb.queue` is returned to the publisher as a failure. A negative confirmation, unroutable/basic.return, or publish failure requeues the article on the in-memory ingestion queue. NNTPD does not call OverviewDB over RPC, HTTP, gRPC, or a database connection.
+Each ingestion worker encodes one Common `OverviewArticleV1` protobuf per accepted article and publishes it through `OverviewDbHandoffPublisher` to `overviewdb.queue`. The worker awaits that article’s publisher confirmation before marking the item complete, but other workers continue concurrently (up to `ArticleIngestion:MaxPublishConcurrency` outstanding confirms). Each publication sets a fresh AMQP `MessageId` (UUID), `AppId` to the generated `{Fqdn}`, `Expiration=2000` (per-message TTL in milliseconds; intentional short-lived handoff — not a queue-wide TTL and not an application timer), persistent delivery mode, and `mandatory=true` so a missing or unroutable `overviewdb.queue` is returned to the publisher as a failure. OverviewDB is expected to consume promptly; RabbitMQ is a short-lived handoff buffer, not a long-term backlog store. A negative confirmation, unroutable/basic.return, or publish failure requeues the article on the in-memory ingestion queue for that worker only; sibling workers are unaffected. NNTPD does not call OverviewDB over RPC, HTTP, gRPC, or a database connection.
 
 `ArticleWorkRpcService` starts immediately after topology declaration. It attaches a shared NNTPD-owned RPC reply consumer and publishes BackFiller v1 article-work requests. Every request publication carries AMQP `RequestId`, a unique `CorrelationId`, `ReplyTo`, `ContentType=application/json`, and `Expiration=1000`. Message-id ARTICLE/HEAD/BODY/STAT use that client; on Success they fetch via `IVatpArticleClient` using `uri` + `articleId`. Lookups use the sequential Backfill Scheduler (one backbone attempt at a time, weighted by active consumer count; never concurrent fan-out). The 5-second lookup deadline is the sole ArticleWork scheduler budget (application constant, not a configuration key); there is no separate longer ceiling.
 

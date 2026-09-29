@@ -735,11 +735,12 @@ public sealed class ApplicationTelemetryTests
         await using var service = CreateService(logger, pipelineMetrics: pipeline);
         service.Emit();
 
-        Assert.Equal(6, logger.Entries.Count);
+        Assert.Equal(7, logger.Entries.Count);
         Assert.All(logger.Entries, static e => Assert.Equal(LogLevel.Information, e.Level));
         var worker = Assert.Single(logger.Entries, static e => e.EventId.Id == 2404);
         var handoff = Assert.Single(logger.Entries, static e => e.EventId.Id == 2405);
         var takeThis = Assert.Single(logger.Entries, static e => e.EventId.Id == 2406);
+        var pool = Assert.Single(logger.Entries, static e => e.EventId.Id == 2407);
         Assert.Equal(1L, GetInt64(worker, "Items"));
         Assert.True(GetDouble(worker, "ArticlesPerSec") > 0);
         Assert.Equal(1L, GetInt64(handoff, "ConfirmFailures"));
@@ -748,6 +749,7 @@ public sealed class ApplicationTelemetryTests
         Assert.Contains("IngestionWorker items=", worker.Message, StringComparison.Ordinal);
         Assert.Contains("OverviewDbHandoff gate_p95_ms=", handoff.Message, StringComparison.Ordinal);
         Assert.Contains("TakeThisPipeline occupied=", takeThis.Message, StringComparison.Ordinal);
+        Assert.Contains("IngestionWorkerPool workers=", pool.Message, StringComparison.Ordinal);
 
         logger.Entries.Clear();
         service.Emit();

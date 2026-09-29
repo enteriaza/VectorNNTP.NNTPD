@@ -92,7 +92,7 @@ Sep 28 08:18:41.398 - giganews <rejected@example> 793311 yEncoding invalid
 Sep 28 08:18:41.398 m giganews <moderated@example> 123456
 ```
 
-Accepted (`+` / `j`) events are emitted by `IncomingSpoolWriterService` after a confirmed OverviewDB RabbitMQ publish. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
+Accepted (`+` / `j`) events are emitted by ingestion workers (owned by `IncomingSpoolWriterService`) after a confirmed OverviewDB RabbitMQ publish. Rejected (`-`) events are emitted at the protocol decision that produced the NNTP rejection, because rejected articles never enter the queue. Moderated (`m`) is emitted at the successful moderation decision. The component that decides the article supplies the disposition and, for `-` and `j`, the already-decided operator-facing reason; the formatter only serializes that decision.
 
 The NNTP response code is not a news field and is not rendered. INN's `- feed <message-id> reason` template has no response-code column; a code that appears inside some INN filter reason strings is not used here.
 
@@ -131,7 +131,7 @@ Path: <canonical-path>
 
 The value is the Path header bytes on the CanonicalV1 record. NNTPD does not reconstruct Path from the inbound peer, Message-ID, Newsgroups, FQDN, or any other metadata, and does not invent hops such as `giganews!nntpd01!not-for-mail`. Empty or missing `ArticleRecord.Path` follows the existing field-table semantics (empty span) and still writes `Path: ` plus the line terminator. Message-ID, Newsgroups, article size, timestamp, inbound peer, disposition, news reason, and ArticleId are not Path-survey fields.
 
-`IncomingSpoolWriterService` writes the observation after a confirmed OverviewDB publish, from the same CanonicalV1 queued `ArticleRecord` used for news `+`/`j`. Articles that never become a CanonicalV1 queued record (protocol rejections, moderated POST that never enters the queue) are not surveyed. Path-survey writes are independent of news: junk with `LogTrash=false` still records Path; a news-log failure still records Path; a Path-survey failure still writes news and still persists.
+`IncomingSpoolWriterService` workers write the observation after a confirmed OverviewDB publish, from the same CanonicalV1 queued `ArticleRecord` used for news `+`/`j`. Articles that never become a CanonicalV1 queued record (protocol rejections, moderated POST that never enters the queue) are not surveyed. Path-survey writes are independent of news: junk with `LogTrash=false` still records Path; a news-log failure still records Path; a Path-survey failure still writes news and still persists.
 
 Observations are appended sequentially to disk. They are not aggregated into ninpaths statistics at write time, not retained in an in-memory collection, and not a cache. Restarting NNTPD leaves previous Path observations on disk. After daily rotation, a background ninpaths worker streams each **completed** uncompressed file when `Nntpd:Top1000` has at least one mailbox.
 
