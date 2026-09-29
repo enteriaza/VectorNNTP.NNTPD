@@ -197,6 +197,8 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
             {
                 if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
                 {
+                    // Idempotent duplicate: best-effort LRU refresh; never replace with conflict.
+                    _ = _articleCache.Put(in record);
                     return Task.FromResult(ArticleAcceptResult.Duplicate(record.ArtId));
                 }
 
@@ -515,11 +517,35 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
                 $"IndexCommitted rejected for sequence {accept.Sequence}.");
         }
 
+        // Phase 3C: best-effort RAM populate only after durable IndexCommitted.
+        // Failure here must not undo or fail the already-durable transaction.
+        TryPopulateCacheAfterDurableCommit(accept);
+
         ThrowIfTestFault(PersistFaultPoint.AfterIndexCommitted, accept.Sequence);
         FileArticleStorageEngineLogMessages.RecoveredIndexCommitted(
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Populates the process-local cache from journal Accept ArtData after IndexCommitted.
+    /// </summary>
+    private void TryPopulateCacheAfterDurableCommit(JournalAcceptRecord accept)
+    {
+        var metadata = new StoredArticleMetadata(
+            accept.ArtId,
+            accept.ArtHash,
+            accept.ArtSize,
+            default,
+            ArticleStorageState.Present,
+            _timeProvider.GetUtcNow());
+        if (!TryCreateCacheRecord(in metadata, accept.ArtData, out var cacheRecord))
+        {
+            return;
+        }
+
+        _ = _articleCache.Put(in cacheRecord);
     }
 
     private bool TryProvePhysicalLocation(

@@ -11,7 +11,9 @@ using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
-/// <summary>Phase 3B: RAM cache integration on the durable FileArticleStorageEngine read path.</summary>
+/// <summary>
+/// Phase 3B/3C: RAM cache integration on durable FileArticleStorageEngine read and write paths.
+/// </summary>
 public sealed class FileArticleStorageEngineCacheTests
 {
     [Fact]
@@ -21,13 +23,16 @@ public sealed class FileArticleStorageEngineCacheTests
         var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
         var record = CreateRecord("<a@cache.test>");
-        _ = await engine.AcceptAsync(record, CancellationToken.None);
-        await engine.DrainPendingAsync(CancellationToken.None);
+        await AcceptAndDrainAsync(engine, record);
+        // Drop write-path population so this read is a true miss.
+        Assert.True(cache.Remove(record.ArtId));
+        cache.ResetCounters();
 
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.Equal(1, cache.TryGetCount);
         Assert.Equal(1, cache.PutCount);
+        Assert.Equal(0, cache.HitCount);
     }
 
     [Fact]
@@ -38,6 +43,8 @@ public sealed class FileArticleStorageEngineCacheTests
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
         var record = CreateRecord("<b@cache.test>");
         await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.Remove(record.ArtId));
+        cache.ResetCounters();
 
         Assert.True(engine.TryRead(record.ArtId, out _));
         Assert.Equal(1, cache.PutCount);
@@ -53,13 +60,15 @@ public sealed class FileArticleStorageEngineCacheTests
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
         var record = CreateRecord("<c@cache.test>");
         await AcceptAndDrainAsync(engine, record);
+        // Write path already populated; first read is a hit.
+        cache.ResetCounters();
         Assert.True(engine.TryRead(record.ArtId, out _));
         var putsAfterFirst = cache.PutCount;
 
         Assert.True(engine.TryRead(record.ArtId, out _));
         Assert.Equal(2, cache.TryGetCount);
         Assert.Equal(putsAfterFirst, cache.PutCount);
-        Assert.Equal(1, cache.HitCount);
+        Assert.Equal(2, cache.HitCount);
     }
 
     [Fact]
@@ -149,7 +158,8 @@ public sealed class FileArticleStorageEngineCacheTests
         await AcceptAndDrainAsync(engine, record);
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
-        Assert.Equal(1, cache.PutCount);
+        // Accept Put + read-path Put both reject oversized; durable read still succeeds.
+        Assert.True(cache.PutCount >= 2);
         Assert.Equal(ArticleMemoryCachePutOutcome.RejectedOversized, cache.LastPutOutcome);
         Assert.Equal(0, cache.Count);
     }
@@ -164,7 +174,8 @@ public sealed class FileArticleStorageEngineCacheTests
         await AcceptAndDrainAsync(engine, record);
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
-        Assert.Equal(1, cache.PutCount);
+        // Accept Put + read-path Put both fail; durable read still succeeds.
+        Assert.True(cache.PutCount >= 2);
     }
 
     [Fact]
@@ -251,36 +262,37 @@ public sealed class FileArticleStorageEngineCacheTests
     }
 
     [Fact]
-    public async Task R_Accept_Unchanged()
+    public async Task R_Accept_Alone_DoesNotPopulateCache()
     {
         using var dir = TempStorageDir.Create();
         var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<r@cache.test>");
         var accept = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accept.Outcome);
-        Assert.Equal(0, cache.PutCount); // no write-through
-        await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(0, cache.PutCount);
+        Assert.Equal(0, cache.PutCount); // journal Accept alone — no IndexCommitted yet
+        Assert.Equal(0, cache.Count);
     }
 
     [Fact]
-    public async Task STUV_Cache_DoesNotParticipateInJournalStages()
+    public async Task STUV_Recovery_PopulatesCacheOnlyAfterIndexCommitted()
     {
         using var dir = TempStorageDir.Create();
         var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<stuv@cache.test>");
-        var accept = await engine.AcceptAsync(record, CancellationToken.None);
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(0, cache.PutCount);
         Assert.Single(engine.Journal.EnumerateIncomplete());
 
         await engine.RecoverAsync(CancellationToken.None);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
-        Assert.Equal(0, cache.PutCount); // recovery does not populate cache
+        Assert.Equal(1, cache.PutCount); // after durable IndexCommitted
+        Assert.True(cache.TryGet(record.ArtId, out var cached));
+        Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.True(engine.Index.TryGet(record.ArtId, out _));
-        Assert.Equal(accept.Sequence, accept.Sequence);
     }
 
     [Fact]
@@ -428,7 +440,8 @@ public sealed class FileArticleStorageEngineCacheTests
         await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
         var record = CreateRecord("<ad@cache.test>");
         await AcceptAndDrainAsync(engine, record);
-        Assert.True(engine.TryRead(record.ArtId, out _)); // populate
+        cache.ResetCounters();
+        Assert.True(engine.TryRead(record.ArtId, out _)); // hit from write-path populate
 
         await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
         {
@@ -454,6 +467,361 @@ public sealed class FileArticleStorageEngineCacheTests
             Assert.True(engine.TryRead(record.ArtId, out var read));
             Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         }
+    }
+
+    // ---- Phase 3C write-path population ----
+
+    [Fact]
+    public async Task Write_A_SuccessfulAccept_PopulatesCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<wa@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.Equal(1, cache.PutCount);
+        Assert.Equal(1, cache.Count);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out var cached));
+        Assert.Equal(record.ArtId, cached.ArtId);
+    }
+
+    [Fact]
+    public async Task Write_BCDE_CachedArticle_MatchesAcceptedFields()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new ArticleMemoryCache(4L * 1024 * 1024);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<wbcde@cache.test>", "exact-write\r\n");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.TryGet(record.ArtId, out var cached));
+        Assert.Equal(record.ArtId, cached.ArtId);
+        Assert.Equal(record.ArtHash, cached.ArtHash);
+        Assert.Equal(record.ArtSize, cached.ArtSize);
+        Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Write_FG_PutOnlyAfterDurableCommit_NotAfterAcceptAlone()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
+        var record = CreateRecord("<wfg@cache.test>");
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(0, cache.PutCount);
+        Assert.Null(Assert.Single(engine.Journal.EnumerateIncomplete()).PhysicalWritten);
+
+        await engine.RecoverAsync(CancellationToken.None);
+        Assert.Equal(1, cache.PutCount);
+        Assert.Empty(engine.Journal.EnumerateIncomplete());
+    }
+
+    [Fact]
+    public async Task Write_H_SataFailure_DoesNotPopulateCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
+        var record = CreateRecord("<wh@cache.test>");
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
+        engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforeSataAppend;
+        await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
+        Assert.Equal(0, cache.PutCount);
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public async Task Write_I_PhysicalWrittenFailure_DoesNotPopulateCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
+        var record = CreateRecord("<wi@cache.test>");
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
+        engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforePhysicalWritten;
+        await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
+        Assert.Equal(0, cache.PutCount);
+    }
+
+    [Fact]
+    public async Task Write_J_IndexPresentFailure_DoesNotPopulateCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        var record = CreateRecord("<wj@cache.test>", "body-a\r\n");
+        await using (var engineA = FileArticleStorageEngine.Open(dir.Options, articleCache: cache))
+        {
+            engineA.SuspendBackgroundPersist = true;
+            var accept = await engineA.AcceptAsync(record, CancellationToken.None);
+            var appender = await engineA.Segments.GetActiveAppenderAsync(CancellationToken.None);
+            var location = await appender.AppendAsync(record.ArtData, CancellationToken.None);
+            _ = await engineA.Journal.AppendPhysicalWrittenAsync(
+                new JournalPhysicalWrittenRecord(1, accept.Sequence, location),
+                CancellationToken.None);
+            Assert.True(
+                engineA.Index.TryCommitPresent(
+                    new StoredArticleMetadata(
+                        record.ArtId,
+                        record.ArtHash ^ 1UL,
+                        record.ArtSize,
+                        new StoredArticleLocation(new SegmentId(99), 0, location.Length),
+                        ArticleStorageState.Present,
+                        DateTimeOffset.UtcNow)));
+        }
+
+        cache.ResetCounters();
+        await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engineB.SuspendBackgroundPersist = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engineB.RecoverAsync(CancellationToken.None));
+        Assert.Equal(0, cache.PutCount);
+    }
+
+    [Fact]
+    public async Task Write_K_IndexCommittedFailure_DoesNotPopulateCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
+        var record = CreateRecord("<wk@cache.test>");
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
+        engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforeIndexCommitted;
+        await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
+        Assert.Equal(0, cache.PutCount);
+        Assert.Single(engine.Journal.EnumerateIncomplete());
+    }
+
+    [Fact]
+    public async Task Write_L_CachePutFailure_StillDurableSuccess()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new RejectAllPutsCache());
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<wl@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(cache.PutCount >= 1);
+        Assert.Empty(engine.Journal.EnumerateIncomplete());
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.True(engine.TryRead(record.ArtId, out _)); // durable read still works
+    }
+
+    [Fact]
+    public async Task Write_MN_DisabledOrOversized_DoesNotFailAccept()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<wmn@cache.test>", "body\r\n");
+        var disabled = new RecordingArticleMemoryCache(new ArticleMemoryCache(maxBytes: 0));
+        await using (var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: disabled))
+        {
+            await AcceptAndDrainAsync(engine, record);
+            Assert.Equal(ArticleMemoryCachePutOutcome.RejectedDisabled, disabled.LastPutOutcome);
+            Assert.True(engine.TryRead(record.ArtId, out _));
+        }
+
+        var oversized = new RecordingArticleMemoryCache(new ArticleMemoryCache(maxBytes: record.ArtSize - 1));
+        await using (var engine2 = FileArticleStorageEngine.Open(dir.Options, articleCache: oversized))
+        {
+            // Already Present → Duplicate; Put may be attempted on duplicate path with oversized reject.
+            var dup = await engine2.AcceptAsync(record, CancellationToken.None);
+            Assert.Equal(ArticleAcceptOutcome.Duplicate, dup.Outcome);
+            Assert.True(engine2.TryRead(record.ArtId, out _));
+        }
+    }
+
+    [Fact]
+    public async Task Write_OPQR_DuplicateAndConflict_CacheSemantics()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var first = CreateRecord("<wopq@cache.test>", "body-a\r\n");
+        await AcceptAndDrainAsync(engine, first);
+        Assert.True(cache.Inner.TryGet(first.ArtId, out var before));
+        var appendsBefore = engine.PhysicalAppendCount;
+
+        var dup = await engine.AcceptAsync(first, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Duplicate, dup.Outcome);
+        Assert.Equal(appendsBefore, engine.PhysicalAppendCount);
+        Assert.True(cache.Inner.TryGet(first.ArtId, out var afterDup));
+        Assert.True(afterDup.ArtData.Span.SequenceEqual(before.ArtData.Span));
+
+        var conflict = CreateRecord("<wopq@cache.test>", "body-b\r\n");
+        Assert.Equal(ArticleAcceptOutcome.Conflict, (await engine.AcceptAsync(conflict, CancellationToken.None)).Outcome);
+        Assert.True(cache.Inner.TryGet(first.ArtId, out var afterConflict));
+        Assert.True(afterConflict.ArtData.Span.SequenceEqual(first.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Write_ST_RepopulateAfterEvictOrInvalidate()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<wst@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        Assert.True(engine.TryEvict(record.ArtId));
+        Assert.Equal(0, cache.Count);
+
+        // Evicted: Accept of same identity creates a new Present via journal path.
+        var again = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, again.Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(cache.Count >= 1);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out _));
+
+        Assert.True(engine.TryInvalidate(record.ArtId));
+        Assert.Equal(0, cache.Count);
+        var third = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, third.Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(cache.Inner.TryGet(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Write_UV_CrashBeforePut_AndNewEngineEmptyCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<wuv@cache.test>");
+        await using (var engineA = FileArticleStorageEngine.Open(
+                         dir.Options,
+                         articleCache: new ArticleMemoryCache(4L * 1024 * 1024)))
+        {
+            engineA.SuspendBackgroundPersist = true;
+            _ = await engineA.AcceptAsync(record, CancellationToken.None);
+            engineA.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.AfterIndexCommitted;
+            // IndexCommitted durable; injected fault after best-effort Put — simulate crash after commit.
+            await Assert.ThrowsAsync<IOException>(() => engineA.RecoverAsync(CancellationToken.None));
+            Assert.Empty(engineA.Journal.EnumerateIncomplete());
+        }
+
+        await using var engineB = FileArticleStorageEngine.Open(
+            dir.Options,
+            articleCache: new ArticleMemoryCache(4L * 1024 * 1024));
+        Assert.Equal(0, engineB.ArticleCache.Count);
+        Assert.True(engineB.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.Equal(1, engineB.ArticleCache.Count);
+    }
+
+    [Fact]
+    public async Task Write_W_DurableSurvivesCacheLoss()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<ww@cache.test>");
+        await using (var engineA = FileArticleStorageEngine.Open(
+                         dir.Options,
+                         articleCache: new ArticleMemoryCache(4L * 1024 * 1024)))
+        {
+            await AcceptAndDrainAsync(engineA, record);
+            Assert.Equal(1, engineA.ArticleCache.Count);
+        }
+
+        await using var engineB = FileArticleStorageEngine.Open(
+            dir.Options,
+            articleCache: new ArticleMemoryCache(4L * 1024 * 1024));
+        Assert.Equal(0, engineB.ArticleCache.Count);
+        Assert.True(engineB.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Write_XY_IncompleteRecovery_DoesNotExposeUncommittedViaCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        engine.SuspendBackgroundPersist = true;
+        var record = CreateRecord("<wxy@cache.test>");
+        _ = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(0, cache.Count);
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
+
+        await engine.RecoverAsync(CancellationToken.None);
+        Assert.Equal(1, cache.Count); // populated only after IndexCommitted
+        Assert.True(engine.TryRead(record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task Write_Z_ConcurrentAccepts_CorrectCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new ArticleMemoryCache(8L * 1024 * 1024);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var records = Enumerable.Range(0, 8)
+            .Select(i => CreateRecord($"<wz-{i}@cache.test>", $"z{i}\r\n"))
+            .ToArray();
+        await Task.WhenAll(records.Select(r => engine.AcceptAsync(r, CancellationToken.None)));
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.Equal(8, cache.Count);
+        foreach (var record in records)
+        {
+            Assert.True(cache.TryGet(record.ArtId, out var cached));
+            Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        }
+    }
+
+    [Fact]
+    public async Task Write_ABC_CachePopulation_DoesNotMutateDurableArtifacts()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new ArticleMemoryCache(4L * 1024 * 1024);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var record = CreateRecord("<wabc@cache.test>");
+        await AcceptAndDrainAsync(engine, record);
+        var journalLen = engine.Journal.JournalPhysicalBytes;
+        var segmentLen = engine.Segments.GetActiveSizeBytes();
+        var indexWrites = engine.Index.DurableWriteCount;
+
+        Assert.True(cache.TryGet(record.ArtId, out _));
+        // Extra Put (idempotent) must not grow durable files / index.
+        _ = cache.Put(record);
+        Assert.Equal(journalLen, engine.Journal.JournalPhysicalBytes);
+        Assert.Equal(segmentLen, engine.Segments.GetActiveSizeBytes());
+        Assert.Equal(indexWrites, engine.Index.DurableWriteCount);
+    }
+
+    [Fact]
+    public async Task Write_AD_RepeatedAcceptReadCache_Cycles()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        for (var i = 0; i < 3; i++)
+        {
+            var record = CreateRecord($"<wad-{i}@cache.test>", $"c{i}\r\n");
+            await AcceptAndDrainAsync(engine, record);
+            Assert.True(engine.TryRead(record.ArtId, out var read));
+            Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        }
+    }
+
+    [Fact]
+    public async Task Write_HitAfterWrite_NoDurableIoRequired()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
+        var record = CreateRecord("<whit@cache.test>");
+        await using (var engineA = FileArticleStorageEngine.Open(dir.Options, articleCache: cache))
+        {
+            await AcceptAndDrainAsync(engineA, record);
+            Assert.Equal(1, cache.Count);
+        }
+
+        foreach (var path in Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*"))
+        {
+            File.Delete(path);
+        }
+
+        File.Delete(Path.Combine(dir.Options.ControlDir, FileArticleIndex.IndexFileName));
+
+        await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        Assert.True(engineB.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.True(cache.HitCount >= 1);
     }
 
     private static async Task AcceptAndDrainAsync(FileArticleStorageEngine engine, ArticleRecord record)
