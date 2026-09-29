@@ -1,0 +1,52 @@
+[Unit]
+Description=VectorNNTP BackFiller
+Documentation=file:///opt/vectornntp/backfiller/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+# Dedicated non-root service account (create before enabling the unit).
+# Same account as NNTPD is acceptable when both share /opt/vectornntp.
+User=vectornntp
+Group=vectornntp
+
+WorkingDirectory=/opt/vectornntp/backfiller
+ExecStart=/opt/vectornntp/backfiller/VectorNNTP.BackFiller
+
+# Align with BackFiller:Shutdown:GracePeriodSeconds (default 30s) plus host overhead.
+# Start budget covers ACME readiness + RabbitMQ connect + Cache Listener bind.
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# Optional environment file for DOTNET_* / BackFiller__* / VECTOR__* overlays.
+# EnvironmentFile=-/etc/vectornntp/backfiller.env
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=
+
+# Watchdog is supported by the application when EnableWatchdog=true (default)
+# AND systemd configures WatchdogSec. Leave disabled here until operators
+# intentionally enable it after verifying readiness on the target host.
+# Example (enable only after validation):
+# WatchdogSec=30
+# Restart=on-watchdog
+
+# Hardening. BackFiller binds TLS and opens outbound NNTP/RabbitMQ/MySQL/Cloudflare.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vectornntp/backfiller
+# CapabilityBoundingSet=
+# AmbientCapabilities=
+
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+[Install]
+WantedBy=multi-user.target

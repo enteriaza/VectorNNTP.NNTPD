@@ -7,6 +7,7 @@ using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Core;
+using VectorNNTP.BackFiller.Hosting.Systemd;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.RabbitMq;
@@ -110,6 +111,18 @@ public static class BackFillerServiceCollectionExtensions
             {
                 host.ShutdownTimeout = runtime.Shutdown.GracePeriod;
             });
+
+        // Register systemd lifecycle notifier before other hosted services so it is
+        // constructed early and observes ApplicationStarted/Stopping for READY/STOPPING.
+        builder.Services.AddSingleton<BackFillerApplicationHealth>();
+        builder.Services.AddSingleton<IApplicationHealth>(static provider =>
+            provider.GetRequiredService<BackFillerApplicationHealth>());
+        builder.Services.TryAddSingleton<ISystemdNotifyBridge, SystemdNotifyBridge>();
+        builder.Services.TryAddSingleton<ISystemdRuntime, SystemdRuntime>();
+        builder.Services.AddSingleton<SystemdLifecycleNotifier>();
+        builder.Services.AddHostedService(static provider =>
+            provider.GetRequiredService<SystemdLifecycleNotifier>());
+        builder.Services.AddHostedService<SystemdWatchdogService>();
 
         builder.Services.TryAddSingleton<IBackFillerRabbitMqConnectionFactory, BackFillerRabbitMqClientConnectionFactory>();
         builder.Services.AddSingleton(static provider => new BackFillerRabbitMqService(

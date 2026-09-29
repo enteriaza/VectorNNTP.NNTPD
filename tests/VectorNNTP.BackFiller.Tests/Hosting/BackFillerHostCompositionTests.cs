@@ -9,6 +9,7 @@ using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
+using VectorNNTP.BackFiller.Hosting.Systemd;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
@@ -35,14 +36,21 @@ public sealed class BackFillerHostCompositionTests
         var hosted = host.Services.GetServices<IHostedService>()
             .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
             .ToArray();
-        Assert.Equal(7, hosted.Length);
-        Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[0]);
-        Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[1]);
-        Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[2]);
-        Assert.IsType<BackFillerApplicationHostedService>(hosted[3]);
-        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[4]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[5]);
-        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[6]);
+        Assert.Equal(9, hosted.Length);
+        Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
+        Assert.IsType<SystemdWatchdogService>(hosted[1]);
+        Assert.Same(host.Services.GetRequiredService<BackFillerRabbitMqService>(), hosted[2]);
+        Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[3]);
+        Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[4]);
+        Assert.IsType<BackFillerApplicationHostedService>(hosted[5]);
+        Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[6]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[7]);
+        Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[8]);
+        Assert.Same(
+            host.Services.GetRequiredService<BackFillerApplicationHealth>(),
+            host.Services.GetRequiredService<IApplicationHealth>());
+        Assert.NotNull(host.Services.GetRequiredService<ISystemdNotifyBridge>());
+        Assert.NotNull(host.Services.GetRequiredService<ISystemdRuntime>());
         Assert.DoesNotContain(
             hosted,
             static service => service.GetType().Name == "AcmeCertificateHostedService");

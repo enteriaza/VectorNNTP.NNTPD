@@ -201,6 +201,11 @@ public sealed class BackFillerOptions
     public BackFillerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets Linux systemd notify/watchdog options.
+    /// </summary>
+    public BackFillerSystemdOptions Systemd { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets how often BackFiller polls NntpDB for
     /// <c>nntpbackfilleraccounts</c> changes.
     /// </summary>

@@ -38,11 +38,33 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateListener(options, failures);
         ValidateAccountRefresh(options, failures);
         ValidateArticleRetention(options, failures);
+        ValidateSystemd(options, failures);
         ValidateRabbitMq(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;
+    }
+
+    private static void ValidateSystemd(BackFillerOptions options, List<string> failures)
+    {
+        if (options.Systemd is null)
+        {
+            failures.Add($"{nameof(BackFillerOptions.Systemd)} must be provided.");
+            return;
+        }
+
+        var fraction = options.Systemd.WatchdogIntervalFraction;
+        if (double.IsNaN(fraction) || fraction is <= 0 or >= 1)
+        {
+            failures.Add(
+                $"{nameof(BackFillerOptions.Systemd)}.{nameof(BackFillerSystemdOptions.WatchdogIntervalFraction)} must be in the open interval (0, 1).");
+        }
+        else if (fraction is < 0.05 or > 0.9)
+        {
+            failures.Add(
+                $"{nameof(BackFillerOptions.Systemd)}.{nameof(BackFillerSystemdOptions.WatchdogIntervalFraction)} must be between 0.05 and 0.9 inclusive.");
+        }
     }
 
     private static void ValidateIdentity(BackFillerOptions options, List<string> failures)
