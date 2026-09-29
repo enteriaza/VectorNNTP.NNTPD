@@ -102,6 +102,31 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
         }
     }
 
+    /// <summary>
+    /// Removes a Retired catalogue entry after its physical <c>.retired</c> file has been deleted.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the entry was removed or already absent;
+    /// <see langword="false"/> when the entry exists but is not Retired.
+    /// </returns>
+    public bool TryRemoveRetired(SegmentId segmentId)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(segmentId.Value, out var existing))
+            {
+                return true;
+            }
+
+            if (existing.State != SegmentState.Retired)
+            {
+                return false;
+            }
+
+            return _entries.Remove(segmentId.Value);
+        }
+    }
+
     /// <inheritdoc />
     public IReadOnlyList<SegmentInfo> Snapshot()
     {

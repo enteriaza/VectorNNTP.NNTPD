@@ -280,6 +280,49 @@ public readonly record struct ArticleSegmentRetirementResult(
     bool CompactionRetiredAppended,
     string? Reason = null);
 
+/// <summary>
+/// Outcome of physical reclamation of a Retired segment (<c>ReclaimRetiredSegmentAsync</c>).
+/// </summary>
+public enum ArticleSegmentReclamationOutcome : byte
+{
+    /// <summary>Physical <c>.retired</c> file deleted and catalogue entry removed.</summary>
+    Reclaimed = 1,
+
+    /// <summary>Segment already absent (prior reclamation); no mutation required.</summary>
+    IdempotentAlreadyReclaimed = 2,
+
+    /// <summary>Catalogue entry missing while an unexpected file still exists.</summary>
+    RejectedMissing = 3,
+
+    /// <summary>Segment is Active.</summary>
+    RejectedActive = 4,
+
+    /// <summary>Segment is Closed (must be Retired).</summary>
+    RejectedClosed = 5,
+
+    /// <summary>Present ArticleIndex entries still reference the segment.</summary>
+    RejectedPresentRemain = 6,
+
+    /// <summary>Unexpected physical representation (not solely the expected <c>.retired</c> file).</summary>
+    RejectedUnexpectedPhysical = 7,
+
+    /// <summary>Delete/catalogue failure.</summary>
+    Failed = 8,
+}
+
+/// <summary>Result of <c>FileArticleStorageEngine.ReclaimRetiredSegmentAsync</c>.</summary>
+/// <param name="Outcome">Reclamation outcome.</param>
+/// <param name="SegmentId">Target segment.</param>
+/// <param name="PhysicalFileDeleted">True when this call deleted the <c>.retired</c> file.</param>
+/// <param name="CatalogueEntryRemoved">True when this call removed the catalogue entry.</param>
+/// <param name="Reason">Optional diagnostic reason.</param>
+public readonly record struct ArticleSegmentReclamationResult(
+    ArticleSegmentReclamationOutcome Outcome,
+    SegmentId SegmentId,
+    bool PhysicalFileDeleted,
+    bool CatalogueEntryRemoved,
+    string? Reason = null);
+
 /// <summary>Opaque segment identity.</summary>
 /// <param name="Value">Monotonic or generated segment number.</param>
 public readonly record struct SegmentId(ulong Value)

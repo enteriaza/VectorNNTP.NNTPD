@@ -64,6 +64,12 @@ internal static partial class FileSegmentStoreLogMessages
     public static partial void Retired(ILogger logger, ulong SegmentId);
 
     [LoggerMessage(
+        EventId = 3209,
+        Level = LogLevel.Information,
+        Message = "Segment physically reclaimed (segmentId={SegmentId})")]
+    public static partial void Reclaimed(ILogger logger, ulong SegmentId);
+
+    [LoggerMessage(
         EventId = 3208,
         Level = LogLevel.Information,
         Message = "Segment store closed (root={Root})")]
