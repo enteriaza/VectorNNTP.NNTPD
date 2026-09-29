@@ -184,6 +184,56 @@ public readonly record struct ArticleRelocationResult(
     StoredArticleLocation? DestinationLocation = null,
     string? Reason = null);
 
+/// <summary>
+/// Outcome of single-segment compaction orchestration (<c>CompactClosedSegmentAsync</c>).
+/// </summary>
+public enum ArticleCompactionOutcome : byte
+{
+    /// <summary>No Present index entry references the source; CompactionCommitted is durable.</summary>
+    Committed = 1,
+
+    /// <summary>
+    /// Work finished without logical exhaustion (Present source references remain).
+    /// CompactionCommitted was not appended.
+    /// </summary>
+    Incomplete = 2,
+
+    /// <summary>Source segment missing from the catalogue.</summary>
+    RejectedSourceMissing = 3,
+
+    /// <summary>Source is Active or Retired (must be Closed).</summary>
+    RejectedSourceNotClosed = 4,
+
+    /// <summary>Multiple uncommitted open compactions already target this source.</summary>
+    CompetingOpenCompaction = 5,
+
+    /// <summary>Protocol/storage failure; CompactionCommitted was not appended.</summary>
+    Failed = 6,
+}
+
+/// <summary>Result of <c>FileArticleStorageEngine.CompactClosedSegmentAsync</c>.</summary>
+/// <param name="Outcome">Compaction outcome.</param>
+/// <param name="CompactionId">Compaction transaction id (0 when rejected before Begin).</param>
+/// <param name="SourceSegmentId">Source segment.</param>
+/// <param name="SourceGeneration">Durable <c>CompactionBegin.SourceGeneration</c> (0 when rejected before Begin).</param>
+/// <param name="InitialCandidateCount">Present@source count in the post-Begin worklist.</param>
+/// <param name="RelocatedCount">Relocated + IdempotentNoOp outcomes.</param>
+/// <param name="AbandonedCount">Abandoned / concurrent not-present outcomes.</param>
+/// <param name="RemainingPresentOnSource">Present@source count after the worklist.</param>
+/// <param name="CompactionCommittedAppended">True when this call appended CompactionCommitted.</param>
+/// <param name="Reason">Optional diagnostic reason.</param>
+public readonly record struct ArticleCompactionResult(
+    ArticleCompactionOutcome Outcome,
+    ulong CompactionId,
+    SegmentId SourceSegmentId,
+    ulong SourceGeneration,
+    int InitialCandidateCount,
+    int RelocatedCount,
+    int AbandonedCount,
+    int RemainingPresentOnSource,
+    bool CompactionCommittedAppended,
+    string? Reason = null);
+
 /// <summary>Opaque segment identity.</summary>
 /// <param name="Value">Monotonic or generated segment number.</param>
 public readonly record struct SegmentId(ulong Value)
