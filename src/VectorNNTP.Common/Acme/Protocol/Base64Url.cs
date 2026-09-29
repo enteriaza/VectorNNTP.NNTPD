@@ -1,10 +1,11 @@
-using System;
 using System.Buffers;
 
-namespace VectorNNTP.NNTPD.Acme.Protocol.Internal;
+namespace VectorNNTP.NNTPD.Acme.Protocol;
 
+/// <summary>RFC 4648 base64url encode/decode used by ACME JWS and DNS-01 digests.</summary>
 internal static class Base64Url
 {
+    /// <summary>Encodes <paramref name="bytes"/> as unpadded base64url.</summary>
     public static string Encode(ReadOnlySpan<byte> bytes)
     {
         if (bytes.IsEmpty)
@@ -52,6 +53,7 @@ internal static class Base64Url
         }
     }
 
+    /// <summary>Decodes unpadded or padded base64url into bytes.</summary>
     public static byte[] Decode(string value)
     {
         ArgumentNullException.ThrowIfNull(value);

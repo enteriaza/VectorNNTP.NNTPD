@@ -1,4 +1,5 @@
 using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.NNTPD.Acme.Protocol;
 
 namespace VectorNNTP.NNTPD.Tests.Acme;
 
@@ -26,7 +27,7 @@ public sealed class AcmeProblemDiagnosticsTests
     public void FormatException_RedactsPemAndLongTokens()
     {
         var pem = "oops -----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY----- trailing";
-        var ex = new VectorNNTP.NNTPD.Acme.Protocol.AcmeException(
+        var ex = new AcmeCaException(
             "server error",
             "urn:ietf:params:acme:error:serverInternal",
             pem + " " + new string('A', 100),
@@ -53,7 +54,7 @@ public sealed class AcmeProblemDiagnosticsTests
     [Fact]
     public void ChallengeFailedWrapper_UsesFormattedProtocolDetails_NotTypeNameOnly()
     {
-        var protocol = new VectorNNTP.NNTPD.Acme.Protocol.AcmeException(
+        var protocol = new AcmeCaException(
             "Error processing request",
             "urn:ietf:params:acme:error:dns",
             "DNS problem: NXDOMAIN looking up TXT",
@@ -63,6 +64,7 @@ public sealed class AcmeProblemDiagnosticsTests
         Assert.Equal("challenge_failed", wrapped.Category);
         Assert.Contains("type=urn:ietf:params:acme:error:dns", wrapped.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("challenge_failed: AcmeException", wrapped.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("challenge_failed: AcmeCaException", wrapped.Message, StringComparison.Ordinal);
         Assert.Equal(wrapped.Message, AcmeFailureSanitizer.Sanitize(wrapped));
     }
 }

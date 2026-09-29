@@ -3,15 +3,15 @@ using System.Text.Json.Serialization;
 
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
+/// <summary>STJ source-generation context for ACME wire DTOs.</summary>
 [JsonSourceGenerationOptions(
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     ReadCommentHandling = JsonCommentHandling.Skip)]
-[JsonSerializable(typeof(AcmeDirectory))]
+[JsonSerializable(typeof(AcmeDirectoryResource))]
 [JsonSerializable(typeof(AcmeAccountResource))]
 [JsonSerializable(typeof(AcmeOrderResource))]
 [JsonSerializable(typeof(AcmeAuthorizationResource))]
 [JsonSerializable(typeof(AcmeChallengeResource))]
 [JsonSerializable(typeof(AcmeProblem))]
-[JsonSerializable(typeof(AcmeRenewalInfoResource))]
 [JsonSerializable(typeof(AcmeEmptyResource))]
 internal sealed partial class AcmeJsonContext : JsonSerializerContext;

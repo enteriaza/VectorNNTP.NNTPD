@@ -1,29 +1,27 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
+using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
-using VectorNNTP.NNTPD.Acme.Protocol.Internal;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
+/// <summary>
+/// ACME v2 protocol client for directory, account, order, authorization, challenge, finalize, and certificate download.
+/// </summary>
 internal sealed class AcmeClient
 {
     private const string PemChainContentType = "application/pem-certificate-chain";
 
     private static readonly TimeSpan MaxPollDelay = TimeSpan.FromSeconds(30);
 
-    private readonly AcmeHttpClient _http;
-    private readonly AcmeKey _accountKey;
+    private readonly AcmeHttpTransport _http;
+    private readonly AcmeAccountKey _accountKey;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
 
     private string? _keyId;
 
-    public AcmeClient(AcmeHttpClient http, AcmeKey accountKey, ILogger logger, TimeProvider time)
+    /// <summary>Initializes a new instance of the <see cref="AcmeClient"/> class.</summary>
+    public AcmeClient(AcmeHttpTransport http, AcmeAccountKey accountKey, ILogger logger, TimeProvider time)
     {
         _http = http;
         _accountKey = accountKey;
@@ -31,43 +29,47 @@ internal sealed class AcmeClient
         _time = time;
     }
 
-    public AcmeKey AccountKey => _accountKey;
+    /// <summary>Gets the account key used for JWS.</summary>
+    public AcmeAccountKey AccountKey => _accountKey;
 
+    /// <summary>Gets the bound account URL (kid), or throws if not registered/bound.</summary>
     public string KeyId => _keyId ?? throw new InvalidOperationException("The ACME account has not been registered yet.");
 
     /// <summary>
     /// Binds a previously persisted ACME account URL (kid) without calling newAccount.
     /// </summary>
-    /// <remarks>
-    /// Existing VectorNNTP installations store <c>account_uri</c> beside the PKCS#8 DER key.
-    /// Reusing that URI avoids creating a new ACME account when the key is unchanged.
-    /// </remarks>
     public void BindExistingAccount(string accountUrl)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountUrl);
         _keyId = accountUrl.Trim();
     }
 
-    public Task<AcmeDirectory> GetDirectoryAsync(CancellationToken cancellationToken) =>
+    /// <summary>Fetches the ACME directory.</summary>
+    public Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken) =>
         _http.GetDirectoryAsync(cancellationToken);
 
+    /// <summary>POST-as-GET for an order resource.</summary>
     public async Task<AcmeOrderResource> GetOrderAsync(Uri orderUrl, CancellationToken cancellationToken)
     {
         AcmeResponse<AcmeOrderResource> response = await _http.PostAsGetAsync(
-            _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken);
+            _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken)
+            .ConfigureAwait(false);
 
-        return response.Content ?? throw new AcmeException("The certificate authority returned an empty order.");
+        return response.Content ?? throw new AcmeCaException("The certificate authority returned an empty order.");
     }
 
+    /// <summary>
+    /// Registers a new account (or reuses one for this key) and returns the account Location URL.
+    /// </summary>
     public async Task<string> RegisterAccountAsync(
         IReadOnlyList<string> contacts,
         bool termsOfServiceAgreed,
         ExternalAccountBinding? externalAccountBinding,
         CancellationToken cancellationToken)
     {
-        AcmeDirectory directory = await _http.GetDirectoryAsync(cancellationToken);
+        AcmeDirectoryResource directory = await _http.GetDirectoryAsync(cancellationToken).ConfigureAwait(false);
         Uri newAccount = directory.NewAccount
-            ?? throw new AcmeException("The ACME directory does not advertise a newAccount endpoint.");
+            ?? throw new AcmeCaException("The ACME directory does not advertise a newAccount endpoint.");
 
         string payload = BuildAccountPayload(_accountKey, contacts, termsOfServiceAgreed, externalAccountBinding, newAccount);
 
@@ -77,48 +79,26 @@ internal sealed class AcmeClient
             newAccount,
             payload,
             AcmeJsonContext.Default.AcmeAccountResource,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         Uri location = response.Location
-            ?? throw new AcmeException("The certificate authority did not return an account URL.");
+            ?? throw new AcmeCaException("The certificate authority did not return an account URL.");
 
         _keyId = location.AbsoluteUri;
-        Log.AccountRegistered(_logger, _keyId);
+        AcmeLogMessages.AcmeProtocolAccountRegistered(_logger, _keyId);
         return _keyId;
     }
 
+    /// <summary>Creates a new order for the given identifiers.</summary>
     public async Task<AcmeOrder> CreateOrderAsync(
         IReadOnlyList<AcmeIdentifier> identifiers,
-        string? profile,
-        string? replaces,
         CancellationToken cancellationToken)
     {
-        AcmeDirectory directory = await _http.GetDirectoryAsync(cancellationToken);
+        AcmeDirectoryResource directory = await _http.GetDirectoryAsync(cancellationToken).ConfigureAwait(false);
         Uri newOrder = directory.NewOrder
-            ?? throw new AcmeException("The ACME directory does not advertise a newOrder endpoint.");
+            ?? throw new AcmeCaException("The ACME directory does not advertise a newOrder endpoint.");
 
-        // RFC 9773 section 5: only send replaces to an authority that advertises renewalInfo. Sending
-        // it to one that does not risks the order being rejected as malformed. The field is only a
-        // rate-limit hint the authority may honour on a renewal, so dropping it costs nothing else.
-        string? renewalHint = directory.RenewalInfo is not null ? replaces : null;
-
-        // The profile is not dropped the way replaces is: a profile decides the certificate's shape and
-        // lifetime, so silently discarding one would hand back a different certificate than asked for.
-        // When the directory advertises its profiles, that list is authoritative (ACME profiles
-        // extension), so a requested profile it omits would be rejected a round trip later; fail now and
-        // name the profiles that exist. A directory that advertises none is left to decide for itself,
-        // so a profile still reaches an authority that supports the extension without listing it, and an
-        // unknown one there is reported by the authority rather than swallowed here.
-        if (!string.IsNullOrEmpty(profile) &&
-            directory.Meta?.Profiles is { Count: > 0 } profiles &&
-            !profiles.ContainsKey(profile))
-        {
-            throw new AcmeException(
-                $"The certificate authority does not offer the '{profile}' certificate profile. " +
-                $"It offers: {string.Join(", ", profiles.Keys)}.");
-        }
-
-        string payload = BuildOrderPayload(identifiers, profile, renewalHint);
+        string payload = BuildOrderPayload(identifiers);
 
         AcmeResponse<AcmeOrderResource> response = await _http.PostAsync(
             _accountKey,
@@ -126,72 +106,33 @@ internal sealed class AcmeClient
             newOrder,
             payload,
             AcmeJsonContext.Default.AcmeOrderResource,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
 
         AcmeOrderResource order = response.Content
-            ?? throw new AcmeException("The certificate authority returned an empty order.");
+            ?? throw new AcmeCaException("The certificate authority returned an empty order.");
         Uri location = response.Location
-            ?? throw new AcmeException("The certificate authority did not return an order URL.");
+            ?? throw new AcmeCaException("The certificate authority did not return an order URL.");
 
         return new AcmeOrder(location, order);
     }
 
+    /// <summary>POST-as-GET for an authorization resource.</summary>
     public async Task<AcmeAuthorizationResource> GetAuthorizationAsync(Uri authorizationUrl, CancellationToken cancellationToken)
     {
         AcmeResponse<AcmeAuthorizationResource> response = await _http.PostAsGetAsync(
-            _accountKey, KeyId, authorizationUrl, AcmeJsonContext.Default.AcmeAuthorizationResource, cancellationToken);
+            _accountKey, KeyId, authorizationUrl, AcmeJsonContext.Default.AcmeAuthorizationResource, cancellationToken)
+            .ConfigureAwait(false);
 
-        return response.Content ?? throw new AcmeException("The certificate authority returned an empty authorization.");
+        return response.Content ?? throw new AcmeCaException("The certificate authority returned an empty authorization.");
     }
 
+    /// <summary>Submits a challenge for validation (empty JSON object payload).</summary>
     public async Task SubmitChallengeAsync(Uri challengeUrl, CancellationToken cancellationToken) =>
         await _http.PostAsync(
-            _accountKey, KeyId, challengeUrl, "{}", AcmeJsonContext.Default.AcmeChallengeResource, cancellationToken);
+            _accountKey, KeyId, challengeUrl, "{}", AcmeJsonContext.Default.AcmeChallengeResource, cancellationToken)
+            .ConfigureAwait(false);
 
-    public async Task<AcmeAuthorizationResource> WaitForAuthorizationAsync(
-        Uri authorizationUrl,
-        TimeSpan timeout,
-        TimeSpan pollInterval,
-        CancellationToken cancellationToken)
-    {
-        DateTimeOffset deadline = _time.GetUtcNow() + timeout;
-
-        while (true)
-        {
-            AcmeResponse<AcmeAuthorizationResource> response = await _http.PostAsGetAsync(
-                _accountKey, KeyId, authorizationUrl, AcmeJsonContext.Default.AcmeAuthorizationResource, cancellationToken);
-            AcmeAuthorizationResource authorization = response.Content
-                ?? throw new AcmeException("The certificate authority returned an empty authorization.");
-
-            switch (authorization.Status)
-            {
-                case AcmeStatus.Valid:
-                    return authorization;
-                case AcmeStatus.Invalid:
-                case AcmeStatus.Deactivated:
-                case AcmeStatus.Expired:
-                case AcmeStatus.Revoked:
-                    AcmeProblem? error = FindChallengeError(authorization);
-                    throw new AcmeException(
-                        $"Validation of '{authorization.Identifier?.Value}' failed: " +
-                        (error?.Detail ?? error?.Type ?? $"the authorization status is '{authorization.Status}'"),
-                        error?.Type,
-                        error?.Detail,
-                        error?.Status);
-                default:
-                    break;
-            }
-
-            if (_time.GetUtcNow() >= deadline)
-            {
-                throw new AcmeException(
-                    $"Timed out waiting for the certificate authority to validate '{authorization.Identifier?.Value}'.");
-            }
-
-            await Task.Delay(PollDelay(response.RetryAfter, pollInterval), _time, cancellationToken);
-        }
-    }
-
+    /// <summary>Finalizes an order with a PKCS#10 CSR.</summary>
     public async Task<AcmeOrderResource> FinalizeOrderAsync(
         Uri finalizeUrl,
         byte[] certificateSigningRequest,
@@ -200,56 +141,13 @@ internal sealed class AcmeClient
         string payload = BuildFinalizePayload(certificateSigningRequest);
 
         AcmeResponse<AcmeOrderResource> response = await _http.PostAsync(
-            _accountKey, KeyId, finalizeUrl, payload, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken);
+            _accountKey, KeyId, finalizeUrl, payload, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken)
+            .ConfigureAwait(false);
 
-        return response.Content ?? throw new AcmeException("The certificate authority returned an empty order.");
+        return response.Content ?? throw new AcmeCaException("The certificate authority returned an empty order.");
     }
 
-    /// <summary>
-    /// Polls the order until it reaches <c>ready</c> (or a later state), used to recover when a
-    /// finalize arrives a moment before the order has flipped to ready. RFC 8555 section 7.4 expects
-    /// the client to wait for readiness and finalize then, rather than abandon the order.
-    /// </summary>
-    public async Task WaitForOrderReadyAsync(
-        Uri orderUrl,
-        TimeSpan timeout,
-        TimeSpan pollInterval,
-        CancellationToken cancellationToken)
-    {
-        DateTimeOffset deadline = _time.GetUtcNow() + timeout;
-
-        while (true)
-        {
-            AcmeResponse<AcmeOrderResource> response = await _http.PostAsGetAsync(
-                _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken);
-            AcmeOrderResource order = response.Content
-                ?? throw new AcmeException("The certificate authority returned an empty order.");
-
-            switch (order.Status)
-            {
-                case AcmeStatus.Ready:
-                case AcmeStatus.Processing:
-                case AcmeStatus.Valid:
-                    return;
-                case AcmeStatus.Invalid:
-                    throw new AcmeException(
-                        $"The certificate authority rejected the order: {order.Error?.Detail ?? "no detail supplied"}",
-                        order.Error?.Type,
-                        order.Error?.Detail,
-                        order.Error?.Status);
-                default:
-                    break;
-            }
-
-            if (_time.GetUtcNow() >= deadline)
-            {
-                throw new AcmeException("Timed out waiting for the certificate authority to make the order ready.");
-            }
-
-            await Task.Delay(PollDelay(response.RetryAfter, pollInterval), _time, cancellationToken);
-        }
-    }
-
+    /// <summary>Polls the order until status is <c>valid</c> or <c>invalid</c>.</summary>
     public async Task<AcmeOrderResource> WaitForOrderAsync(
         Uri orderUrl,
         TimeSpan timeout,
@@ -261,16 +159,17 @@ internal sealed class AcmeClient
         while (true)
         {
             AcmeResponse<AcmeOrderResource> response = await _http.PostAsGetAsync(
-                _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken);
+                _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken)
+                .ConfigureAwait(false);
             AcmeOrderResource order = response.Content
-                ?? throw new AcmeException("The certificate authority returned an empty order.");
+                ?? throw new AcmeCaException("The certificate authority returned an empty order.");
 
             switch (order.Status)
             {
                 case AcmeStatus.Valid:
                     return order;
                 case AcmeStatus.Invalid:
-                    throw new AcmeException(
+                    throw new AcmeCaException(
                         $"The certificate authority rejected the order: {order.Error?.Detail ?? "no detail supplied"}",
                         order.Error?.Type,
                         order.Error?.Detail,
@@ -281,17 +180,33 @@ internal sealed class AcmeClient
 
             if (_time.GetUtcNow() >= deadline)
             {
-                throw new AcmeException("Timed out waiting for the certificate authority to issue the certificate.");
+                throw new AcmeCaException("Timed out waiting for the certificate authority to issue the certificate.");
             }
 
-            await Task.Delay(PollDelay(response.RetryAfter, pollInterval), _time, cancellationToken);
+            await Task.Delay(PollDelay(response.RetryAfter, pollInterval), _time, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
-    // RFC 8555 section 7.5.1: while an order or authorization is still pending, the authority may
-    // return a Retry-After header saying how long to wait before asking again. Honour it, but never
-    // poll faster than the configured interval, and cap a single wait at MaxPollDelay so that a large
-    // value cannot hold the order open well past the validation timeout.
+    /// <summary>Downloads the PEM certificate chain (RFC 8555 §7.4.2).</summary>
+    public async Task<AcmeCertificate> DownloadCertificateAsync(Uri certificateUrl, CancellationToken cancellationToken)
+    {
+        AcmeRawResponse response = await _http.PostAsGetRawAsync(
+            _accountKey, KeyId, certificateUrl, PemChainContentType, cancellationToken)
+            .ConfigureAwait(false);
+
+        var alternates = new List<Uri>();
+        foreach (AcmeLink link in response.Links)
+        {
+            if (string.Equals(link.Relation, "alternate", StringComparison.OrdinalIgnoreCase))
+            {
+                alternates.Add(link.Url);
+            }
+        }
+
+        return new AcmeCertificate(response.Body, alternates);
+    }
+
     private TimeSpan PollDelay(DateTimeOffset? retryAfter, TimeSpan pollInterval)
     {
         if (retryAfter is not { } at)
@@ -308,74 +223,8 @@ internal sealed class AcmeClient
         return requested > MaxPollDelay ? MaxPollDelay : requested;
     }
 
-    public async Task<AcmeCertificate> DownloadCertificateAsync(Uri certificateUrl, CancellationToken cancellationToken)
-    {
-        AcmeRawResponse response = await _http.PostAsGetRawAsync(
-            _accountKey, KeyId, certificateUrl, PemChainContentType, cancellationToken);
-
-        // RFC 8555 section 7.4.2: the authority may advertise other chains for the same certificate
-        // with Link rel="alternate". Surface them so a caller can pick a different trust anchor.
-        var alternates = new List<Uri>();
-        foreach (AcmeLink link in response.Links)
-        {
-            if (string.Equals(link.Relation, "alternate", StringComparison.OrdinalIgnoreCase))
-            {
-                alternates.Add(link.Url);
-            }
-        }
-
-        return new AcmeCertificate(response.Body, alternates);
-    }
-
-    public async Task RevokeCertificateAsync(byte[] certificateDer, int reason, CancellationToken cancellationToken)
-    {
-        AcmeDirectory directory = await _http.GetDirectoryAsync(cancellationToken);
-        Uri revoke = directory.RevokeCertificate
-            ?? throw new AcmeException("The ACME directory does not advertise a revokeCert endpoint.");
-
-        string payload = BuildRevokePayload(certificateDer, reason);
-
-        await _http.PostAsync(
-            _accountKey, KeyId, revoke, payload, AcmeJsonContext.Default.AcmeEmptyResource, cancellationToken);
-    }
-
-    public async Task<AcmeRenewalInfo> GetRenewalInfoAsync(string certificateId, CancellationToken cancellationToken)
-    {
-        AcmeDirectory directory = await _http.GetDirectoryAsync(cancellationToken);
-        if (directory.RenewalInfo is null)
-        {
-            return default;
-        }
-
-        var url = new Uri(EnsureTrailingSlash(directory.RenewalInfo) + certificateId);
-
-        try
-        {
-            AcmeResponse<AcmeRenewalInfoResource> response = await _http.GetAsync(
-                url, AcmeJsonContext.Default.AcmeRenewalInfoResource, cancellationToken);
-
-            // RFC 9773 section 4.2: the response's Retry-After says when the client should query
-            // renewal information again. Carry it so the renewal loop can re-check when asked.
-            return new AcmeRenewalInfo(response.Content, response.RetryAfter);
-        }
-        catch (AcmeException ex)
-        {
-            Log.RenewalInfoUnavailable(_logger, certificateId, ex);
-            return default;
-        }
-    }
-
-    private static string EnsureTrailingSlash(Uri uri)
-    {
-        string value = uri.AbsoluteUri;
-        return value.EndsWith('/') ? value : value + "/";
-    }
-
-    private static AcmeProblem? FindChallengeError(AcmeAuthorizationResource authorization) =>
-        authorization.Challenges?.FirstOrDefault(c => c.Error is not null)?.Error;
-
     private static string BuildAccountPayload(
-        AcmeKey accountKey,
+        AcmeAccountKey accountKey,
         IReadOnlyList<string> contacts,
         bool termsOfServiceAgreed,
         ExternalAccountBinding? externalAccountBinding,
@@ -403,10 +252,10 @@ internal sealed class AcmeClient
 
         if (externalAccountBinding is null)
         {
-            return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+            return Encoding.UTF8.GetString(stream.ToArray());
         }
 
-        string body = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        string body = Encoding.UTF8.GetString(stream.ToArray());
         string binding = JsonWebSignature.EncodeHmac(
             externalAccountBinding.GetHmacKey(),
             externalAccountBinding.KeyId,
@@ -416,7 +265,7 @@ internal sealed class AcmeClient
         return body[..^1] + ",\"externalAccountBinding\":" + binding + "}";
     }
 
-    private static string BuildOrderPayload(IReadOnlyList<AcmeIdentifier> identifiers, string? profile, string? replaces)
+    private static string BuildOrderPayload(IReadOnlyList<AcmeIdentifier> identifiers)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -433,35 +282,10 @@ internal sealed class AcmeClient
             }
 
             writer.WriteEndArray();
-
-            if (!string.IsNullOrEmpty(profile))
-            {
-                writer.WriteString("profile", profile);
-            }
-
-            if (!string.IsNullOrEmpty(replaces))
-            {
-                writer.WriteString("replaces", replaces);
-            }
-
             writer.WriteEndObject();
         }
 
-        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
-    }
-
-    private static string BuildRevokePayload(byte[] certificateDer, int reason)
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("certificate", Internal.Base64Url.Encode(certificateDer));
-            writer.WriteNumber("reason", reason);
-            writer.WriteEndObject();
-        }
-
-        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static string BuildFinalizePayload(byte[] certificateSigningRequest)
@@ -470,16 +294,10 @@ internal sealed class AcmeClient
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("csr", Internal.Base64Url.Encode(certificateSigningRequest));
+            writer.WriteString("csr", Base64Url.Encode(certificateSigningRequest));
             writer.WriteEndObject();
         }
 
-        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 }
-
-internal sealed record AcmeOrder(Uri Location, AcmeOrderResource Resource);
-
-internal sealed record AcmeCertificate(string Pem, IReadOnlyList<Uri> Alternates);
-
-internal readonly record struct AcmeRenewalInfo(AcmeRenewalInfoResource? Resource, DateTimeOffset? RetryAfter);

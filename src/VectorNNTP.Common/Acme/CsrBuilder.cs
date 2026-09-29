@@ -1,7 +1,6 @@
 using System.Net;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using VectorNNTP.NNTPD.Acme.Protocol.Certificates;
+using VectorNNTP.NNTPD.Acme.Protocol;
 
 namespace VectorNNTP.NNTPD.Acme;
 
@@ -9,7 +8,7 @@ namespace VectorNNTP.NNTPD.Acme;
 internal static class CsrBuilder
 {
     /// <summary>Creates a PKCS#10 CSR covering the given DNS names (first name is CN when ≤64 chars).</summary>
-    public static byte[] CreateDnsSigningRequest(IReadOnlyList<string> dnsNames, CertificateKey key)
+    public static byte[] CreateDnsSigningRequest(IReadOnlyList<string> dnsNames, AcmeCertificateKey key)
     {
         ArgumentNullException.ThrowIfNull(dnsNames);
         ArgumentNullException.ThrowIfNull(key);

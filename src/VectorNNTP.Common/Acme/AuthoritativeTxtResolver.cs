@@ -1,5 +1,5 @@
 using System.Net;
-using VectorNNTP.NNTPD.Dns.Wire;
+using VectorNNTP.NNTPD.Dns;
 
 namespace VectorNNTP.NNTPD.Acme;
 
@@ -10,16 +10,17 @@ namespace VectorNNTP.NNTPD.Acme;
 /// <remarks>
 /// <para>
 /// <b>NS discovery (product contract):</b> discovers NS for the configured DNS apex (<c>DnsSuffix</c>) only.
-/// Historical Vector.NNTP label-walk from the challenge name is intentionally not used so zone-apex
-/// configuration remains authoritative.
+/// Challenge hostnames are not walked to find a delegation cut; zone-apex configuration is authoritative.
 /// </para>
 /// <para>
 /// <b>TXT visibility (product contract):</b> requires the expected token on every reachable authoritative
-/// address that answers successfully (intersection semantics). Historical configurable quorum is not used.
+/// address that answers successfully (intersection of successful answers). Unreachable or failed servers
+/// are skipped and do not vote.
 /// </para>
 /// <para>
-/// Bootstrap/recursive DNS is used only to discover apex NS names and resolve NS A/AAAA. TXT queries
-/// are sent directly to those addresses via the owned DNS wire client (UDP then TCP).
+/// Bootstrap/recursive DNS is used only to discover apex NS names and resolve NS A/AAAA via
+/// <see cref="ZoneApexNameserverDiscovery"/>. TXT queries are sent directly to those addresses via
+/// <see cref="AuthoritativeTxtClient"/> (UDP then TCP, RD=0).
 /// </para>
 /// </remarks>
 public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
@@ -83,8 +84,8 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
             {
                 IReadOnlyList<string> raw = _txtQuery is not null
                     ? await _txtQuery(server.Address, name.TrimEnd('.'), cancellationToken).ConfigureAwait(false)
-                    : await AuthoritativeDnsWireClient
-                        .QueryTxtAsync(server.Address, name.TrimEnd('.'), cancellationToken)
+                    : await AuthoritativeTxtClient
+                        .QueryTxtAsync(server.Address, name.TrimEnd('.'), cancellationToken, _logger)
                         .ConfigureAwait(false);
                 var values = raw
                     .Select(static t => t.Trim())
@@ -112,9 +113,8 @@ public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
     private async Task<IReadOnlyList<IPEndPoint>> DiscoverAuthoritativeEndpointsAsync(
         CancellationToken cancellationToken)
     {
-        // Zone-apex NS discovery (not label-walk): see type remarks.
-        IReadOnlyList<IPAddress> addresses = await DnsWireRecursiveResolver
-            .ResolveConfiguredZoneApexNameServerAddressesAsync(_zoneApex, _logger, cancellationToken)
+        IReadOnlyList<IPAddress> addresses = await ZoneApexNameserverDiscovery
+            .DiscoverAddressesAsync(_zoneApex, _logger, cancellationToken)
             .ConfigureAwait(false);
 
         if (addresses.Count == 0)

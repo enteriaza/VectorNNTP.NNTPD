@@ -3,7 +3,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.Acme.Protocol;
-using VectorNNTP.NNTPD.Acme.Protocol.Certificates;
 
 namespace VectorNNTP.Common.Tests.Acme;
 
@@ -17,9 +16,9 @@ public sealed class OwnedAcmeProtocolTests
     {
         using var rsa = RSA.Create(2048);
         byte[] der = rsa.ExportPkcs8PrivateKey();
-        AccountKeyCodec.AssertDerPemRoundTripPreservesRsaMaterial(der);
+        AcmeAccountKey.AssertPkcs8DerRoundTripPreservesRsaMaterial(der);
 
-        using AcmeKey key = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(der);
+        using AcmeAccountKey key = AcmeAccountKey.ImportPkcs8Der(der);
         Assert.Equal("RS256", key.SignatureAlgorithm);
         Assert.False(string.IsNullOrWhiteSpace(key.Thumbprint));
         Assert.Contains("\"kty\":\"RSA\"", key.Jwk, StringComparison.Ordinal);
@@ -29,7 +28,7 @@ public sealed class OwnedAcmeProtocolTests
     public void AccountKey_Dns01Txt_IsBase64UrlSha256OfKeyAuthorization()
     {
         using var rsa = RSA.Create(2048);
-        using AcmeKey key = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(rsa.ExportPkcs8PrivateKey());
+        using AcmeAccountKey key = AcmeAccountKey.ImportPkcs8Der(rsa.ExportPkcs8PrivateKey());
         const string token = "test-token-value";
         string txt = key.GetDnsRecordValue(token);
         Assert.False(string.IsNullOrWhiteSpace(txt));
@@ -42,7 +41,7 @@ public sealed class OwnedAcmeProtocolTests
     [Fact]
     public void CertificateKey_Csr_IsNonEmptyPkcs10()
     {
-        using CertificateKey certKey = CertificateKey.Create(KeyAlgorithm.Rsa2048);
+        using AcmeCertificateKey certKey = AcmeCertificateKey.CreateRsa(2048);
         byte[] csr = CsrBuilder.CreateDnsSigningRequest(["host.example.com", "news.example.com"], certKey);
         Assert.True(csr.Length > 32);
         // PKCS#10 DER SEQUENCE tag
@@ -52,7 +51,7 @@ public sealed class OwnedAcmeProtocolTests
     [Fact]
     public void Pfx_FromPemChain_LoadsWithBcl()
     {
-        using CertificateKey certKey = CertificateKey.Create(KeyAlgorithm.Rsa2048);
+        using AcmeCertificateKey certKey = AcmeCertificateKey.CreateRsa(2048);
         string keyPem = certKey.ExportPem();
         CertificateRequest request = certKey.CreateRequest(new X500DistinguishedName("CN=host.example.com"));
         var san = new SubjectAlternativeNameBuilder();
@@ -81,7 +80,9 @@ public sealed class OwnedAcmeProtocolTests
               "newOrder": "https://acme.example/new-order"
             }
             """;
-        AcmeDirectory? directory = JsonSerializer.Deserialize(directoryJson, AcmeJsonContext.Default.AcmeDirectory);
+        AcmeDirectoryResource? directory = JsonSerializer.Deserialize(
+            directoryJson,
+            AcmeJsonContext.Default.AcmeDirectoryResource);
         Assert.NotNull(directory);
         Assert.Equal("https://acme.example/new-order", directory.NewOrder?.AbsoluteUri);
 
@@ -105,8 +106,8 @@ public sealed class OwnedAcmeProtocolTests
     public void AcmeClient_BindExistingAccount_ReusesPersistedAccountUri()
     {
         using var rsa = RSA.Create(2048);
-        using AcmeKey key = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(rsa.ExportPkcs8PrivateKey());
-        var http = new AcmeHttpClient(
+        using AcmeAccountKey key = AcmeAccountKey.ImportPkcs8Der(rsa.ExportPkcs8PrivateKey());
+        var http = new AcmeHttpTransport(
             new ThrowingHttpClientFactory(),
             "unused",
             new Uri("https://acme.example/directory"),

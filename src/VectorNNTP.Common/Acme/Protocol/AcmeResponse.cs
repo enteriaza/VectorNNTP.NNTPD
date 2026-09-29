@@ -1,11 +1,11 @@
-using System;
-using System.Collections.Generic;
 using System.Net;
 
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
+/// <summary>Typed ACME HTTP response with Location / Link / Retry-After metadata.</summary>
 internal sealed class AcmeResponse<T>
 {
+    /// <summary>Initializes a new instance of the <see cref="AcmeResponse{T}"/> class.</summary>
     public AcmeResponse(
         HttpStatusCode statusCode,
         T? content,
@@ -22,21 +22,33 @@ internal sealed class AcmeResponse<T>
         RetryAfter = retryAfter;
     }
 
+    /// <summary>Gets the HTTP status code.</summary>
     public HttpStatusCode StatusCode { get; }
 
+    /// <summary>Gets the deserialized body when present.</summary>
     public T? Content { get; }
 
+    /// <summary>Gets the Location header when present.</summary>
     public Uri? Location { get; }
 
+    /// <summary>Gets parsed Link headers.</summary>
     public IReadOnlyList<AcmeLink> Links { get; }
 
+    /// <summary>Gets the raw response body.</summary>
     public string RawBody { get; }
 
-    /// <summary>When the authority returned a Retry-After header, the moment it asked to be polled again.</summary>
+    /// <summary>Gets Retry-After as an absolute UTC time when the authority supplied one.</summary>
     public DateTimeOffset? RetryAfter { get; }
 }
 
+/// <summary>One RFC 8288 Link entry from an ACME response.</summary>
 internal readonly record struct AcmeLink(Uri Url, string Relation);
 
-/// <summary>A raw (non-JSON) response body together with the Link headers that came with it.</summary>
+/// <summary>Raw (non-JSON) response body with Link headers (certificate download).</summary>
 internal readonly record struct AcmeRawResponse(string Body, IReadOnlyList<AcmeLink> Links);
+
+/// <summary>Order URL plus the latest order resource representation.</summary>
+internal sealed record AcmeOrder(Uri Location, AcmeOrderResource Resource);
+
+/// <summary>Downloaded PEM certificate chain and any alternate chain Link URLs.</summary>
+internal sealed record AcmeCertificate(string Pem, IReadOnlyList<Uri> Alternates);

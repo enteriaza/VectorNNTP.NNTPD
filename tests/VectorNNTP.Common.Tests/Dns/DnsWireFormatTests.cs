@@ -3,7 +3,7 @@ using System.Net;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Dns.Wire;
+using VectorNNTP.NNTPD.Dns;
 
 namespace VectorNNTP.Common.Tests.Dns;
 
@@ -15,8 +15,8 @@ public sealed class DnsWireFormatTests
     [Fact]
     public void QueryBuilder_BuildsSingleQuestionTxtQuery()
     {
-        byte[] query = DnsWireQueryBuilder.Build("_acme-challenge.example.com", DnsWireRecordTypes.Txt, out ushort queryId);
-        Assert.True(query.Length > DnsWireFormatUtilities.DnsHeaderSize);
+        byte[] query = DnsQueryBuilder.Build("_acme-challenge.example.com", DnsRecordType.Txt, out ushort queryId);
+        Assert.True(query.Length > DnsWireFormat.HeaderSize);
         Assert.Equal(queryId, BinaryPrimitives.ReadUInt16BigEndian(query));
         Assert.Equal(0, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(2))); // RD=0 default
         Assert.Equal(1, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(4))); // QDCOUNT
@@ -25,9 +25,9 @@ public sealed class DnsWireFormatTests
     [Fact]
     public void QueryBuilder_RecursiveDesired_SetsRdBit()
     {
-        byte[] query = DnsWireQueryBuilder.Build(
+        byte[] query = DnsQueryBuilder.Build(
             "example.com",
-            DnsWireRecordTypes.Ns,
+            DnsRecordType.Ns,
             out _,
             recursionDesired: true);
         Assert.Equal(0x0100, BinaryPrimitives.ReadUInt16BigEndian(query.AsSpan(2)));
@@ -37,16 +37,16 @@ public sealed class DnsWireFormatTests
     public void TryValidateDnsName_ValidName_EncodesAndRoundTrips()
     {
         const string name = "_acme-challenge.example.com";
-        Assert.True(DnsWireFormatUtilities.TryValidateDnsName(name, out string? error));
+        Assert.True(DnsWireFormat.TryValidateDnsName(name, out string? error));
         Assert.Null(error);
 
-        int wireLength = DnsWireFormatUtilities.ComputeWireNameLength(name);
+        int wireLength = DnsWireFormat.ComputeWireNameLength(name);
         Span<byte> buffer = stackalloc byte[wireLength];
-        int written = DnsWireFormatUtilities.EncodeDnsName(name, buffer);
+        int written = DnsWireFormat.EncodeDnsName(name, buffer);
         Assert.Equal(wireLength, written);
 
         int offset = 0;
-        Assert.True(DnsWireNameReader.TryReadDomainName(buffer, ref offset, out string decoded));
+        Assert.True(DnsNameCodec.TryReadDomainName(buffer, ref offset, out string decoded));
         Assert.Equal(name, decoded);
         Assert.Equal(written, offset);
     }
@@ -54,9 +54,9 @@ public sealed class DnsWireFormatTests
     [Fact]
     public void TryValidateDnsName_RejectsEmptyLabelAndNonAscii()
     {
-        Assert.False(DnsWireFormatUtilities.TryValidateDnsName("example..com", out _));
-        Assert.False(DnsWireFormatUtilities.TryValidateDnsName("café.example.com", out _));
-        Assert.False(DnsWireFormatUtilities.TryValidateDnsName(string.Empty, out _));
+        Assert.False(DnsWireFormat.TryValidateDnsName("example..com", out _));
+        Assert.False(DnsWireFormat.TryValidateDnsName("café.example.com", out _));
+        Assert.False(DnsWireFormat.TryValidateDnsName(string.Empty, out _));
     }
 
     [Fact]
@@ -68,13 +68,13 @@ public sealed class DnsWireFormatTests
         byte[] expectedBytes = Encoding.ASCII.GetBytes(challenge);
 
         List<byte[]> parsed = [];
-        Assert.True(DnsWireTxtResponseParser.TryParseTxtRecords(response, 0x1234, parsed));
+        Assert.True(DnsTxtParser.TryParseTxtRecords(response, 0x1234, parsed));
         Assert.Single(parsed);
         Assert.Equal(expectedBytes, parsed[0]);
-        Assert.True(DnsWireTxtResponseParser.ResponseContainsTxt(response, 0x1234, expectedBytes));
-        Assert.False(DnsWireTxtResponseParser.ResponseContainsTxt(response, 0x1234, "wrong"u8));
+        Assert.True(DnsTxtParser.ResponseContainsTxt(response, 0x1234, expectedBytes));
+        Assert.False(DnsTxtParser.ResponseContainsTxt(response, 0x1234, "wrong"u8));
 
-        List<string> strings = DnsWireTxtResponseParser.ParseTxtResponseStrings(response, 0x1234);
+        List<string> strings = DnsTxtParser.ParseTxtStrings(response, 0x1234);
         Assert.Equal([challenge], strings);
     }
 
@@ -83,7 +83,7 @@ public sealed class DnsWireFormatTests
     {
         const string recordName = "txt.example.com";
         byte[] response = BuildMultiStringTxtResponse(0x42, recordName, "hello", "world");
-        List<string> strings = DnsWireTxtResponseParser.ParseTxtResponseStrings(response, 0x42);
+        List<string> strings = DnsTxtParser.ParseTxtStrings(response, 0x42);
         Assert.Equal(["helloworld"], strings);
     }
 
@@ -91,8 +91,8 @@ public sealed class DnsWireFormatTests
     public void TxtParser_TransactionIdMismatch_ReturnsEmpty()
     {
         byte[] response = BuildGoldenTxtResponse(0x1111, "example.com", "token");
-        Assert.Empty(DnsWireTxtResponseParser.ParseTxtResponseStrings(response, 0x2222));
-        Assert.False(DnsWireTxtResponseParser.ResponseContainsTxt(response, 0x2222, "token"u8));
+        Assert.Empty(DnsTxtParser.ParseTxtStrings(response, 0x2222));
+        Assert.False(DnsTxtParser.ResponseContainsTxt(response, 0x2222, "token"u8));
     }
 
     [Fact]
@@ -101,46 +101,45 @@ public sealed class DnsWireFormatTests
         byte[] response = BuildGoldenTxtResponse(0x99, "example.com", "token");
         // Force RCODE=3 (NXDOMAIN) while keeping QR.
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(2), 0x8003);
-        Assert.Empty(DnsWireTxtResponseParser.ParseTxtResponseStrings(response, 0x99));
+        Assert.Empty(DnsTxtParser.ParseTxtStrings(response, 0x99));
     }
 
     [Fact]
     public void TxtParser_MalformedPacket_DoesNotThrow()
     {
         byte[] truncated = [0x00, 0x01, 0x80, 0x00];
-        Assert.Empty(DnsWireTxtResponseParser.ParseTxtResponseStrings(truncated, 1));
-        Assert.False(DnsWireTxtResponseParser.TryParseTxtRecords(truncated, 1, []));
+        Assert.Empty(DnsTxtParser.ParseTxtStrings(truncated, 1));
+        Assert.False(DnsTxtParser.TryParseTxtRecords(truncated, 1, []));
     }
 
     [Fact]
-    public void NameSkipper_SkipsQuestionName()
+    public void NameCodec_SkipsQuestionName()
     {
-        byte[] query = DnsWireQueryBuilder.Build("example.com", DnsWireRecordTypes.Txt, out _);
-        int offset = DnsWireFormatUtilities.DnsHeaderSize;
-        Assert.True(DnsWireNameSkipper.TrySkipName(query, ref offset));
-        Assert.Equal(DnsWireFormatUtilities.DnsHeaderSize + 13, offset);
+        byte[] query = DnsQueryBuilder.Build("example.com", DnsRecordType.Txt, out _);
+        int offset = DnsWireFormat.HeaderSize;
+        Assert.True(DnsNameCodec.TrySkipName(query, ref offset));
+        Assert.Equal(DnsWireFormat.HeaderSize + 13, offset);
     }
 
     [Fact]
-    public void NameSkipper_CompressionPointer_AdvancesTwoBytesWithoutFollowing()
+    public void NameCodec_CompressionPointer_AdvancesTwoBytesWithoutFollowing()
     {
-        // Skipper does not follow pointers (offset arithmetic only); pointer bytes advance by 2.
-        byte[] packet = new byte[DnsWireFormatUtilities.DnsHeaderSize + 2];
+        byte[] packet = new byte[DnsWireFormat.HeaderSize + 2];
         packet[12] = 0xC0;
         packet[13] = 0;
-        int offset = DnsWireFormatUtilities.DnsHeaderSize;
-        Assert.True(DnsWireNameSkipper.TrySkipName(packet, ref offset));
-        Assert.Equal(DnsWireFormatUtilities.DnsHeaderSize + 2, offset);
+        int offset = DnsWireFormat.HeaderSize;
+        Assert.True(DnsNameCodec.TrySkipName(packet, ref offset));
+        Assert.Equal(DnsWireFormat.HeaderSize + 2, offset);
     }
 
     [Fact]
-    public void NameReader_SelfReferentialCompressionPointer_FailsBounded()
+    public void NameCodec_SelfReferentialCompressionPointer_FailsBounded()
     {
-        byte[] packet = new byte[DnsWireFormatUtilities.DnsHeaderSize + 2];
+        byte[] packet = new byte[DnsWireFormat.HeaderSize + 2];
         packet[12] = 0xC0;
         packet[13] = 12; // pointer to self
-        int offset = DnsWireFormatUtilities.DnsHeaderSize;
-        Assert.False(DnsWireNameReader.TryReadDomainName(packet, ref offset, out _));
+        int offset = DnsWireFormat.HeaderSize;
+        Assert.False(DnsNameCodec.TryReadDomainName(packet, ref offset, out _));
     }
 
     [Fact]
@@ -195,17 +194,17 @@ public sealed class DnsWireFormatTests
 
     private static byte[] BuildGoldenTxtResponse(ushort queryId, string recordName, string txtValue)
     {
-        byte[] query = DnsWireQueryBuilder.Build(recordName, DnsWireRecordTypes.Txt, out _);
-        int qnameLength = query.Length - DnsWireFormatUtilities.DnsHeaderSize - DnsWireFormatUtilities.QuestionSuffixSize;
-        ReadOnlySpan<byte> qname = query.AsSpan(DnsWireFormatUtilities.DnsHeaderSize, qnameLength);
+        byte[] query = DnsQueryBuilder.Build(recordName, DnsRecordType.Txt, out _);
+        int qnameLength = query.Length - DnsWireFormat.HeaderSize - DnsWireFormat.QuestionSuffixSize;
+        ReadOnlySpan<byte> qname = query.AsSpan(DnsWireFormat.HeaderSize, qnameLength);
 
         byte[] rdata = new byte[1 + txtValue.Length];
         rdata[0] = (byte)txtValue.Length;
         Encoding.ASCII.GetBytes(txtValue, rdata.AsSpan(1));
 
-        int responseLength = DnsWireFormatUtilities.DnsHeaderSize
+        int responseLength = DnsWireFormat.HeaderSize
             + qnameLength
-            + DnsWireFormatUtilities.QuestionSuffixSize
+            + DnsWireFormat.QuestionSuffixSize
             + qnameLength
             + 10
             + rdata.Length;
@@ -216,17 +215,17 @@ public sealed class DnsWireFormatTests
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(4, 2), 1);
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(6, 2), 1);
 
-        int offset = DnsWireFormatUtilities.DnsHeaderSize;
+        int offset = DnsWireFormat.HeaderSize;
         qname.CopyTo(response.AsSpan(offset));
         offset += qnameLength;
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsWireRecordTypes.Txt);
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsWireQueryBuilder.DnsClassIn);
-        offset += DnsWireFormatUtilities.QuestionSuffixSize;
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsRecordType.Txt);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsRecordType.ClassIn);
+        offset += DnsWireFormat.QuestionSuffixSize;
 
         qname.CopyTo(response.AsSpan(offset));
         offset += qnameLength;
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsWireRecordTypes.Txt);
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsWireQueryBuilder.DnsClassIn);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsRecordType.Txt);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsRecordType.ClassIn);
         BinaryPrimitives.WriteUInt32BigEndian(response.AsSpan(offset + 4), 60);
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 8), (ushort)rdata.Length);
         offset += 10;
@@ -236,9 +235,9 @@ public sealed class DnsWireFormatTests
 
     private static byte[] BuildMultiStringTxtResponse(ushort queryId, string recordName, string part1, string part2)
     {
-        byte[] query = DnsWireQueryBuilder.Build(recordName, DnsWireRecordTypes.Txt, out _);
-        int qnameLength = query.Length - DnsWireFormatUtilities.DnsHeaderSize - DnsWireFormatUtilities.QuestionSuffixSize;
-        ReadOnlySpan<byte> qname = query.AsSpan(DnsWireFormatUtilities.DnsHeaderSize, qnameLength);
+        byte[] query = DnsQueryBuilder.Build(recordName, DnsRecordType.Txt, out _);
+        int qnameLength = query.Length - DnsWireFormat.HeaderSize - DnsWireFormat.QuestionSuffixSize;
+        ReadOnlySpan<byte> qname = query.AsSpan(DnsWireFormat.HeaderSize, qnameLength);
 
         byte[] rdata = new byte[2 + part1.Length + part2.Length];
         rdata[0] = (byte)part1.Length;
@@ -246,9 +245,9 @@ public sealed class DnsWireFormatTests
         rdata[1 + part1.Length] = (byte)part2.Length;
         Encoding.ASCII.GetBytes(part2, rdata.AsSpan(2 + part1.Length));
 
-        int responseLength = DnsWireFormatUtilities.DnsHeaderSize
+        int responseLength = DnsWireFormat.HeaderSize
             + qnameLength
-            + DnsWireFormatUtilities.QuestionSuffixSize
+            + DnsWireFormat.QuestionSuffixSize
             + qnameLength
             + 10
             + rdata.Length;
@@ -258,17 +257,17 @@ public sealed class DnsWireFormatTests
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(4, 2), 1);
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(6, 2), 1);
 
-        int offset = DnsWireFormatUtilities.DnsHeaderSize;
+        int offset = DnsWireFormat.HeaderSize;
         qname.CopyTo(response.AsSpan(offset));
         offset += qnameLength;
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsWireRecordTypes.Txt);
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsWireQueryBuilder.DnsClassIn);
-        offset += DnsWireFormatUtilities.QuestionSuffixSize;
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsRecordType.Txt);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsRecordType.ClassIn);
+        offset += DnsWireFormat.QuestionSuffixSize;
 
         qname.CopyTo(response.AsSpan(offset));
         offset += qnameLength;
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsWireRecordTypes.Txt);
-        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsWireQueryBuilder.DnsClassIn);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset), DnsRecordType.Txt);
+        BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 2), DnsRecordType.ClassIn);
         BinaryPrimitives.WriteUInt32BigEndian(response.AsSpan(offset + 4), 60);
         BinaryPrimitives.WriteUInt16BigEndian(response.AsSpan(offset + 8), (ushort)rdata.Length);
         offset += 10;

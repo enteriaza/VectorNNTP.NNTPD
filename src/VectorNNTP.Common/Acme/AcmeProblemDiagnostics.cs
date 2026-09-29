@@ -1,12 +1,12 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using ProtocolAcmeException = VectorNNTP.NNTPD.Acme.Protocol.AcmeException;
+using VectorNNTP.NNTPD.Acme.Protocol;
 
 namespace VectorNNTP.NNTPD.Acme;
 
 /// <summary>
-/// Formats owned ACME protocol / problem details into sanitized diagnostic strings
+/// Formats ACME CA / problem details into sanitized diagnostic strings
 /// (no account keys, tokens, passwords, or PEM material).
 /// </summary>
 internal static partial class AcmeProblemDiagnostics
@@ -17,16 +17,16 @@ internal static partial class AcmeProblemDiagnostics
     public static string FormatException(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        if (exception is ProtocolAcmeException protocol)
+        if (exception is AcmeCaException ca)
         {
-            return FormatProtocolException(protocol);
+            return FormatCaException(ca);
         }
 
         return exception.GetType().Name;
     }
 
-    /// <summary>Formats an owned ACME protocol exception / problem document.</summary>
-    public static string FormatProtocolException(ProtocolAcmeException exception)
+    /// <summary>Formats an ACME CA exception / problem document.</summary>
+    public static string FormatCaException(AcmeCaException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (string.IsNullOrWhiteSpace(exception.ErrorType)
@@ -34,7 +34,7 @@ internal static partial class AcmeProblemDiagnostics
             && exception.StatusCode is null)
         {
             var fallback = SanitizeText(exception.Message);
-            return string.IsNullOrEmpty(fallback) ? nameof(ProtocolAcmeException) : fallback;
+            return string.IsNullOrEmpty(fallback) ? nameof(AcmeCaException) : fallback;
         }
 
         return FormatProblemFields(
@@ -98,7 +98,7 @@ internal static partial class AcmeProblemDiagnostics
             }
         }
 
-        return parts.Count == 0 ? nameof(ProtocolAcmeException) : string.Join(' ', parts);
+        return parts.Count == 0 ? nameof(AcmeCaException) : string.Join(' ', parts);
     }
 
     /// <summary>Formats a failed authorization for operator diagnostics.</summary>

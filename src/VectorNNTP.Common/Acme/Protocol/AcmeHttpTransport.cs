@@ -1,21 +1,18 @@
-using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
-using System.Threading;
-using System.Threading.Tasks;
-using VectorNNTP.NNTPD.Acme.Protocol.Internal;
-using Microsoft.Extensions.Logging;
 
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
-internal sealed class AcmeHttpClient
+/// <summary>
+/// ACME HTTP transport: directory cache, nonce pool, JWS POST, badNonce / transient retries.
+/// Creates an <see cref="HttpClient"/> per request via <see cref="IHttpClientFactory"/>.
+/// </summary>
+internal sealed class AcmeHttpTransport
 {
     private const string JoseContentType = "application/jose+json";
     private const int MaxBadNonceRetries = 5;
@@ -30,9 +27,10 @@ internal sealed class AcmeHttpClient
     private readonly TimeProvider _time;
     private readonly ConcurrentStack<string> _nonces = new();
 
-    private Task<AcmeDirectory>? _directory;
+    private Task<AcmeDirectoryResource>? _directory;
 
-    public AcmeHttpClient(
+    /// <summary>Initializes a new instance of the <see cref="AcmeHttpTransport"/> class.</summary>
+    public AcmeHttpTransport(
         IHttpClientFactory httpClientFactory,
         string httpClientName,
         Uri directoryUri,
@@ -46,45 +44,37 @@ internal sealed class AcmeHttpClient
         _time = time;
     }
 
-    // A client is taken per request rather than held for the process lifetime, so that the factory
-    // can rotate the underlying handler and pick up DNS changes on a server that runs for months.
     private HttpClient CreateClient() => _httpClientFactory.CreateClient(_httpClientName);
 
-    public Task<AcmeDirectory> GetDirectoryAsync(CancellationToken cancellationToken)
+    /// <summary>Returns the cached ACME directory, fetching it on first use.</summary>
+    public Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken)
     {
-        Task<AcmeDirectory>? cached = Volatile.Read(ref _directory);
+        Task<AcmeDirectoryResource>? cached = Volatile.Read(ref _directory);
         if (cached is not null && !cached.IsFaulted && !cached.IsCanceled)
         {
             return cached;
         }
 
-        Task<AcmeDirectory> fetch = FetchDirectoryAsync(cancellationToken);
+        Task<AcmeDirectoryResource> fetch = FetchDirectoryAsync(cancellationToken);
         Volatile.Write(ref _directory, fetch);
         return fetch;
     }
 
-    // Drops the cached directory so the next call refetches it. Used when a request to an endpoint the
-    // directory named fails as if that endpoint has moved, which is how an authority migration surfaces
-    // to a process running since before the move. A refetch faults on its own if the authority is
-    // simply unreachable, so a transient outage does not wedge the cache.
-    //
-    // A fetch already running when this clears the cache can still publish its stale result afterwards.
-    // The single ordered renewal loop serialises these, so it does not matter today; a concurrent
-    // refresh would need a generation check on the assignment in GetDirectoryAsync.
     private void InvalidateDirectory() => Volatile.Write(ref _directory, null);
 
-    private async Task<AcmeDirectory> FetchDirectoryAsync(CancellationToken cancellationToken)
+    private async Task<AcmeDirectoryResource> FetchDirectoryAsync(CancellationToken cancellationToken)
     {
-        AcmeResponse<AcmeDirectory> response = await SendWithRetryAsync(
+        AcmeResponse<AcmeDirectoryResource> response = await SendWithRetryAsync(
             () => new HttpRequestMessage(HttpMethod.Get, _directoryUri),
-            AcmeJsonContext.Default.AcmeDirectory,
-            cancellationToken);
+            AcmeJsonContext.Default.AcmeDirectoryResource,
+            cancellationToken).ConfigureAwait(false);
 
-        return response.Content ?? throw new AcmeException("The ACME directory response was empty.");
+        return response.Content ?? throw new AcmeCaException("The ACME directory response was empty.");
     }
 
+    /// <summary>POSTs a JWS-signed payload, retrying on badNonce.</summary>
     public async Task<AcmeResponse<T>> PostAsync<T>(
-        AcmeKey key,
+        AcmeAccountKey key,
         string? keyId,
         Uri url,
         string payload,
@@ -95,35 +85,38 @@ internal sealed class AcmeHttpClient
 
         for (int attempt = 0; attempt < MaxBadNonceRetries; attempt++)
         {
-            string nonce = await TakeNonceAsync(cancellationToken);
+            string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
             string jws = JsonWebSignature.Encode(key, url, nonce, keyId, payload);
 
             try
             {
-                return await SendWithRetryAsync(() => CreateJwsRequest(url, jws, accept: null), typeInfo, cancellationToken);
+                return await SendWithRetryAsync(() => CreateJwsRequest(url, jws, accept: null), typeInfo, cancellationToken)
+                    .ConfigureAwait(false);
             }
-            catch (AcmeException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
+            catch (AcmeCaException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
             {
                 lastError = ex;
-                Log.NonceRejected(_logger, url);
+                AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
             }
         }
 
-        throw new AcmeException(
+        throw new AcmeCaException(
             $"The certificate authority repeatedly rejected the replay nonce for '{url}'.",
-            lastError ?? new AcmeException("badNonce"));
+            lastError ?? new AcmeCaException("badNonce"));
     }
 
+    /// <summary>POST-as-GET (empty JWS payload).</summary>
     public Task<AcmeResponse<T>> PostAsGetAsync<T>(
-        AcmeKey key,
+        AcmeAccountKey key,
         string keyId,
         Uri url,
         JsonTypeInfo<T> typeInfo,
         CancellationToken cancellationToken) =>
         PostAsync(key, keyId, url, string.Empty, typeInfo, cancellationToken);
 
+    /// <summary>POST-as-GET returning the raw body (certificate PEM chain).</summary>
     public async Task<AcmeRawResponse> PostAsGetRawAsync(
-        AcmeKey key,
+        AcmeAccountKey key,
         string keyId,
         Uri url,
         string accept,
@@ -131,7 +124,7 @@ internal sealed class AcmeHttpClient
     {
         for (int attempt = 0; attempt < MaxBadNonceRetries; attempt++)
         {
-            string nonce = await TakeNonceAsync(cancellationToken);
+            string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
             string jws = JsonWebSignature.Encode(key, url, nonce, keyId, string.Empty);
 
             try
@@ -139,29 +132,24 @@ internal sealed class AcmeHttpClient
                 AcmeResponse<object> response = await SendWithRetryAsync<object>(
                     () => CreateJwsRequest(url, jws, accept),
                     typeInfo: null,
-                    cancellationToken);
+                    cancellationToken).ConfigureAwait(false);
 
                 return new AcmeRawResponse(response.RawBody, response.Links);
             }
-            catch (AcmeException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
+            catch (AcmeCaException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
             {
-                Log.NonceRejected(_logger, url);
+                AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
             }
         }
 
-        throw new AcmeException($"The certificate authority repeatedly rejected the replay nonce for '{url}'.");
+        throw new AcmeCaException($"The certificate authority repeatedly rejected the replay nonce for '{url}'.");
     }
-
-    public Task<AcmeResponse<T>> GetAsync<T>(Uri url, JsonTypeInfo<T> typeInfo, CancellationToken cancellationToken) =>
-        SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, url), typeInfo, cancellationToken);
 
     private static HttpRequestMessage CreateJwsRequest(Uri url, string jws, string? accept)
     {
         var content = new StringContent(jws, Encoding.UTF8);
 
-        // RFC 8555 section 6.2 requires exactly "application/jose+json". Certificate authorities
-        // compare the header as a string, so the "; charset=utf-8" that StringContent would append
-        // gets the request rejected with a 415.
+        // RFC 8555 §6.2 requires exactly "application/jose+json" (no charset parameter).
         content.Headers.ContentType = new MediaTypeHeaderValue(JoseContentType);
 
         var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
@@ -181,9 +169,9 @@ internal sealed class AcmeHttpClient
             return nonce;
         }
 
-        AcmeDirectory directory = await GetDirectoryAsync(cancellationToken);
+        AcmeDirectoryResource directory = await GetDirectoryAsync(cancellationToken).ConfigureAwait(false);
         Uri newNonce = directory.NewNonce
-            ?? throw new AcmeException("The ACME directory does not advertise a newNonce endpoint.");
+            ?? throw new AcmeCaException("The ACME directory does not advertise a newNonce endpoint.");
 
         using var request = new HttpRequestMessage(HttpMethod.Head, newNonce);
         using HttpClient client = CreateClient();
@@ -191,12 +179,11 @@ internal sealed class AcmeHttpClient
         HttpResponseMessage response;
         try
         {
-            response = await client.SendAsync(request, cancellationToken);
+            response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+                                   && !cancellationToken.IsCancellationRequested)
         {
-            // The newNonce endpoint is the first thing an operation touches. If it has gone away, the
-            // directory that named it is stale; drop it so the next attempt refetches the new one.
             InvalidateDirectory();
             throw;
         }
@@ -216,7 +203,7 @@ internal sealed class AcmeHttpClient
             return nonce;
         }
 
-        throw new AcmeException("The certificate authority did not supply a replay nonce.");
+        throw new AcmeCaException("The certificate authority did not supply a replay nonce.");
     }
 
     private async Task<AcmeResponse<T>> SendWithRetryAsync<T>(
@@ -232,40 +219,46 @@ internal sealed class AcmeHttpClient
             try
             {
                 using HttpClient client = CreateClient();
-                response = await client.SendAsync(request, cancellationToken);
+                response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+                                       && !cancellationToken.IsCancellationRequested)
             {
                 if (attempt >= MaxTransientRetries)
                 {
-                    // A directory-named endpoint that stays unreachable after every retry may have moved.
                     InvalidateDirectory();
-                    throw new AcmeException($"The request to '{request.RequestUri}' failed after {attempt + 1} attempts.", ex);
+                    throw new AcmeCaException(
+                        $"The request to '{request.RequestUri}' failed after {attempt + 1} attempts.",
+                        ex);
                 }
 
                 TimeSpan backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
-                Log.TransportRetry(_logger, backoff, ex);
-                await Task.Delay(backoff, _time, cancellationToken);
+                AcmeLogMessages.AcmeTransportRetry(_logger, backoff, ex);
+                await Task.Delay(backoff, _time, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
             using (response)
             {
                 CaptureNonce(response);
-                string body = await response.Content.ReadAsStringAsync(cancellationToken);
+                string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
                 DateTimeOffset? retryAfter = ParseRetryAfter(response);
 
                 if (response.IsSuccessStatusCode)
                 {
                     T? content = typeInfo is null || body.Length == 0 ? default : Deserialize(body, typeInfo);
-                    return new AcmeResponse<T>(response.StatusCode, content, response.Headers.Location, ParseLinks(response), body, retryAfter);
+                    return new AcmeResponse<T>(
+                        response.StatusCode,
+                        content,
+                        response.Headers.Location,
+                        ParseLinks(response),
+                        body,
+                        retryAfter);
                 }
 
                 AcmeProblem? problem = TryParseProblem(body);
 
-                // A 404 from an endpoint the directory named means the directory is stale: refetch it
-                // on the next call so a moved endpoint is picked up without a restart.
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
                     InvalidateDirectory();
@@ -279,8 +272,8 @@ internal sealed class AcmeHttpClient
 
                     if (delay > TimeSpan.Zero && delay <= MaxRetryDelay)
                     {
-                        Log.ServerErrorRetry(_logger, (int)response.StatusCode, delay);
-                        await Task.Delay(delay, _time, cancellationToken);
+                        AcmeLogMessages.AcmeServerErrorRetry(_logger, (int)response.StatusCode, delay);
+                        await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
                 }
@@ -303,7 +296,7 @@ internal sealed class AcmeHttpClient
             or HttpStatusCode.GatewayTimeout;
     }
 
-    private static AcmeException CreateException(
+    private static AcmeCaException CreateException(
         HttpStatusCode statusCode,
         AcmeProblem? problem,
         DateTimeOffset? retryAfter,
@@ -317,10 +310,10 @@ internal sealed class AcmeHttpClient
 
         if (statusCode == HttpStatusCode.TooManyRequests || problem?.Type == AcmeErrorTypes.RateLimited)
         {
-            return new AcmeRateLimitException(message, problem?.Detail, retryAfter);
+            return new AcmeCaRateLimitException(message, problem?.Detail, retryAfter);
         }
 
-        return new AcmeException(message, problem?.Type, problem?.Detail, (int)statusCode);
+        return new AcmeCaException(message, problem?.Type, problem?.Detail, (int)statusCode);
     }
 
     private static T? Deserialize<T>(string body, JsonTypeInfo<T> typeInfo)
@@ -331,7 +324,7 @@ internal sealed class AcmeHttpClient
         }
         catch (JsonException ex)
         {
-            throw new AcmeException("The certificate authority returned a response that could not be parsed.", ex);
+            throw new AcmeCaException("The certificate authority returned a response that could not be parsed.", ex);
         }
     }
 
@@ -388,7 +381,7 @@ internal sealed class AcmeHttpClient
     {
         if (!response.Headers.TryGetValues("Link", out IEnumerable<string>? values))
         {
-            return Array.Empty<AcmeLink>();
+            return [];
         }
 
         var links = new List<AcmeLink>();
@@ -431,8 +424,6 @@ internal sealed class AcmeHttpClient
                 case ',' when depth == 0:
                     yield return value[start..i];
                     start = i + 1;
-                    break;
-                default:
                     break;
             }
         }

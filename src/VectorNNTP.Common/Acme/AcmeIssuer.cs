@@ -2,18 +2,15 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Acme.Protocol;
-using VectorNNTP.NNTPD.Acme.Protocol.Certificates;
 using VectorNNTP.NNTPD.Configuration;
-using ProtocolAcmeException = VectorNNTP.NNTPD.Acme.Protocol.AcmeException;
 
 namespace VectorNNTP.NNTPD.Acme;
 
 /// <summary>
-/// ACME v2 issuer using the owned AutoHttps-derived protocol stack with DNS-01 via <see cref="Dns01Solver"/>.
+/// ACME v2 issuer using the owned protocol client with DNS-01 via <see cref="Dns01Solver"/>.
 /// </summary>
 /// <remarks>
-/// Replaces Certes. Account keys remain PKCS#8 DER on disk; PEM is used only transiently for the
-/// vendored <see cref="AcmeKey"/> import. Persisted TLS credentials remain PKCS#12/PFX via BCL.
+/// Account keys remain PKCS#8 DER on disk. Persisted TLS credentials remain PKCS#12/PFX via BCL.
 /// After DNS-01 challenges are triggered, the issuer polls until the ACME order is
 /// <c>ready</c> (or fails) before finalize.
 /// </remarks>
@@ -96,8 +93,8 @@ public sealed class AcmeIssuer : ICertificateIssuer
         var account = EnsureAccount(options, cancellationToken);
         var directoryUri = new Uri(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute);
 
-        using AcmeKey accountKey = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(account.PrivateKeyDer);
-        var http = new AcmeHttpClient(
+        using AcmeAccountKey accountKey = AcmeAccountKey.ImportPkcs8Der(account.PrivateKeyDer);
+        var http = new AcmeHttpTransport(
             _httpClientFactory,
             HttpClientName,
             directoryUri,
@@ -106,7 +103,7 @@ public sealed class AcmeIssuer : ICertificateIssuer
         var acme = new AcmeClient(http, accountKey, _logger, TimeProvider.System);
         acme.BindExistingAccount(account.AccountUri);
 
-        using CertificateKey certKey = CertificateKey.Create(KeyAlgorithm.Rsa2048);
+        using AcmeCertificateKey certKey = AcmeCertificateKey.CreateRsa(KeySizeBits);
         AcmeOrder order;
         try
         {
@@ -114,7 +111,7 @@ public sealed class AcmeIssuer : ICertificateIssuer
             var identifiers = domains
                 .Select(static d => new AcmeIdentifier { Type = AcmeIdentifierTypes.Dns, Value = d })
                 .ToArray();
-            order = await acme.CreateOrderAsync(identifiers, profile: null, replaces: null, cancellationToken)
+            order = await acme.CreateOrderAsync(identifiers, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -197,7 +194,7 @@ public sealed class AcmeIssuer : ICertificateIssuer
                     .ConfigureAwait(false);
                 certificatePem = certificate.Pem;
             }
-            catch (Exception ex) when (ex is ProtocolAcmeException or CryptographicException)
+            catch (Exception ex) when (ex is AcmeCaException or CryptographicException)
             {
                 var orderStatus = "unknown";
                 try
@@ -312,8 +309,8 @@ public sealed class AcmeIssuer : ICertificateIssuer
         try
         {
             var directoryUri = new Uri(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute);
-            using AcmeKey accountKey = AccountKeyCodec.ImportAcmeKeyFromPkcs8Der(keyDer);
-            var http = new AcmeHttpClient(
+            using AcmeAccountKey accountKey = AcmeAccountKey.ImportPkcs8Der(keyDer);
+            var http = new AcmeHttpTransport(
                 _httpClientFactory,
                 HttpClientName,
                 directoryUri,
@@ -349,7 +346,7 @@ public sealed class AcmeIssuer : ICertificateIssuer
         }
     }
 
-    private static byte[] BuildPfx(string certificateChainPem, CertificateKey certKey, string password)
+    private static byte[] BuildPfx(string certificateChainPem, AcmeCertificateKey certKey, string password)
     {
         if (string.IsNullOrWhiteSpace(certificateChainPem))
         {

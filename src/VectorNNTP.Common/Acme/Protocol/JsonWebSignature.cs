@@ -1,14 +1,14 @@
-using System;
 using System.IO;
 using System.Text;
 using System.Text.Json;
-using VectorNNTP.NNTPD.Acme.Protocol.Internal;
 
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
+/// <summary>Builds ACME JWS (RFC 8555 §6.2) and external-account-binding HMAC JWS.</summary>
 internal static class JsonWebSignature
 {
-    public static string Encode(AcmeKey key, Uri url, string? nonce, string? keyId, string payload)
+    /// <summary>Encodes a signed JWS object for an ACME request.</summary>
+    public static string Encode(AcmeAccountKey key, Uri url, string? nonce, string? keyId, string payload)
     {
         string protectedHeader = Base64Url.Encode(WriteProtectedHeader(key, url, nonce, keyId));
         string encodedPayload = payload.Length == 0 ? string.Empty : Base64Url.Encode(Encoding.UTF8.GetBytes(payload));
@@ -19,6 +19,7 @@ internal static class JsonWebSignature
         return $"{{\"protected\":\"{protectedHeader}\",\"payload\":\"{encodedPayload}\",\"signature\":\"{signature}\"}}";
     }
 
+    /// <summary>Encodes an HS256 JWS for external account binding.</summary>
     public static string EncodeHmac(byte[] hmacKey, string keyId, Uri url, string payload)
     {
         using var stream = new MemoryStream();
@@ -40,7 +41,7 @@ internal static class JsonWebSignature
         return $"{{\"protected\":\"{protectedHeader}\",\"payload\":\"{encodedPayload}\",\"signature\":\"{signature}\"}}";
     }
 
-    private static byte[] WriteProtectedHeader(AcmeKey key, Uri url, string? nonce, string? keyId)
+    private static byte[] WriteProtectedHeader(AcmeAccountKey key, Uri url, string? nonce, string? keyId)
     {
         using var stream = new MemoryStream();
         using var writer = new Utf8JsonWriter(stream);

@@ -122,4 +122,28 @@ internal static partial class AcmeLogMessages
         Level = LogLevel.Information,
         Message = "Server certificate ready generation={Generation} notAfter={NotAfter:o}")]
     public static partial void ServerCertificateReady(ILogger logger, int Generation, DateTimeOffset NotAfter);
+
+    [LoggerMessage(
+        EventId = 1919,
+        Level = LogLevel.Debug,
+        Message = "ACME protocol account registered accountUrl={AccountUrl}")]
+    public static partial void AcmeProtocolAccountRegistered(ILogger logger, string AccountUrl);
+
+    [LoggerMessage(
+        EventId = 1920,
+        Level = LogLevel.Debug,
+        Message = "ACME badNonce; retrying {Url}")]
+    public static partial void AcmeBadNonceRetry(ILogger logger, Uri Url);
+
+    [LoggerMessage(
+        EventId = 1921,
+        Level = LogLevel.Debug,
+        Message = "ACME transport error; retrying in {Delay}")]
+    public static partial void AcmeTransportRetry(ILogger logger, TimeSpan Delay, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1922,
+        Level = LogLevel.Debug,
+        Message = "ACME server status={StatusCode}; retrying in {Delay}")]
+    public static partial void AcmeServerErrorRetry(ILogger logger, int StatusCode, TimeSpan Delay);
 }

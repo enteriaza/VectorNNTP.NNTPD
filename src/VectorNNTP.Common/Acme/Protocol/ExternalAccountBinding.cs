@@ -1,21 +1,14 @@
-using System;
-using VectorNNTP.NNTPD.Acme.Protocol.Internal;
-
 namespace VectorNNTP.NNTPD.Acme.Protocol;
 
 /// <summary>
-/// Credentials that bind a new ACME account to an existing account at the certificate authority.
-/// Required by authorities such as ZeroSSL, Google Trust Services and Sectigo.
+/// External account binding credentials (RFC 8555 §7.3.4). Optional; VectorNNTP registration passes null
+/// when the directory does not require EAB.
 /// </summary>
-public sealed class ExternalAccountBinding
+internal sealed class ExternalAccountBinding
 {
     private readonly byte[] _hmacKey;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ExternalAccountBinding"/> class.
-    /// </summary>
-    /// <param name="keyId">The key identifier issued by the certificate authority.</param>
-    /// <param name="hmacKey">The HMAC key issued by the certificate authority, encoded as base64url.</param>
+    /// <summary>Initializes a new instance with a base64url-encoded HMAC key.</summary>
     public ExternalAccountBinding(string keyId, string hmacKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
@@ -25,11 +18,7 @@ public sealed class ExternalAccountBinding
         _hmacKey = DecodeKey(hmacKey);
     }
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ExternalAccountBinding"/> class.
-    /// </summary>
-    /// <param name="keyId">The key identifier issued by the certificate authority.</param>
-    /// <param name="hmacKey">The raw HMAC key issued by the certificate authority.</param>
+    /// <summary>Initializes a new instance with a raw HMAC key.</summary>
     public ExternalAccountBinding(string keyId, byte[] hmacKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
@@ -42,6 +31,7 @@ public sealed class ExternalAccountBinding
     /// <summary>Gets the key identifier issued by the certificate authority.</summary>
     public string KeyId { get; }
 
+    /// <summary>Returns the HMAC key bytes for JWS signing.</summary>
     internal byte[] GetHmacKey() => _hmacKey;
 
     private static byte[] DecodeKey(string hmacKey)
