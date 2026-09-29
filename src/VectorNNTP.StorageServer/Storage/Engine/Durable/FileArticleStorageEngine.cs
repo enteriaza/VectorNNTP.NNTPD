@@ -32,6 +32,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// successful Evict/Invalidate the cache entry is removed (Phase 3D), and a cache hit for an
 /// ArtId whose durable state is Evicted/Invalid is dropped rather than returned.
 /// </para>
+/// <para>
+/// Phase 4A: logical death updates in-memory segment Live/Dead using
+/// <see cref="StoredArticleLocation.Length"/>. Catalogue Live/Dead are reconstructed from the
+/// article index on open/recovery. Physical segment reclamation/compaction is not implemented
+/// here — see <see cref="SegmentLifecycle.IsReclaimable"/>.
+/// </para>
 /// </remarks>
 public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
 {
@@ -159,6 +165,7 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
             journal = null;
             segments = null;
             index = null;
+            engine.RebuildSegmentAccountingFromIndex();
             FileArticleStorageEngineLogMessages.Opened(log, options.ControlDir, options.SegmentDir);
             return engine;
         }
@@ -263,6 +270,21 @@ public sealed class FileArticleStorageEngine : IArticleStorageEngine, IArticleSt
         }
 
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
+        RebuildSegmentAccountingFromIndex();
+    }
+
+    /// <summary>
+    /// Rebuilds catalogue LiveBytes/DeadBytes from the durable article index.
+    /// </summary>
+    /// <remarks>
+    /// ArticleIndex remains authoritative for logical state. Catalogue SizeBytes remains the
+    /// physical file extent from segment discovery. This method only repairs in-memory live/dead
+    /// views after open or recovery.
+    /// </remarks>
+    public void RebuildSegmentAccountingFromIndex()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        _segments.Catalogue.RebuildLiveDeadFromIndex(_index.Snapshot());
     }
 
     /// <summary>Waits until no incomplete journal sequences remain.</summary>

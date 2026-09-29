@@ -4,9 +4,19 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// In-memory segment catalogue with Retired fencing, reconstructed from segment files on store open.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Phase 2B does not introduce a durable catalogue database. Physical segment files under
-/// CacheDir are authoritative for discovery; this catalogue tracks Size/Live/Dead/Generation
-/// for the open store instance and persists Retired via on-disk <c>.retired</c> rename.
+/// CacheDir are authoritative for discovery and <see cref="SegmentInfo.SizeBytes"/>;
+/// this catalogue tracks Live/Dead/Generation for the open store instance and persists
+/// Retired via on-disk <c>.retired</c> rename.
+/// </para>
+/// <para>
+/// On store open, discovery provisionally sets <c>LiveBytes = SizeBytes</c> and
+/// <c>DeadBytes = 0</c>. The durable article storage engine then rebuilds Live/Dead from
+/// the article index (Present → Live, Evicted/Invalid → Dead) using location Length.
+/// Live/Dead are therefore process-local views repaired from the authoritative index — they
+/// are not independently durable metrics.
+/// </para>
 /// </remarks>
 public sealed class FileSegmentCatalogue : ISegmentCatalogue
 {
@@ -111,8 +121,8 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
     }
 
     /// <summary>
-    /// Applies live/dead accounting without relocating bytes (tests / future eviction).
-    /// Does not free physical holes — next append remains at EOF.
+    /// Applies live/dead accounting without relocating bytes.
+    /// Does not free physical holes — next append remains at EOF; SizeBytes unchanged.
     /// </summary>
     public void ApplyLiveDeadDelta(SegmentId segmentId, long liveDelta, long deadDelta)
     {
@@ -128,6 +138,55 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
                 LiveBytes = Math.Max(0L, existing.LiveBytes + liveDelta),
                 DeadBytes = Math.Max(0L, existing.DeadBytes + deadDelta),
             };
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds LiveBytes/DeadBytes from durable article index metadata.
+    /// </summary>
+    /// <remarks>
+    /// Resets Live/Dead to zero for every catalogue entry, then accumulates
+    /// <see cref="StoredArticleLocation.Length"/> for Present (live) and Evicted/Invalid (dead).
+    /// SizeBytes, State, and Generation are unchanged. Unknown segment ids are ignored.
+    /// </remarks>
+    public void RebuildLiveDeadFromIndex(IEnumerable<StoredArticleMetadata> articles)
+    {
+        ArgumentNullException.ThrowIfNull(articles);
+        lock (_gate)
+        {
+            foreach (var key in _entries.Keys.ToArray())
+            {
+                var existing = _entries[key];
+                _entries[key] = existing with { LiveBytes = 0, DeadBytes = 0 };
+            }
+
+            foreach (var article in articles)
+            {
+                var segmentKey = article.Location.SegmentId.Value;
+                if (!_entries.TryGetValue(segmentKey, out var existing))
+                {
+                    continue;
+                }
+
+                var extent = article.Location.Length;
+                if (extent <= 0)
+                {
+                    continue;
+                }
+
+                _entries[segmentKey] = article.State switch
+                {
+                    ArticleStorageState.Present => existing with
+                    {
+                        LiveBytes = existing.LiveBytes + extent,
+                    },
+                    ArticleStorageState.Evicted or ArticleStorageState.Invalid => existing with
+                    {
+                        DeadBytes = existing.DeadBytes + extent,
+                    },
+                    _ => existing,
+                };
+            }
         }
     }
 

@@ -123,6 +123,21 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Returns a snapshot of all index entries (Present, Evicted, and Invalid).
+    /// </summary>
+    /// <remarks>
+    /// Used to rebuild segment Live/Dead accounting after open/recovery. Does not perform IO.
+    /// </remarks>
+    public IReadOnlyList<StoredArticleMetadata> Snapshot()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _entries.Values.ToArray();
+        }
+    }
+
     /// <inheritdoc />
     public bool TryCommitPresent(in StoredArticleMetadata metadata)
     {

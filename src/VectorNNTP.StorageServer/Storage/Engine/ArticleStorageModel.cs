@@ -23,9 +23,17 @@ public enum ArticleStorageState : byte
 
 /// <summary>Segment lifecycle for append-oriented immutable segment files.</summary>
 /// <remarks>
-/// Closed segments are immutable. Retired segments may become physically reclaimable only after
-/// durable index relocation for every live article that previously referenced them has committed.
-/// Physical reclamation itself is out of scope for Phase 1.5.
+/// <para>
+/// States: <see cref="Active"/> (writable) → <see cref="Closed"/> (immutable) →
+/// <see cref="Retired"/> (terminal fencing after durable live relocation). Physical deletion
+/// of retired segments is a later phase. There is no separate “Reclaiming” catalogue state —
+/// eligibility is a predicate over Closed + live accounting (see
+/// <see cref="SegmentLifecycle.IsReclaimable"/>).
+/// </para>
+/// <para>
+/// Closed segments are immutable. Retired segments must never become writable again.
+/// A segment that still has live Present articles must not be physically deleted.
+/// </para>
 /// </remarks>
 public enum SegmentState : byte
 {
@@ -39,6 +47,23 @@ public enum SegmentState : byte
     /// Segment is retired after durable compaction relocation; bytes may later be reclaimed.
     /// </summary>
     Retired = 3,
+}
+
+/// <summary>Segment reclamation eligibility helpers (Phase 4A foundation; no physical delete).</summary>
+public static class SegmentLifecycle
+{
+    /// <summary>
+    /// Returns whether <paramref name="info"/> is eligible for physical reclamation work.
+    /// </summary>
+    /// <remarks>
+    /// Only a <see cref="SegmentState.Closed"/> segment with <see cref="SegmentInfo.LiveBytes"/>
+    /// equal to zero is reclaimable. Active segments are never reclaimable. Retired segments
+    /// are already past rewrite fencing; their physical deletion is a later phase and is not
+    /// expressed by this predicate. A positive LiveBytes value means Present articles still
+    /// reference the segment.
+    /// </remarks>
+    public static bool IsReclaimable(in SegmentInfo info) =>
+        info.State == SegmentState.Closed && info.LiveBytes == 0;
 }
 
 /// <summary>Journal / write-path pressure derived from <see cref="IArticleJournal.OutstandingRecoverableBytes"/>.</summary>
@@ -152,11 +177,25 @@ public readonly record struct StoredArticleMetadata(
 /// <param name="SegmentId">Segment identity.</param>
 /// <param name="State">Active, closed, or retired.</param>
 /// <param name="Generation">Monotonic catalogue generation for fencing.</param>
-/// <param name="SizeBytes">Total bytes written to the segment.</param>
-/// <param name="LiveBytes">Bytes still referenced by Present index entries.</param>
-/// <param name="DeadBytes">Bytes logically dead; not yet reclaimed.</param>
+/// <param name="SizeBytes">
+/// Physical segment file extent in bytes (valid length after torn-tail repair). This is the
+/// on-disk size; logical eviction does not shrink it.
+/// </param>
+/// <param name="LiveBytes">
+/// Bytes still referenced by Present index entries (sum of
+/// <see cref="StoredArticleLocation.Length"/>). In-process; reconstructed from the article
+/// index on engine open — not a durable catalogue database.
+/// </param>
+/// <param name="DeadBytes">
+/// Bytes for Evicted/Invalid index entries on this segment (sum of location Length). Same
+/// reconstruction rules as LiveBytes.
+/// </param>
 /// <param name="CreatedUtc">Segment creation time (UTC).</param>
 /// <param name="ClosedUtc">Segment close time when closed/retired; null while active.</param>
+/// <remarks>
+/// Invariant: <c>SizeBytes &gt;= LiveBytes + DeadBytes</c>. Equality holds when every physical
+/// record extent is covered by an index entry; unindexed orphan extents leave a gap.
+/// </remarks>
 public readonly record struct SegmentInfo(
     SegmentId SegmentId,
     SegmentState State,
