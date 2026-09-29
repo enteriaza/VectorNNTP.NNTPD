@@ -72,4 +72,14 @@ public sealed class ArticleStorageOptions
     /// <see cref="ArticleCompactionPolicyOptions.Enabled"/> is <see langword="false"/>.
     /// </remarks>
     public ArticleCompactionPolicyOptions Compaction { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets process-local SATA capacity admission under
+    /// <c>StorageServer:Storage:Capacity</c>.
+    /// </summary>
+    /// <remarks>
+    /// Default <see cref="ArticleCapacityOptions.Enabled"/> is <see langword="false"/>.
+    /// Reservations are process-local only (Phase 5E.1).
+    /// </remarks>
+    public ArticleCapacityOptions Capacity { get; set; } = new();
 }

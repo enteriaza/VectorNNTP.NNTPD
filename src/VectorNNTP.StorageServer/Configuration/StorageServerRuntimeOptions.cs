@@ -36,12 +36,18 @@ public sealed record StorageServerRuntimeOptions(
 /// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
 /// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
+/// <param name="CapacityAdmissionEnabled">Process-local capacity admission (Phase 5E.1).</param>
+/// <param name="CapacityMaximumUtilization">
+/// Max <c>(Used + Reserved + Required) / Total</c> when capacity admission is enabled.
+/// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
     string SegmentDir,
     long JournalSoftLimitBytes,
     long JournalHardLimitBytes,
-    long SegmentTargetSizeBytes);
+    long SegmentTargetSizeBytes,
+    bool CapacityAdmissionEnabled = false,
+    double CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

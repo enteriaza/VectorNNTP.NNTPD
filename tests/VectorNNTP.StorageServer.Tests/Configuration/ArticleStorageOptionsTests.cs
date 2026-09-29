@@ -22,6 +22,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultInterval, storage.Compaction.Interval);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes, storage.Compaction.MinimumDeadBytes);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio, storage.Compaction.MinimumDeadRatio);
+        Assert.False(storage.Capacity.Enabled);
+        Assert.Equal(ArticleCapacityOptions.DefaultMaximumUtilization, storage.Capacity.MaximumUtilization);
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
 
@@ -194,6 +196,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal("00:01:00", compaction.GetProperty("Interval").GetString());
         Assert.Equal(67108864, compaction.GetProperty("MinimumDeadBytes").GetInt64());
         Assert.Equal(0.10, compaction.GetProperty("MinimumDeadRatio").GetDouble());
+        var capacity = storage.GetProperty("Capacity");
+        Assert.False(capacity.GetProperty("Enabled").GetBoolean());
+        Assert.Equal(0.80, capacity.GetProperty("MaximumUtilization").GetDouble());
     }
 
     [Fact]

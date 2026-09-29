@@ -196,6 +196,20 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         }
 
         ValidateCompactionPolicy(options.Storage.Compaction, failures);
+        ValidateCapacityPolicy(options.Storage.Capacity, failures);
+    }
+
+    private static void ValidateCapacityPolicy(
+        ArticleCapacityOptions? capacity,
+        List<string> failures)
+    {
+        capacity ??= new ArticleCapacityOptions();
+        var util = capacity.MaximumUtilization;
+        if (double.IsNaN(util) || double.IsInfinity(util) || util is <= 0 or >= 1)
+        {
+            failures.Add(
+                "StorageServer:Storage:Capacity:MaximumUtilization must be a finite value in the open interval (0, 1).");
+        }
     }
 
     private static void ValidateCompactionPolicy(

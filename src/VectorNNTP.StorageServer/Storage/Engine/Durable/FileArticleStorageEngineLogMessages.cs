@@ -18,6 +18,20 @@ internal static partial class FileArticleStorageEngineLogMessages
     public static partial void Accepted(ILogger logger, string ArtId, ulong Sequence, int ArtSize);
 
     [LoggerMessage(
+        EventId = 3415,
+        Level = LogLevel.Warning,
+        Message = "Article Accept rejected by process-local capacity (artId={ArtId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ReservedBytes={ReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization})")]
+    public static partial void RejectedCapacity(
+        ILogger logger,
+        string ArtId,
+        long RequiredBytes,
+        long UsedBytes,
+        long ReservedBytes,
+        long TotalBytes,
+        long AvailableBytes,
+        double MaximumUtilization);
+
+    [LoggerMessage(
         EventId = 3402,
         Level = LogLevel.Information,
         Message = "Article storage recovery started (incomplete={IncompleteCount})")]

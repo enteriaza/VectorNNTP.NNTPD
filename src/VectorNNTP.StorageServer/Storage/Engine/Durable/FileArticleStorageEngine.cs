@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
@@ -33,6 +34,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// ArtId whose durable state is Evicted/Invalid is dropped rather than returned.
 /// </para>
 /// <para>
+/// Phase 5E.1: optional process-local capacity reservation under
+/// <see cref="ArticleCapacityOptions"/>. Reservations are not kernel/cross-process filesystem
+/// reservations. Compaction/relocation appends do not participate (deferred to 5E.2).
+/// </para>
+/// <para>
 /// Phase 4A: logical death updates in-memory segment Live/Dead using
 /// <see cref="StoredArticleLocation.Length"/>. Catalogue Live/Dead are reconstructed from the
 /// article index on open/recovery. Physical segment reclamation/compaction is not implemented
@@ -47,6 +53,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly IArticleMemoryCache _articleCache;
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IStorageCapacityReader? _capacityReader;
+    private readonly bool _capacityAdmissionEnabled;
+    private readonly double _capacityMaximumUtilization;
+    private readonly ProcessLocalCapacityLedger _capacityLedger = new();
     private readonly object _gate = new();
     private readonly Queue<ulong> _pendingSequences = new();
     private readonly SemaphoreSlim _workerSignal = new(0, int.MaxValue);
@@ -62,7 +72,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         FileArticleIndex index,
         IArticleMemoryCache articleCache,
         ILogger logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IStorageCapacityReader? capacityReader,
+        bool capacityAdmissionEnabled,
+        double capacityMaximumUtilization)
     {
         _journal = journal;
         _segments = segments;
@@ -70,6 +83,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _articleCache = articleCache;
         _logger = logger;
         _timeProvider = timeProvider;
+        _capacityReader = capacityReader;
+        _capacityAdmissionEnabled = capacityAdmissionEnabled;
+        _capacityMaximumUtilization = capacityMaximumUtilization;
         _worker = Task.Run(() => RunPhysicalWorkerAsync(_workerCts.Token));
     }
 
@@ -105,6 +121,30 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>Number of SATA appends performed by this engine instance (tests).</summary>
     public long PhysicalAppendCount => Volatile.Read(ref _physicalAppendCount);
 
+    /// <summary>Process-local reserved SATA bytes awaiting PhysicalWritten (tests / diagnostics).</summary>
+    internal long ProcessLocalReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capacityLedger.ReservedBytes;
+            }
+        }
+    }
+
+    /// <summary>Number of sequences holding a process-local capacity reservation (tests).</summary>
+    internal int ProcessLocalReservationCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capacityLedger.ReservationCount;
+            }
+        }
+    }
+
     /// <summary>
     /// When true, Accept does not enqueue background SATA/index work (crash-after-Accept tests).
     /// Recovery via <see cref="RecoverAsync"/> still completes outstanding sequences.
@@ -136,11 +176,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Optional process-local cache for <see cref="TryRead"/>. When null, a disabled cache
     /// (<c>MaxBytes = 0</c>) is used.
     /// </param>
+    /// <param name="capacityReader">
+    /// Optional physical capacity source for process-local admission. When capacity admission is
+    /// enabled and this is null, a <see cref="CacheDirectoryCapacityReader"/> over
+    /// <see cref="ArticleStorageRuntimeOptions.SegmentDir"/> is used.
+    /// </param>
     public static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         ILogger? logger = null,
         TimeProvider? timeProvider = null,
-        IArticleMemoryCache? articleCache = null)
+        IArticleMemoryCache? articleCache = null,
+        IStorageCapacityReader? capacityReader = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -155,13 +201,22 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             journal = FileArticleJournal.Open(options, log);
             segments = FileSegmentStore.Open(options, log);
             index = FileArticleIndex.Open(options, log);
+            IStorageCapacityReader? capacity = capacityReader;
+            if (options.CapacityAdmissionEnabled && capacity is null)
+            {
+                capacity = new CacheDirectoryCapacityReader(options.SegmentDir);
+            }
+
             var engine = new FileArticleStorageEngine(
                 journal,
                 segments,
                 index,
                 articleCache ?? new ArticleMemoryCache(maxBytes: 0),
                 log,
-                timeProvider ?? TimeProvider.System);
+                timeProvider ?? TimeProvider.System,
+                capacity,
+                options.CapacityAdmissionEnabled,
+                options.CapacityMaximumUtilization);
             journal = null;
             segments = null;
             index = null;
@@ -204,6 +259,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
 
         JournalAcceptRecord journalRecord;
+        var reservedForAccept = false;
+        var requiredBytes = 0L;
         lock (_gate)
         {
             if (_index.TryGet(record.ArtId, out var existing)
@@ -219,23 +276,79 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 return Task.FromResult(ArticleAcceptResult.Conflict(record.ArtId));
             }
 
-            if (!_journal.TryAppendNewAccept(
-                    record.ArtId,
-                    record.ArtHash,
-                    record.ArtSize,
-                    _timeProvider.GetUtcNow(),
-                    artData,
-                    out journalRecord!,
-                    out var rejectOutcome))
+            if (_capacityAdmissionEnabled)
             {
-                return Task.FromResult(rejectOutcome switch
+                if (_capacityReader is null)
                 {
-                    ArticleAcceptOutcome.Duplicate => ArticleAcceptResult.Duplicate(record.ArtId),
-                    ArticleAcceptOutcome.Conflict => ArticleAcceptResult.Conflict(record.ArtId),
-                    ArticleAcceptOutcome.RejectedInvalid =>
-                        ArticleAcceptResult.RejectedInvalid(record.ArtId, "integrity"),
-                    _ => ArticleAcceptResult.RejectedPressure(record.ArtId),
-                });
+                    throw new InvalidOperationException(
+                        "Capacity admission is enabled but no IStorageCapacityReader is configured.");
+                }
+
+                requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+                var snap = _capacityReader.Read();
+                if (!_capacityLedger.WouldFit(
+                        snap.UsedBytes,
+                        snap.TotalBytes,
+                        requiredBytes,
+                        _capacityMaximumUtilization))
+                {
+                    FileArticleStorageEngineLogMessages.RejectedCapacity(
+                        _logger,
+                        record.ArtId.ToString() ?? string.Empty,
+                        requiredBytes,
+                        snap.UsedBytes,
+                        _capacityLedger.ReservedBytes,
+                        snap.TotalBytes,
+                        snap.AvailableBytes,
+                        _capacityMaximumUtilization);
+                    return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
+                }
+
+                _capacityLedger.TentativeAdd(requiredBytes);
+                reservedForAccept = true;
+            }
+
+            try
+            {
+                if (!_journal.TryAppendNewAccept(
+                        record.ArtId,
+                        record.ArtHash,
+                        record.ArtSize,
+                        _timeProvider.GetUtcNow(),
+                        artData,
+                        out journalRecord!,
+                        out var rejectOutcome))
+                {
+                    if (reservedForAccept)
+                    {
+                        _capacityLedger.RollbackUnbound(requiredBytes);
+                        reservedForAccept = false;
+                    }
+
+                    return Task.FromResult(rejectOutcome switch
+                    {
+                        ArticleAcceptOutcome.Duplicate => ArticleAcceptResult.Duplicate(record.ArtId),
+                        ArticleAcceptOutcome.Conflict => ArticleAcceptResult.Conflict(record.ArtId),
+                        ArticleAcceptOutcome.RejectedInvalid =>
+                            ArticleAcceptResult.RejectedInvalid(record.ArtId, "integrity"),
+                        _ => ArticleAcceptResult.RejectedPressure(record.ArtId),
+                    });
+                }
+
+                if (reservedForAccept)
+                {
+                    _capacityLedger.BindSequence(journalRecord.Sequence, requiredBytes);
+                    reservedForAccept = false;
+                }
+            }
+            catch
+            {
+                if (reservedForAccept)
+                {
+                    _capacityLedger.RollbackUnbound(requiredBytes);
+                }
+
+                throw;
             }
 
             if (!SuspendBackgroundPersist)
@@ -576,6 +689,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 written.Location.SegmentId.Value,
                 written.Location.Offset,
                 written.Location.Length);
+            // Durable PW already owns physical capacity; release before index work (idempotent).
+            ReleaseCapacityReservation(accept.Sequence);
             await CompleteFromPhysicalWrittenAsync(accept, written, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -596,8 +711,19 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 $"PhysicalWritten conflict for sequence {accept.Sequence} during recovery.");
         }
 
+        // Physical extent is durable; process-local reservation may release (idempotent after restart).
+        ReleaseCapacityReservation(accept.Sequence);
+
         ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
         await CompleteFromPhysicalWrittenAsync(accept, pw, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void ReleaseCapacityReservation(ulong sequence)
+    {
+        lock (_gate)
+        {
+            _ = _capacityLedger.Release(sequence);
+        }
     }
 
     private async Task CompleteFromPhysicalWrittenAsync(

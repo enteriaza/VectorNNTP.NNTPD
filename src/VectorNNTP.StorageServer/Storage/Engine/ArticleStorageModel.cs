@@ -98,6 +98,12 @@ public enum ArticleAcceptOutcome : byte
 
     /// <summary>Rejected because the record is not CanonicalV1 or fails basic validation.</summary>
     RejectedInvalid = 5,
+
+    /// <summary>
+    /// Rejected by process-local SATA capacity admission (Phase 5E.1).
+    /// Distinct from <see cref="RejectedPressure"/> (journal outstanding-bytes pressure).
+    /// </summary>
+    RejectedCapacity = 6,
 }
 
 /// <summary>Result of appending a staged journal event after Accept.</summary>
@@ -420,6 +426,10 @@ public readonly record struct ArticleAcceptResult(
     /// <summary>Creates a pressure rejection.</summary>
     public static ArticleAcceptResult RejectedPressure(ArticleId artId) =>
         new(ArticleAcceptOutcome.RejectedPressure, artId, Reason: "journal-pressure");
+
+    /// <summary>Creates a process-local capacity rejection.</summary>
+    public static ArticleAcceptResult RejectedCapacity(ArticleId artId, string? reason = null) =>
+        new(ArticleAcceptOutcome.RejectedCapacity, artId, Reason: reason ?? "storage-capacity");
 
     /// <summary>Creates an invalid-record rejection.</summary>
     public static ArticleAcceptResult RejectedInvalid(ArticleId artId, string reason) =>
