@@ -17,6 +17,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(128L * 1024 * 1024, storage.JournalHardLimitBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
+        Assert.False(storage.Compaction.Enabled);
+        Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes, storage.Compaction.MinimumDeadBytes);
+        Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio, storage.Compaction.MinimumDeadRatio);
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
 
@@ -76,6 +79,9 @@ public sealed class ArticleStorageOptionsTests
                 ["StorageServer:Storage:JournalHardLimitBytes"] = "20",
                 ["StorageServer:Storage:SegmentTargetSizeBytes"] = "30",
                 ["StorageServer:Storage:ArticleCache:MaxBytes"] = "4096",
+                ["StorageServer:Storage:Compaction:Enabled"] = "true",
+                ["StorageServer:Storage:Compaction:MinimumDeadBytes"] = "1048576",
+                ["StorageServer:Storage:Compaction:MinimumDeadRatio"] = "0.25",
             })
             .Build();
         var bound = new StorageServerOptions();
@@ -85,6 +91,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(20, bound.Storage.JournalHardLimitBytes);
         Assert.Equal(30, bound.Storage.SegmentTargetSizeBytes);
         Assert.Equal(4096, bound.Storage.ArticleCache.MaxBytes);
+        Assert.True(bound.Storage.Compaction.Enabled);
+        Assert.Equal(1_048_576, bound.Storage.Compaction.MinimumDeadBytes);
+        Assert.Equal(0.25, bound.Storage.Compaction.MinimumDeadRatio);
     }
 
     [Fact]
@@ -100,6 +109,30 @@ public sealed class ArticleStorageOptionsTests
     }
 
     [Fact]
+    public void Validator_rejects_negative_Compaction_MinimumDeadBytes()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Compaction.MinimumDeadBytes = -1;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Compaction:MinimumDeadBytes", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_rejects_out_of_range_Compaction_MinimumDeadRatio()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.Compaction.MinimumDeadRatio = 1.5;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("Compaction:MinimumDeadRatio", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Production_appsettings_declares_Storage_ControlDir()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
@@ -111,5 +144,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
         Assert.Equal(268435456, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
         Assert.Equal(0, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
+        var compaction = storage.GetProperty("Compaction");
+        Assert.False(compaction.GetProperty("Enabled").GetBoolean());
+        Assert.Equal(67108864, compaction.GetProperty("MinimumDeadBytes").GetInt64());
+        Assert.Equal(0.10, compaction.GetProperty("MinimumDeadRatio").GetDouble());
     }
 }

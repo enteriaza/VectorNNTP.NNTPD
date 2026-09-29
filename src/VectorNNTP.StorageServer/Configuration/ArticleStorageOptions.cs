@@ -62,4 +62,14 @@ public sealed class ArticleStorageOptions
     /// <c>StorageServer:Storage:ArticleCache</c>.
     /// </summary>
     public ArticleMemoryCacheOptions ArticleCache { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets Closed-segment compaction victim-selection thresholds under
+    /// <c>StorageServer:Storage:Compaction</c>.
+    /// </summary>
+    /// <remarks>
+    /// Policy only; does not schedule or execute compaction. Default
+    /// <see cref="ArticleCompactionPolicyOptions.Enabled"/> is <see langword="false"/>.
+    /// </remarks>
+    public ArticleCompactionPolicyOptions Compaction { get; set; } = new();
 }

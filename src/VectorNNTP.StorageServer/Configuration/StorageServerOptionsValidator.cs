@@ -194,6 +194,28 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         {
             failures.Add("StorageServer:Storage:ArticleCache:MaxBytes must be greater than or equal to 0.");
         }
+
+        ValidateCompactionPolicy(options.Storage.Compaction, failures);
+    }
+
+    private static void ValidateCompactionPolicy(
+        ArticleCompactionPolicyOptions? compaction,
+        List<string> failures)
+    {
+        compaction ??= new ArticleCompactionPolicyOptions();
+
+        if (compaction.MinimumDeadBytes < 0)
+        {
+            failures.Add(
+                "StorageServer:Storage:Compaction:MinimumDeadBytes must be greater than or equal to 0.");
+        }
+
+        var ratio = compaction.MinimumDeadRatio;
+        if (double.IsNaN(ratio) || double.IsInfinity(ratio) || ratio is < 0 or > 1)
+        {
+            failures.Add(
+                "StorageServer:Storage:Compaction:MinimumDeadRatio must be a finite value in the closed interval [0, 1].");
+        }
     }
 
     private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)
