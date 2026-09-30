@@ -1,8 +1,32 @@
 using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Messaging.Cache;
+using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Storage;
+
+/// <summary>One validated StorageServer presence response retained for a single lookup.</summary>
+/// <param name="ServerId">Responding StorageServer id.</param>
+/// <param name="Fqdn">Responding StorageServer FQDN.</param>
+/// <param name="Uri">Cache URI for VATP retrieval.</param>
+internal readonly record struct StorageArticleCandidate(int ServerId, string Fqdn, string Uri);
+
+/// <summary>
+/// Later positives for one in-flight lookup. Completes when an alternate arrives or the
+/// original lookup window closes. Does not start another lookup.
+/// </summary>
+internal interface IStorageArticleAlternateSource
+{
+    /// <summary>Completes when the lookup window closes.</summary>
+    Task WhenClosed { get; }
+
+    /// <summary>
+    /// Returns the second retained candidate, or <see langword="null"/> when the original
+    /// lookup window closes without one.
+    /// </summary>
+    ValueTask<StorageArticleCandidate?> WaitForAlternateAsync(CancellationToken cancellationToken);
+}
 
 /// <summary>Outcome of a StorageServer fleet article-presence lookup.</summary>
 public enum StorageArticleLookupOutcome
@@ -31,6 +55,12 @@ public sealed record StorageArticleLookupResult(
     string? Uri,
     string? Error)
 {
+    /// <summary>
+    /// Later candidates for this lookup, present only while the original lookup window can
+    /// still accept them. Null when the lookup did not find a first candidate.
+    /// </summary>
+    internal IStorageArticleAlternateSource? Alternates { get; init; }
+
     /// <summary>Builds a not-found result.</summary>
     public static StorageArticleLookupResult NotFound(Guid requestId, ArticleId articleId, string error) =>
         new(StorageArticleLookupOutcome.NotFound, requestId, articleId, null, null, null, error);
@@ -40,15 +70,17 @@ public sealed record StorageArticleLookupResult(
 public interface IStorageArticleLookupClient
 {
     /// <summary>
-    /// Asks all StorageServers "who has this article?" and completes on the first valid
-    /// positive response or the lookup timeout.
+    /// Asks all StorageServers "who has this article?" once. The task completes when the
+    /// first valid positive arrives or the lookup timeout elapses. The registration stays
+    /// until that same timeout so one later positive can still be retained.
     /// </summary>
     Task<StorageArticleLookupResult> LookupAsync(ArticleId articleId, CancellationToken cancellationToken);
 }
 
 /// <summary>
 /// Correlates StorageServer lookup responses by AMQP <c>CorrelationId</c>.
-/// First valid positive response wins; duplicates and unknowns are ignored.
+/// Matching positives are retained until the lookup window closes. Duplicates and
+/// unknowns are ignored. The registration is not removed on the first positive.
 /// </summary>
 internal sealed class StorageArticleLookupResponseRouter
 {
@@ -103,8 +135,8 @@ internal sealed class StorageArticleLookupResponseRouter
     }
 
     /// <summary>
-    /// Dispatches a parsed positive response. Returns <see langword="true"/> when it
-    /// completed an outstanding lookup.
+    /// Dispatches a parsed positive response. Returns <see langword="true"/> when the
+    /// response was retained as a candidate. Does not remove the registration.
     /// </summary>
     internal bool TryComplete(string? correlationId, StorageArticleLookupResponse response)
     {
@@ -129,32 +161,30 @@ internal sealed class StorageArticleLookupResponseRouter
             return false;
         }
 
-        var result = new StorageArticleLookupResult(
-            StorageArticleLookupOutcome.Found,
-            response.RequestId,
-            response.ArticleId,
-            response.ServerId,
-            response.Fqdn,
-            response.Uri,
-            Error: null);
-
-        if (!pending.Operation.TrySetResult(result))
-        {
-            return false;
-        }
-
-        _pending.TryRemove(correlationId, out _);
-        return true;
+        return pending.Operation.TryAccept(response);
     }
 
     private sealed record PendingLookup(StorageArticleLookupOperation Operation);
 }
 
-/// <summary>One in-flight StorageServer fleet lookup.</summary>
-internal sealed class StorageArticleLookupOperation
+/// <summary>
+/// One in-flight StorageServer fleet lookup. Retains at most two distinct candidates in
+/// arrival order and wakes waiters on the first without closing the lookup window.
+/// </summary>
+internal sealed class StorageArticleLookupOperation : IStorageArticleAlternateSource
 {
-    private readonly TaskCompletionSource<StorageArticleLookupResult> _completion =
+    private const int MaxRetainedCandidates = 2;
+    private readonly object _gate = new();
+    private readonly List<StorageArticleCandidate> _candidates = new(MaxRetainedCandidates);
+    private readonly HashSet<int> _serverIds = [];
+    private readonly HashSet<string> _endpoints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TaskCompletionSource<bool> _firstReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _alternateOrClosed =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _closed =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _windowClosed;
 
     /// <summary>Initializes a lookup operation.</summary>
     internal StorageArticleLookupOperation(Guid requestId, ArticleId articleId)
@@ -169,29 +199,150 @@ internal sealed class StorageArticleLookupOperation
     /// <summary>Queried article identity.</summary>
     internal ArticleId ArticleId { get; }
 
-    /// <summary>Completion task.</summary>
-    internal Task<StorageArticleLookupResult> Completion => _completion.Task;
+    /// <summary>Completes when the first candidate is retained or the window closes without one.</summary>
+    internal Task FirstReady => _firstReady.Task;
 
-    /// <summary>Whether the lookup already completed.</summary>
-    internal bool IsCompleted => _completion.Task.IsCompleted;
+    /// <inheritdoc />
+    public Task WhenClosed => _closed.Task;
 
-    /// <summary>Attempts to complete with a result (first wins).</summary>
-    internal bool TrySetResult(StorageArticleLookupResult result) =>
-        _completion.TrySetResult(result);
-
-    /// <summary>Attempts to cancel the lookup.</summary>
-    internal bool TrySetCanceled() => _completion.TrySetCanceled();
-
-    /// <summary>Attempts to read the completed result.</summary>
-    internal bool TryGetResult(out StorageArticleLookupResult result)
+    /// <summary>Whether the window has been closed.</summary>
+    internal bool IsCompleted
     {
-        if (_completion.Task.IsCompletedSuccessfully)
+        get
         {
-            result = _completion.Task.Result;
-            return true;
+            lock (_gate)
+            {
+                return _windowClosed;
+            }
+        }
+    }
+
+    /// <summary>Reads the first retained candidate.</summary>
+    internal bool TryGetFirst(out StorageArticleCandidate candidate)
+    {
+        lock (_gate)
+        {
+            if (_candidates.Count > 0)
+            {
+                candidate = _candidates[0];
+                return true;
+            }
         }
 
-        result = null!;
+        candidate = default;
         return false;
+    }
+
+    /// <summary>
+    /// Retains <paramref name="response"/> when it is a new valid candidate.
+    /// Invalid, duplicate, and over-cap responses are ignored.
+    /// </summary>
+    internal bool TryAccept(StorageArticleLookupResponse response)
+    {
+        if (!TryValidate(response, out var candidate, out var endpointKey))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (_windowClosed || _candidates.Count >= MaxRetainedCandidates)
+            {
+                return false;
+            }
+
+            if (_serverIds.Contains(candidate.ServerId) || _endpoints.Contains(endpointKey))
+            {
+                return false;
+            }
+
+            _serverIds.Add(candidate.ServerId);
+            _endpoints.Add(endpointKey);
+            _candidates.Add(candidate);
+            if (_candidates.Count == 1)
+            {
+                _firstReady.TrySetResult(true);
+            }
+            else
+            {
+                _alternateOrClosed.TrySetResult(true);
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Closes the window so no further candidate can be retained.</summary>
+    internal void CloseWindow()
+    {
+        lock (_gate)
+        {
+            if (_windowClosed)
+            {
+                return;
+            }
+
+            _windowClosed = true;
+        }
+
+        _firstReady.TrySetResult(false);
+        _alternateOrClosed.TrySetResult(false);
+        _closed.TrySetResult();
+    }
+
+    /// <summary>Cancels waiters. Used when the lookup service is stopping.</summary>
+    internal bool TrySetCanceled()
+    {
+        CloseWindow();
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<StorageArticleCandidate?> WaitForAlternateAsync(CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (_candidates.Count >= 2)
+            {
+                return _candidates[1];
+            }
+
+            if (_windowClosed)
+            {
+                return null;
+            }
+        }
+
+        await _alternateOrClosed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            return _candidates.Count >= 2 ? _candidates[1] : null;
+        }
+    }
+
+    private bool TryValidate(
+        StorageArticleLookupResponse response,
+        out StorageArticleCandidate candidate,
+        out string endpointKey)
+    {
+        candidate = default;
+        endpointKey = string.Empty;
+        if (!ServerIdRules.IsInRange(response.ServerId))
+        {
+            return false;
+        }
+
+        if (response.ArticleId != ArticleId
+            || string.IsNullOrWhiteSpace(response.Uri)
+            || !CacheArticleUriParser.TryParse(response.Uri, out var parsed, out _)
+            || !ArticleId.TryParseLowerHex(parsed.ArticleIdHex, out var pathId)
+            || pathId != ArticleId)
+        {
+            return false;
+        }
+
+        candidate = new StorageArticleCandidate(response.ServerId, response.Fqdn, response.Uri);
+        endpointKey = parsed.Host.Trim() + ":" + parsed.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return true;
     }
 }

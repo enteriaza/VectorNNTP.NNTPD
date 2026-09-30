@@ -216,7 +216,7 @@ internal sealed class VatpConnection : IAsyncDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return VatpFetchResult.Cancelled(requestId, articleId);
+            return VatpFetchResult.Cancelled(requestId, articleId, pending.ReceiveStream.ReceivedBytes);
         }
         finally
         {
@@ -527,7 +527,11 @@ internal sealed class VatpConnection : IAsyncDisposable
                         receive.ExpectedArtId.ToLowerHexString());
                     CompletePending(
                         frame.Header.StreamId,
-                        VatpFetchResult.FromSuccess(record, receive.RequestId, receive.ExpectedArtId));
+                        VatpFetchResult.FromSuccess(
+                            record,
+                            receive.RequestId,
+                            receive.ExpectedArtId,
+                            receive.ReceivedBytes));
                 }
                 else
                 {
@@ -537,7 +541,8 @@ internal sealed class VatpConnection : IAsyncDisposable
                             "END received without consumable record.",
                             receive.Failure,
                             receive.RequestId,
-                            receive.ExpectedArtId));
+                            receive.ExpectedArtId,
+                            receive.ReceivedBytes));
                 }
 
                 break;
@@ -591,7 +596,12 @@ internal sealed class VatpConnection : IAsyncDisposable
                     errorCode);
                 CompletePendingLocked(
                     frame.Header.StreamId,
-                    VatpFetchResult.RemoteFailure(reasonText, errorCode, pending.ReceiveStream.RequestId, pending.ArticleId));
+                    VatpFetchResult.RemoteFailure(
+                        reasonText,
+                        errorCode,
+                        pending.ReceiveStream.RequestId,
+                        pending.ArticleId,
+                        pending.ReceiveStream.ReceivedBytes));
             }
         }
 
@@ -624,14 +634,18 @@ internal sealed class VatpConnection : IAsyncDisposable
             receive.Failure);
         if (receive.Failure == VatpErrorCode.Cancelled)
         {
-            return VatpFetchResult.Cancelled(receive.RequestId, receive.ExpectedArtId);
+            return VatpFetchResult.Cancelled(
+                receive.RequestId,
+                receive.ExpectedArtId,
+                receive.ReceivedBytes);
         }
 
         return VatpFetchResult.IncompleteOrMalformed(
             detail,
             receive.Failure,
             receive.RequestId,
-            receive.ExpectedArtId);
+            receive.ExpectedArtId,
+            receive.ReceivedBytes);
     }
 
     private void FailAllPending(VatpFetchResult result)
@@ -644,7 +658,8 @@ internal sealed class VatpConnection : IAsyncDisposable
                     VatpFetchResult.ConnectionFailure(
                         result.Error,
                         pending.ReceiveStream.RequestId,
-                        pending.ArticleId));
+                        pending.ArticleId,
+                        pending.ReceiveStream.ReceivedBytes));
                 _pending.Remove(streamId);
                 _streamTable.TryRemove(streamId);
                 RecycleStreamIdLocked(streamId);

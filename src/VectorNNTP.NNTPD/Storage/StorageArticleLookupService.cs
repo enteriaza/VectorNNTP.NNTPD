@@ -11,11 +11,11 @@ namespace VectorNNTP.NNTPD.Storage;
 
 /// <summary>
 /// NNTPD-owned StorageServer fleet article-presence lookup: publish to <c>cache.requests</c>,
-/// consume replies on an ephemeral reply queue, first positive response wins.
+/// consume replies on an ephemeral reply queue, and return the first valid positive immediately.
 /// </summary>
 /// <remarks>
-/// Independent of ArticleWork RPC. Does not select a single StorageServer up front; the
-/// fanout delivers to every bound StorageServer queue. Negative responses are not expected.
+/// The registration stays until the existing lookup timeout so one later distinct positive
+/// can be retained. Independent of ArticleWork RPC. Negative responses are not expected.
 /// </remarks>
 internal sealed class StorageArticleLookupService : IApplicationService, IStorageArticleLookupClient
 {
@@ -103,49 +103,83 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
             throw new InvalidOperationException("Storage article lookup is not started.");
         }
 
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var requestId = Guid.NewGuid();
         var correlationId = Guid.NewGuid().ToString("D");
         var operation = new StorageArticleLookupOperation(requestId, articleId);
         if (!_router.TryRegister(correlationId, operation))
         {
+            linked.Dispose();
             return StorageArticleLookupResult.NotFound(requestId, articleId, "Lookup could not be registered.");
         }
 
+        var windowStarted = false;
         try
         {
             await PublishRequestAsync(requestId, correlationId, articleId, linked.Token).ConfigureAwait(false);
-            await WaitUntilAsync(operation, linked.Token).ConfigureAwait(false);
-
-            if (operation.TryGetResult(out var result))
+            windowStarted = true;
+            _ = ObserveLookupWindowAsync(operation, correlationId, linked);
+            await operation.FirstReady.WaitAsync(linked.Token).ConfigureAwait(false);
+            if (operation.TryGetFirst(out var first))
             {
-                return result;
+                return new StorageArticleLookupResult(
+                    StorageArticleLookupOutcome.Found,
+                    requestId,
+                    articleId,
+                    first.ServerId,
+                    first.Fqdn,
+                    first.Uri,
+                    Error: null)
+                {
+                    Alternates = operation,
+                };
             }
 
-            var timedOut = StorageArticleLookupResult.NotFound(
+            return StorageArticleLookupResult.NotFound(
                 requestId,
                 articleId,
                 "Storage article lookup timed out with no positive response.");
-            _ = operation.TrySetResult(timedOut);
-            return timedOut;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            operation.TrySetCanceled();
+            operation.CloseWindow();
             throw;
         }
         catch (OperationCanceledException)
         {
-            var canceled = StorageArticleLookupResult.NotFound(
+            operation.CloseWindow();
+            return StorageArticleLookupResult.NotFound(
                 requestId,
                 articleId,
                 "Storage article lookup was canceled.");
-            _ = operation.TrySetResult(canceled);
-            return canceled;
         }
         finally
         {
+            if (!windowStarted)
+            {
+                _router.Unregister(correlationId);
+                linked.Dispose();
+            }
+        }
+    }
+
+    private async Task ObserveLookupWindowAsync(
+        StorageArticleLookupOperation operation,
+        string correlationId,
+        CancellationTokenSource linked)
+    {
+        try
+        {
+            await Task.Delay(CacheFleetTopology.LookupTimeout, _timeProvider, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            operation.CloseWindow();
             _router.Unregister(correlationId);
+            linked.Dispose();
         }
     }
 
@@ -213,28 +247,6 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
         finally
         {
             _publishGate.Release();
-        }
-    }
-
-    private async Task WaitUntilAsync(StorageArticleLookupOperation operation, CancellationToken cancellationToken)
-    {
-        var remaining = CacheFleetTopology.LookupTimeout;
-        if (remaining <= TimeSpan.Zero || operation.IsCompleted)
-        {
-            return;
-        }
-
-        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var delay = Task.Delay(remaining, _timeProvider, delayCts.Token);
-        var completed = await Task.WhenAny(operation.Completion, delay).ConfigureAwait(false);
-        if (completed == operation.Completion)
-        {
-            await delayCts.CancelAsync().ConfigureAwait(false);
-            _ = await operation.Completion.ConfigureAwait(false);
-        }
-        else
-        {
-            await delay.ConfigureAwait(false);
         }
     }
 

@@ -328,11 +328,104 @@ internal static class Article
             articleId.ToLowerHexString(),
             fleet.RequestId);
 
+        var serverId = fleet.ServerId ?? 0;
         VatpFetchResult fetch;
         try
         {
-            fetch = await vatp.FetchArticleAsync(cacheUri, fleet.RequestId, articleId, cancellationToken)
+            fetch = await FetchStorageCandidateAsync(
+                vatp,
+                cacheUri,
+                fleet.RequestId,
+                articleId,
+                serverId,
+                attempt: 1,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return ResolveResult.Temporary();
+        }
+
+        if (IsAlternateEligible(fetch) && fleet.Alternates is not null)
+        {
+            // Caller cancellation is terminal even when an alternate is already retained
+            // or the same cancel has already closed the lookup window.
+            cancellationToken.ThrowIfCancellationRequested();
+            var alternate = await fleet.Alternates.WaitForAlternateAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (alternate is { } next)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    fetch = await FetchStorageCandidateAsync(
+                        vatp,
+                        next.Uri,
+                        fleet.RequestId,
+                        articleId,
+                        next.ServerId,
+                        attempt: 2,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    return ResolveResult.Temporary();
+                }
+            }
+            else
+            {
+                ArticleRetrievalLogMessages.StorageCandidateExhausted(
+                    Logger,
+                    articleId.ToLowerHexString(),
+                    fleet.RequestId,
+                    1);
+            }
+        }
+
+        return MapFetch(fetch, messageId.Span, articleId);
+    }
+
+    private static async ValueTask<VatpFetchResult> FetchStorageCandidateAsync(
+        IVatpArticleClient vatp,
+        string cacheUri,
+        Guid requestId,
+        ArticleId articleId,
+        int serverId,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        ArticleRetrievalLogMessages.StorageCandidateSelected(
+            Logger,
+            articleId.ToLowerHexString(),
+            requestId,
+            serverId,
+            attempt);
+        try
+        {
+            var fetch = await vatp.FetchArticleAsync(cacheUri, requestId, articleId, cancellationToken)
                 .ConfigureAwait(false);
+            if (fetch.Kind != VatpFetchKind.Success)
+            {
+                ArticleRetrievalLogMessages.StorageCandidateFailed(
+                    Logger,
+                    articleId.ToLowerHexString(),
+                    requestId,
+                    serverId,
+                    attempt,
+                    fetch.Kind.ToString(),
+                    fetch.AcceptedDataBytes,
+                    IsAlternateEligible(fetch));
+            }
+
+            return fetch;
         }
         catch (OperationCanceledException)
         {
@@ -340,12 +433,20 @@ internal static class Article
         }
         catch (Exception ex)
         {
-            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, cacheUri, fleet.RequestId);
-            return ResolveResult.Temporary();
+            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, cacheUri, requestId);
+            throw;
         }
-
-        return MapFetch(fetch, messageId.Span, articleId);
     }
+
+    /// <summary>
+    /// A second candidate is allowed only when no DATA payload was copied and the failure
+    /// is connection, remote transfer, or protocol. Every other result is terminal.
+    /// </summary>
+    private static bool IsAlternateEligible(VatpFetchResult fetch) =>
+        fetch.AcceptedDataBytes == 0
+        && fetch.Kind is VatpFetchKind.ConnectionFailure
+            or VatpFetchKind.RemoteTransferFailure
+            or VatpFetchKind.ProtocolFailure;
 
     private static bool TryBindStorageUri(string? uri, in ArticleId articleId, out string cacheUri)
     {

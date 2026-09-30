@@ -34,6 +34,9 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
 
     public int ActiveSessions => Volatile.Read(ref _activeSessions);
 
+    /// <summary>DATA prefix used by accepted-byte probe transfer modes.</summary>
+    internal const int ProbePayloadBytes = 64;
+
     internal TransferMode Mode { get; set; } = TransferMode.Complete;
 
     /// <summary>OPEN StreamIds observed on this listener (client-assigned).</summary>
@@ -177,6 +180,21 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
         /// After accepting OPEN, writes a META frame on StreamId 0 (parser must reject).
         /// </summary>
         MetaOnConnectionStreamId,
+
+        /// <summary>Sends a META payload the client must reject before any DATA.</summary>
+        InvalidMeta,
+
+        /// <summary>Sends a short DATA frame with FIN so the client copies it and then fails.</summary>
+        ShortDataFin,
+
+        /// <summary>Sends one DATA chunk, then a later DATA frame the client rejects before copying.</summary>
+        DataThenSizeReject,
+
+        /// <summary>Sends one DATA chunk, then a stream FAIL.</summary>
+        DataThenRemoteFail,
+
+        /// <summary>Sends a full body whose META ArtHash does not match, then END.</summary>
+        CorruptArtHash,
     }
 
     private readonly record struct RegisteredArticle(
@@ -335,6 +353,52 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                 await stream.WriteAsync(metaFrame.Header, cancellationToken).ConfigureAwait(false);
                 await stream.DisposeAsync().ConfigureAwait(false);
                 return false;
+            }
+
+            if (transferMode == TransferMode.InvalidMeta)
+            {
+                var invalid = new byte[VatpProtocol.MetaPayloadLength];
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, invalid)).ConfigureAwait(false);
+                return true;
+            }
+
+            if (transferMode == TransferMode.CorruptArtHash)
+            {
+                var corrupt = new ArticleCanonicalTransferMeta(
+                    meta.ArtHash ^ 1UL,
+                    meta.ArtLines,
+                    meta.ArtSize,
+                    meta.SelectedDateHeaderName,
+                    meta.Fields);
+                metaBytes = VatpMetaCodec.Encode(in corrupt);
+            }
+
+            if (transferMode == TransferMode.ShortDataFin)
+            {
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes)).ConfigureAwait(false);
+                await WriteProbeDataAsync(frame.Header.StreamId, record.ArtData.ToArray(), fin: true).ConfigureAwait(false);
+                return true;
+            }
+
+            if (transferMode == TransferMode.DataThenRemoteFail)
+            {
+                var artData = record.ArtData.ToArray();
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes)).ConfigureAwait(false);
+                await WriteProbeDataAsync(frame.Header.StreamId, artData, fin: false).ConfigureAwait(false);
+                await WriteFrameAsync(VatpFrameEncoder.EncodeFail(frame.Header.StreamId, VatpErrorCode.OpenRejected))
+                    .ConfigureAwait(false);
+                return true;
+            }
+
+            if (transferMode == TransferMode.DataThenSizeReject)
+            {
+                var artData = record.ArtData.ToArray();
+                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(frame.Header.StreamId, metaBytes)).ConfigureAwait(false);
+                await WriteProbeDataAsync(frame.Header.StreamId, artData, fin: false).ConfigureAwait(false);
+                var overflow = new byte[artData.Length - VatpLoopbackTestServer.ProbePayloadBytes + 1];
+                await WriteFrameAsync(VatpFrameEncoder.EncodeData(frame.Header.StreamId, overflow, fin: false))
+                    .ConfigureAwait(false);
+                return true;
             }
 
             var send = new SendStream(
@@ -511,7 +575,7 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
                     return;
                 }
 
-                if (fin && sendStream.TransferMode == TransferMode.Complete)
+                if (fin && sendStream.TransferMode is TransferMode.Complete or TransferMode.CorruptArtHash)
                 {
                     await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(sendStream.StreamId)).ConfigureAwait(false);
                     _streams.Remove(sendStream.StreamId);
@@ -544,6 +608,21 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
             await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(NeverAllocatedStreamId)).ConfigureAwait(false);
             await WriteFrameAsync(
                     VatpFrameEncoder.EncodeFail(NeverAllocatedStreamId, VatpErrorCode.UnknownStream))
+                .ConfigureAwait(false);
+        }
+
+        private async Task WriteProbeDataAsync(uint streamId, byte[] artData, bool fin)
+        {
+            if (artData.Length <= VatpLoopbackTestServer.ProbePayloadBytes)
+            {
+                throw new InvalidOperationException("Article is smaller than the accepted-data probe.");
+            }
+
+            await WriteFrameAsync(
+                    VatpFrameEncoder.EncodeData(
+                        streamId,
+                        artData.AsMemory(0, VatpLoopbackTestServer.ProbePayloadBytes),
+                        fin))
                 .ConfigureAwait(false);
         }
 

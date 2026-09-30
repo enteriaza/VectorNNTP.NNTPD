@@ -48,4 +48,39 @@ internal static partial class ArticleRetrievalLogMessages
         string Outcome,
         string ArticleId,
         Guid RequestId);
+
+    [LoggerMessage(
+        EventId = 2617,
+        Level = LogLevel.Debug,
+        Message = "Storage candidate selected articleId={ArticleId} requestId={RequestId} serverId={ServerId} attempt={Attempt}")]
+    public static partial void StorageCandidateSelected(
+        ILogger logger,
+        string ArticleId,
+        Guid RequestId,
+        int ServerId,
+        int Attempt);
+
+    [LoggerMessage(
+        EventId = 2618,
+        Level = LogLevel.Debug,
+        Message = "Storage candidate failed articleId={ArticleId} requestId={RequestId} serverId={ServerId} attempt={Attempt} kind={Kind} acceptedDataBytes={AcceptedDataBytes} failoverEligible={FailoverEligible}")]
+    public static partial void StorageCandidateFailed(
+        ILogger logger,
+        string ArticleId,
+        Guid RequestId,
+        int ServerId,
+        int Attempt,
+        string Kind,
+        int AcceptedDataBytes,
+        bool FailoverEligible);
+
+    [LoggerMessage(
+        EventId = 2619,
+        Level = LogLevel.Debug,
+        Message = "Storage candidate exhausted articleId={ArticleId} requestId={RequestId} attempt={Attempt}")]
+    public static partial void StorageCandidateExhausted(
+        ILogger logger,
+        string ArticleId,
+        Guid RequestId,
+        int Attempt);
 }

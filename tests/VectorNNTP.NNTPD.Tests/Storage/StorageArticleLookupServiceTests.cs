@@ -53,7 +53,22 @@ public sealed class StorageArticleLookupServiceTests
         Assert.Equal(StorageArticleLookupOutcome.Found, result.Outcome);
         Assert.Equal("cache02.usenet.ninja", result.Fqdn);
         Assert.Equal(2, result.ServerId);
+        Assert.Equal(1, service.OutstandingCorrelations);
+        Assert.NotNull(result.Alternates);
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request!, 4, "cache04.usenet.ninja")));
+
+        var alternate = await result.Alternates!.WaitForAlternateAsync(CancellationToken.None);
+        Assert.Equal(3, alternate!.Value.ServerId);
+        Assert.Equal("cache03.usenet.ninja", alternate.Value.Fqdn);
+
+        time.Advance(CacheFleetTopology.LookupTimeout);
+        await result.Alternates.WhenClosed.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(0, service.OutstandingCorrelations);
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request!, 4, "cache04.usenet.ninja")));
 
         await service.StopAsync(CancellationToken.None);
     }
@@ -75,9 +90,13 @@ public sealed class StorageArticleLookupServiceTests
 
         var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
         _ = await WaitForPublicationAsync(factory);
-        time.Advance(CacheFleetTopology.LookupTimeout);
+        for (var attempt = 0; attempt < 3 && !lookupTask.IsCompleted; attempt++)
+        {
+            time.Advance(CacheFleetTopology.LookupTimeout);
+            await Task.Yield();
+        }
 
-        var result = await lookupTask;
+        var result = await lookupTask.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(StorageArticleLookupOutcome.NotFound, result.Outcome);
         Assert.Contains("timed out", result.Error, StringComparison.OrdinalIgnoreCase);
 
@@ -85,14 +104,16 @@ public sealed class StorageArticleLookupServiceTests
     }
 
     [Fact]
-    public async Task LateResponse_AfterCompletion_IsIgnored()
+    public async Task LateResponse_AfterDeadline_IsIgnored()
     {
         var factory = new FakeRabbitMqConnectionFactory();
         await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
         var service = new StorageArticleLookupService(
             rabbit,
             Options.Create(CreateOptions()),
-            NullLogger<StorageArticleLookupService>.Instance);
+            NullLogger<StorageArticleLookupService>.Instance,
+            time);
 
         await rabbit.StartAsync(CancellationToken.None);
         await service.StartAsync(CancellationToken.None);
@@ -106,7 +127,49 @@ public sealed class StorageArticleLookupServiceTests
             StorageArticleLookupWireProtocol.SerializeResponseV1(CreateResponse(request!, 1, "cache01.usenet.ninja")));
         var result = await lookupTask;
         Assert.Equal(StorageArticleLookupOutcome.Found, result.Outcome);
+        Assert.NotNull(result.Alternates);
 
+        time.Advance(CacheFleetTopology.LookupTimeout);
+        await result.Alternates!.WhenClosed.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, service.OutstandingCorrelations);
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request!, 2, "cache02.usenet.ninja")));
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AlternateWait_CompletesWhenOriginalWindowClosesWithoutSecondCandidate()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            time);
+
+        await rabbit.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+
+        var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
+        var publication = await WaitForPublicationAsync(factory);
+        Assert.True(StorageArticleLookupWireProtocol.TryParseRequestV1(publication.Body, out var request, out _));
+        var consume = factory.LastConnection!.RpcChannels.First(static c => c.ConsumedQueue is not null);
+        await consume.DeliverAsync(
+            publication.CorrelationId,
+            StorageArticleLookupWireProtocol.SerializeResponseV1(CreateResponse(request!, 1, "cache01.usenet.ninja")));
+        var result = await lookupTask;
+        Assert.NotNull(result.Alternates);
+
+        var alternateTask = result.Alternates!.WaitForAlternateAsync(CancellationToken.None).AsTask();
+        Assert.False(alternateTask.IsCompleted);
+        time.Advance(CacheFleetTopology.LookupTimeout);
+        var alternate = await alternateTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Null(alternate);
+        Assert.Equal(0, service.OutstandingCorrelations);
         Assert.False(service.TryDispatchResponse(
             publication.CorrelationId,
             CreateResponse(request!, 2, "cache02.usenet.ninja")));
@@ -155,6 +218,116 @@ public sealed class StorageArticleLookupServiceTests
         var resultB = await lookupB;
         Assert.Equal("cache01.usenet.ninja", resultA.Fqdn);
         Assert.Equal("cache03.usenet.ninja", resultB.Fqdn);
+        Assert.NotEqual(resultA.RequestId, resultB.RequestId);
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task DuplicateServerId_AndSameEndpoint_AreNotSecondCandidates()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            time);
+        await rabbit.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+
+        var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
+        var publication = await WaitForPublicationAsync(factory);
+        Assert.True(StorageArticleLookupWireProtocol.TryParseRequestV1(publication.Body, out var request, out _));
+        var first = CreateResponse(request!, 2, "cache02.usenet.ninja");
+        var consume = factory.LastConnection!.RpcChannels.First(static c => c.ConsumedQueue is not null);
+        await consume.DeliverAsync(publication.CorrelationId, StorageArticleLookupWireProtocol.SerializeResponseV1(first));
+        var result = await lookupTask;
+
+        var duplicateServer = new StorageArticleLookupResponse(
+            1,
+            request!.RequestId,
+            2,
+            "cache02.usenet.ninja",
+            request.ArticleId,
+            StorageArticleLookupWireProtocol.BuildCacheUri("cache02.usenet.ninja", 1192, request.ArticleId));
+        var sameEndpoint = new StorageArticleLookupResponse(
+            1,
+            request.RequestId,
+            9,
+            "cache09.usenet.ninja",
+            request.ArticleId,
+            first.Uri);
+        Assert.False(service.TryDispatchResponse(publication.CorrelationId, duplicateServer));
+        Assert.False(service.TryDispatchResponse(publication.CorrelationId, sameEndpoint));
+
+        time.Advance(CacheFleetTopology.LookupTimeout);
+        await result.Alternates!.WhenClosed.WaitAsync(TimeSpan.FromSeconds(2));
+        var alternate = await result.Alternates.WaitForAlternateAsync(CancellationToken.None);
+        Assert.Null(alternate);
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InvalidCandidateResponses_AreIgnoredUntilAValidOneArrives()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            new FakeTimeProvider());
+        await rabbit.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+
+        var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
+        var publication = await WaitForPublicationAsync(factory);
+        Assert.True(StorageArticleLookupWireProtocol.TryParseRequestV1(publication.Body, out var request, out _));
+        var otherArticle = ArticleId.FromMessageId("<other@example.com>"u8);
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request!, 0, "cache00.usenet.ninja")));
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request!, 256, "cache256.usenet.ninja")));
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            new StorageArticleLookupResponse(
+                1,
+                Guid.NewGuid(),
+                4,
+                "cache04.usenet.ninja",
+                request!.ArticleId,
+                StorageArticleLookupWireProtocol.BuildCacheUri("cache04.usenet.ninja", 1191, request.ArticleId))));
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            new StorageArticleLookupResponse(
+                1,
+                request.RequestId,
+                5,
+                "cache05.usenet.ninja",
+                otherArticle,
+                StorageArticleLookupWireProtocol.BuildCacheUri("cache05.usenet.ninja", 1191, otherArticle))));
+        Assert.False(service.TryDispatchResponse(
+            publication.CorrelationId,
+            new StorageArticleLookupResponse(
+                1,
+                request.RequestId,
+                6,
+                "cache06.usenet.ninja",
+                request.ArticleId,
+                StorageArticleLookupWireProtocol.BuildCacheUri("cache06.usenet.ninja", 1191, otherArticle))));
+        Assert.False(lookupTask.IsCompleted);
+
+        Assert.True(service.TryDispatchResponse(
+            publication.CorrelationId,
+            CreateResponse(request, 7, "cache07.usenet.ninja")));
+        var result = await lookupTask;
+        Assert.Equal(7, result.ServerId);
+        Assert.Equal(request.RequestId, result.RequestId);
 
         await service.StopAsync(CancellationToken.None);
     }

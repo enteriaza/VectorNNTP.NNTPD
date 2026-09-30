@@ -634,6 +634,186 @@ public sealed class VatpArticleClientTests
         Assert.Equal(VatpFetchKind.Success, retry.Kind);
     }
 
+    [Fact]
+    public async Task AcceptedDataBytes_ProtocolFailureBeforeStream_IsZero()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var prepared = CreateArticle("<pre-stream-protocol@example.test>");
+        var client = CreateClient(server);
+
+        var emptyRequest = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            Guid.Empty,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.ProtocolFailure, emptyRequest.Kind);
+        Assert.Equal(0, emptyRequest.AcceptedDataBytes);
+
+        var badUri = await client.FetchArticleAsync(
+            "not-a-cache-uri",
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.ProtocolFailure, badUri.Kind);
+        Assert.Equal(0, badUri.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_ConnectionFailureBeforeStream_IsZero()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var prepared = CreateArticle("<pre-stream-connect@example.test>");
+        var pool = new VatpConnectionPool(NullLogger<VatpConnectionPool>.Instance)
+        {
+            TestTcpConnectHost = IPAddress.Loopback.ToString(),
+        };
+        var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
+        var uri = $"cache://wrong.host.test:{server.Port}/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+        var result = await client.FetchArticleAsync(uri, prepared.RequestId, prepared.Record.ArtId, CancellationToken.None);
+        Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
+        Assert.Equal(0, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_ConnectionFailureBeforeData_IsZero()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.DisconnectMidMeta;
+        var prepared = CreateArticle("<mid-meta-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
+        Assert.Equal(0, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_ConnectionFailureAfterData_IsPositive()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.DisconnectMidData;
+        var prepared = CreateArticle("<mid-data-bytes@example.test>", body: BuildLargeBody(256 * 1024));
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        Assert.True(prepared.Record.ArtData.Length > 64 * 1024);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
+        Assert.Equal(64 * 1024, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_RemoteFailureBeforeData_IsZero()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var prepared = CreateArticle("<registered-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var wrongId = ArticleId.FromMessageId("<other-bytes@example.test>"u8);
+        var client = CreateClient(server);
+        var result = await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            wrongId,
+            CancellationToken.None);
+        Assert.Equal(VatpFetchKind.RemoteTransferFailure, result.Kind);
+        Assert.Equal(VatpErrorCode.OpenRejected, result.ErrorCode);
+        Assert.Equal(0, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_RemoteFailureAfterData_IsProbeLength()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.DataThenRemoteFail;
+        var prepared = CreateProbeArticle("<fail-after-data@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.RemoteTransferFailure, result.Kind);
+        Assert.Equal(VatpErrorCode.OpenRejected, result.ErrorCode);
+        Assert.Equal(VatpLoopbackTestServer.ProbePayloadBytes, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_MetaRejected_IsZero()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.InvalidMeta;
+        var prepared = CreateProbeArticle("<bad-meta-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.IncompleteOrMalformedArticle, result.Kind);
+        Assert.Equal(0, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_ShortFin_IsCopiedLength()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.ShortDataFin;
+        var prepared = CreateProbeArticle("<short-fin-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.IncompleteOrMalformedArticle, result.Kind);
+        Assert.Equal(VatpErrorCode.ArtSizeMismatch, result.ErrorCode);
+        Assert.Equal(VatpLoopbackTestServer.ProbePayloadBytes, result.AcceptedDataBytes);
+        Assert.NotEqual(prepared.Record.ArtSize, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_LaterDataRejectedBeforeCopy_KeepsFirstChunk()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.DataThenSizeReject;
+        var prepared = CreateProbeArticle("<size-reject-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.IncompleteOrMalformedArticle, result.Kind);
+        Assert.Equal(VatpErrorCode.ArtSizeMismatch, result.ErrorCode);
+        Assert.Equal(VatpLoopbackTestServer.ProbePayloadBytes, result.AcceptedDataBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_HashMismatchAfterFullBody_IsArtSize()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        server.Mode = VatpLoopbackTestServer.TransferMode.CorruptArtHash;
+        var prepared = CreateProbeArticle("<hash-mismatch-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.IncompleteOrMalformedArticle, result.Kind);
+        Assert.Equal(VatpErrorCode.ArtHashMismatch, result.ErrorCode);
+        Assert.Equal(prepared.Record.ArtSize, result.AcceptedDataBytes);
+        Assert.True(result.AcceptedDataBytes > VatpLoopbackTestServer.ProbePayloadBytes);
+    }
+
+    [Fact]
+    public async Task AcceptedDataBytes_Success_IsArtSize()
+    {
+        await using var server = VatpLoopbackTestServer.Start();
+        var prepared = CreateProbeArticle("<success-bytes@example.test>");
+        server.Register(prepared.Record, prepared.SelectedDateHeaderName);
+        var result = await FetchAsync(server, prepared);
+        Assert.Equal(VatpFetchKind.Success, result.Kind);
+        Assert.Equal(prepared.Record.ArtId, result.Record.ArtId);
+        Assert.Equal(prepared.Record.ArtSize, result.AcceptedDataBytes);
+        Assert.Equal(prepared.Record.ArtData.Length, result.AcceptedDataBytes);
+    }
+
+    private static async Task<VatpFetchResult> FetchAsync(VatpLoopbackTestServer server, PreparedArticle prepared)
+    {
+        var client = CreateClient(server);
+        return await client.FetchArticleAsync(
+            server.CreateCacheUri(),
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
+    }
+
+    private static PreparedArticle CreateProbeArticle(string messageId)
+    {
+        var prepared = CreateArticle(messageId);
+        Assert.True(prepared.Record.ArtData.Length > VatpLoopbackTestServer.ProbePayloadBytes);
+        Assert.Equal(prepared.Record.ArtData.Length, prepared.Record.ArtSize);
+        return prepared;
+    }
+
     private static VatpArticleClient CreateClient(VatpLoopbackTestServer server) =>
         new(CreatePool(server), NullLogger<VatpArticleClient>.Instance);
 

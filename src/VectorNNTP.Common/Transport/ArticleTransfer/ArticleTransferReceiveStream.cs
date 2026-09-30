@@ -85,7 +85,13 @@ public sealed class ArticleTransferReceiveStream
     /// <summary>Gets the failure code when <see cref="Phase"/> is <see cref="ArticleTransferPhase.Failed"/>.</summary>
     public VatpErrorCode Failure { get; private set; }
 
-    /// <summary>Gets received ArtData bytes so far.</summary>
+    /// <summary>
+    /// Gets the number of DATA payload bytes copied into this stream.
+    /// </summary>
+    /// <remarks>
+    /// Releasing the article buffer on failure or cancellation does not erase this count.
+    /// A failed or cancelled stream is terminal and is not reused for another article.
+    /// </remarks>
     public int ReceivedBytes => _received;
 
     /// <summary>Gets META ArtSize after META is accepted; otherwise 0.</summary>
@@ -360,8 +366,8 @@ public sealed class ArticleTransferReceiveStream
 
     private void ClearArtData()
     {
+        // Drop the article buffer. _received remains the copied DATA payload count.
         _artData = null;
-        _received = 0;
     }
 
     private static VatpErrorCode MapTransferFailure(NntpArticleCanonicalFailureCode code) =>

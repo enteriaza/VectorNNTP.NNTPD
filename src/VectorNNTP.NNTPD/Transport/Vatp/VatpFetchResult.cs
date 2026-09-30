@@ -12,14 +12,21 @@ public readonly record struct VatpFetchResult
         string? error,
         VatpErrorCode? errorCode,
         Guid? requestId,
-        ArticleId? articleId)
+        ArticleId? articleId,
+        int acceptedDataBytes)
     {
+        if (acceptedDataBytes < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(acceptedDataBytes));
+        }
+
         Kind = kind;
         Record = record;
         Error = error;
         ErrorCode = errorCode;
         RequestId = requestId;
         ArticleId = articleId;
+        AcceptedDataBytes = acceptedDataBytes;
     }
 
     /// <summary>Gets the outcome kind.</summary>
@@ -40,39 +47,69 @@ public readonly record struct VatpFetchResult
     /// <summary>Gets the OPEN ArticleId when known.</summary>
     public ArticleId? ArticleId { get; }
 
+    /// <summary>
+    /// Gets the number of DATA payload bytes copied into the receive stream before this result was built.
+    /// </summary>
+    /// <remarks>
+    /// Zero when no receive stream existed or no DATA payload had been copied.
+    /// When a stream exists, this is that stream's copied DATA count at completion.
+    /// </remarks>
+    public int AcceptedDataBytes { get; }
+
     /// <summary>Creates a success result.</summary>
-    public static VatpFetchResult FromSuccess(ArticleRecord record, Guid requestId, ArticleId articleId) =>
-        new(VatpFetchKind.Success, record, null, null, requestId, articleId);
+    public static VatpFetchResult FromSuccess(
+        ArticleRecord record,
+        Guid requestId,
+        ArticleId articleId,
+        int acceptedDataBytes = 0) =>
+        new(VatpFetchKind.Success, record, null, null, requestId, articleId, acceptedDataBytes);
 
     /// <summary>Creates a remote transfer failure.</summary>
     public static VatpFetchResult RemoteFailure(
         string? error,
         VatpErrorCode? errorCode,
         Guid requestId,
-        ArticleId articleId) =>
-        new(VatpFetchKind.RemoteTransferFailure, default, error, errorCode, requestId, articleId);
+        ArticleId articleId,
+        int acceptedDataBytes = 0) =>
+        new(VatpFetchKind.RemoteTransferFailure, default, error, errorCode, requestId, articleId, acceptedDataBytes);
 
     /// <summary>Creates a protocol failure.</summary>
-    public static VatpFetchResult ProtocolFailure(string? error, Guid? requestId = null, ArticleId? articleId = null) =>
-        new(VatpFetchKind.ProtocolFailure, default, error, null, requestId, articleId);
+    public static VatpFetchResult ProtocolFailure(
+        string? error,
+        Guid? requestId = null,
+        ArticleId? articleId = null,
+        int acceptedDataBytes = 0) =>
+        new(VatpFetchKind.ProtocolFailure, default, error, null, requestId, articleId, acceptedDataBytes);
 
     /// <summary>Creates a connection failure.</summary>
-    public static VatpFetchResult ConnectionFailure(string? error, Guid? requestId = null, ArticleId? articleId = null) =>
-        new(VatpFetchKind.ConnectionFailure, default, error, null, requestId, articleId);
+    public static VatpFetchResult ConnectionFailure(
+        string? error,
+        Guid? requestId = null,
+        ArticleId? articleId = null,
+        int acceptedDataBytes = 0) =>
+        new(VatpFetchKind.ConnectionFailure, default, error, null, requestId, articleId, acceptedDataBytes);
 
     /// <summary>Creates a cancelled result.</summary>
-    public static VatpFetchResult Cancelled(Guid requestId, ArticleId articleId) =>
-        new(VatpFetchKind.Cancelled, default, null, VatpErrorCode.Cancelled, requestId, articleId);
+    public static VatpFetchResult Cancelled(Guid requestId, ArticleId articleId, int acceptedDataBytes = 0) =>
+        new(VatpFetchKind.Cancelled, default, null, VatpErrorCode.Cancelled, requestId, articleId, acceptedDataBytes);
 
     /// <summary>Creates an invalid ArticleId result.</summary>
     public static VatpFetchResult InvalidArticleId(string? error) =>
-        new(VatpFetchKind.InvalidArticleId, default, error, null, null, null);
+        new(VatpFetchKind.InvalidArticleId, default, error, null, null, null, 0);
 
     /// <summary>Creates an incomplete or malformed article result.</summary>
     public static VatpFetchResult IncompleteOrMalformed(
         string? error,
         VatpErrorCode? errorCode,
         Guid requestId,
-        ArticleId articleId) =>
-        new(VatpFetchKind.IncompleteOrMalformedArticle, default, error, errorCode, requestId, articleId);
+        ArticleId articleId,
+        int acceptedDataBytes = 0) =>
+        new(
+            VatpFetchKind.IncompleteOrMalformedArticle,
+            default,
+            error,
+            errorCode,
+            requestId,
+            articleId,
+            acceptedDataBytes);
 }
