@@ -21,8 +21,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// article persistence and location identity (<see cref="StoredArticleLocation"/>).
 /// </para>
 /// <para>
-/// Active segment: incomplete final record is truncated on open. Closed/Retired: any
-/// incomplete or corrupt record fails closed via <see cref="SegmentStoreCorruptException"/>.
+/// Active segment: incomplete final record is truncated on open, and corruption before
+/// the valid end fails closed. Closed and retired segments are catalogued from filename,
+/// lifecycle, and file length only; payload CRC is proved on the targeted read path.
 /// </para>
 /// </remarks>
 public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposable
@@ -36,6 +37,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private ulong _nextSegmentId = 1;
     private ulong? _activeSegmentId;
     private bool _disposed;
+
+    /// <summary>
+    /// Bytes read while proving the active append offset. Closed and retired discovery
+    /// must leave this at zero. Tests use it as a regression guard.
+    /// </summary>
+    internal long DiscoveryPayloadBytesRead { get; private set; }
+
+    /// <summary>
+    /// Optional replacement for the active-tail payload read. Tests only.
+    /// Closed and retired discovery must not call it.
+    /// </summary>
+    internal Func<string, byte[]>? TestDiscoveryPayloadReader { get; set; }
 
     private FileSegmentStore(
         string root,
@@ -67,12 +80,27 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     /// <summary>
     /// Opens or creates the segment store under <paramref name="options"/>.SegmentDir,
-    /// discovers existing segments, repairs only the active torn tail, and fail-closes on
-    /// closed-segment corruption.
+    /// discovers segment identity and lifecycle, and repairs only the active torn tail.
+    /// Closed and retired payload bytes are not scanned here.
     /// </summary>
     public static FileSegmentStore Open(
         ArticleStorageRuntimeOptions options,
         ILogger? logger = null)
+        => OpenCore(options, logger, discoveryPayloadReader: null);
+
+    /// <summary>
+    /// Test entry that installs <paramref name="discoveryPayloadReader"/> before discovery.
+    /// Closed and retired files must not be passed to the reader.
+    /// </summary>
+    internal static FileSegmentStore Open(
+        ArticleStorageRuntimeOptions options,
+        Func<string, byte[]> discoveryPayloadReader)
+        => OpenCore(options, logger: null, discoveryPayloadReader);
+
+    private static FileSegmentStore OpenCore(
+        ArticleStorageRuntimeOptions options,
+        ILogger? logger,
+        Func<string, byte[]>? discoveryPayloadReader)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.SegmentDir);
@@ -80,6 +108,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(options.SegmentDir);
         var store = new FileSegmentStore(options.SegmentDir, options.SegmentTargetSizeBytes, log);
+        store.TestDiscoveryPayloadReader = discoveryPayloadReader;
         try
         {
             store.DiscoverAndRecoverUnlocked();
@@ -522,12 +551,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private void DiscoverAndRecoverUnlocked()
     {
         var discovered = new List<(SegmentId Id, SegmentFileKind Kind, string Path, long Length)>();
+        var seenIds = new HashSet<ulong>();
         foreach (var path in Directory.EnumerateFiles(_root, "seg-*"))
         {
             var name = Path.GetFileName(path);
             if (!SegmentFileNames.TryParse(name, out var segmentId, out var kind))
             {
-                continue;
+                throw new SegmentStoreCorruptException(
+                    $"Malformed segment filename '{name}'.",
+                    path);
+            }
+
+            if (!seenIds.Add(segmentId.Value))
+            {
+                throw new SegmentStoreCorruptException(
+                    $"Duplicate segment id {segmentId.Value} under '{_root}'.",
+                    path);
             }
 
             var length = new FileInfo(path).Length;
@@ -566,9 +605,23 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             {
                 validLength = RepairActiveTail(item.Path, item.Id, item.Length);
             }
-            else if (state is SegmentState.Closed or SegmentState.Retired)
+            else if (state == SegmentState.Retired)
             {
-                ValidateImmutableSegmentOrThrow(item.Path, item.Id, item.Length);
+                // Filename and length are the catalogue facts. Opening the handle proves the
+                // file is accessible without reading payload bytes. TryRead never serves Retired.
+                using var probe = new FileStream(
+                    item.Path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite,
+                    bufferSize: 1,
+                    FileOptions.None);
+                if (probe.Length != item.Length)
+                {
+                    throw new SegmentStoreCorruptException(
+                        $"Retired segment {item.Id} length changed during discovery.",
+                        item.Path);
+                }
             }
 
             var generation = _catalogue.AllocateGeneration();
@@ -577,7 +630,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 state,
                 generation,
                 validLength,
-                LiveBytes: validLength,
+                LiveBytes: 0,
                 DeadBytes: 0,
                 CreatedUtc: DateTimeOffset.UtcNow,
                 ClosedUtc: state == SegmentState.Active ? null : DateTimeOffset.UtcNow));
@@ -639,7 +692,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 path);
         }
 
-        var bytes = File.ReadAllBytes(path);
+        var bytes = ReadDiscoveryPayload(path);
         var offset = 0;
         while (offset < bytes.Length)
         {
@@ -690,42 +743,16 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         return offset;
     }
 
-    private void ValidateImmutableSegmentOrThrow(string path, SegmentId segmentId, long fileLength)
+    /// <summary>
+    /// Reads an active segment for tail repair. This is the only discovery path that
+    /// loads payload bytes.
+    /// </summary>
+    private byte[] ReadDiscoveryPayload(string path)
     {
-        if (fileLength == 0)
-        {
-            return;
-        }
-
-        if (fileLength > int.MaxValue)
-        {
-            throw new SegmentStoreCorruptException(
-                $"Closed segment {segmentId} exceeds supported size.",
-                path);
-        }
-
-        var bytes = File.ReadAllBytes(path);
-        var offset = 0;
-        while (offset < bytes.Length)
-        {
-            var span = bytes.AsSpan(offset);
-            if (!SegmentRecordCodec.TryDecode(
-                    span,
-                    out var recordLength,
-                    out _,
-                    out _,
-                    out _,
-                    out _,
-                    out var error))
-            {
-                FileSegmentStoreLogMessages.ClosedCorrupt(_logger, path, offset, error.ToString());
-                throw new SegmentStoreCorruptException(
-                    $"Closed/retired segment {segmentId} corrupt at offset {offset} ({error}).",
-                    path);
-            }
-
-            offset += recordLength;
-        }
+        var reader = TestDiscoveryPayloadReader;
+        var bytes = reader is not null ? reader(path) : File.ReadAllBytes(path);
+        DiscoveryPayloadBytesRead += bytes.LongLength;
+        return bytes;
     }
 
     /// <summary>

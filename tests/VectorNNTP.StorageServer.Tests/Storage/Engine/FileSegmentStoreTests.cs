@@ -254,17 +254,18 @@ public sealed class FileSegmentStoreTests
     }
 
     [Fact]
-    public async Task O_CorruptFinalRecord_OnClosed_FailsClosed()
+    public async Task O_CorruptFinalRecord_OnClosed_DoesNotBlockOpen_TargetedReadFails()
     {
-        using var dir = TempSegmentDir.Create(targetSegmentBytes: 200);
+        using var dir = TempSegmentDir.Create();
+        var locations = new List<StoredArticleLocation>();
         using (var storeA = FileSegmentStore.Open(dir.Options))
         {
             var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
             for (var i = 0; i < 10; i++)
             {
-                _ = await appender.AppendAsync(
+                locations.Add(await appender.AppendAsync(
                     CreateArtData($"<o-{i}@example.test>", new string('y', 30) + "\r\n"),
-                    CancellationToken.None);
+                    CancellationToken.None));
             }
 
             await storeA.CloseActiveAsync(CancellationToken.None);
@@ -275,18 +276,25 @@ public sealed class FileSegmentStoreTests
         bytes[^1] ^= 0xFF;
         File.WriteAllBytes(closed, bytes);
 
-        _ = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        using var storeB = FileSegmentStore.Open(dir.Options);
+        Assert.Equal(0, storeB.DiscoveryPayloadBytesRead);
+        Assert.True(storeB.TryRead(locations[0], out var kept));
+        Assert.True(kept.Length > 0);
+        Assert.False(storeB.TryRead(locations[^1], out var corrupt));
+        Assert.Equal(0, corrupt.Length);
     }
 
     [Fact]
-    public async Task P_CorruptMiddleRecord_OnClosed_FailsClosed()
+    public async Task P_CorruptMiddleRecord_OnClosed_DoesNotBlockOpen_TargetedReadFails()
     {
         using var dir = TempSegmentDir.Create();
+        StoredArticleLocation first;
+        StoredArticleLocation second;
         using (var storeA = FileSegmentStore.Open(dir.Options))
         {
             var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
-            _ = await appender.AppendAsync(CreateArtData("<p-1@example.test>", "one\r\n"), CancellationToken.None);
-            _ = await appender.AppendAsync(CreateArtData("<p-2@example.test>", "two\r\n"), CancellationToken.None);
+            first = await appender.AppendAsync(CreateArtData("<p-1@example.test>", "one\r\n"), CancellationToken.None);
+            second = await appender.AppendAsync(CreateArtData("<p-2@example.test>", "two\r\n"), CancellationToken.None);
             await storeA.CloseActiveAsync(CancellationToken.None);
         }
 
@@ -297,7 +305,12 @@ public sealed class FileSegmentStoreTests
         bytes[(int)firstLen - 1] ^= 0xFF;
         File.WriteAllBytes(closed, bytes);
 
-        _ = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        using var storeB = FileSegmentStore.Open(dir.Options);
+        Assert.Equal(0, storeB.DiscoveryPayloadBytesRead);
+        Assert.False(storeB.TryRead(first, out var corrupt));
+        Assert.Equal(0, corrupt.Length);
+        Assert.True(storeB.TryRead(second, out var kept));
+        Assert.True(kept.Length > 0);
     }
 
     [Fact]

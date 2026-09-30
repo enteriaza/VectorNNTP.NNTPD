@@ -1,7 +1,7 @@
 namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 /// <summary>
-/// Raised when a closed/retired segment is corrupt or an invalid segment layout is discovered.
+/// Raised when segment identity or the active append offset cannot be established.
 /// </summary>
 public sealed class SegmentStoreCorruptException : InvalidOperationException
 {

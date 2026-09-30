@@ -87,6 +87,10 @@ public sealed class StorageMaintenanceCoordinator
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Startup leaves unreferenced-extent accounting incomplete. Victim selection must
+        // not treat that under-count as a finished dead-byte inventory.
+        _engine.CompleteUnreferencedExtentAccounting();
+
         var pressure = _engine.ObserveCapacityAdmissionPressure();
 
         // 1) Physical reclaim of existing Retired garbage (no new compaction).

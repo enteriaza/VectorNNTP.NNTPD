@@ -84,6 +84,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private long _persistBlockedRetryScheduledCount;
     private int _disposed;
     private int _suspendBackgroundPersist;
+    private List<StoredArticleLocation> _unreferencedAccountingSkip = [];
 
     private FileArticleStorageEngine(
         FileArticleJournal journal,
@@ -230,6 +231,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _capacityMaximumUtilization,
             _capacityCompactionHeadroom);
     }
+
+    /// <summary>
+    /// True after <see cref="CompleteUnreferencedExtentAccounting"/> has classified proven
+    /// extents the index does not name. False after open and after every index rebuild.
+    /// Maintenance must not treat <see cref="SegmentInfo.DeadBytes"/> as a complete
+    /// physical accounting while this is false.
+    /// </summary>
+    internal bool IsUnreferencedExtentAccountingComplete { get; private set; }
 
     /// <summary>
     /// When true, Accept does not enqueue background SATA/index work (crash-after-Accept tests).
@@ -549,13 +558,30 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             MarkAbandonedDestinationDead(dest);
         }
 
-        // Rebuild drops process-local dead marks. Re-classify proven records that the index
-        // does not name so crash orphans stay dead across restart. Abandoned destinations
-        // were just counted and must not be counted again.
-        AccountUnreferencedProvenExtents(abandonedDestinations);
+        // Index rebuild cleared the accounting-complete flag. Abandoned destinations are
+        // already in DeadBytes; a later CompleteUnreferencedExtentAccounting must not add
+        // them again. Unreferenced orphans stay uncounted until that explicit pass.
+        _unreferencedAccountingSkip = [.. abandonedDestinations];
 
         // Durable recovery finished: re-link any still-incomplete work into the transient queue.
         EnqueueIncompleteFromJournal();
+    }
+
+    /// <summary>
+    /// Classifies proven segment records the durable index does not name as dead bytes.
+    /// Not part of storage-engine readiness. Idempotent once complete, until the next
+    /// <see cref="RebuildSegmentAccountingFromIndex"/>.
+    /// </summary>
+    internal void CompleteUnreferencedExtentAccounting()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (IsUnreferencedExtentAccountingComplete)
+        {
+            return;
+        }
+
+        AccountUnreferencedProvenExtents(_unreferencedAccountingSkip);
+        IsUnreferencedExtentAccountingComplete = true;
     }
 
     /// <summary>
@@ -691,6 +717,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         _segments.Catalogue.RebuildLiveDeadFromIndex(_index.Snapshot());
+        _unreferencedAccountingSkip = [];
+        IsUnreferencedExtentAccountingComplete = false;
     }
 
     /// <summary>Waits until no incomplete journal sequences remain.</summary>

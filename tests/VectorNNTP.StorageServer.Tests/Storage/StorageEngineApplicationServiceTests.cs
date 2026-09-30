@@ -163,13 +163,13 @@ public sealed class StorageEngineApplicationServiceTests
     }
 
     [Fact]
-    public async Task T_StartupFailsClosed_OnSegmentCorruption()
+    public async Task T_ClosedPayloadCorruption_DoesNotBlockReady_TryReadRefuses()
     {
         using var dirs = TempDirs.Create();
         SegmentId closedId;
+        var record = CreateRecord("<se-t@seg.test>");
         await using (var seed = FileArticleStorageEngine.Open(CreateRuntime(dirs).Storage))
         {
-            var record = CreateRecord("<se-t@seg.test>");
             Assert.Equal(
                 ArticleAcceptOutcome.Accepted,
                 (await seed.AcceptAsync(record, CancellationToken.None)).Outcome);
@@ -185,8 +185,12 @@ public sealed class StorageEngineApplicationServiceTests
         await File.WriteAllBytesAsync(closedPath, [0xDE, 0xAD, 0xBE, 0xEF]);
 
         var service = CreateService(dirs);
-        await Assert.ThrowsAnyAsync<Exception>(() => service.StartAsync(CancellationToken.None));
-        Assert.False(service.IsReady);
+        await service.StartAsync(CancellationToken.None);
+        Assert.True(service.IsReady);
+        Assert.False(service.Engine.IsUnreferencedExtentAccountingComplete);
+        Assert.False(service.Engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.IsEmpty);
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]

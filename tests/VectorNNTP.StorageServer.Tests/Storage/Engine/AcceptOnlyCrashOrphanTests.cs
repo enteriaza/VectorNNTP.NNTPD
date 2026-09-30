@@ -71,6 +71,12 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.False(engine.Index.TryGet(other.ArtId, out _));
+        Assert.False(engine.IsUnreferencedExtentAccountingComplete);
+        Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var before));
+        Assert.Equal(read.Metadata.Location.Length, before.LiveBytes);
+        Assert.Equal(0, before.DeadBytes);
+        engine.CompleteUnreferencedExtentAccounting();
+        Assert.True(engine.IsUnreferencedExtentAccountingComplete);
         Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var info));
         Assert.Equal(read.Metadata.Location.Length, info.LiveBytes);
         Assert.Equal(otherBytes.Length, info.DeadBytes);
@@ -151,6 +157,11 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.Equal(0, read.Metadata.Location.Offset);
         Assert.Equal(one.Length, read.Metadata.Location.Length);
+        Assert.False(engine.IsUnreferencedExtentAccountingComplete);
+        Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var before));
+        Assert.Equal(one.Length, before.LiveBytes);
+        Assert.Equal(0, before.DeadBytes);
+        engine.CompleteUnreferencedExtentAccounting();
         Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var info));
         Assert.Equal(one.Length, info.LiveBytes);
         Assert.Equal(one.Length, info.DeadBytes);
@@ -182,6 +193,11 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.Equal(0, read.Metadata.Location.Offset);
         Assert.Equal(ArticleStorageState.Present, read.Metadata.State);
+        Assert.False(engineB.IsUnreferencedExtentAccountingComplete);
+        Assert.True(engineB.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var before));
+        Assert.Equal(one.Length, before.LiveBytes);
+        Assert.Equal(0, before.DeadBytes);
+        engineB.CompleteUnreferencedExtentAccounting();
         Assert.True(engineB.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var info));
         Assert.Equal(one.Length, info.LiveBytes);
         Assert.Equal(one.Length, info.DeadBytes);

@@ -57,13 +57,16 @@ public static class SegmentLifecycle
     /// </summary>
     /// <remarks>
     /// Only a <see cref="SegmentState.Closed"/> segment with <see cref="SegmentInfo.LiveBytes"/>
-    /// equal to zero is reclaimable. Active segments are never reclaimable. Retired segments
-    /// are already past rewrite fencing; their physical deletion is a later phase and is not
-    /// expressed by this predicate. A positive LiveBytes value means Present articles still
-    /// reference the segment.
+    /// equal to zero is reclaimable, and only when <see cref="SegmentInfo.SizeBytes"/> equals
+    /// live plus dead. A gap means unreferenced physical extents have not been classified;
+    /// that under-count must not make the segment reclaimable. Active segments are never
+    /// reclaimable. Retired segments are already past rewrite fencing; their physical deletion
+    /// is a later phase and is not expressed by this predicate.
     /// </remarks>
     public static bool IsReclaimable(in SegmentInfo info) =>
-        info.State == SegmentState.Closed && info.LiveBytes == 0;
+        info.State == SegmentState.Closed
+        && info.LiveBytes == 0
+        && info.SizeBytes == info.LiveBytes + info.DeadBytes;
 }
 
 /// <summary>Journal / write-path pressure derived from <see cref="IArticleJournal.OutstandingRecoverableBytes"/>.</summary>
@@ -387,8 +390,9 @@ public readonly record struct StoredArticleMetadata(
 /// index on engine open — not a durable catalogue database.
 /// </param>
 /// <param name="DeadBytes">
-/// Bytes for Evicted/Invalid index entries on this segment (sum of location Length). Same
-/// reconstruction rules as LiveBytes.
+/// Bytes for Evicted/Invalid index entries on this segment (sum of location Length), plus
+/// unreferenced proven extents after an explicit accounting pass. Until that pass, DeadBytes
+/// may under-count and is not a complete physical inventory.
 /// </param>
 /// <param name="CreatedUtc">Segment creation time (UTC).</param>
 /// <param name="ClosedUtc">Segment close time when closed/retired; null while active.</param>
