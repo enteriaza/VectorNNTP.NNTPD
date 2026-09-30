@@ -23,6 +23,7 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
@@ -63,6 +64,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IAccountRateAllocator _accountRates;
     private readonly IArticleWorkRpcClient? _articleWorkRpc;
     private readonly IVatpArticleClient? _vatpArticleClient;
+    private readonly IStorageArticleLookupClient? _storageArticleLookup;
     private readonly IPostFilter _postFilter;
     private readonly PostFilterMetrics _postFilterMetrics;
     private readonly IPostFilterRejectionEvidenceQueue _postFilterEvidence;
@@ -105,6 +107,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
         IVatpArticleClient? vatpArticleClient = null,
+        IStorageArticleLookupClient? storageArticleLookup = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
@@ -141,6 +144,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _accountRates = accountRates ?? NullAccountRateAllocator.Instance;
         _articleWorkRpc = articleWorkRpc;
         _vatpArticleClient = vatpArticleClient;
+        _storageArticleLookup = storageArticleLookup;
         _postFilter = postFilter ?? DisabledPostFilter.Instance;
         _postFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         _postFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
@@ -393,6 +397,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 accountRates: _accountRates,
                 articleWorkRpc: _articleWorkRpc,
                 vatpArticleClient: _vatpArticleClient,
+                storageArticleLookup: _storageArticleLookup,
                 postFilter: _postFilter,
                 postFilterMetrics: _postFilterMetrics,
                 postFilterEvidence: _postFilterEvidence,

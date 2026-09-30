@@ -38,4 +38,14 @@ internal static partial class ArticleRetrievalLogMessages
         Level = LogLevel.Warning,
         Message = "BackFiller article ingest failed after successful retrieval")]
     public static partial void IngestFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(
+        EventId = 2616,
+        Level = LogLevel.Debug,
+        Message = "Storage article lookup {Outcome} articleId={ArticleId} requestId={RequestId}")]
+    public static partial void StorageLookupCompleted(
+        ILogger logger,
+        string Outcome,
+        string ArticleId,
+        Guid RequestId);
 }

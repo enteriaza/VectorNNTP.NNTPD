@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
@@ -224,6 +225,298 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.True(vatp.SawCancellation);
     }
 
+    [Fact]
+    public async Task ArticleWork_Success_DoesNotCallStorageLookup()
+    {
+        var prepared = PrepareArticle(MessageId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.Success, prepared.Record.ArtId, CacheUri);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, Guid.NewGuid()));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.FromSuccess(prepared.Record, prepared.RequestId, prepared.Record.ArtId));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        var wire = Encoding.ASCII.GetString(await duplex.ReadMultilineAsync());
+        Assert.StartsWith($"220 0 {MessageId}\r\n", wire, StringComparison.Ordinal);
+        Assert.Equal(0, lookup.LookupCount);
+        Assert.Equal(1, vatp.FetchCount);
+        Assert.Equal(CacheUri, vatp.Uri);
+    }
+
+    [Theory]
+    [InlineData("ARTICLE", ArticleWorkOutcome.ArticleNotFound)]
+    [InlineData("HEAD", ArticleWorkOutcome.ArticleNotFound)]
+    [InlineData("BODY", ArticleWorkOutcome.ArticleNotFound)]
+    [InlineData("STAT", ArticleWorkOutcome.ArticleNotFound)]
+    [InlineData("ARTICLE", ArticleWorkOutcome.InvalidArticle)]
+    public async Task ArticleWorkMiss_StorageHit_ServesAndAdmits(string verb, ArticleWorkOutcome outcome)
+    {
+        var prepared = PrepareArticle(MessageId, body: "hello\r\n");
+        var requestId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+        var uri = StorageCacheUri(prepared.Record.ArtId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var queue = new RecordingIngestionQueue();
+        var rpc = new StubArticleWorkRpcClient(outcome, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId, uri));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.FromSuccess(prepared.Record, requestId, prepared.Record.ArtId));
+        var session = duplex.CreateSession(
+            articleWorkRpc: rpc,
+            vatp: vatp,
+            ingestion: queue,
+            storageLookup: lookup);
+
+        await DispatchLineAsync(duplex, session, $"{verb} {MessageId}");
+
+        switch (verb)
+        {
+            case "ARTICLE":
+                Assert.StartsWith($"220 0 {MessageId}\r\n", Encoding.ASCII.GetString(await duplex.ReadMultilineAsync()), StringComparison.Ordinal);
+                break;
+            case "HEAD":
+                Assert.StartsWith($"221 0 {MessageId}\r\n", Encoding.ASCII.GetString(await duplex.ReadMultilineAsync()), StringComparison.Ordinal);
+                break;
+            case "BODY":
+                Assert.StartsWith($"222 0 {MessageId}\r\n", Encoding.ASCII.GetString(await duplex.ReadMultilineAsync()), StringComparison.Ordinal);
+                break;
+            default:
+                Assert.Equal($"223 0 {MessageId}", await duplex.ReadClientLineAsync());
+                break;
+        }
+
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(prepared.Record.ArtId, lookup.LastArticleId);
+        Assert.Equal(1, vatp.FetchCount);
+        Assert.Equal(uri, vatp.Uri);
+        Assert.Equal(requestId, vatp.RequestId);
+        Assert.Equal(prepared.Record.ArtId, vatp.ArticleId);
+        Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(queue.Admitted).Producer);
+    }
+
+    [Fact]
+    public async Task ArticleWorkMiss_StorageSilence_Returns430_WithoutVatp()
+    {
+        var prepared = PrepareArticle(MessageId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageSilence(prepared.Record.ArtId));
+        var vatp = new RecordingVatpArticleClient(VatpFetchResult.ConnectionFailure("unused"));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(0, vatp.FetchCount);
+    }
+
+    [Theory]
+    [InlineData("Storage article lookup was canceled.")]
+    [InlineData("Lookup could not be registered.")]
+    public async Task ArticleWorkMiss_StorageUnavailable_Returns400_WithoutVatp(string error)
+    {
+        var prepared = PrepareArticle(MessageId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageNotFound(prepared.Record.ArtId, error));
+        var vatp = new RecordingVatpArticleClient(VatpFetchResult.ConnectionFailure("unused"));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(0, vatp.FetchCount);
+    }
+
+    [Fact]
+    public async Task ArticleWorkMiss_StorageThrows_Returns400_WithoutVatpOrRetry()
+    {
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new ThrowingStorageLookup();
+        var vatp = new RecordingVatpArticleClient(VatpFetchResult.ConnectionFailure("unused"));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(0, vatp.FetchCount);
+    }
+
+    [Fact]
+    public async Task ArticleWorkThrows_DoesNotCallStorageLookup()
+    {
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new ThrowingArticleWorkRpcClient();
+        var lookup = new ThrowingStorageLookup();
+        var vatp = new RecordingVatpArticleClient(VatpFetchResult.ConnectionFailure("unused"));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(0, lookup.LookupCount);
+        Assert.Equal(0, vatp.FetchCount);
+    }
+
+    [Fact]
+    public async Task Cancellation_DuringStorageLookup_PropagatesWithoutReply()
+    {
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lookup = new GatedStorageLookup(gate.Task);
+        var vatp = new RecordingVatpArticleClient(VatpFetchResult.ConnectionFailure("unused"));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        using var cts = new CancellationTokenSource();
+        var dispatch = DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}", cts.Token);
+        await lookup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await cts.CancelAsync();
+        gate.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await dispatch);
+        Assert.True(lookup.SawCancellation);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(0, vatp.FetchCount);
+        Assert.Null(await duplex.TryReadClientLineAsync(TimeSpan.FromMilliseconds(200)));
+    }
+
+    [Fact]
+    public async Task StorageHit_OpenRejected_Returns400_WithoutRetry()
+    {
+        var prepared = PrepareArticle(MessageId);
+        var requestId = Guid.NewGuid();
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.RemoteFailure("open", VatpErrorCode.OpenRejected, requestId, prepared.Record.ArtId));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(1, vatp.FetchCount);
+        Assert.Equal(requestId, vatp.RequestId);
+    }
+
+    [Fact]
+    public async Task StorageHit_IdentityMismatch_Returns430_WithoutRetry()
+    {
+        var prepared = PrepareArticle(MessageId);
+        var other = PrepareArticle("<other@example.test>");
+        var requestId = Guid.NewGuid();
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.FromSuccess(other.Record, requestId, other.Record.ArtId));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(1, vatp.FetchCount);
+    }
+
+    [Fact]
+    public async Task StorageHit_IncompleteTransfer_Returns400_WithoutRetry()
+    {
+        var prepared = PrepareArticle(MessageId);
+        var requestId = Guid.NewGuid();
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.IncompleteOrMalformed(
+                "truncated",
+                VatpErrorCode.IncompleteTransfer,
+                requestId,
+                prepared.Record.ArtId));
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(1, vatp.FetchCount);
+    }
+
+    [Fact]
+    public async Task StorageHit_CancellationDuringVatp_PropagatesWithoutReply()
+    {
+        var prepared = PrepareArticle(MessageId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, Guid.NewGuid()));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vatp = new GatedVatpArticleClient(gate.Task);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        using var cts = new CancellationTokenSource();
+        var dispatch = DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}", cts.Token);
+        await vatp.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await cts.CancelAsync();
+        gate.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await dispatch);
+        Assert.True(vatp.SawCancellation);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(1, rpc.LookupCount);
+        Assert.Null(await duplex.TryReadClientLineAsync(TimeSpan.FromMilliseconds(200)));
+    }
+
+    [Fact]
+    public async Task TwoSessions_SameMessageId_LookupIndependently()
+    {
+        var prepared = PrepareArticle(MessageId);
+        var requestId = Guid.NewGuid();
+        await using var firstDuplex = await ArticleDuplex.CreateAsync();
+        await using var secondDuplex = await ArticleDuplex.CreateAsync();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.FromSuccess(prepared.Record, requestId, prepared.Record.ArtId));
+        var first = firstDuplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        var second = secondDuplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+
+        await DispatchLineAsync(firstDuplex, first, $"ARTICLE {MessageId}");
+        await DispatchLineAsync(secondDuplex, second, $"ARTICLE {MessageId}");
+
+        Assert.StartsWith(
+            $"220 0 {MessageId}\r\n",
+            Encoding.ASCII.GetString(await firstDuplex.ReadMultilineAsync()),
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"220 0 {MessageId}\r\n",
+            Encoding.ASCII.GetString(await secondDuplex.ReadMultilineAsync()),
+            StringComparison.Ordinal);
+        Assert.Equal(2, rpc.LookupCount);
+        Assert.Equal(2, lookup.LookupCount);
+        Assert.Equal(2, vatp.FetchCount);
+    }
+
+    private static string StorageCacheUri(ArticleId articleId) =>
+        $"cache://cache01.usenet.ninja:563/{articleId.ToLowerHexString()}";
+
+    private static StorageArticleLookupResult StorageFound(ArticleId articleId, Guid requestId, string? uri = null) =>
+        new(
+            StorageArticleLookupOutcome.Found,
+            requestId,
+            articleId,
+            1,
+            "cache01.usenet.ninja",
+            uri ?? StorageCacheUri(articleId),
+            Error: null);
+
+    private static StorageArticleLookupResult StorageSilence(ArticleId articleId) =>
+        StorageNotFound(articleId, "Storage article lookup timed out with no positive response.");
+
+    private static StorageArticleLookupResult StorageNotFound(ArticleId articleId, string error) =>
+        new(
+            StorageArticleLookupOutcome.NotFound,
+            Guid.NewGuid(),
+            articleId,
+            null,
+            null,
+            null,
+            error);
+
     private static Prepared PrepareArticle(string messageId, string body = "body\r\n")
     {
         var parser = new NntpArticleParser("nntpd.test");
@@ -284,6 +577,95 @@ public sealed class ArticleRetrievalVatpCommandTests
         {
             FetchCount++;
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class RecordingVatpArticleClient(VatpFetchResult result) : IVatpArticleClient
+    {
+        public int FetchCount { get; private set; }
+
+        public string? Uri { get; private set; }
+
+        public Guid RequestId { get; private set; }
+
+        public ArticleId ArticleId { get; private set; }
+
+        public Task<VatpFetchResult> FetchArticleAsync(
+            string cacheUri,
+            Guid requestId,
+            ArticleId articleId,
+            CancellationToken cancellationToken)
+        {
+            FetchCount++;
+            Uri = cacheUri;
+            RequestId = requestId;
+            ArticleId = articleId;
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowingArticleWorkRpcClient : IArticleWorkRpcClient
+    {
+        public int LookupCount { get; private set; }
+
+        public Task<ArticleWorkRpcResult> LookupByMessageIdAsync(
+            ReadOnlyMemory<byte> messageId,
+            CancellationToken cancellationToken)
+        {
+            LookupCount++;
+            throw new InvalidOperationException("article-work unavailable");
+        }
+    }
+
+    private sealed class StubStorageLookup(StorageArticleLookupResult result) : IStorageArticleLookupClient
+    {
+        public int LookupCount { get; private set; }
+
+        public ArticleId LastArticleId { get; private set; }
+
+        public Task<StorageArticleLookupResult> LookupAsync(ArticleId articleId, CancellationToken cancellationToken)
+        {
+            LookupCount++;
+            LastArticleId = articleId;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowingStorageLookup : IStorageArticleLookupClient
+    {
+        public int LookupCount { get; private set; }
+
+        public Task<StorageArticleLookupResult> LookupAsync(ArticleId articleId, CancellationToken cancellationToken)
+        {
+            LookupCount++;
+            throw new InvalidOperationException("storage lookup unavailable");
+        }
+    }
+
+    private sealed class GatedStorageLookup(Task release) : IStorageArticleLookupClient
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int LookupCount { get; private set; }
+
+        public bool SawCancellation { get; private set; }
+
+        public async Task<StorageArticleLookupResult> LookupAsync(ArticleId articleId, CancellationToken cancellationToken)
+        {
+            LookupCount++;
+            Entered.TrySetResult();
+            try
+            {
+                await release.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                SawCancellation = true;
+                throw;
+            }
+
+            return StorageArticleLookupResult.NotFound(Guid.NewGuid(), articleId, "unexpected");
         }
     }
 
@@ -396,7 +778,8 @@ public sealed class ArticleRetrievalVatpCommandTests
             IArticleWorkRpcClient? articleWorkRpc = null,
             IVatpArticleClient? vatp = null,
             IArticleIngestionQueue? ingestion = null,
-            IHistoryDb? historyDb = null)
+            IHistoryDb? historyDb = null,
+            IStorageArticleLookupClient? storageLookup = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -408,7 +791,8 @@ public sealed class ArticleRetrievalVatpCommandTests
                 articleIngestion: ingestion,
                 historyDb: historyDb,
                 articleWorkRpc: articleWorkRpc,
-                vatpArticleClient: vatp);
+                vatpArticleClient: vatp,
+                storageArticleLookup: storageLookup);
             session.SetAuthorization(Reader);
             return session;
         }
@@ -419,6 +803,19 @@ public sealed class ArticleRetrievalVatpCommandTests
             var line = await NntpCommandLineReader.ReadLineAsync(_serverToClient.Reader, cts.Token);
             Assert.NotNull(line);
             return line!;
+        }
+
+        public async Task<string?> TryReadClientLineAsync(TimeSpan timeout)
+        {
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                return await NntpCommandLineReader.ReadLineAsync(_serverToClient.Reader, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
         }
 
         public async Task<byte[]> ReadMultilineAsync()

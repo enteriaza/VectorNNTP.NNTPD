@@ -21,6 +21,7 @@ using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Transit;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Session;
@@ -107,6 +108,7 @@ public sealed class NntpSession
         IAccountRateAllocator? accountRates = null,
         IArticleWorkRpcClient? articleWorkRpc = null,
         IVatpArticleClient? vatpArticleClient = null,
+        IStorageArticleLookupClient? storageArticleLookup = null,
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
@@ -180,6 +182,7 @@ public sealed class NntpSession
         AccountRates = accountRates ?? NullAccountRateAllocator.Instance;
         ArticleWorkRpc = articleWorkRpc;
         VatpArticleClient = vatpArticleClient;
+        StorageArticleLookup = storageArticleLookup;
         PostFilter = postFilter ?? DisabledPostFilter.Instance;
         PostFilterMetrics = postFilterMetrics ?? new PostFilterMetrics();
         PostFilterEvidence = postFilterEvidence ?? DisabledPostFilterRejectionEvidenceQueue.Instance;
@@ -210,6 +213,12 @@ public sealed class NntpSession
     /// <see langword="null"/> when tests construct a session without VATP.
     /// </summary>
     internal IVatpArticleClient? VatpArticleClient { get; }
+
+    /// <summary>
+    /// Gets the StorageServer fleet lookup used after a definitive ArticleWork miss, or
+    /// <see langword="null"/> when tests construct a session without fleet lookup.
+    /// </summary>
+    internal IStorageArticleLookupClient? StorageArticleLookup { get; }
 
     /// <summary>Gets the POST-only PostFilter. IHAVE/TAKETHIS must not call this.</summary>
     internal IPostFilter PostFilter { get; }

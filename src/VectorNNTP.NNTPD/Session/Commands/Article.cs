@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
@@ -15,7 +16,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <remarks>
 /// <para>
 /// Message-id form resolves through ArticleWork RPC then VATP
-/// (<see cref="IVatpArticleClient"/>). A validated CanonicalV1
+/// (<see cref="IVatpArticleClient"/>). A definitive ArticleWork
+/// <see cref="ArticleWorkOutcome.ArticleNotFound"/> or
+/// <see cref="ArticleWorkOutcome.InvalidArticle"/> asks
+/// <see cref="IStorageArticleLookupClient"/> once and, on a positive URI for the same
+/// ArticleId, uses that same VATP client. A validated CanonicalV1
 /// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
 /// reply. Local ingest admission is independent of serving the requesting client.
 /// </para>
@@ -203,7 +208,7 @@ internal static class Article
 
         if (lookup.Outcome is ArticleWorkOutcome.ArticleNotFound or ArticleWorkOutcome.InvalidArticle)
         {
-            return ResolveResult.NotFound();
+            return await ResolveFromStorageAsync(context, messageId, cancellationToken).ConfigureAwait(false);
         }
 
         if (lookup.Outcome != ArticleWorkOutcome.Success
@@ -244,6 +249,120 @@ internal static class Article
         }
 
         return MapFetch(fetch, messageId.Span, expectedArtId);
+    }
+
+    /// <summary>
+    /// Silence from the fleet lookup. Matches <c>StorageArticleLookupService</c> when no
+    /// positive response arrives before the existing lookup budget.
+    /// </summary>
+    private const string StorageLookupSilence = "Storage article lookup timed out with no positive response.";
+
+    private static async ValueTask<ResolveResult> ResolveFromStorageAsync(
+        NntpCommandContext context,
+        ReadOnlyMemory<byte> messageId,
+        CancellationToken cancellationToken)
+    {
+        var storage = context.Session.StorageArticleLookup;
+        if (storage is null)
+        {
+            return ResolveResult.NotFound();
+        }
+
+        var articleId = ArticleId.FromMessageId(messageId.Span);
+        StorageArticleLookupResult fleet;
+        try
+        {
+            fleet = await storage.LookupAsync(articleId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                Logger,
+                "unavailable",
+                articleId.ToLowerHexString(),
+                Guid.Empty);
+            return ResolveResult.Temporary();
+        }
+
+        if (fleet.Outcome != StorageArticleLookupOutcome.Found)
+        {
+            var miss = string.Equals(fleet.Error, StorageLookupSilence, StringComparison.Ordinal);
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                Logger,
+                miss ? "miss" : "unavailable",
+                articleId.ToLowerHexString(),
+                fleet.RequestId);
+            return miss ? ResolveResult.NotFound() : ResolveResult.Temporary();
+        }
+
+        if (fleet.ArticleId != articleId || !TryBindStorageUri(fleet.Uri, articleId, out var cacheUri))
+        {
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                Logger,
+                "unavailable",
+                articleId.ToLowerHexString(),
+                fleet.RequestId);
+            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "StorageUri", fleet.Uri);
+            return ResolveResult.Temporary();
+        }
+
+        var vatp = context.Session.VatpArticleClient;
+        if (vatp is null)
+        {
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                Logger,
+                "found",
+                articleId.ToLowerHexString(),
+                fleet.RequestId);
+            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", cacheUri);
+            return ResolveResult.Temporary();
+        }
+
+        ArticleRetrievalLogMessages.StorageLookupCompleted(
+            Logger,
+            "found",
+            articleId.ToLowerHexString(),
+            fleet.RequestId);
+
+        VatpFetchResult fetch;
+        try
+        {
+            fetch = await vatp.FetchArticleAsync(cacheUri, fleet.RequestId, articleId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, cacheUri, fleet.RequestId);
+            return ResolveResult.Temporary();
+        }
+
+        return MapFetch(fetch, messageId.Span, articleId);
+    }
+
+    private static bool TryBindStorageUri(string? uri, in ArticleId articleId, out string cacheUri)
+    {
+        cacheUri = string.Empty;
+        if (string.IsNullOrWhiteSpace(uri)
+            || !CacheArticleUriParser.TryParse(uri, out var parsed, out _))
+        {
+            return false;
+        }
+
+        if (!ArticleId.TryParseLowerHex(parsed.ArticleIdHex, out var pathId) || pathId != articleId)
+        {
+            return false;
+        }
+
+        cacheUri = uri;
+        return true;
     }
 
     private static ResolveResult MapFetch(
