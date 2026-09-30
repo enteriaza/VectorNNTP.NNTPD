@@ -21,6 +21,7 @@ public sealed class StaleReadInvalidationTests
         var record = CreateRecord("<p5f11-a@seg.test>");
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         var (sourceId, _, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+        engine.CompleteUnreferencedExtentAccounting();
 
         engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
         {

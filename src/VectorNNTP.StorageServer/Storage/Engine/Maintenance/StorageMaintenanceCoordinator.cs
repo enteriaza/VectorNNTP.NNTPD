@@ -531,6 +531,7 @@ public sealed class StorageMaintenanceCoordinator
             case ArticleSegmentRetirementOutcome.RejectedSourceMissing:
             case ArticleSegmentRetirementOutcome.RejectedNotCommitted:
             case ArticleSegmentRetirementOutcome.RejectedUnknownCompaction:
+            case ArticleSegmentRetirementOutcome.RejectedAccountingIncomplete:
                 return EnrichCompactionResult(
                     new StorageMaintenanceResult(
                         StorageMaintenanceOutcome.Compacted,

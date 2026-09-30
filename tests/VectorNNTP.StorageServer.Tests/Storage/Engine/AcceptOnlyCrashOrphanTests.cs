@@ -11,8 +11,9 @@ using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
-/// Accept-only recovery adopts one proven physical copy and classifies other proven
-/// copies as dead. Unproven records are not published.
+/// Accept-only recovery adopts one proven physical copy. Other proved copies on a
+/// Closed segment become dead exactly once. Unproven records are not published.
+/// Active segments are not historically accounted.
 /// </summary>
 public sealed class AcceptOnlyCrashOrphanTests
 {
@@ -71,6 +72,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.False(engine.Index.TryGet(other.ArtId, out _));
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
         Assert.False(engine.IsUnreferencedExtentAccountingComplete);
         Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var before));
         Assert.Equal(read.Metadata.Location.Length, before.LiveBytes);
@@ -80,6 +82,8 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var info));
         Assert.Equal(read.Metadata.Location.Length, info.LiveBytes);
         Assert.Equal(otherBytes.Length, info.DeadBytes);
+        Assert.True(info.ExtentAccountingComplete);
+        Assert.Equal(info.SizeBytes, info.LiveBytes + info.DeadBytes);
     }
 
     [Fact]
@@ -157,6 +161,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.Equal(0, read.Metadata.Location.Offset);
         Assert.Equal(one.Length, read.Metadata.Location.Length);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
         Assert.False(engine.IsUnreferencedExtentAccountingComplete);
         Assert.True(engine.Segments.TryGetSegmentInfo(read.Metadata.Location.SegmentId, out var before));
         Assert.Equal(one.Length, before.LiveBytes);
@@ -166,6 +171,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         Assert.Equal(one.Length, info.LiveBytes);
         Assert.Equal(one.Length, info.DeadBytes);
         Assert.Equal(info.SizeBytes, info.LiveBytes + info.DeadBytes);
+        Assert.True(info.ExtentAccountingComplete);
     }
 
     [Fact]
@@ -183,6 +189,7 @@ public sealed class AcceptOnlyCrashOrphanTests
             Assert.Equal(0, engineA.PhysicalAppendCount);
             Assert.True(engineA.TryRead(record.ArtId, out var first));
             Assert.Equal(0, first.Metadata.Location.Offset);
+            await engineA.Segments.CloseActiveAsync(CancellationToken.None);
         }
 
         await using var engineB = OpenSuspended(dir);

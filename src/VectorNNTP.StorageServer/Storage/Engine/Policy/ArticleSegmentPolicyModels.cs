@@ -3,7 +3,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// <summary>Why a segment is or is not compaction-eligible under the configured policy.</summary>
 public enum CompactionEligibilityReason : byte
 {
-    /// <summary>Closed, sized, and meets both dead-byte thresholds.</summary>
+    /// <summary>Closed, historically accounted, sized, and meets both dead-byte thresholds.</summary>
     Eligible = 1,
 
     /// <summary><c>StorageServer:Storage:Compaction:Enabled</c> is false.</summary>
@@ -20,6 +20,12 @@ public enum CompactionEligibilityReason : byte
 
     /// <summary>Dead ratio is below <c>MinimumDeadRatio</c>.</summary>
     InsufficientDeadRatio = 6,
+
+    /// <summary>
+    /// Closed segment has not completed historical extent accounting.
+    /// <see cref="SegmentInfo.DeadBytes"/> must not authorize a new compaction victim.
+    /// </summary>
+    AccountingIncomplete = 7,
 }
 
 /// <summary>Read-only compaction eligibility evaluation for one catalogue entry.</summary>

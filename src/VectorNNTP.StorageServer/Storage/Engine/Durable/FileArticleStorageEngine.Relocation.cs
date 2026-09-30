@@ -434,6 +434,15 @@ public sealed partial class FileArticleStorageEngine
         TestHookBeforeIndexRelocate = null;
         hook?.Invoke();
 
+        ArticleRelocationResult result = default;
+        Catalogue.ExecuteLocked(() => result = FinishIndexRelocateUnlocked(intent, destination));
+        return result;
+    }
+
+    private ArticleRelocationResult FinishIndexRelocateUnlocked(
+        JournalRelocationIntentRecord intent,
+        StoredArticleLocation destination)
+    {
         if (_index.TryGet(intent.ArtId, out var current)
             && current.State == ArticleStorageState.Present
             && LocationsEqual(current.Location, destination))

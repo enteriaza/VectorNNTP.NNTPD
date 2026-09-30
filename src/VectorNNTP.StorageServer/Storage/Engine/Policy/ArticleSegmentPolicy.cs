@@ -131,6 +131,21 @@ public sealed class ArticleSegmentPolicy
                 _minimumDeadRatio);
         }
 
+        if (!segment.ExtentAccountingComplete)
+        {
+            return new CompactionEligibility(
+                false,
+                CompactionEligibilityReason.AccountingIncomplete,
+                segment.SegmentId,
+                segment.State,
+                segment.SizeBytes,
+                segment.LiveBytes,
+                segment.DeadBytes,
+                deadRatio,
+                _minimumDeadBytes,
+                _minimumDeadRatio);
+        }
+
         if (segment.DeadBytes < _minimumDeadBytes)
         {
             return new CompactionEligibility(

@@ -152,6 +152,12 @@ internal static partial class FileArticleStorageEngineLogMessages
         int ProvenCopies);
 
     [LoggerMessage(
+        EventId = 3423,
+        Level = LogLevel.Warning,
+        Message = "Closed segment extent accounting incomplete (SegmentId={SegmentId})")]
+    public static partial void ClosedExtentAccountingIncomplete(ILogger logger, ulong SegmentId);
+
+    [LoggerMessage(
         EventId = 3422,
         Level = LogLevel.Information,
         Message = "Unreferenced proven segment record marked dead (artId={ArtId}, SegmentId={SegmentId}, Offset={Offset}, Length={Length})")]

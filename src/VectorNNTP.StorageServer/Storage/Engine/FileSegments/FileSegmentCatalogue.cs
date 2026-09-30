@@ -11,11 +11,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// Retired via on-disk <c>.retired</c> rename.
 /// </para>
 /// <para>
-/// On store open, discovery provisionally sets <c>LiveBytes = SizeBytes</c> and
-/// <c>DeadBytes = 0</c>. The durable article storage engine then rebuilds Live/Dead from
-/// the article index (Present → Live, Evicted/Invalid → Dead) using location Length.
-/// Live/Dead are therefore process-local views repaired from the authoritative index — they
-/// are not independently durable metrics.
+/// On store open, discovery sets <c>LiveBytes = 0</c> and <c>DeadBytes = 0</c>.
+/// The durable article storage engine then rebuilds Live/Dead from the article index
+/// (Present → Live, Evicted/Invalid → Dead) using location Length, and clears
+/// <see cref="SegmentInfo.ExtentAccountingComplete"/>. Live/Dead are process-local views
+/// repaired from the authoritative index — they are not independently durable metrics.
+/// A later closed-segment scan may replace DeadBytes and set the accounted bit.
 /// </para>
 /// </remarks>
 public sealed class FileSegmentCatalogue : ISegmentCatalogue
@@ -170,7 +171,8 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
     /// Rebuilds LiveBytes/DeadBytes from durable article index metadata.
     /// </summary>
     /// <remarks>
-    /// Resets Live/Dead to zero for every catalogue entry, then accumulates
+    /// Resets Live/Dead to zero for every catalogue entry and clears
+    /// <see cref="SegmentInfo.ExtentAccountingComplete"/>, then accumulates
     /// <see cref="StoredArticleLocation.Length"/> for Present (live) and Evicted/Invalid (dead).
     /// SizeBytes, State, and Generation are unchanged. Unknown segment ids are ignored.
     /// </remarks>
@@ -182,7 +184,12 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
             foreach (var key in _entries.Keys.ToArray())
             {
                 var existing = _entries[key];
-                _entries[key] = existing with { LiveBytes = 0, DeadBytes = 0 };
+                _entries[key] = existing with
+                {
+                    LiveBytes = 0,
+                    DeadBytes = 0,
+                    ExtentAccountingComplete = false,
+                };
             }
 
             foreach (var article in articles)
@@ -212,6 +219,65 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
                     _ => existing,
                 };
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> while holding the catalogue lock used by live/dead mutations.
+    /// </summary>
+    internal void ExecuteLocked(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_gate)
+        {
+            action();
+        }
+    }
+
+    /// <summary>
+    /// True when every Closed segment has completed historical extent accounting.
+    /// Vacuous when no Closed segment exists. Retired and Active entries are ignored.
+    /// </summary>
+    internal bool AreAllClosedSegmentsAccounted()
+    {
+        lock (_gate)
+        {
+            foreach (var info in _entries.Values)
+            {
+                if (info.State == SegmentState.Closed && !info.ExtentAccountingComplete)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Replaces DeadBytes on a Closed segment and marks historical accounting complete.
+    /// Refuses unless <c>SizeBytes == LiveBytes + deadBytes</c>. Does not change LiveBytes.
+    /// </summary>
+    /// <returns>True when this call published the accounted bit.</returns>
+    internal bool TryCommitClosedExtentAccounting(SegmentId segmentId, long deadBytes)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(segmentId.Value, out var existing)
+                || existing.State != SegmentState.Closed
+                || existing.ExtentAccountingComplete
+                || deadBytes < 0
+                || existing.SizeBytes != existing.LiveBytes + deadBytes)
+            {
+                return false;
+            }
+
+            _entries[segmentId.Value] = existing with
+            {
+                DeadBytes = deadBytes,
+                ExtentAccountingComplete = true,
+            };
+            return true;
         }
     }
 

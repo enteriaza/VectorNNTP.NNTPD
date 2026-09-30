@@ -794,19 +794,67 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
-    /// Every record that decodes and proves its own header. Does not filter by caller identity.
-    /// Retired segments are skipped. A corrupt record ends that segment's walk.
+    /// Proves every physical record in a Closed segment, from offset 0 through
+    /// <see cref="SegmentInfo.SizeBytes"/>. Active and Retired segments are not walked.
+    /// A failed proof returns false and an empty list; partial results are not published.
     /// </summary>
-    internal List<ProvenSegmentExtent> EnumerateProvenExtents()
+    internal bool TryReadClosedProvedExtents(SegmentId segmentId, out List<ProvenSegmentExtent> extents)
     {
-        var extents = new List<ProvenSegmentExtent>();
+        extents = [];
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            VisitProvenUnlocked(static (extent, _, found) => found.Add(extent), extents);
-        }
+            if (!_segments.TryGetValue(segmentId.Value, out var runtime)
+                || runtime.State != SegmentState.Closed)
+            {
+                return false;
+            }
 
-        return extents;
+            if (runtime.SizeBytes == 0)
+            {
+                return true;
+            }
+
+            runtime.EnsureReadable();
+            var stream = runtime.Stream;
+            var restore = stream.Position;
+            var found = new List<ProvenSegmentExtent>();
+            try
+            {
+                long offset = 0;
+                while (offset < runtime.SizeBytes)
+                {
+                    if (!TryReadProvenAtUnlocked(
+                            stream,
+                            runtime,
+                            offset,
+                            out var extent,
+                            out _,
+                            out var consumed)
+                        || consumed <= 0
+                        || extent.Location.Offset != offset
+                        || extent.Location.Length != consumed)
+                    {
+                        return false;
+                    }
+
+                    found.Add(extent);
+                    offset += consumed;
+                }
+
+                if (offset != runtime.SizeBytes)
+                {
+                    return false;
+                }
+
+                extents = found;
+                return true;
+            }
+            finally
+            {
+                stream.Seek(restore, SeekOrigin.Begin);
+            }
+        }
     }
 
     private void VisitProvenUnlocked<TState>(Action<ProvenSegmentExtent, ReadOnlyMemory<byte>, TState> visit, TState state)

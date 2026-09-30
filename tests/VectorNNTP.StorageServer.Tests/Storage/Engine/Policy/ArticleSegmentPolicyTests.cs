@@ -193,6 +193,18 @@ public sealed class ArticleSegmentPolicyTests
     }
 
     [Fact]
+    public void U_AccountingIncomplete_RejectsClosedSegment()
+    {
+        var policy = EnabledPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0);
+        var segment = Seg(1, SegmentState.Closed, size: 1000, live: 0, dead: 1000) with
+        {
+            ExtentAccountingComplete = false,
+        };
+        Assert.Equal(CompactionEligibilityReason.AccountingIncomplete, policy.EvaluateCompaction(segment).Reason);
+        Assert.False(policy.TrySelectCompactionVictim([segment], out _));
+    }
+
+    [Fact]
     public void Q_R_S_ReclamationSelectsOnlyRetired()
     {
         var policy = EnabledPolicy();
@@ -328,5 +340,6 @@ public sealed class ArticleSegmentPolicyTests
             LiveBytes: live,
             DeadBytes: dead,
             CreatedUtc: Utc,
-            ClosedUtc: state == SegmentState.Active ? null : Utc);
+            ClosedUtc: state == SegmentState.Active ? null : Utc,
+            ExtentAccountingComplete: state == SegmentState.Closed);
 }

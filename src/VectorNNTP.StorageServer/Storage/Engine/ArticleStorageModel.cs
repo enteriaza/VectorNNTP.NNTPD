@@ -278,6 +278,12 @@ public enum ArticleSegmentRetirementOutcome : byte
 
     /// <summary>Journal/catalogue conflict or protocol failure.</summary>
     Failed = 8,
+
+    /// <summary>
+    /// Source is Closed but its historical extent accounting has not completed.
+    /// Unproved bytes must not be retired.
+    /// </summary>
+    RejectedAccountingIncomplete = 9,
 }
 
 /// <summary>Result of <c>FileArticleStorageEngine.RetireCompactedSegmentAsync</c>.</summary>
@@ -391,14 +397,20 @@ public readonly record struct StoredArticleMetadata(
 /// </param>
 /// <param name="DeadBytes">
 /// Bytes for Evicted/Invalid index entries on this segment (sum of location Length), plus
-/// unreferenced proven extents after an explicit accounting pass. Until that pass, DeadBytes
-/// may under-count and is not a complete physical inventory.
+/// unreferenced proved extents after a complete Closed-segment accounting scan.
+/// Until that scan, DeadBytes is index-derived only and may under-count.
+/// Unproved bytes are never included.
 /// </param>
 /// <param name="CreatedUtc">Segment creation time (UTC).</param>
 /// <param name="ClosedUtc">Segment close time when closed/retired; null while active.</param>
+/// <param name="ExtentAccountingComplete">
+/// True only after a Closed segment’s historical scan proved every byte and replaced
+/// <see cref="DeadBytes"/>. Active segments never set this. The bit is irrelevant once Retired.
+/// </param>
 /// <remarks>
-/// Invariant: <c>SizeBytes &gt;= LiveBytes + DeadBytes</c>. Equality holds when every physical
-/// record extent is covered by an index entry; unindexed orphan extents leave a gap.
+/// Invariant: <c>SizeBytes &gt;= LiveBytes + DeadBytes</c>. Equality holds when
+/// <see cref="ExtentAccountingComplete"/> is true. The gap
+/// <c>SizeBytes - LiveBytes - DeadBytes</c> is unknown bytes, not free capacity and not proven dead.
 /// </remarks>
 public readonly record struct SegmentInfo(
     SegmentId SegmentId,
@@ -408,7 +420,8 @@ public readonly record struct SegmentInfo(
     long LiveBytes,
     long DeadBytes,
     DateTimeOffset CreatedUtc,
-    DateTimeOffset? ClosedUtc);
+    DateTimeOffset? ClosedUtc,
+    bool ExtentAccountingComplete = false);
 
 /// <summary>Result of an Accept attempt after journal Accept durability.</summary>
 /// <param name="Outcome">Accept outcome.</param>

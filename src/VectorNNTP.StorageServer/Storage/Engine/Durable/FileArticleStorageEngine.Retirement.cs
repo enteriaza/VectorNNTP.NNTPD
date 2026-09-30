@@ -117,6 +117,16 @@ public sealed partial class FileArticleStorageEngine
                 CompactionRetiredAppended: false,
                 Reason: "source-not-closed");
         }
+        else if (!info.ExtentAccountingComplete)
+        {
+            return new ArticleSegmentRetirementResult(
+                ArticleSegmentRetirementOutcome.RejectedAccountingIncomplete,
+                compactionId,
+                sourceId,
+                beginGeneration,
+                CompactionRetiredAppended: false,
+                Reason: "accounting-incomplete");
+        }
 
         ThrowIfRetirementFault(RetirementFaultPoint.BeforeCompactionRetired);
 
@@ -229,6 +239,17 @@ public sealed partial class FileArticleStorageEngine
                 beginGeneration,
                 compactionRetiredAppended,
                 Reason: "unexpected-source-state-" + info.State);
+        }
+
+        if (!info.ExtentAccountingComplete)
+        {
+            return new ArticleSegmentRetirementResult(
+                ArticleSegmentRetirementOutcome.RejectedAccountingIncomplete,
+                compactionId,
+                sourceId,
+                beginGeneration,
+                compactionRetiredAppended,
+                Reason: "accounting-incomplete");
         }
 
         // Catalogue Generation is process-local; after restart it may differ from

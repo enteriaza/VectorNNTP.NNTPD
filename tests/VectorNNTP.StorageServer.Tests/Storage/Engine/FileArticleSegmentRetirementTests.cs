@@ -294,6 +294,7 @@ public sealed class FileArticleSegmentRetirementTests
         var puts = cache.PutCount;
         var removes = cache.RemoveCount;
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
@@ -355,6 +356,7 @@ public sealed class FileArticleSegmentRetirementTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.TryEvict(drop.ArtId));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         Assert.True(engine.Index.TryGet(keep.ArtId, out var meta));
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
@@ -389,6 +391,7 @@ public sealed class FileArticleSegmentRetirementTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
         return meta.Location.SegmentId;

@@ -253,6 +253,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
             Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
             sourceId = meta.Location.SegmentId;
             await engine.Segments.CloseActiveAsync(CancellationToken.None);
+            engine.CompleteUnreferencedExtentAccounting();
             Assert.True(engine.TryEvict(record.ArtId));
             var compact = await engine.CompactClosedSegmentAsync(sourceId, CancellationToken.None);
             Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
@@ -474,6 +475,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
             Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
             sourceId = meta.Location.SegmentId;
             await engine.Segments.CloseActiveAsync(CancellationToken.None);
+            engine.CompleteUnreferencedExtentAccounting();
             Assert.True(engine.TryEvict(record.ArtId));
             var compact = await engine.CompactClosedSegmentAsync(sourceId, CancellationToken.None);
             Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);

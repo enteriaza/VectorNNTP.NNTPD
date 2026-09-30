@@ -496,7 +496,8 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
             LiveBytes: live,
             DeadBytes: dead,
             CreatedUtc: new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
-            ClosedUtc: new DateTimeOffset(2024, 8, 23, 8, 0, 0, TimeSpan.Zero));
+            ClosedUtc: new DateTimeOffset(2024, 8, 23, 8, 0, 0, TimeSpan.Zero),
+            ExtentAccountingComplete: true);
 
     private static StorageMaintenanceCoordinator CreateCoordinator(
         FileArticleStorageEngine engine,
@@ -523,6 +524,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         Assert.True(engine.TryEvict(record.ArtId));
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);

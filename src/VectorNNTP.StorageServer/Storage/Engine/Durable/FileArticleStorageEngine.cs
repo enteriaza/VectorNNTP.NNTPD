@@ -84,7 +84,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private long _persistBlockedRetryScheduledCount;
     private int _disposed;
     private int _suspendBackgroundPersist;
-    private List<StoredArticleLocation> _unreferencedAccountingSkip = [];
 
     private FileArticleStorageEngine(
         FileArticleJournal journal,
@@ -233,12 +232,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// True after <see cref="CompleteUnreferencedExtentAccounting"/> has classified proven
-    /// extents the index does not name. False after open and after every index rebuild.
-    /// Maintenance must not treat <see cref="SegmentInfo.DeadBytes"/> as a complete
-    /// physical accounting while this is false.
+    /// True when every Closed segment has completed historical extent accounting.
+    /// Derived from per-segment <see cref="SegmentInfo.ExtentAccountingComplete"/>.
+    /// False after open and after every index rebuild while any Closed segment remains
+    /// unaccounted. Not the authority for an individual compaction decision.
     /// </summary>
-    internal bool IsUnreferencedExtentAccountingComplete { get; private set; }
+    internal bool IsUnreferencedExtentAccountingComplete =>
+        Catalogue.AreAllClosedSegmentsAccounted();
+
+    /// <summary>
+    /// Invoked inside the catalogue lock, before a Closed segment's dead-byte replacement.
+    /// Tests only. A concurrent live/dead mutation started here blocks until the replacement
+    /// is published.
+    /// </summary>
+    internal Action? TestHookDuringClosedAccountingCommit { get; set; }
 
     /// <summary>
     /// When true, Accept does not enqueue background SATA/index work (crash-after-Accept tests).
@@ -558,30 +565,116 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             MarkAbandonedDestinationDead(dest);
         }
 
-        // Index rebuild cleared the accounting-complete flag. Abandoned destinations are
-        // already in DeadBytes; a later CompleteUnreferencedExtentAccounting must not add
-        // them again. Unreferenced orphans stay uncounted until that explicit pass.
-        _unreferencedAccountingSkip = [.. abandonedDestinations];
+        // Index rebuild cleared per-segment accounting bits. Abandoned destinations are
+        // already in DeadBytes. A later closed-segment scan replaces DeadBytes from one
+        // complete proof, so those destinations are included once rather than added again.
 
         // Durable recovery finished: re-link any still-incomplete work into the transient queue.
         EnqueueIncompleteFromJournal();
     }
 
     /// <summary>
-    /// Classifies proven segment records the durable index does not name as dead bytes.
-    /// Not part of storage-engine readiness. Idempotent once complete, until the next
-    /// <see cref="RebuildSegmentAccountingFromIndex"/>.
+    /// Replaces DeadBytes on each Closed segment from one complete physical proof plus the
+    /// durable index. Not part of storage-engine readiness. Skips Active and Retired.
+    /// A segment that cannot be proved is left at its index-derived DeadBytes.
+    /// A second successful scan does not add the same orphan again.
     /// </summary>
     internal void CompleteUnreferencedExtentAccounting()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (IsUnreferencedExtentAccountingComplete)
+        foreach (var info in Catalogue.Snapshot())
+        {
+            if (info.State != SegmentState.Closed || info.ExtentAccountingComplete)
+            {
+                continue;
+            }
+
+            if (!_segments.TryReadClosedProvedExtents(info.SegmentId, out var extents))
+            {
+                FileArticleStorageEngineLogMessages.ClosedExtentAccountingIncomplete(
+                    _logger,
+                    info.SegmentId.Value);
+                continue;
+            }
+
+            var proved = extents;
+            Catalogue.ExecuteLocked(() => CommitClosedExtentAccounting(info.SegmentId, proved));
+        }
+    }
+
+    /// <summary>
+    /// Caller holds the catalogue lock. Classification, DeadBytes replacement, and the
+    /// accounted bit are published before that lock is released.
+    /// </summary>
+    private void CommitClosedExtentAccounting(SegmentId segmentId, List<ProvenSegmentExtent> proved)
+    {
+        TestHookDuringClosedAccountingCommit?.Invoke();
+        if (!Catalogue.TryGet(segmentId, out var current)
+            || current.State != SegmentState.Closed
+            || current.ExtentAccountingComplete)
         {
             return;
         }
 
-        AccountUnreferencedProvenExtents(_unreferencedAccountingSkip);
-        IsUnreferencedExtentAccountingComplete = true;
+        long indexLive = 0;
+        long indexDead = 0;
+        var named = new HashSet<StoredArticleLocation>();
+        foreach (var row in _index.Snapshot())
+        {
+            if (row.Location.SegmentId != current.SegmentId)
+            {
+                continue;
+            }
+
+            named.Add(row.Location);
+            if (row.State == ArticleStorageState.Present)
+            {
+                indexLive += row.Location.Length;
+            }
+            else if (row.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
+            {
+                indexDead += row.Location.Length;
+            }
+        }
+
+        if (current.LiveBytes != indexLive)
+        {
+            FileArticleStorageEngineLogMessages.ClosedExtentAccountingIncomplete(
+                _logger,
+                current.SegmentId.Value);
+            return;
+        }
+
+        long orphan = 0;
+        var orphans = new List<ProvenSegmentExtent>();
+        foreach (var extent in proved)
+        {
+            if (named.Contains(extent.Location))
+            {
+                continue;
+            }
+
+            orphan += extent.Location.Length;
+            orphans.Add(extent);
+        }
+
+        if (!Catalogue.TryCommitClosedExtentAccounting(current.SegmentId, indexDead + orphan))
+        {
+            FileArticleStorageEngineLogMessages.ClosedExtentAccountingIncomplete(
+                _logger,
+                current.SegmentId.Value);
+            return;
+        }
+
+        foreach (var extent in orphans)
+        {
+            FileArticleStorageEngineLogMessages.UnreferencedRecordMarkedDead(
+                _logger,
+                extent.ArtId.ToString() ?? string.Empty,
+                extent.Location.SegmentId.Value,
+                extent.Location.Offset,
+                extent.Location.Length);
+        }
     }
 
     /// <summary>
@@ -717,8 +810,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         _segments.Catalogue.RebuildLiveDeadFromIndex(_index.Snapshot());
-        _unreferencedAccountingSkip = [];
-        IsUnreferencedExtentAccountingComplete = false;
     }
 
     /// <summary>Waits until no incomplete journal sequences remain.</summary>
@@ -1154,9 +1245,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             try
             {
-                // This copy was counted live at append or at discovery. Move it to dead.
-                // A later index rebuild clears this and AccountUnreferencedProvenExtents
-                // adds the dead bytes back without subtracting live a second time.
+                // This copy was counted live at append. Move it to dead.
+                // A later index rebuild clears the delta. A closed-segment scan replaces
+                // DeadBytes from one complete proof instead of adding the copy again.
                 Catalogue.ApplyLiveDeadDelta(
                     copy.SegmentId,
                     liveDelta: -copy.Length,
@@ -1165,47 +1256,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             catch (InvalidOperationException)
             {
             }
-        }
-    }
-
-    /// <summary>
-    /// After index rebuild, marks every proven segment record the index does not name.
-    /// Skips <paramref name="alreadyCounted"/> so abandoned compaction destinations
-    /// are not added twice.
-    /// </summary>
-    private void AccountUnreferencedProvenExtents(IReadOnlyList<StoredArticleLocation> alreadyCounted)
-    {
-        var skip = new HashSet<StoredArticleLocation>(alreadyCounted);
-        foreach (var extent in _segments.EnumerateProvenExtents())
-        {
-            if (skip.Contains(extent.Location))
-            {
-                continue;
-            }
-
-            if (_index.TryGet(extent.ArtId, out var metadata)
-                && LocationsEqual(metadata.Location, extent.Location))
-            {
-                continue;
-            }
-
-            try
-            {
-                Catalogue.ApplyLiveDeadDelta(
-                    extent.Location.SegmentId,
-                    liveDelta: 0,
-                    deadDelta: extent.Location.Length);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
-            FileArticleStorageEngineLogMessages.UnreferencedRecordMarkedDead(
-                _logger,
-                extent.ArtId.ToString() ?? string.Empty,
-                extent.Location.SegmentId.Value,
-                extent.Location.Offset,
-                extent.Location.Length);
         }
     }
 
@@ -1490,34 +1540,55 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         TestHookBeforeExpectedInvalidation = null;
         hook?.Invoke(expected.ArtId, expected.Location);
 
-        if (!_index.TryInvalidatePresentAt(
-                expected.ArtId,
-                expected.Location,
-                expected.ArtHash,
-                expected.ArtSize,
-                _timeProvider.GetUtcNow(),
-                out var transitioned))
+        var invalidated = false;
+        var expectedArtId = expected.ArtId;
+        var expectedLocation = expected.Location;
+        var expectedArtHash = expected.ArtHash;
+        var expectedArtSize = expected.ArtSize;
+        Catalogue.ExecuteLocked(() =>
         {
-            return false;
+            if (!_index.TryInvalidatePresentAt(
+                    expectedArtId,
+                    expectedLocation,
+                    expectedArtHash,
+                    expectedArtSize,
+                    _timeProvider.GetUtcNow(),
+                    out var transitioned))
+            {
+                return;
+            }
+
+            try
+            {
+                Catalogue.ApplyLiveDeadDelta(
+                    transitioned.Location.SegmentId,
+                    liveDelta: -transitioned.Location.Length,
+                    deadDelta: transitioned.Location.Length);
+            }
+            catch (InvalidOperationException)
+            {
+                // Catalogue entry may be absent in edge tests; logical index transition still stands.
+            }
+
+            invalidated = true;
+        });
+
+        if (invalidated)
+        {
+            BestEffortCacheRemove(expected.ArtId);
         }
 
-        try
-        {
-            Catalogue.ApplyLiveDeadDelta(
-                transitioned.Location.SegmentId,
-                liveDelta: -transitioned.Location.Length,
-                deadDelta: transitioned.Location.Length);
-        }
-        catch (InvalidOperationException)
-        {
-            // Catalogue entry may be absent in edge tests; logical index transition still stands.
-        }
-
-        BestEffortCacheRemove(expected.ArtId);
-        return true;
+        return invalidated;
     }
 
     private bool TransitionLogicalDeath(ArticleId artId, ArticleStorageState state)
+    {
+        var changed = false;
+        Catalogue.ExecuteLocked(() => changed = TransitionLogicalDeathUnlocked(artId, state));
+        return changed;
+    }
+
+    private bool TransitionLogicalDeathUnlocked(ArticleId artId, ArticleStorageState state)
     {
         if (!_index.TryGet(artId, out var snapshot))
         {

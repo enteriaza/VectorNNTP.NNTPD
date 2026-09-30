@@ -132,7 +132,7 @@ public sealed class StorageMaintenanceOperationalReportingTests
     }
 
     [Fact]
-    public async Task H_Failed_outcome_carries_detail_without_article_data()
+    public async Task H_UnprovedClosedSegment_IsNotSelected_AndDoesNotReportArticleData()
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<op-h@seg.test>");
@@ -151,9 +151,11 @@ public sealed class StorageMaintenanceOperationalReportingTests
         var result = await CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0)
             .RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.Failed, result.Outcome);
-        Assert.False(string.IsNullOrEmpty(result.SkipReason));
-        Assert.DoesNotContain("<op-h@seg.test>", result.SkipReason, StringComparison.Ordinal);
+        Assert.Equal(StorageMaintenanceOutcome.NoWork, result.Outcome);
+        Assert.False(result.CompactionAttempted);
+        Assert.DoesNotContain("<op-h@seg.test>", result.SkipReason ?? string.Empty, StringComparison.Ordinal);
+        Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var unaccounted));
+        Assert.False(unaccounted.ExtentAccountingComplete);
     }
 
     [Fact]
@@ -369,6 +371,7 @@ public sealed class StorageMaintenanceOperationalReportingTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
         var retire = await engine.RetireCompactedSegmentAsync(compact.CompactionId, CancellationToken.None);

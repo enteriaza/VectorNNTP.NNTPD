@@ -162,7 +162,7 @@ public sealed class StorageMaintenanceCoordinatorTests
     }
 
     [Fact]
-    public async Task H_CompactionFailure_Propagates()
+    public async Task H_UnprovedClosedSegment_IsNotACompactionVictim()
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<mnt-h@seg.test>");
@@ -173,7 +173,8 @@ public sealed class StorageMaintenanceCoordinatorTests
         var sourceId = meta.Location.SegmentId;
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
 
-        // Corrupt source bytes so relocate fails closed.
+        // Replace the closed payload before any accounting scan. The segment cannot be
+        // proved, so it must not be selected as a compaction victim.
         var closedPath = Path.Combine(
             dir.Options.SegmentDir,
             SegmentFileNames.Format(sourceId, SegmentFileKind.Closed));
@@ -181,11 +182,13 @@ public sealed class StorageMaintenanceCoordinatorTests
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
-        Assert.Equal(StorageMaintenanceOutcome.Failed, result.Outcome);
-        Assert.True(result.CompactionAttempted);
+        Assert.Equal(StorageMaintenanceOutcome.NoWork, result.Outcome);
+        Assert.False(result.CompactionAttempted);
         Assert.False(result.CompactionCommitted);
         Assert.False(result.RetirementAttempted);
         Assert.False(result.Reclaimed);
+        Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var unaccounted));
+        Assert.False(unaccounted.ExtentAccountingComplete);
     }
 
     [Fact]
@@ -497,6 +500,7 @@ public sealed class StorageMaintenanceCoordinatorTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         var compact = await engine.CompactClosedSegmentAsync(meta.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
         var retire = await engine.RetireCompactedSegmentAsync(compact.CompactionId, CancellationToken.None);

@@ -172,6 +172,7 @@ public sealed partial class StorageVatpArticleServingTests
         var engine = hosted.Service.Engine;
         Assert.True(engine.Index.TryGet(built.Record.ArtId, out var source));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        engine.CompleteUnreferencedExtentAccounting();
         engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, _) =>
         {
             var compact = engine.CompactClosedSegmentAsync(source.Location.SegmentId, CancellationToken.None)
