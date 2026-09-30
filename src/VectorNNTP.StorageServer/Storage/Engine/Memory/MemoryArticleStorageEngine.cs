@@ -358,31 +358,16 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
 
     private bool TransitionLogicalDeath(ArticleId artId, ArticleStorageState state)
     {
-        if (!_index.TryGet(artId, out var existing))
+        if (!_index.TryTransitionPresentOnce(artId, state, _timeProvider.GetUtcNow(), out var transitioned))
         {
-            return false;
-        }
-
-        if (existing.State == state)
-        {
-            return true;
-        }
-
-        if (existing.State != ArticleStorageState.Present)
-        {
-            return false;
-        }
-
-        if (!_index.TrySetState(artId, state, _timeProvider.GetUtcNow()))
-        {
-            return false;
+            return _index.TryGet(artId, out var existing) && existing.State == state;
         }
 
         _catalogue.ApplyLiveDeadDelta(
-            existing.Location.SegmentId,
-            liveDelta: -existing.ArtSize,
-            deadDelta: existing.ArtSize,
-            sizeBytes: existing.Location.Offset + existing.ArtSize);
+            transitioned.Location.SegmentId,
+            liveDelta: -transitioned.ArtSize,
+            deadDelta: transitioned.ArtSize,
+            sizeBytes: transitioned.Location.Offset + transitioned.ArtSize);
         return true;
     }
 

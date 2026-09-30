@@ -73,7 +73,7 @@ public sealed class FileArticleStorageEngineCacheTests
     }
 
     [Fact]
-    public async Task D_CacheHit_DoesNotRequireIndexFile()
+    public async Task D_CacheHit_WithoutIndexRow_IsNotReadable()
     {
         using var dir = TempStorageDir.Create();
         var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
@@ -84,13 +84,12 @@ public sealed class FileArticleStorageEngineCacheTests
             Assert.True(engineA.TryRead(record.ArtId, out _));
         }
 
-        // Destroy durable index; shared cache still holds the article.
+        // Cache must not publish an article the reopened index does not.
         File.Delete(Path.Combine(dir.Options.ControlDir, FileArticleIndex.IndexFileName));
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
-        Assert.True(engineB.TryRead(record.ArtId, out var read));
-        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
-        Assert.True(cache.HitCount >= 1);
+        Assert.False(engineB.TryRead(record.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
     }
 
     [Fact]
@@ -801,7 +800,7 @@ public sealed class FileArticleStorageEngineCacheTests
     }
 
     [Fact]
-    public async Task Write_HitAfterWrite_NoDurableIoRequired()
+    public async Task Write_HitAfterWrite_WithoutIndex_IsNotReadable()
     {
         using var dir = TempStorageDir.Create();
         var cache = new RecordingArticleMemoryCache(new ArticleMemoryCache(4L * 1024 * 1024));
@@ -820,9 +819,8 @@ public sealed class FileArticleStorageEngineCacheTests
         File.Delete(Path.Combine(dir.Options.ControlDir, FileArticleIndex.IndexFileName));
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
-        Assert.True(engineB.TryRead(record.ArtId, out var read));
-        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
-        Assert.True(cache.HitCount >= 1);
+        Assert.False(engineB.TryRead(record.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
     }
 
     // --- Phase 3D: eviction / invalidation coherence ---
@@ -984,6 +982,34 @@ public sealed class FileArticleStorageEngineCacheTests
         Assert.Equal(ArticleStorageState.Present, meta.State);
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Coherence_I_PresentIndexWinsOverConflictingCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var cache = new ArticleMemoryCache(4L * 1024 * 1024);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var present = CreateRecord("<coh-i@cache.test>", "present-body\r\n");
+        var stale = CreateRecord("<coh-i@cache.test>", "stale-body\r\n");
+        Assert.Equal(present.ArtId, stale.ArtId);
+        Assert.NotEqual(present.ArtHash, stale.ArtHash);
+
+        await AcceptAndDrainAsync(engine, present);
+        Assert.True(engine.TryEvict(present.ArtId));
+        Assert.Equal(ArticleMemoryCachePutOutcome.Inserted, cache.Put(in stale));
+
+        await AcceptAndDrainAsync(engine, present);
+        Assert.True(engine.Index.TryGet(present.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(present.ArtHash, meta.ArtHash);
+
+        Assert.True(engine.TryRead(present.ArtId, out var read));
+        Assert.Equal(present.ArtHash, read.Metadata.ArtHash);
+        Assert.True(read.ArtData.Span.SequenceEqual(present.ArtData.Span));
+        Assert.True(cache.TryGet(present.ArtId, out var cached));
+        Assert.Equal(present.ArtHash, cached.ArtHash);
+        Assert.True(cached.ArtData.Span.SequenceEqual(present.ArtData.Span));
     }
 
     [Fact]

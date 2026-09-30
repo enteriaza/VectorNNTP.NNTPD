@@ -164,7 +164,7 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
     }
 
     [Fact]
-    public async Task Conflicting_PhysicalWritten_completes_via_existing_location_without_duplicate_pw()
+    public async Task Proven_prior_extent_is_adopted_without_a_second_append()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
@@ -174,29 +174,13 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<5f1c-conflict@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        var accept = await engine.AcceptAsync(record, CancellationToken.None);
+        var accepted = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
         Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
 
-        // Prior orphan extent that will become the durable PW (different from Accept-only append).
+        // Proven copy already on disk. Recovery adopts it instead of appending again.
         var priorAppender = await engine.Segments.GetActiveAppenderAsync(CancellationToken.None);
         var priorLocation = await priorAppender.AppendAsync(record.ArtData, CancellationToken.None);
-
-        engine.TestHookAfterSataBeforePhysicalWritten = (sequence, location) =>
-        {
-            Assert.Equal(accept.Sequence, sequence);
-            Assert.False(
-                location.SegmentId.Value == priorLocation.SegmentId.Value
-                && location.Offset == priorLocation.Offset
-                && location.Length == priorLocation.Length);
-            Assert.Equal(
-                JournalAppendOutcome.Applied,
-                engine.Journal.AppendPhysicalWrittenAsync(
-                        new JournalPhysicalWrittenRecord(1, sequence, priorLocation),
-                        CancellationToken.None)
-                    .AsTask()
-                    .GetAwaiter()
-                    .GetResult());
-        };
 
         await engine.RecoverAsync(CancellationToken.None);
 
@@ -206,9 +190,7 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         Assert.Equal(priorLocation.SegmentId.Value, read.Metadata.Location.SegmentId.Value);
         Assert.Equal(priorLocation.Offset, read.Metadata.Location.Offset);
         Assert.Equal(priorLocation.Length, read.Metadata.Location.Length);
-        // Accept-only path performed one engine-counted append; prior extent is an orphan relative
-        // to the durable PW that won the journal Conflict.
-        Assert.Equal(1, engine.PhysicalAppendCount);
+        Assert.Equal(0, engine.PhysicalAppendCount);
     }
 
     [Fact]

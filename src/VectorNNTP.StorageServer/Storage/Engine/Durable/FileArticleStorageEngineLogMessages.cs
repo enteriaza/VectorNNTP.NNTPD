@@ -122,12 +122,45 @@ internal static partial class FileArticleStorageEngineLogMessages
     [LoggerMessage(
         EventId = 3419,
         Level = LogLevel.Error,
-        Message = "Durable persist failure is not retryable (sequence={Sequence}, ExceptionType={ExceptionType}, Detail={Detail}); leaving incomplete outstanding")]
+        Message = "Durable persist failure is not retryable (sequence={Sequence}, ExceptionType={ExceptionType}, Detail={Detail}); incomplete Accept retained, reservation released, blocked retry scheduled")]
     public static partial void PersistNonRetryableFailure(
         ILogger logger,
         ulong Sequence,
         string ExceptionType,
         string Detail);
+
+    [LoggerMessage(
+        EventId = 3420,
+        Level = LogLevel.Warning,
+        Message = "Blocked persist retry scheduled (sequence={Sequence}, Attempt={Attempt}, DelayMs={DelayMs})")]
+    public static partial void PersistBlockedRetryScheduled(
+        ILogger logger,
+        ulong Sequence,
+        int Attempt,
+        double DelayMs);
+
+    [LoggerMessage(
+        EventId = 3421,
+        Level = LogLevel.Information,
+        Message = "Adopted proven physical record for incomplete Accept (sequence={Sequence}, SegmentId={SegmentId}, Offset={Offset}, Length={Length}, ProvenCopies={ProvenCopies})")]
+    public static partial void AcceptOrphanAdopted(
+        ILogger logger,
+        ulong Sequence,
+        ulong SegmentId,
+        long Offset,
+        int Length,
+        int ProvenCopies);
+
+    [LoggerMessage(
+        EventId = 3422,
+        Level = LogLevel.Information,
+        Message = "Unreferenced proven segment record marked dead (artId={ArtId}, SegmentId={SegmentId}, Offset={Offset}, Length={Length})")]
+    public static partial void UnreferencedRecordMarkedDead(
+        ILogger logger,
+        string ArtId,
+        ulong SegmentId,
+        long Offset,
+        int Length);
 
     [LoggerMessage(
         EventId = 3409,

@@ -118,6 +118,32 @@ public sealed class MemoryArticleIndex : IArticleIndex
     /// <inheritdoc />
     public bool TrySetState(ArticleId artId, ArticleStorageState state, DateTimeOffset utcNow)
     {
+        if (TryTransitionPresentOnce(artId, state, utcNow, out _))
+        {
+            return true;
+        }
+
+        lock (_gate)
+        {
+            return _entries.TryGetValue(artId, out var existing) && existing.State == state;
+        }
+    }
+
+    /// <summary>
+    /// Moves a Present entry to <paramref name="state"/> at most once.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="false"/> when the entry is missing, already in
+    /// <paramref name="state"/>, or in the other terminal state. Live/dead accounting
+    /// must run only when this returns <see langword="true"/>.
+    /// </remarks>
+    internal bool TryTransitionPresentOnce(
+        ArticleId artId,
+        ArticleStorageState state,
+        DateTimeOffset utcNow,
+        out StoredArticleMetadata transitioned)
+    {
+        transitioned = default;
         if (state is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
         {
             return false;
@@ -125,22 +151,14 @@ public sealed class MemoryArticleIndex : IArticleIndex
 
         lock (_gate)
         {
-            if (!_entries.TryGetValue(artId, out var existing))
+            if (!_entries.TryGetValue(artId, out var existing)
+                || existing.State != ArticleStorageState.Present)
             {
                 return false;
             }
 
-            if (existing.State == state)
-            {
-                return true;
-            }
-
-            if (existing.State != ArticleStorageState.Present)
-            {
-                return false;
-            }
-
-            _entries[artId] = existing with { State = state, LastAccessUtc = utcNow };
+            transitioned = existing with { State = state, LastAccessUtc = utcNow };
+            _entries[artId] = transitioned;
             _durableWriteCount++;
             return true;
         }

@@ -186,7 +186,7 @@ public sealed class IncompleteAcceptPersistRetryTests
     }
 
     [Fact]
-    public async Task Option1_orphan_still_fresh_appends_on_Accept_only_recovery()
+    public async Task AcceptOnly_proven_orphan_is_adopted_without_a_second_append()
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<5f1a-orphan@seg.test>");
@@ -203,8 +203,10 @@ public sealed class IncompleteAcceptPersistRetryTests
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);
         engineB.SuspendBackgroundPersist = true;
         await engineB.RecoverAsync(CancellationToken.None);
-        Assert.True(engineB.Segments.GetActiveSizeBytes() > sizeAfterOrphan);
-        Assert.Equal(1, engineB.PhysicalAppendCount);
+        Assert.Equal(sizeAfterOrphan, engineB.Segments.GetActiveSizeBytes());
+        Assert.Equal(0, engineB.PhysicalAppendCount);
+        Assert.True(engineB.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
     }
 
     [Fact]

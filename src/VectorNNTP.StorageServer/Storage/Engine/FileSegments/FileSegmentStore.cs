@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -727,6 +728,157 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Locations whose decoded payload is exactly <paramref name="artData"/> for the identity.
+    /// Ordered by segment id, then offset. Skips retired segments. Stops a segment at the
+    /// first undecodable record and does not adopt anything past it.
+    /// </summary>
+    internal List<StoredArticleLocation> FindProvenLocations(
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        ReadOnlySpan<byte> artData)
+    {
+        var matches = new List<StoredArticleLocation>();
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            VisitProvenUnlocked(static (extent, payload, state) =>
+            {
+                var (id, hash, size, expected, found) = state;
+                if (!extent.ArtId.Equals(id)
+                    || extent.ArtHash != hash
+                    || extent.ArtSize != size
+                    || !payload.Span.SequenceEqual(expected))
+                {
+                    return;
+                }
+
+                found.Add(extent.Location);
+            }, (artId, artHash, artSize, artData.ToArray(), matches));
+        }
+
+        matches.Sort(static (left, right) =>
+        {
+            var segment = left.SegmentId.Value.CompareTo(right.SegmentId.Value);
+            return segment != 0 ? segment : left.Offset.CompareTo(right.Offset);
+        });
+        return matches;
+    }
+
+    /// <summary>
+    /// Every record that decodes and proves its own header. Does not filter by caller identity.
+    /// Retired segments are skipped. A corrupt record ends that segment's walk.
+    /// </summary>
+    internal List<ProvenSegmentExtent> EnumerateProvenExtents()
+    {
+        var extents = new List<ProvenSegmentExtent>();
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            VisitProvenUnlocked(static (extent, _, found) => found.Add(extent), extents);
+        }
+
+        return extents;
+    }
+
+    private void VisitProvenUnlocked<TState>(Action<ProvenSegmentExtent, ReadOnlyMemory<byte>, TState> visit, TState state)
+    {
+        foreach (var runtime in _segments.Values.OrderBy(static runtime => runtime.SegmentId.Value))
+        {
+            if (runtime.State == SegmentState.Retired || runtime.SizeBytes <= 0)
+            {
+                continue;
+            }
+
+            runtime.EnsureReadable();
+            var stream = runtime.Stream;
+            var restore = stream.Position;
+            try
+            {
+                long offset = 0;
+                while (offset < runtime.SizeBytes)
+                {
+                    if (!TryReadProvenAtUnlocked(stream, runtime, offset, out var extent, out var payload, out var consumed))
+                    {
+                        break;
+                    }
+
+                    visit(extent, payload, state);
+                    offset += consumed;
+                }
+            }
+            finally
+            {
+                stream.Seek(restore, SeekOrigin.Begin);
+            }
+        }
+    }
+
+    private static bool TryReadProvenAtUnlocked(
+        FileStream stream,
+        SegmentRuntime runtime,
+        long offset,
+        out ProvenSegmentExtent extent,
+        out ReadOnlyMemory<byte> payload,
+        out int consumed)
+    {
+        extent = default;
+        payload = default;
+        consumed = 0;
+        if (offset < 0 || offset + 4 > runtime.SizeBytes)
+        {
+            return false;
+        }
+
+        stream.Seek(offset, SeekOrigin.Begin);
+        Span<byte> lengthBytes = stackalloc byte[4];
+        if (stream.Read(lengthBytes) != 4)
+        {
+            return false;
+        }
+
+        var total = BinaryPrimitives.ReadUInt32LittleEndian(lengthBytes);
+        if (total < SegmentRecordCodec.MinimumRecordLength
+            || total > SegmentRecordCodec.MaxRecordLength
+            || offset + total > runtime.SizeBytes)
+        {
+            return false;
+        }
+
+        var buffer = new byte[total];
+        stream.Seek(offset, SeekOrigin.Begin);
+        if (stream.Read(buffer, 0, buffer.Length) != buffer.Length)
+        {
+            return false;
+        }
+
+        if (!SegmentRecordCodec.TryDecode(
+                buffer,
+                out var recordLength,
+                out var artId,
+                out var artHash,
+                out var artSize,
+                out payload,
+                out _))
+        {
+            return false;
+        }
+
+        if (recordLength != buffer.Length)
+        {
+            return false;
+        }
+
+        extent = new ProvenSegmentExtent(
+            new StoredArticleLocation(runtime.SegmentId, offset, recordLength),
+            artId,
+            artHash,
+            artSize);
+        consumed = recordLength;
+        return true;
+    }
+
     private static bool TryReadUnlocked(
         SegmentRuntime runtime,
         in StoredArticleLocation location,
@@ -842,3 +994,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 }
+
+/// <summary>One proven segment record. Payload is not retained.</summary>
+internal readonly record struct ProvenSegmentExtent(
+    StoredArticleLocation Location,
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize);

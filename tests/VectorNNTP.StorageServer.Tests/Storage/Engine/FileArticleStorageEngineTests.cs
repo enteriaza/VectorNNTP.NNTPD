@@ -221,9 +221,8 @@ public sealed class FileArticleStorageEngineTests
     }
 
     [Fact]
-    public async Task L_AcceptOnly_AfterOrphanSata_DoesNotDiscoverOrphan()
+    public async Task L_AcceptOnly_AfterOrphanSata_AdoptsProvenRecord()
     {
-        // Option 1: prior SATA append without PhysicalWritten is orphan/dead; recovery re-appends.
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<l@example.test>");
         long sizeAfterOrphan;
@@ -241,10 +240,10 @@ public sealed class FileArticleStorageEngineTests
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);
         engineB.SuspendBackgroundPersist = true;
         await engineB.RecoverAsync(CancellationToken.None);
-        Assert.Equal(1, engineB.PhysicalAppendCount);
-        var sizeAfterRecovery = engineB.Segments.GetActiveSizeBytes();
-        Assert.True(sizeAfterRecovery > sizeAfterOrphan); // second physical copy; orphan retained
-        Assert.True(engineB.TryRead(record.ArtId, out _));
+        Assert.Equal(0, engineB.PhysicalAppendCount);
+        Assert.Equal(sizeAfterOrphan, engineB.Segments.GetActiveSizeBytes());
+        Assert.True(engineB.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
     }
 
     [Fact]

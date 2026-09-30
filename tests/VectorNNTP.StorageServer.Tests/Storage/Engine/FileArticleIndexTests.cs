@@ -579,6 +579,153 @@ public sealed class FileArticleIndexTests
     }
 
     [Fact]
+    public void Replay_RelocateEvictInvalidateAndReAccept_LastWriteWins()
+    {
+        using var dir = TempControlDir.Create();
+        var source = new StoredArticleLocation(new SegmentId(1), 0, 40);
+        var relocated = new StoredArticleLocation(new SegmentId(2), 128, 40);
+        var original = Present("<replay-a@example.test>", 11, 10, source);
+        var sibling = Present("<replay-b@example.test>", 22, 12, 1, 80, 48);
+        var reaccepted = sibling with
+        {
+            ArtHash = 99,
+            Location = new StoredArticleLocation(new SegmentId(4), 400, 48),
+        };
+
+        using (var indexA = FileArticleIndex.Open(dir.Options))
+        {
+            Assert.True(indexA.TryCommitPresent(original));
+            Assert.True(indexA.TryCommitPresent(sibling));
+            Assert.Equal(
+                ArticleRelocateOutcome.Relocated,
+                indexA.TryRelocate(original.ArtId, source, relocated, original.ArtHash, original.ArtSize));
+            Assert.True(indexA.TrySetState(sibling.ArtId, ArticleStorageState.Evicted, DateTimeOffset.UtcNow));
+            Assert.True(indexA.TryCommitPresent(reaccepted));
+            Assert.True(indexA.TryInvalidatePresentAt(
+                original.ArtId,
+                relocated,
+                original.ArtHash,
+                original.ArtSize,
+                DateTimeOffset.UtcNow,
+                out _));
+        }
+
+        using var indexB = FileArticleIndex.Open(dir.Options);
+        Assert.True(indexB.TryGet(original.ArtId, out var gotOriginal));
+        Assert.Equal(ArticleStorageState.Invalid, gotOriginal.State);
+        Assert.Equal(relocated, gotOriginal.Location);
+        Assert.Equal(original.ArtHash, gotOriginal.ArtHash);
+        Assert.True(indexB.TryGet(sibling.ArtId, out var gotSibling));
+        Assert.Equal(ArticleStorageState.Present, gotSibling.State);
+        Assert.Equal(99UL, gotSibling.ArtHash);
+        Assert.Equal(reaccepted.Location, gotSibling.Location);
+    }
+
+    [Fact]
+    public void Replay_ShortPrefixBelowLengthField_IsTruncated()
+    {
+        using var dir = TempControlDir.Create();
+        var meta = Present("<replay-short-prefix@example.test>", 1, 10, 1, 0, 40);
+        using (var indexA = FileArticleIndex.Open(dir.Options))
+        {
+            Assert.True(indexA.TryCommitPresent(meta));
+        }
+
+        var path = Path.Combine(dir.ControlDir, FileArticleIndex.IndexFileName);
+        var bytes = File.ReadAllBytes(path);
+        File.WriteAllBytes(path, [.. bytes, 0x01, 0x02, 0x03]);
+
+        using var indexB = FileArticleIndex.Open(dir.Options);
+        Assert.True(indexB.TryGet(meta.ArtId, out var got));
+        Assert.Equal(ArticleStorageState.Present, got.State);
+        Assert.Equal(ArticleIndexRecordCodec.RecordLength, new FileInfo(path).Length);
+    }
+
+    [Fact]
+    public void Replay_InvalidReservedField_FailsClosed()
+    {
+        using var dir = TempControlDir.Create();
+        using (var indexA = FileArticleIndex.Open(dir.Options))
+        {
+            Assert.True(indexA.TryCommitPresent(Present("<replay-reserved@example.test>", 1, 10, 1, 0, 40)));
+        }
+
+        var path = Path.Combine(dir.ControlDir, FileArticleIndex.IndexFileName);
+        var bytes = File.ReadAllBytes(path);
+        bytes[5] = 1;
+        var crc = Crc32.HashToUInt32(bytes.AsSpan(0, bytes.Length - 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - 4, 4), crc);
+        File.WriteAllBytes(path, bytes);
+
+        var ex = Assert.Throws<ArticleIndexCorruptException>(() => FileArticleIndex.Open(dir.Options));
+        Assert.Equal(ArticleIndexRecordCodec.RecordLength, new FileInfo(path).Length);
+        Assert.DoesNotContain("incomplete", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Replay_RequestsAtMostOneFrame()
+    {
+        var first = Present("<replay-bound-1@example.test>", 1, 10, 1, 0, 40);
+        var second = Present("<replay-bound-2@example.test>", 2, 11, 1, 40, 44);
+        var payload = Concat(ArticleIndexRecordCodec.Encode(first), ArticleIndexRecordCodec.Encode(second));
+        var stream = new CountingIndexStream(payload, payload.Length);
+        var entries = new Dictionary<ArticleId, StoredArticleMetadata>();
+
+        ArticleIndexReplayer.Replay(
+            stream,
+            payload.Length,
+            entries,
+            (_, _, error) => throw new ArticleIndexCorruptException(error.ToString()));
+
+        Assert.True(stream.MaxRequested <= ArticleIndexRecordCodec.RecordLength);
+        Assert.True(entries.TryGetValue(first.ArtId, out var gotFirst));
+        Assert.Equal(first.ArtHash, gotFirst.ArtHash);
+        Assert.True(entries.TryGetValue(second.ArtId, out var gotSecond));
+        Assert.Equal(second.Location, gotSecond.Location);
+    }
+
+    [Fact]
+    public void Replay_LengthAboveIntMaxValue_DoesNotNarrowOrReadTheRemainder()
+    {
+        var meta = Present("<replay-long@example.test>", 5, 10, 3, 16, 40);
+        var frame = ArticleIndexRecordCodec.Encode(meta);
+        var reportedLength = (long)int.MaxValue + frame.Length;
+        var stream = new CountingIndexStream(frame, reportedLength);
+        var entries = new Dictionary<ArticleId, StoredArticleMetadata>();
+
+        var ex = Assert.Throws<IOException>(() =>
+            ArticleIndexReplayer.Replay(
+                stream,
+                reportedLength,
+                entries,
+                (_, _, _) => throw new InvalidOperationException("length was treated as a frame error")));
+
+        Assert.Contains("Short read", ex.Message, StringComparison.Ordinal);
+        Assert.True(stream.MaxRequested <= ArticleIndexRecordCodec.RecordLength);
+        Assert.True(entries.TryGetValue(meta.ArtId, out var got));
+        Assert.Equal(meta, got);
+    }
+
+    [Fact]
+    public void Replay_CorruptDeclaredLength_DoesNotReadThatLength()
+    {
+        var declared = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(declared, uint.MaxValue);
+        var stream = new CountingIndexStream(declared, declared.Length);
+
+        var ex = Assert.Throws<ArticleIndexCorruptException>(() =>
+            ArticleIndexReplayer.Replay(
+                stream,
+                declared.Length,
+                new Dictionary<ArticleId, StoredArticleMetadata>(),
+                (offset, _, error) => throw new ArticleIndexCorruptException(error.ToString(), offset)));
+
+        Assert.Equal(ArticleIndexFrameError.CorruptLength.ToString(), ex.Message);
+        Assert.Equal(4, stream.MaxRequested);
+        Assert.Equal(4, stream.TotalRead);
+    }
+
+    [Fact]
     public void TouchHint_DoesNotDurableWrite()
     {
         using var dir = TempControlDir.Create();
@@ -589,6 +736,14 @@ public sealed class FileArticleIndexTests
         index.TouchHint(meta.ArtId, DateTimeOffset.UtcNow);
         Assert.Equal(durable, index.DurableWriteCount);
         Assert.Equal(1, index.TouchHintCount);
+    }
+
+    private static byte[] Concat(byte[] left, byte[] right)
+    {
+        var combined = new byte[left.Length + right.Length];
+        left.CopyTo(combined, 0);
+        right.CopyTo(combined, left.Length);
+        return combined;
     }
 
     private static ArticleId ArtId(string messageId) =>
@@ -660,5 +815,66 @@ public sealed class FileArticleIndexTests
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Records each read size. <see cref="Length"/> can exceed <see cref="int.MaxValue"/>
+    /// while the readable payload stays small.
+    /// </summary>
+    private sealed class CountingIndexStream : Stream
+    {
+        private readonly byte[] _payload;
+        private readonly long _reportedLength;
+        private int _position;
+
+        public CountingIndexStream(byte[] payload, long reportedLength)
+        {
+            _payload = payload;
+            _reportedLength = reportedLength;
+        }
+
+        public int MaxRequested { get; private set; }
+
+        public int TotalRead { get; private set; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => _reportedLength;
+
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            MaxRequested = Math.Max(MaxRequested, count);
+            var available = _payload.Length - _position;
+            if (available <= 0)
+            {
+                return 0;
+            }
+
+            var n = Math.Min(count, available);
+            _payload.AsSpan(_position, n).CopyTo(buffer.AsSpan(offset, n));
+            _position += n;
+            TotalRead += n;
+            return n;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

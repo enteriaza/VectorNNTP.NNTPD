@@ -75,11 +75,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly HashSet<ulong> _pendingSet = new();
     private readonly HashSet<ulong> _persistInFlight = new();
     private readonly Dictionary<ulong, int> _persistRetryAttempts = new();
+    private readonly Dictionary<ulong, int> _persistBlockedRetryAttempts = new();
     private readonly SemaphoreSlim _workerSignal = new(0, int.MaxValue);
     private readonly CancellationTokenSource _workerCts = new();
     private readonly Task _worker;
     private long _physicalAppendCount;
     private long _persistRetryScheduledCount;
+    private long _persistBlockedRetryScheduledCount;
     private int _disposed;
     private int _suspendBackgroundPersist;
 
@@ -256,6 +258,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Number of persist retries scheduled (tests).</summary>
     internal long PersistRetryScheduledCount => Volatile.Read(ref _persistRetryScheduledCount);
+
+    /// <summary>
+    /// Number of deferred retries scheduled after a non-retryable persist failure (tests).
+    /// Distinct from <see cref="PersistRetryScheduledCount"/>.
+    /// </summary>
+    internal long PersistBlockedRetryScheduledCount => Volatile.Read(ref _persistBlockedRetryScheduledCount);
 
     /// <summary>
     /// Invoked after Accept-only SATA append and before <c>AppendPhysicalWrittenAsync</c>.
@@ -541,6 +549,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             MarkAbandonedDestinationDead(dest);
         }
 
+        // Rebuild drops process-local dead marks. Re-classify proven records that the index
+        // does not name so crash orphans stay dead across restart. Abandoned destinations
+        // were just counted and must not be counted again.
+        AccountUnreferencedProvenExtents(abandonedDestinations);
+
         // Durable recovery finished: re-link any still-incomplete work into the transient queue.
         EnqueueIncompleteFromJournal();
     }
@@ -725,27 +738,32 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     {
         result = default;
 
-        // Phase 3B: memory-local acceleration. Hit skips segment IO.
-        // Phase 3D: if durable index knows the ArtId and it is not Present, drop stale cache.
+        // Cache is non-authoritative. A hit is usable only when the index still
+        // publishes that exact identity as Present. Anything else is dropped and
+        // the index path decides readability.
         if (_articleCache.TryGet(artId, out var cached))
         {
-            if (_index.TryGet(artId, out var cachedIndexMeta)
-                && cachedIndexMeta.State != ArticleStorageState.Present)
+            var cacheCoherent = _index.TryGet(artId, out var cachedIndexMeta)
+                && cachedIndexMeta.State == ArticleStorageState.Present
+                && cachedIndexMeta.ArtHash == cached.ArtHash
+                && cachedIndexMeta.ArtSize == cached.ArtSize;
+            if (!cacheCoherent)
             {
                 BestEffortCacheRemove(artId);
-                return false;
             }
-
-            result = new ArticleReadResult(
-                new StoredArticleMetadata(
-                    cached.ArtId,
-                    cached.ArtHash,
-                    cached.ArtSize,
-                    default,
-                    ArticleStorageState.Present,
-                    _timeProvider.GetUtcNow()),
-                cached.ArtData);
-            return true;
+            else
+            {
+                result = new ArticleReadResult(
+                    new StoredArticleMetadata(
+                        cached.ArtId,
+                        cached.ArtHash,
+                        cached.ArtSize,
+                        cachedIndexMeta.Location,
+                        ArticleStorageState.Present,
+                        _timeProvider.GetUtcNow()),
+                    cached.ArtData);
+                return true;
+            }
         }
 
         if (!_index.TryGet(artId, out var metadata) || metadata.State != ArticleStorageState.Present)
@@ -895,13 +913,44 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return;
         }
 
-        // Accept-only (Option 1): never scan SATA or discover orphans; always fresh append.
+        // Accept-only: adopt one proven physical copy when the bytes match this Accept.
+        // Otherwise append. Unproven records are never published.
         FileArticleStorageEngineLogMessages.RecoverAcceptOnly(
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
-        var location = await AppendAcceptLocationForPhysicalWrittenAsync(accept, cancellationToken)
-            .ConfigureAwait(false);
+        EnsureAcceptReservationOrDefer(accept);
+        var proven = _segments.FindProvenLocations(
+            accept.ArtId,
+            accept.ArtHash,
+            accept.ArtSize,
+            accept.ArtData.Span);
+        StoredArticleLocation location;
+        if (proven.Count > 0 && TryChooseProvenLocation(accept, proven, out var chosen))
+        {
+            if (TryRegisterPrePhysicalWritten(accept.Sequence, chosen))
+            {
+                location = chosen;
+                FileArticleStorageEngineLogMessages.AcceptOrphanAdopted(
+                    _logger,
+                    accept.Sequence,
+                    location.SegmentId.Value,
+                    location.Offset,
+                    location.Length,
+                    proven.Count);
+            }
+            else
+            {
+                ClearPrePhysicalWritten(accept.Sequence);
+                location = await AppendAcceptLocationForPhysicalWrittenAsync(accept, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            location = await AppendAcceptLocationForPhysicalWrittenAsync(accept, cancellationToken)
+                .ConfigureAwait(false);
+        }
         var physicalWrittenDurable = false;
         try
         {
@@ -922,6 +971,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
                     await CompleteFromPhysicalWrittenAsync(accept, pwCandidate, cancellationToken)
                         .ConfigureAwait(false);
+                    MarkUnpublishedProvenCopiesDead(accept.ArtId, proven);
                     return;
 
                 case JournalAppendOutcome.Conflict:
@@ -938,6 +988,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     ReleaseCapacityReservation(accept.Sequence);
                     await CompleteFromPhysicalWrittenAsync(accept, existingPw, cancellationToken)
                         .ConfigureAwait(false);
+                    MarkUnpublishedProvenCopiesDead(accept.ArtId, proven);
                     return;
 
                 case JournalAppendOutcome.Rejected:
@@ -960,6 +1011,173 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Re-binds a released Accept reservation before another physical attempt.
+    /// Throws <see cref="PersistCompletionDeferredException"/> when admission cannot fit,
+    /// without appending.
+    /// </summary>
+    private void EnsureAcceptReservationOrDefer(JournalAcceptRecord accept)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        var requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(accept.ArtSize);
+        lock (_gate)
+        {
+            if (_capacityLedger.HoldsArticle(accept.Sequence))
+            {
+                return;
+            }
+
+            if (_capacityReader is null)
+            {
+                throw new InvalidOperationException(
+                    "Capacity admission is enabled but no IStorageCapacityReader is configured.");
+            }
+
+            var snap = _capacityReader.Read();
+            if (!_capacityLedger.WouldFit(
+                    snap.UsedBytes,
+                    snap.TotalBytes,
+                    requiredBytes,
+                    _capacityMaximumUtilization))
+            {
+                throw new PersistCompletionDeferredException(
+                    $"Accept sequence {accept.Sequence} cannot reserve {requiredBytes} bytes until capacity is free.");
+            }
+
+            _capacityLedger.TentativeAdd(requiredBytes);
+            _capacityLedger.BindSequence(accept.Sequence, requiredBytes);
+        }
+    }
+
+    /// <summary>
+    /// Prefers the published index location when it is one of the proven copies.
+    /// Skips an Evicted or Invalid location so a later Accept is not closed as still dead.
+    /// Otherwise the earliest segment id and offset. Returns false when every proven
+    /// copy is that dead location; the caller appends a new record.
+    /// </summary>
+    private bool TryChooseProvenLocation(
+        JournalAcceptRecord accept,
+        IReadOnlyList<StoredArticleLocation> proven,
+        out StoredArticleLocation chosen)
+    {
+        chosen = default;
+        var skipDead = false;
+        StoredArticleLocation deadLocation = default;
+        if (_index.TryGet(accept.ArtId, out var existing))
+        {
+            if (existing.State == ArticleStorageState.Present)
+            {
+                foreach (var candidate in proven)
+                {
+                    if (LocationsEqual(candidate, existing.Location))
+                    {
+                        chosen = candidate;
+                        return true;
+                    }
+                }
+            }
+            else if (existing.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
+            {
+                skipDead = true;
+                deadLocation = existing.Location;
+            }
+        }
+
+        foreach (var candidate in proven)
+        {
+            if (skipDead && LocationsEqual(candidate, deadLocation))
+            {
+                continue;
+            }
+
+            chosen = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Counts proven copies the index does not publish as dead. Does not change the index.
+    /// </summary>
+    private void MarkUnpublishedProvenCopiesDead(
+        ArticleId artId,
+        IReadOnlyList<StoredArticleLocation> copies)
+    {
+        StoredArticleLocation? published = null;
+        if (_index.TryGet(artId, out var metadata))
+        {
+            published = metadata.Location;
+        }
+
+        foreach (var copy in copies)
+        {
+            if (published is { } location && LocationsEqual(copy, location))
+            {
+                continue;
+            }
+
+            try
+            {
+                // This copy was counted live at append or at discovery. Move it to dead.
+                // A later index rebuild clears this and AccountUnreferencedProvenExtents
+                // adds the dead bytes back without subtracting live a second time.
+                Catalogue.ApplyLiveDeadDelta(
+                    copy.SegmentId,
+                    liveDelta: -copy.Length,
+                    deadDelta: copy.Length);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// After index rebuild, marks every proven segment record the index does not name.
+    /// Skips <paramref name="alreadyCounted"/> so abandoned compaction destinations
+    /// are not added twice.
+    /// </summary>
+    private void AccountUnreferencedProvenExtents(IReadOnlyList<StoredArticleLocation> alreadyCounted)
+    {
+        var skip = new HashSet<StoredArticleLocation>(alreadyCounted);
+        foreach (var extent in _segments.EnumerateProvenExtents())
+        {
+            if (skip.Contains(extent.Location))
+            {
+                continue;
+            }
+
+            if (_index.TryGet(extent.ArtId, out var metadata)
+                && LocationsEqual(metadata.Location, extent.Location))
+            {
+                continue;
+            }
+
+            try
+            {
+                Catalogue.ApplyLiveDeadDelta(
+                    extent.Location.SegmentId,
+                    liveDelta: 0,
+                    deadDelta: extent.Location.Length);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            FileArticleStorageEngineLogMessages.UnreferencedRecordMarkedDead(
+                _logger,
+                extent.ArtId.ToString() ?? string.Empty,
+                extent.Location.SegmentId.Value,
+                extent.Location.Offset,
+                extent.Location.Length);
         }
     }
 
@@ -1163,17 +1381,19 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     private void TryPopulateCacheAfterDurableCommit(JournalAcceptRecord accept)
     {
-        if (_index.TryGet(accept.ArtId, out var indexed)
-            && indexed.State != ArticleStorageState.Present)
+        if (!_index.TryGet(accept.ArtId, out var indexed)
+            || indexed.State != ArticleStorageState.Present
+            || indexed.ArtHash != accept.ArtHash
+            || indexed.ArtSize != accept.ArtSize)
         {
             return;
         }
 
         var metadata = new StoredArticleMetadata(
-            accept.ArtId,
-            accept.ArtHash,
-            accept.ArtSize,
-            default,
+            indexed.ArtId,
+            indexed.ArtHash,
+            indexed.ArtSize,
+            indexed.Location,
             ArticleStorageState.Present,
             _timeProvider.GetUtcNow());
         if (!TryCreateCacheRecord(in metadata, accept.ArtData, out var cacheRecord))
@@ -1271,19 +1491,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     private bool TransitionLogicalDeath(ArticleId artId, ArticleStorageState state)
     {
-        if (!_index.TryGet(artId, out var existing))
+        if (!_index.TryGet(artId, out var snapshot))
         {
             return false;
         }
 
-        if (existing.State == state)
+        if (snapshot.State == state)
         {
-            // Ensure RAM cannot serve a logically dead article.
             BestEffortCacheRemove(artId);
             return true;
         }
 
-        if (existing.State != ArticleStorageState.Present)
+        if (snapshot.State != ArticleStorageState.Present)
         {
             return false;
         }
@@ -1294,19 +1513,25 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return false;
         }
 
-        if (!_index.TrySetState(artId, state, _timeProvider.GetUtcNow()))
+        // Only the caller that actually changes Present applies the live→dead delta.
+        // A second evict observes the terminal state and must not count the bytes again.
+        if (!_index.TryTransitionPresentOnce(artId, state, _timeProvider.GetUtcNow(), out var transitioned))
         {
-            // Durable transition failed — leave cache untouched.
+            if (_index.TryGet(artId, out snapshot) && snapshot.State == state)
+            {
+                BestEffortCacheRemove(artId);
+                return true;
+            }
+
             return false;
         }
 
-        // FileSegmentStore already counted LiveBytes at append; move live → dead.
         try
         {
             Catalogue.ApplyLiveDeadDelta(
-                existing.Location.SegmentId,
-                liveDelta: -existing.Location.Length,
-                deadDelta: existing.Location.Length);
+                transitioned.Location.SegmentId,
+                liveDelta: -transitioned.Location.Length,
+                deadDelta: transitioned.Location.Length);
         }
         catch (InvalidOperationException)
         {
@@ -1413,11 +1638,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         }
                         else
                         {
+                            // Keep the incomplete Accept. Release the process-local pin and
+                            // retry later on the blocked path. Do not publish.
+                            ReleaseCapacityReservation(sequence);
                             FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
                                 _logger,
                                 sequence,
                                 ex.GetType().Name,
                                 ex.Message);
+                            ScheduleBlockedPersistRetry(sequence);
                         }
                     }
                 }

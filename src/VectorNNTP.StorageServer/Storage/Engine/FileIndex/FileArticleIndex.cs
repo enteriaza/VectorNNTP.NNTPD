@@ -12,8 +12,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// <para>
 /// Single append-only file <c>article.index</c>. Each durable mutation appends a full
 /// <see cref="StoredArticleMetadata"/> snapshot; replay is last-write-wins per
-/// <see cref="ArticleId"/>. Durability uses <see cref="FileStream.Flush(bool)"/> with
-/// <c>flushToDisk: true</c>.
+/// <see cref="ArticleId"/>. Startup reads one
+/// <see cref="ArticleIndexRecordCodec.RecordLength"/>-byte frame at a time, so the
+/// file-byte working set does not grow with the file. Durability uses
+/// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c>.
 /// </para>
 /// <para>
 /// <see cref="TouchHint"/> updates in-memory LastAccess only and must not perform a durable
@@ -24,19 +26,44 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// Evicted/Invalid are logical states only; physical SATA reclamation is a later phase.
 /// Relocation changes index metadata only and never mutates segment bytes.
 /// </para>
+/// <para>
+/// <see cref="WriteSnapshot"/> writes <c>article.index.snap</c> from the in-memory projection.
+/// It does not append to <c>article.index</c> and does not change which mutations are
+/// acknowledged. <see cref="Checkpoint"/> installs that snapshot and then replaces
+/// <c>article.index</c> with a <c>VNID</c> file whose payload is only the frames past the
+/// covered length. Startup loads a valid snapshot. A legacy index is then replayed from the
+/// covered length. A replacement whose generation equals the snapshot is replayed from its
+/// payload only. An invalid installed snapshot or an invalid replacement fails Open.
+/// <c>article.index.snap.tmp</c> and <c>article.index.repl.tmp</c> are ignored.
+/// </para>
 /// </remarks>
 public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposable
 {
     /// <summary>Engine-owned index filename beneath ControlDir.</summary>
     public const string IndexFileName = "article.index";
 
+    /// <summary>Installed snapshot filename beneath ControlDir. Not read as startup authority.</summary>
+    public const string SnapshotFileName = "article.index.snap";
+
+    /// <summary>In-progress snapshot filename. Never authoritative.</summary>
+    public const string SnapshotTempFileName = "article.index.snap.tmp";
+
+    /// <summary>In-progress index replacement. Never authoritative.</summary>
+    public const string ReplacementTempFileName = "article.index.repl.tmp";
+
+    private const int CopyBufferBytes = 64 * 1024;
+
     private readonly ILogger _logger;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _snapshotFlight = new(1, 1);
     private readonly Dictionary<ArticleId, StoredArticleMetadata> _entries = new();
     private readonly string _indexPath;
     private FileStream _stream;
     private long _durableWriteCount;
     private long _touchHintCount;
+    private ulong _installedSnapshotGeneration;
+    private int _snapshotWriters;
+    private int _maxSnapshotWriters;
     private bool _disposed;
 
     private FileArticleIndex(string indexPath, FileStream stream, ILogger logger)
@@ -61,6 +88,78 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>Copies the open index file. Restores the stream position. Tests only.</summary>
+    internal byte[] CopyIndexBytes()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var length = _stream.Length;
+            if (length > int.MaxValue)
+            {
+                throw new InvalidOperationException("Index test copy exceeds a single byte array.");
+            }
+
+            var buffer = new byte[(int)length];
+            var position = _stream.Position;
+            try
+            {
+                _stream.Position = 0;
+                var filled = 0;
+                while (filled < buffer.Length)
+                {
+                    var read = _stream.Read(buffer, filled, buffer.Length - filled);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException("Short read copying the open article index.");
+                    }
+
+                    filled += read;
+                }
+
+                return buffer;
+            }
+            finally
+            {
+                _stream.Position = position;
+            }
+        }
+    }
+
+    /// <summary>Highest number of snapshot writers inside the single-flight section (tests).</summary>
+    internal int MaxSnapshotWriters => Volatile.Read(ref _maxSnapshotWriters);
+
+    /// <summary>Invoked once a snapshot has left the index gate and before the temp file is written (tests).</summary>
+    internal Action? TestDuringSnapshotWrite { get; set; }
+
+    /// <summary>Invoked after the temp snapshot is durable and validated, before install (tests).</summary>
+    internal Action? TestBeforeSnapshotInstall { get; set; }
+
+    /// <summary>Invoked when a second snapshot observes the single-flight gate already taken (tests).</summary>
+    internal Action? TestOnSnapshotFlightContended { get; set; }
+
+    /// <summary>Invoked after snapshot bytes are written and before <c>Flush(true)</c> (tests).</summary>
+    internal Action? TestBeforeSnapshotFlush { get; set; }
+
+    /// <summary>
+    /// Invoked after the stable tail has been copied and before the install gate (tests).
+    /// Runs inside the checkpoint flight and outside the index gate. Must not call
+    /// <see cref="Checkpoint"/> or <see cref="WriteSnapshot"/>.
+    /// </summary>
+    internal Action? TestDuringReplacementWrite { get; set; }
+
+    /// <summary>
+    /// Invoked under the index gate after the catch-up copy and before replacement <c>Flush(true)</c> (tests).
+    /// Must not call back into this index.
+    /// </summary>
+    internal Action? TestBeforeReplacementFlush { get; set; }
+
+    /// <summary>
+    /// Invoked under the index gate after the replacement is durable and verified, before it is installed (tests).
+    /// Must not call back into this index.
+    /// </summary>
+    internal Action? TestBeforeReplacementInstall { get; set; }
+
     /// <summary>Number of soft TouchHint calls (tests).</summary>
     public long TouchHintCount
     {
@@ -75,7 +174,10 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
 
     /// <summary>
     /// Opens or creates <c>article.index</c> under <paramref name="options"/>.ControlDir and
-    /// replays durable mutations (torn final frame may be truncated).
+    /// restores the published projection. A valid <c>article.index.snap</c> supplies the covered
+    /// prefix. A legacy index is replayed from that covered length. A <c>VNID</c> replacement
+    /// whose generation equals the snapshot is replayed from its payload. Without a snapshot,
+    /// a legacy index is replayed from the start. A torn final frame may be truncated.
     /// </summary>
     public static FileArticleIndex Open(
         ArticleStorageRuntimeOptions options,
@@ -87,13 +189,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         var log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(options.ControlDir);
         var path = Path.Combine(options.ControlDir, IndexFileName);
-        var stream = new FileStream(
-            path,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None,
-            bufferSize: 64 * 1024,
-            FileOptions.None);
+        var stream = OpenIndexStream(path, FileMode.OpenOrCreate);
 
         var index = new FileArticleIndex(path, stream, log);
         try
@@ -235,6 +331,34 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <inheritdoc />
     public bool TrySetState(ArticleId artId, ArticleStorageState state, DateTimeOffset utcNow)
     {
+        if (TryTransitionPresentOnce(artId, state, utcNow, out _))
+        {
+            return true;
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _entries.TryGetValue(artId, out var existing) && existing.State == state;
+        }
+    }
+
+    /// <summary>
+    /// Durably moves a Present entry to <paramref name="state"/> at most once.
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="false"/> when the entry is missing, already in
+    /// <paramref name="state"/>, or in the other terminal state. Callers that adjust
+    /// live/dead bytes must do so only on <see langword="true"/>, using
+    /// <paramref name="transitioned"/>.
+    /// </remarks>
+    internal bool TryTransitionPresentOnce(
+        ArticleId artId,
+        ArticleStorageState state,
+        DateTimeOffset utcNow,
+        out StoredArticleMetadata transitioned)
+    {
+        transitioned = default;
         if (state is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
         {
             return false;
@@ -243,24 +367,15 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (!_entries.TryGetValue(artId, out var existing))
+            if (!_entries.TryGetValue(artId, out var existing)
+                || existing.State != ArticleStorageState.Present)
             {
                 return false;
             }
 
-            if (existing.State == state)
-            {
-                return true;
-            }
-
-            if (existing.State != ArticleStorageState.Present)
-            {
-                return false;
-            }
-
-            var updated = existing with { State = state, LastAccessUtc = utcNow };
-            AppendDurableUnlocked(updated);
-            _entries[artId] = updated;
+            transitioned = existing with { State = state, LastAccessUtc = utcNow };
+            AppendDurableUnlocked(transitioned);
+            _entries[artId] = transitioned;
             return true;
         }
     }
@@ -358,6 +473,475 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    /// Writes and installs <c>article.index.snap</c> from the current in-memory projection.
+    /// </summary>
+    /// <remarks>
+    /// The index gate is held only to copy the dictionary and to rename the temp file.
+    /// The copy is one <see cref="StoredArticleMetadata"/> array for the call and is not retained.
+    /// <c>article.index</c> is not appended, truncated, or replaced. A failed attempt deletes
+    /// the temp file and leaves any previously installed snapshot in place.
+    /// </remarks>
+    /// <returns>The installed snapshot identity. Generation is index-local, not a journal sequence.</returns>
+    internal ArticleIndexSnapshotHeader WriteSnapshot()
+    {
+        EnterSnapshotFlight();
+        try
+        {
+            return WriteSnapshotBody();
+        }
+        finally
+        {
+            ExitSnapshotFlight();
+        }
+    }
+
+    /// <summary>
+    /// Installs a snapshot, then replaces <c>article.index</c> with the frames past that snapshot.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Order: durable snapshot, durable replacement, same-directory <see cref="File.Move(string, string, bool)"/>,
+    /// then the previous index bytes are the replaced file. The index gate is not held across snapshot
+    /// or tail IO. The live stream allows readers so that tail copy can use a second handle.
+    /// Bytes below a length captured under the gate stay put because the log is append-only.
+    /// The gate is held again to copy the catch-up tail, check those bytes, and install the
+    /// replacement. Appends during the flight land in the catch-up or, after install, on the new
+    /// file. A failure before install deletes <c>article.index.repl.tmp</c> and leaves the previous
+    /// <c>article.index</c> in place. The snapshot, once installed, is left in place.
+    /// </para>
+    /// <para>
+    /// The move is the same call the article journal uses. The write handle is closed first because
+    /// Windows cannot replace a file this process still has open. Source and destination are in the
+    /// same control directory. Crash before the move returns: the previous index plus the installed
+    /// snapshot still recover, and <c>article.index.repl.tmp</c> is not read. Crash after the move
+    /// completes: the snapshot plus the replacement recover. A crash inside the move is not repaired.
+    /// The next open fails closed unless the installed file is a valid legacy log or a valid
+    /// replacement for the installed snapshot. Directory fsync is not used.
+    /// </para>
+    /// </remarks>
+    /// <returns>The installed snapshot and the number of index bytes copied into the replacement.</returns>
+    internal ArticleIndexCheckpointResult Checkpoint()
+    {
+        EnterSnapshotFlight();
+        try
+        {
+            EnsureAlignedForCheckpoint();
+            var snapshot = WriteSnapshotBody();
+            var deltaBytes = RetireCoveredPrefix(snapshot);
+            return new ArticleIndexCheckpointResult(snapshot, deltaBytes);
+        }
+        finally
+        {
+            ExitSnapshotFlight();
+        }
+    }
+
+    private void EnterSnapshotFlight()
+    {
+        if (!_snapshotFlight.Wait(TimeSpan.Zero))
+        {
+            TestOnSnapshotFlightContended?.Invoke();
+            _snapshotFlight.Wait();
+        }
+
+        var writers = Interlocked.Increment(ref _snapshotWriters);
+        UpdateMaxSnapshotWriters(writers);
+    }
+
+    private void ExitSnapshotFlight()
+    {
+        Interlocked.Decrement(ref _snapshotWriters);
+        _snapshotFlight.Release();
+    }
+
+    private ArticleIndexSnapshotHeader WriteSnapshotBody()
+    {
+        var tempPath = SnapshotTempPath();
+        var installed = false;
+        try
+        {
+            StoredArticleMetadata[] copy;
+            long coveredIndexLength;
+            ulong generation;
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                copy = new StoredArticleMetadata[_entries.Count];
+                if (copy.Length > 0)
+                {
+                    _entries.Values.CopyTo(copy, 0);
+                }
+
+                coveredIndexLength = _stream.Length;
+                generation = _installedSnapshotGeneration + 1;
+            }
+
+            TestDuringSnapshotWrite?.Invoke();
+            using (var temp = new FileStream(
+                       tempPath,
+                       FileMode.Create,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: CopyBufferBytes,
+                       FileOptions.None))
+            {
+                ArticleIndexSnapshotCodec.Write(temp, generation, coveredIndexLength, copy);
+                TestBeforeSnapshotFlush?.Invoke();
+                temp.Flush(flushToDisk: true);
+            }
+
+            _ = ArticleIndexSnapshotCodec.Read(tempPath);
+            TestBeforeSnapshotInstall?.Invoke();
+
+            var snapshotPath = SnapshotPath();
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                File.Move(tempPath, snapshotPath, overwrite: true);
+                installed = true;
+                _installedSnapshotGeneration = generation;
+            }
+
+            FileArticleIndexLogMessages.SnapshotInstalled(
+                _logger,
+                snapshotPath,
+                generation,
+                copy.Length,
+                coveredIndexLength);
+            return new ArticleIndexSnapshotHeader(
+                generation,
+                ArticleIndexSnapshotCodec.LegacyDeltaGeneration,
+                coveredIndexLength,
+                (ulong)copy.Length);
+        }
+        catch (Exception ex)
+        {
+            FileArticleIndexLogMessages.SnapshotFailed(_logger, ex, tempPath);
+            if (!installed)
+            {
+                TryDelete(tempPath);
+            }
+
+            throw;
+        }
+    }
+
+    private void EnsureAlignedForCheckpoint()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var frameBase = FrameBaseUnlocked();
+            var length = _stream.Length;
+            if (length < frameBase || (length - frameBase) % ArticleIndexRecordCodec.RecordLength != 0)
+            {
+                throw new ArticleIndexCorruptException(
+                    $"Article index length {length} is not an aligned checkpoint boundary.",
+                    length);
+            }
+        }
+    }
+
+    private long RetireCoveredPrefix(ArticleIndexSnapshotHeader snapshot)
+    {
+        var replPath = ReplacementTempPath();
+        var moved = false;
+        try
+        {
+            var copyEnd = WriteReplacementPrefix(snapshot, replPath);
+            TestDuringReplacementWrite?.Invoke();
+            var deltaBytes = InstallReplacement(snapshot, replPath, copyEnd, ref moved);
+            FileArticleIndexLogMessages.CheckpointInstalled(
+                _logger,
+                _indexPath,
+                snapshot.Generation,
+                snapshot.CoveredIndexLength,
+                deltaBytes);
+            return deltaBytes;
+        }
+        catch (Exception ex)
+        {
+            if (!moved)
+            {
+                TryDelete(replPath);
+            }
+
+            FileArticleIndexLogMessages.CheckpointFailed(_logger, ex, _indexPath);
+            throw;
+        }
+    }
+
+    private long WriteReplacementPrefix(ArticleIndexSnapshotHeader snapshot, string replPath)
+    {
+        long copyEnd;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var frameBase = FrameBaseUnlocked();
+            copyEnd = _stream.Length;
+            ValidateSnapshotCoverage(snapshot.CoveredIndexLength, copyEnd, frameBase);
+        }
+
+        using var read = OpenIndexReadStream();
+        using var repl = CreateReplacementStream(replPath);
+        ArticleIndexDeltaFile.WriteHeader(repl, snapshot.Generation);
+        var stable = copyEnd - snapshot.CoveredIndexLength;
+        CopyRange(read, snapshot.CoveredIndexLength, copyEnd, repl);
+        AssertSameBytes(read, snapshot.CoveredIndexLength, repl, ArticleIndexDeltaFile.HeaderLength, stable);
+        return copyEnd;
+    }
+
+    private long InstallReplacement(
+        ArticleIndexSnapshotHeader snapshot,
+        string replPath,
+        long copyEnd,
+        ref bool moved)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var end = _stream.Length;
+            if (end < copyEnd)
+            {
+                throw new InvalidOperationException("Article index shrank during checkpoint.");
+            }
+
+            var payload = end - snapshot.CoveredIndexLength;
+            using (var repl = OpenReplacementStream(replPath))
+            {
+                _ = repl.Seek(0, SeekOrigin.End);
+                CopyRange(_stream, copyEnd, end, repl);
+                TestBeforeReplacementFlush?.Invoke();
+                repl.Flush(flushToDisk: true);
+                if (repl.Length != ArticleIndexDeltaFile.HeaderLength + payload)
+                {
+                    throw new ArticleIndexCorruptException(
+                        $"Article index replacement length {repl.Length} does not match the covered tail {payload}.",
+                        snapshot.CoveredIndexLength);
+                }
+
+                AssertSameBytes(_stream, snapshot.CoveredIndexLength, repl, ArticleIndexDeltaFile.HeaderLength, payload);
+                TestBeforeReplacementInstall?.Invoke();
+            }
+
+            ReplaceIndexUnlocked(replPath, ref moved);
+            return payload;
+        }
+    }
+
+    private void ReplaceIndexUnlocked(string replPath, ref bool moved)
+    {
+        _stream.Dispose();
+        try
+        {
+            File.Move(replPath, _indexPath, overwrite: true);
+            moved = true;
+        }
+        catch (Exception moveEx)
+        {
+            if (!TryReopenIndex())
+            {
+                _disposed = true;
+                throw new IOException(
+                    "Article index checkpoint failed and the previous index could not be reopened.",
+                    moveEx);
+            }
+
+            throw;
+        }
+
+        if (!TryReopenIndex())
+        {
+            _disposed = true;
+            throw new IOException("Article index replacement was installed and the new index could not be opened.");
+        }
+    }
+
+    private bool TryReopenIndex()
+    {
+        try
+        {
+            _stream = OpenIndexStream(_indexPath, FileMode.Open);
+            _ = _stream.Seek(0, SeekOrigin.End);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private long FrameBaseUnlocked()
+    {
+        var length = _stream.Length;
+        var position = _stream.Position;
+        try
+        {
+            return ArticleIndexDeltaFile.TryReadHeader(_stream, length, out _)
+                ? ArticleIndexDeltaFile.HeaderLength
+                : 0;
+        }
+        finally
+        {
+            _stream.Position = position;
+        }
+    }
+
+    private static void CopyRange(Stream source, long sourceOffset, long sourceEnd, Stream destination)
+    {
+        if (sourceEnd < sourceOffset)
+        {
+            throw new IOException("Article index tail range is inverted.");
+        }
+
+        var remaining = sourceEnd - sourceOffset;
+        if (remaining == 0)
+        {
+            return;
+        }
+
+        _ = source.Seek(sourceOffset, SeekOrigin.Begin);
+        var buffer = new byte[CopyBufferBytes];
+        while (remaining > 0)
+        {
+            var requested = (int)Math.Min(buffer.Length, remaining);
+            var read = source.Read(buffer, 0, requested);
+            if (read == 0)
+            {
+                throw new EndOfStreamException("Short read copying the article index tail.");
+            }
+
+            destination.Write(buffer, 0, read);
+            remaining -= read;
+        }
+    }
+
+    private static void AssertSameBytes(Stream left, long leftOffset, Stream right, long rightOffset, long count)
+    {
+        if (count < 0)
+        {
+            throw new IOException("Article index comparison length is negative.");
+        }
+
+        if (count == 0)
+        {
+            return;
+        }
+
+        _ = left.Seek(leftOffset, SeekOrigin.Begin);
+        _ = right.Seek(rightOffset, SeekOrigin.Begin);
+        var leftBuffer = new byte[CopyBufferBytes];
+        var rightBuffer = new byte[CopyBufferBytes];
+        var remaining = count;
+        while (remaining > 0)
+        {
+            var requested = (int)Math.Min(leftBuffer.Length, remaining);
+            ReadExact(left, leftBuffer, requested);
+            ReadExact(right, rightBuffer, requested);
+            if (!leftBuffer.AsSpan(0, requested).SequenceEqual(rightBuffer.AsSpan(0, requested)))
+            {
+                throw new ArticleIndexCorruptException(
+                    "Article index replacement bytes do not match the covered tail.",
+                    leftOffset);
+            }
+
+            remaining -= requested;
+        }
+    }
+
+    private static void ReadExact(Stream stream, byte[] buffer, int count)
+    {
+        var filled = 0;
+        while (filled < count)
+        {
+            var read = stream.Read(buffer, filled, count - filled);
+            if (read == 0)
+            {
+                throw new EndOfStreamException("Short read verifying the article index replacement.");
+            }
+
+            filled += read;
+        }
+    }
+
+    private FileStream OpenIndexReadStream() =>
+        new(
+            _indexPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            bufferSize: CopyBufferBytes,
+            FileOptions.None);
+
+    private static FileStream CreateReplacementStream(string path) =>
+        new(
+            path,
+            FileMode.Create,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: CopyBufferBytes,
+            FileOptions.None);
+
+    private static FileStream OpenReplacementStream(string path) =>
+        new(
+            path,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: CopyBufferBytes,
+            FileOptions.None);
+
+    private static FileStream OpenIndexStream(string path, FileMode mode) =>
+        new(
+            path,
+            mode,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: CopyBufferBytes,
+            FileOptions.None);
+
+    private void UpdateMaxSnapshotWriters(int writers)
+    {
+        int observed;
+        do
+        {
+            observed = Volatile.Read(ref _maxSnapshotWriters);
+            if (writers <= observed)
+            {
+                return;
+            }
+        }
+        while (Interlocked.CompareExchange(ref _maxSnapshotWriters, writers, observed) != observed);
+    }
+
+    private string SnapshotPath() =>
+        Path.Combine(Path.GetDirectoryName(_indexPath) ?? string.Empty, SnapshotFileName);
+
+    private string SnapshotTempPath() =>
+        Path.Combine(Path.GetDirectoryName(_indexPath) ?? string.Empty, SnapshotTempFileName);
+
+    private string ReplacementTempPath() =>
+        Path.Combine(Path.GetDirectoryName(_indexPath) ?? string.Empty, ReplacementTempFileName);
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private void AppendDurableUnlocked(in StoredArticleMetadata metadata)
     {
         var frame = ArticleIndexRecordCodec.Encode(metadata);
@@ -370,46 +954,100 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private void ReplayAndRecoverUnlocked()
     {
         var fileLength = _stream.Length;
-        if (fileLength == 0)
+        var snapshotPath = SnapshotPath();
+        var hasSnapshot = File.Exists(snapshotPath);
+        ArticleIndexSnapshotHeader snapshot = default;
+        if (hasSnapshot)
+        {
+            snapshot = ArticleIndexSnapshotCodec.Apply(snapshotPath, _entries);
+            _installedSnapshotGeneration = snapshot.Generation;
+        }
+
+        var deltaStart = ResolveDeltaStartUnlocked(fileLength, hasSnapshot, snapshot, snapshotPath);
+        if (deltaStart == fileLength)
         {
             _stream.Seek(0, SeekOrigin.End);
             return;
         }
 
-        if (fileLength > int.MaxValue)
+        _stream.Seek(deltaStart, SeekOrigin.Begin);
+        ArticleIndexReplayer.Replay(_stream, fileLength, _entries, HandleDecodeFailureUnlocked, deltaStart);
+        _stream.Seek(0, SeekOrigin.End);
+    }
+
+    private long ResolveDeltaStartUnlocked(
+        long fileLength,
+        bool hasSnapshot,
+        ArticleIndexSnapshotHeader snapshot,
+        string snapshotPath)
+    {
+        if (!ArticleIndexDeltaFile.TryReadHeader(_stream, fileLength, out var fileGeneration))
+        {
+            if (!hasSnapshot)
+            {
+                return 0;
+            }
+
+            ValidateSnapshotCoverage(snapshot.CoveredIndexLength, fileLength, frameBase: 0);
+            FileArticleIndexLogMessages.SnapshotReplay(
+                _logger,
+                snapshotPath,
+                snapshot.Generation,
+                snapshot.CoveredIndexLength,
+                fileLength);
+            return snapshot.CoveredIndexLength;
+        }
+
+        if (!hasSnapshot)
         {
             throw new ArticleIndexCorruptException(
-                $"Article index exceeds supported size ({fileLength} bytes).",
+                "Article index replacement has no installed snapshot.",
                 0);
         }
 
-        var buffer = new byte[(int)fileLength];
-        _stream.Seek(0, SeekOrigin.Begin);
-        var read = _stream.Read(buffer, 0, buffer.Length);
-        if (read != buffer.Length)
+        if (fileGeneration > snapshot.Generation)
         {
-            throw new IOException($"Short read replaying article index ({read}/{buffer.Length}).");
+            throw new ArticleIndexCorruptException(
+                $"Article index replacement generation {fileGeneration} is newer than snapshot generation {snapshot.Generation}.",
+                0);
         }
 
-        var offset = 0;
-        while (offset < buffer.Length)
+        if (fileGeneration == snapshot.Generation)
         {
-            var span = buffer.AsSpan(offset);
-            if (!ArticleIndexRecordCodec.TryDecode(
-                    span,
-                    out var frameLength,
-                    out var metadata,
-                    out var error))
-            {
-                HandleDecodeFailureUnlocked(offset, buffer.Length, error);
-                break;
-            }
-
-            _entries[metadata.ArtId] = metadata;
-            offset += frameLength;
+            FileArticleIndexLogMessages.ReplacementReplay(
+                _logger,
+                _indexPath,
+                fileGeneration,
+                ArticleIndexDeltaFile.HeaderLength,
+                fileLength);
+            return ArticleIndexDeltaFile.HeaderLength;
         }
 
-        _stream.Seek(0, SeekOrigin.End);
+        ValidateSnapshotCoverage(snapshot.CoveredIndexLength, fileLength, ArticleIndexDeltaFile.HeaderLength);
+        FileArticleIndexLogMessages.SnapshotReplay(
+            _logger,
+            snapshotPath,
+            snapshot.Generation,
+            snapshot.CoveredIndexLength,
+            fileLength);
+        return snapshot.CoveredIndexLength;
+    }
+
+    private static void ValidateSnapshotCoverage(long coveredIndexLength, long indexLength, long frameBase)
+    {
+        if (coveredIndexLength < frameBase || coveredIndexLength > indexLength)
+        {
+            throw new ArticleIndexCorruptException(
+                $"Article index snapshot covered length {coveredIndexLength} exceeds index length {indexLength}.",
+                coveredIndexLength);
+        }
+
+        if ((coveredIndexLength - frameBase) % ArticleIndexRecordCodec.RecordLength != 0)
+        {
+            throw new ArticleIndexCorruptException(
+                $"Article index snapshot covered length {coveredIndexLength} is not aligned to an {ArticleIndexRecordCodec.RecordLength}-byte frame.",
+                coveredIndexLength);
+        }
     }
 
     private void HandleDecodeFailureUnlocked(
@@ -471,3 +1109,10 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         && left.Offset == right.Offset
         && left.Length == right.Length;
 }
+
+/// <summary>Result of one explicit index checkpoint.</summary>
+/// <param name="Snapshot">Snapshot installed before the historical prefix was retired.</param>
+/// <param name="DeltaBytes">Index bytes copied from the covered length through the install boundary.</param>
+internal readonly record struct ArticleIndexCheckpointResult(
+    ArticleIndexSnapshotHeader Snapshot,
+    long DeltaBytes);

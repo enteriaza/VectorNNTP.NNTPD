@@ -33,4 +33,60 @@ internal static partial class FileArticleIndexLogMessages
         Level = LogLevel.Information,
         Message = "Article index closed (path={Path})")]
     public static partial void Closed(ILogger logger, string Path);
+
+    [LoggerMessage(
+        EventId = 3304,
+        Level = LogLevel.Information,
+        Message = "Article index snapshot installed (path={Path}, generation={Generation}, records={RecordCount}, coveredIndexLength={CoveredIndexLength})")]
+    public static partial void SnapshotInstalled(
+        ILogger logger,
+        string Path,
+        ulong Generation,
+        int RecordCount,
+        long CoveredIndexLength);
+
+    [LoggerMessage(
+        EventId = 3305,
+        Level = LogLevel.Error,
+        Message = "Article index snapshot failed (path={Path})")]
+    public static partial void SnapshotFailed(ILogger logger, Exception exception, string Path);
+
+    [LoggerMessage(
+        EventId = 3306,
+        Level = LogLevel.Information,
+        Message = "Article index startup using snapshot (path={Path}, generation={Generation}, coveredIndexLength={CoveredIndexLength}, indexLength={IndexLength})")]
+    public static partial void SnapshotReplay(
+        ILogger logger,
+        string Path,
+        ulong Generation,
+        long CoveredIndexLength,
+        long IndexLength);
+
+    [LoggerMessage(
+        EventId = 3307,
+        Level = LogLevel.Information,
+        Message = "Article index checkpoint installed (path={Path}, generation={Generation}, retiredPrefixLength={RetiredPrefixLength}, deltaBytes={DeltaBytes})")]
+    public static partial void CheckpointInstalled(
+        ILogger logger,
+        string Path,
+        ulong Generation,
+        long RetiredPrefixLength,
+        long DeltaBytes);
+
+    [LoggerMessage(
+        EventId = 3308,
+        Level = LogLevel.Error,
+        Message = "Article index checkpoint failed (path={Path})")]
+    public static partial void CheckpointFailed(ILogger logger, Exception exception, string Path);
+
+    [LoggerMessage(
+        EventId = 3309,
+        Level = LogLevel.Information,
+        Message = "Article index startup replaying replacement delta (path={Path}, generation={Generation}, deltaStart={DeltaStart}, indexLength={IndexLength})")]
+    public static partial void ReplacementReplay(
+        ILogger logger,
+        string Path,
+        ulong Generation,
+        long DeltaStart,
+        long IndexLength);
 }

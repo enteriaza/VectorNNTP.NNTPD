@@ -10,10 +10,10 @@ public sealed partial class FileArticleStorageEngine
     private static readonly TimeSpan PersistRetryMaxDelay = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Conservatively treats <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>
-    /// as retryable (transient filesystem conditions). Logical fail-closed outcomes
-    /// (<see cref="InvalidOperationException"/> for unusable/rejected PhysicalWritten, journal
-    /// conflicts handled elsewhere, catalogue/integrity failures) are not requeued.
+    /// Filesystem failures are retried on the IO path and keep their capacity reservation.
+    /// Logical failures stay incomplete, release the process-local reservation, and use
+    /// <see cref="ScheduleBlockedPersistRetry"/> so they are not abandoned and are not
+    /// mixed with IO retries.
     /// </summary>
     private static bool IsRetryablePersistFailure(Exception ex) =>
         ex is IOException or UnauthorizedAccessException;
@@ -156,6 +156,7 @@ public sealed partial class FileArticleStorageEngine
         lock (_gate)
         {
             _ = _persistRetryAttempts.Remove(sequence);
+            _ = _persistBlockedRetryAttempts.Remove(sequence);
         }
     }
 
@@ -233,5 +234,48 @@ public sealed partial class FileArticleStorageEngine
         }
 
         SignalPersistWorker();
+    }
+
+    /// <summary>
+    /// Deferred retry for a non-retryable persist failure. Does not publish and does not
+    /// remove the journal Accept. Backoff matches IO retry but the counter and log do not.
+    /// </summary>
+    private void ScheduleBlockedPersistRetry(ulong sequence)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        int attempt;
+        lock (_gate)
+        {
+            _ = _persistBlockedRetryAttempts.TryGetValue(sequence, out attempt);
+            attempt++;
+            _persistBlockedRetryAttempts[sequence] = attempt;
+        }
+
+        var delay = TestPersistRetryDelay ?? ComputePersistRetryDelay(attempt);
+        _ = Interlocked.Increment(ref _persistBlockedRetryScheduledCount);
+        FileArticleStorageEngineLogMessages.PersistBlockedRetryScheduled(
+            _logger,
+            sequence,
+            attempt,
+            delay.TotalMilliseconds);
+        _ = PersistRetryAfterDelayAsync(sequence, delay);
+    }
+}
+
+/// <summary>
+/// Accept is durable and incomplete, but this attempt cannot reserve capacity or finish.
+/// The worker releases any pin and schedules <c>ScheduleBlockedPersistRetry</c>.
+/// Not an <see cref="IOException"/>, so it is not classified as a filesystem retry.
+/// </summary>
+internal sealed class PersistCompletionDeferredException : Exception
+{
+    /// <summary>Creates a deferred-completion failure.</summary>
+    public PersistCompletionDeferredException(string message)
+        : base(message)
+    {
     }
 }

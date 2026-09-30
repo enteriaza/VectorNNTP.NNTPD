@@ -112,6 +112,51 @@ public sealed class FileSegmentLifecycleTests
     }
 
     [Fact]
+    public async Task E2_ConcurrentEvict_AccountsLiveDeadOnce()
+    {
+        using var dir = TempStorageDir.Create();
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var keep = CreateRecord("<life-e2-keep@seg.test>", "keep-body\r\n");
+        var drop = CreateRecord("<life-e2-drop@seg.test>", "drop-body\r\n");
+        await AcceptAndDrainAsync(engine, keep);
+        await AcceptAndDrainAsync(engine, drop);
+        Assert.True(engine.Index.TryGet(keep.ArtId, out var keepMeta));
+        Assert.True(engine.Index.TryGet(drop.ArtId, out var dropMeta));
+        Assert.Equal(keepMeta.Location.SegmentId, dropMeta.Location.SegmentId);
+
+        const int racers = 16;
+        var start = new Barrier(racers);
+        var results = new bool[racers];
+        var threads = new Thread[racers];
+        for (var i = 0; i < racers; i++)
+        {
+            var index = i;
+            threads[i] = new Thread(() =>
+            {
+                start.SignalAndWait();
+                results[index] = engine.TryEvict(drop.ArtId);
+            });
+            threads[i].IsBackground = true;
+            threads[i].Start();
+        }
+
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        Assert.All(results, static ok => Assert.True(ok));
+        Assert.True(engine.Segments.TryGetSegmentInfo(dropMeta.Location.SegmentId, out var info));
+        Assert.Equal(keepMeta.Location.Length, info.LiveBytes);
+        Assert.Equal(dropMeta.Location.Length, info.DeadBytes);
+
+        Assert.True(engine.TryEvict(drop.ArtId));
+        Assert.True(engine.Segments.TryGetSegmentInfo(dropMeta.Location.SegmentId, out var after));
+        Assert.Equal(info.LiveBytes, after.LiveBytes);
+        Assert.Equal(info.DeadBytes, after.DeadBytes);
+    }
+
+    [Fact]
     public async Task F_FailedDeath_LeavesAccountingUnchanged()
     {
         using var dir = TempStorageDir.Create();

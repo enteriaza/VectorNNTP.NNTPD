@@ -253,6 +253,9 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>Alias for <see cref="ReleaseArticle"/>.</summary>
     public bool Release(ulong sequence) => ReleaseArticle(sequence);
 
+    /// <summary>True when <paramref name="sequence"/> still holds an article reservation.</summary>
+    public bool HoldsArticle(ulong sequence) => _articleBySequence.ContainsKey(sequence);
+
     /// <summary>
     /// Binds a compaction destination reservation to <paramref name="compactionId"/> /
     /// <paramref name="relocationId"/> and increments <see cref="CompactionReservedBytes"/>.
