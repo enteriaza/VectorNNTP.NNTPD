@@ -15,7 +15,8 @@ public sealed partial class FileArticleStorageEngine
     /// <summary>
     /// Compacts one Closed source segment by relocating Present index entries through
     /// <see cref="RelocateArticleAsync"/>, then appends <c>CompactionCommitted</c> only when a
-    /// fresh index snapshot shows zero Present references to the source.
+    /// fresh index snapshot shows zero Present references and no publishable incomplete
+    /// PhysicalWritten or pre-PhysicalWritten append still targets the source.
     /// </summary>
     /// <remarks>
     /// Does not scan SATA. Does not retire/rename/delete the source. Does not append
@@ -79,28 +80,10 @@ public sealed partial class FileArticleStorageEngine
                 sourceInfo.Generation,
                 out var compactionId,
                 out var sourceGeneration,
-                out var alreadyCommitted,
+                out _,
                 out var resolveReject))
         {
             return resolveReject;
-        }
-
-        if (alreadyCommitted)
-        {
-            var remainingCommitted = CountPresentOnSource(sourceSegmentId);
-            return new ArticleCompactionResult(
-                remainingCommitted == 0
-                    ? ArticleCompactionOutcome.Committed
-                    : ArticleCompactionOutcome.Incomplete,
-                compactionId,
-                sourceSegmentId,
-                sourceGeneration,
-                InitialCandidateCount: 0,
-                RelocatedCount: 0,
-                AbandonedCount: 0,
-                RemainingPresentOnSource: remainingCommitted,
-                CompactionCommittedAppended: false,
-                Reason: remainingCommitted == 0 ? "already-committed" : "committed-but-present-remain");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -227,6 +210,21 @@ public sealed partial class FileArticleStorageEngine
                 remaining,
                 CompactionCommittedAppended: false,
                 Reason: "present-remain-on-source");
+        }
+
+        if (!TryReadSourcePublicationFence(sourceSegmentId, out var fenceReason))
+        {
+            return new ArticleCompactionResult(
+                ArticleCompactionOutcome.Incomplete,
+                compactionId,
+                sourceSegmentId,
+                sourceGeneration,
+                worklist.Count,
+                relocated,
+                abandoned,
+                CountPresentOnSource(sourceSegmentId),
+                CompactionCommittedAppended: false,
+                Reason: fenceReason);
         }
 
         var commitOutcome = await _journal

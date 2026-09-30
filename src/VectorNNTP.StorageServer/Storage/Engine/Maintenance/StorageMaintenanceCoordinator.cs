@@ -27,10 +27,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// Phase 5F.3 / 5F.4: when an open compaction returns
 /// <see cref="StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress"/>, that open
 /// remains durable and resumable but yields for the remainder of this
-/// <see cref="RunOnceAsync"/>. The coordinator then tries the next uncommitted open by ascending
-/// CompactionId (each yielded open attempted at most once this run). After all eligible opens
-/// have capacity-yielded, Closed-victim selection runs (Phase 5F.3). CompetingOpenCompaction and
-/// other non-capacity outcomes do not rotate.
+/// <see cref="RunOnceAsync"/>. The same yield applies when the only block is a publishable
+/// PhysicalWritten or pre-PhysicalWritten append. The coordinator then tries the next
+/// uncommitted open by ascending CompactionId (each yielded open attempted at most once this
+/// run). After all eligible opens have yielded, Closed-victim selection runs (Phase 5F.3).
+/// CompetingOpenCompaction and other non-yield outcomes do not rotate. A committed compaction
+/// that still has Present entries is relocated on that same id before it can yield.
 /// </para>
 /// <para>
 /// Policy selection is a hint — every destructive step is revalidated against current
@@ -98,20 +100,35 @@ public sealed class StorageMaintenanceCoordinator
             return AttachPressure(reclaimed, _engine.ObserveCapacityAdmissionPressure());
         }
 
-        // 2) Finish CompactionCommitted → Retire → Reclaim (partial progress).
-        if (TryFindCommittedPendingRetirement(out var committed))
-        {
-            return AttachPressure(
-                await FinishCommittedCompactionAsync(committed, cancellationToken)
-                    .ConfigureAwait(false),
-                pressure);
-        }
-
-        // 3) Continue open uncommitted compaction(s). Capacity zero-progress yields to the next
-        // open (Phase 5F.4), then to Closed selection (Phase 5F.3). Each yielded open is not
-        // retried in this RunOnceAsync.
+        // 2) Finish CompactionCommitted → relocate any late Present → Retire → Reclaim.
+        // A source blocked only by a publishable PhysicalWritten yields for this run.
         StorageMaintenanceResult? firstDeferredOpenCapacitySkip = null;
         var deferredOpenCount = 0;
+        HashSet<ulong>? yieldedCommittedIds = null;
+        while (TryFindCommittedPendingRetirement(yieldedCommittedIds, out var committed))
+        {
+            var finished = await FinishCommittedCompactionAsync(committed, cancellationToken)
+                .ConfigureAwait(false);
+            if (!IsSameRunYieldSkip(in finished))
+            {
+                var primary = AttachPressure(finished, pressure);
+                if (firstDeferredOpenCapacitySkip is { } priorCommitted)
+                {
+                    return primary.WithDeferredOpenCompaction(in priorCommitted, deferredOpenCount);
+                }
+
+                return primary;
+            }
+
+            yieldedCommittedIds ??= new HashSet<ulong>();
+            _ = yieldedCommittedIds.Add(committed.Begin.CompactionId);
+            deferredOpenCount++;
+            firstDeferredOpenCapacitySkip ??= finished;
+        }
+
+        // 3) Continue open uncommitted compaction(s). Capacity zero-progress and pending
+        // PhysicalWritten yield to the next open (Phase 5F.4), then to Closed selection
+        // (Phase 5F.3). Each yielded open is not retried in this RunOnceAsync.
         HashSet<ulong>? yieldedOpenCompactionIds = null;
 
         while (TryFindOpenUncommitted(yieldedOpenCompactionIds, out var open))
@@ -129,7 +146,7 @@ public sealed class StorageMaintenanceCoordinator
                 open.Begin.CompactionId,
                 openResult);
 
-            if (!IsCapacityOpenCompactionZeroProgressSkip(in openResult))
+            if (!IsSameRunYieldSkip(in openResult))
             {
                 // Progress, Failed, CompetingOpen, stale Skip, etc. — return immediately.
                 var primary = AttachPressure(openResult, pressure);
@@ -145,6 +162,32 @@ public sealed class StorageMaintenanceCoordinator
             _ = yieldedOpenCompactionIds.Add(open.Begin.CompactionId);
             deferredOpenCount++;
             firstDeferredOpenCapacitySkip ??= openResult;
+        }
+
+        // Journal CompactionRetired that could not rename still has Present entries.
+        // Relocation intents are rejected on that id, so continue with a new compaction id.
+        if (TryFindJournalRetiredStillClosedWithPresent(out var retiredSource))
+        {
+            var reconciled = await CompactThenFinishAsync(
+                    retiredSource,
+                    requirePolicyEligibility: false,
+                    sourceAccountingHint: null,
+                    continuingOpenCompaction: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!IsSameRunYieldSkip(in reconciled))
+            {
+                var primary = AttachPressure(reconciled, pressure);
+                if (firstDeferredOpenCapacitySkip is { } priorRetired)
+                {
+                    return primary.WithDeferredOpenCompaction(in priorRetired, deferredOpenCount);
+                }
+
+                return primary;
+            }
+
+            deferredOpenCount++;
+            firstDeferredOpenCapacitySkip ??= reconciled;
         }
 
         // 4) Select a new Closed compaction victim (pressure-aware when under admission pressure).
@@ -300,6 +343,20 @@ public sealed class StorageMaintenanceCoordinator
         && result.SkipReason == StorageMaintenanceSkipReasons.CapacityOpenCompactionZeroProgress;
 
     /// <summary>
+    /// Same-run yield: capacity made no progress, or the source is waiting on a publishable
+    /// PhysicalWritten / pre-PhysicalWritten append. Present relocation is not a yield.
+    /// </summary>
+    private static bool IsSameRunYieldSkip(in StorageMaintenanceResult result) =>
+        IsCapacityOpenCompactionZeroProgressSkip(in result)
+        || (result.Outcome == StorageMaintenanceOutcome.Skipped
+            && IsPublicationFenceReason(result.SkipReason));
+
+    private static bool IsPublicationFenceReason(string? reason) =>
+        reason is StorageMaintenanceSkipReasons.PendingPhysicalWritten
+            or "pending-inflight-append"
+            or "index-publication-in-flight";
+
+    /// <summary>
     /// True when Closed selection found nothing useful to attempt (preserve deferred open Skip).
     /// </summary>
     private static bool IsNoClosedWorkOutcome(in StorageMaintenanceResult result) =>
@@ -331,21 +388,13 @@ public sealed class StorageMaintenanceCoordinator
         CompactionJournalSnapshot committed,
         CancellationToken cancellationToken)
     {
-        var compactionId = committed.Begin.CompactionId;
-        var sourceId = committed.Begin.SourceSegmentId;
-
-        if (!TryRevalidateRetirementCandidate(compactionId, sourceId, out var skipReason))
-        {
-            return Skipped(sourceId, compactionId, skipReason);
-        }
-
-        return await RetireThenMaybeReclaimAsync(
-                compactionId,
-                sourceId,
-                compactionAttempted: false,
-                compactionCommitted: true,
-                compactionExecution: null,
+        // Same compaction id. Present that landed after CompactionCommitted is relocated
+        // before retirement. A publishable PhysicalWritten is not relocated.
+        return await CompactThenFinishAsync(
+                committed.Begin.SourceSegmentId,
+                requirePolicyEligibility: false,
                 sourceAccountingHint: null,
+                continuingOpenCompaction: true,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -382,6 +431,17 @@ public sealed class StorageMaintenanceCoordinator
                     .ConfigureAwait(false);
 
             case ArticleCompactionOutcome.Incomplete:
+                if (IsPublicationFenceReason(compact.Reason))
+                {
+                    return EnrichCompactionResult(
+                        Skipped(
+                            compact.SourceSegmentId,
+                            compact.CompactionId,
+                            compact.Reason),
+                        compact,
+                        sourceAccountingHint);
+                }
+
                 // Capacity policy denial before any successful relocation → Skipped (not Failed).
                 // Distinguish open soft-spin from new-compaction headroom denial.
                 if (compact.RelocatedCount == 0
@@ -601,13 +661,21 @@ public sealed class StorageMaintenanceCoordinator
             sourceAccountingHint);
     }
 
-    private bool TryFindCommittedPendingRetirement(out CompactionJournalSnapshot snapshot)
+    private bool TryFindCommittedPendingRetirement(
+        HashSet<ulong>? excludeCompactionIds,
+        out CompactionJournalSnapshot snapshot)
     {
         snapshot = default;
         CompactionJournalSnapshot? best = null;
         foreach (var entry in _engine.Journal.EnumerateOpenCompactions())
         {
             if (!entry.Committed || entry.Retired is not null)
+            {
+                continue;
+            }
+
+            if (excludeCompactionIds is not null
+                && excludeCompactionIds.Contains(entry.Begin.CompactionId))
             {
                 continue;
             }
@@ -625,6 +693,38 @@ public sealed class StorageMaintenanceCoordinator
 
         snapshot = best.Value;
         return true;
+    }
+
+    private bool TryFindJournalRetiredStillClosedWithPresent(out SegmentId segmentId)
+    {
+        segmentId = default;
+        ulong? best = null;
+        foreach (var entry in _engine.Journal.EnumerateCompactions())
+        {
+            if (entry.Retired is null)
+            {
+                continue;
+            }
+
+            var source = entry.Begin.SourceSegmentId;
+            if (!_engine.Catalogue.TryGet(source, out var info) || info.State != SegmentState.Closed)
+            {
+                continue;
+            }
+
+            if (CountPresent(source) == 0)
+            {
+                continue;
+            }
+
+            if (best is null || source.Value < best.Value)
+            {
+                best = source.Value;
+                segmentId = source;
+            }
+        }
+
+        return best is not null;
     }
 
     private bool TryFindOpenUncommitted(out CompactionJournalSnapshot snapshot) =>

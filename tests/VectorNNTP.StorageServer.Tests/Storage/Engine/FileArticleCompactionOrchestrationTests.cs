@@ -362,7 +362,7 @@ public sealed class FileArticleCompactionOrchestrationTests
         Assert.Equal(ArticleCompactionOutcome.Committed, second.Outcome);
         Assert.Equal(first.CompactionId, second.CompactionId);
         Assert.False(second.CompactionCommittedAppended);
-        Assert.Equal("already-committed", second.Reason);
+        Assert.Equal("commit-idempotent", second.Reason);
     }
 
     [Fact]

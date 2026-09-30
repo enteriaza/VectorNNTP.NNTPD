@@ -115,6 +115,12 @@ public static class StorageMaintenanceSkipReasons
     /// <summary>Open compaction continued but relocated zero articles due to capacity denial.</summary>
     public const string CapacityOpenCompactionZeroProgress = "capacity-open-compaction-zero-progress";
 
+    /// <summary>
+    /// Source cannot be committed or retired yet because a publishable PhysicalWritten
+    /// or pre-PhysicalWritten append still targets it. Not a capacity decision.
+    /// </summary>
+    public const string PendingPhysicalWritten = "pending-physical-written";
+
     /// <summary>True when <paramref name="reason"/> is a capacity-pressure skip (not stale/race).</summary>
     public static bool IsCapacityPressureReason(string? reason) =>
         reason is CapacityInsufficientHeadroom

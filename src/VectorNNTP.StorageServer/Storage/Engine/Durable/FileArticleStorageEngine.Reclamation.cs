@@ -34,14 +34,14 @@ public sealed partial class FileArticleStorageEngine
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (CountPresentOnSource(segmentId) > 0)
+        if (!TryReadSourcePublicationFence(segmentId, out var fenceReason))
         {
             return Task.FromResult(new ArticleSegmentReclamationResult(
                 ArticleSegmentReclamationOutcome.RejectedPresentRemain,
                 segmentId,
                 PhysicalFileDeleted: false,
                 CatalogueEntryRemoved: false,
-                Reason: "present-remain-on-source"));
+                Reason: fenceReason ?? "present-remain-on-source"));
         }
 
         var retiredPath = Path.Combine(

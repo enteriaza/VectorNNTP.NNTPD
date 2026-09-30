@@ -69,8 +69,7 @@ public sealed partial class FileArticleStorageEngine
                 Reason: "not-committed");
         }
 
-        var presentRemain = CountPresentOnSource(sourceId);
-        if (presentRemain > 0)
+        if (!TryReadSourcePublicationFence(sourceId, out var fenceReason))
         {
             return new ArticleSegmentRetirementResult(
                 ArticleSegmentRetirementOutcome.RejectedPresentRemain,
@@ -78,7 +77,7 @@ public sealed partial class FileArticleStorageEngine
                 sourceId,
                 beginGeneration,
                 CompactionRetiredAppended: false,
-                Reason: "present-remain-on-source");
+                Reason: fenceReason);
         }
 
         if (!Catalogue.TryGet(sourceId, out var info))
@@ -272,7 +271,20 @@ public sealed partial class FileArticleStorageEngine
             return false;
         }
 
-        return Catalogue.TryRetire(sourceId, info.Generation, _timeProvider.GetUtcNow());
+        // Seal only around the decision. Catalogue rename runs after this method returns
+        // from the seal section; TryRetire performs the file move outside _publicationFence.
+        if (!TrySealSourceForRename(sourceId))
+        {
+            return false;
+        }
+
+        if (!Catalogue.TryRetire(sourceId, info.Generation, _timeProvider.GetUtcNow()))
+        {
+            UnsealSource(sourceId);
+            return false;
+        }
+
+        return true;
     }
 
     private void ThrowIfRetirementFault(RetirementFaultPoint point)

@@ -900,62 +900,111 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
-        var location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
-        ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, accept.Sequence);
-
-        var rewrite = TestRewritePhysicalLocationAfterAppend;
-        TestRewritePhysicalLocationAfterAppend = null;
-        if (rewrite is not null)
-        {
-            location = rewrite(location);
-        }
-
-        var afterSataHook = TestHookAfterSataBeforePhysicalWritten;
-        TestHookAfterSataBeforePhysicalWritten = null;
-        afterSataHook?.Invoke(accept.Sequence, location);
-
-        var pwCandidate = new JournalPhysicalWrittenRecord(1, accept.Sequence, location);
-        ThrowIfTestFault(PersistFaultPoint.BeforePhysicalWritten, accept.Sequence);
-        var pwOutcome = await _journal
-            .AppendPhysicalWrittenAsync(pwCandidate, cancellationToken)
+        var location = await AppendAcceptLocationForPhysicalWrittenAsync(accept, cancellationToken)
             .ConfigureAwait(false);
-
-        switch (pwOutcome)
+        var physicalWrittenDurable = false;
+        try
         {
-            case JournalAppendOutcome.Applied:
-            case JournalAppendOutcome.IdempotentNoOp:
-                // Durable PW owns physical capacity; release before index work.
-                ReleaseCapacityReservation(accept.Sequence);
-                ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
-                await CompleteFromPhysicalWrittenAsync(accept, pwCandidate, cancellationToken)
-                    .ConfigureAwait(false);
-                return;
+            var pwCandidate = new JournalPhysicalWrittenRecord(1, accept.Sequence, location);
+            ThrowIfTestFault(PersistFaultPoint.BeforePhysicalWritten, accept.Sequence);
+            var pwOutcome = await _journal
+                .AppendPhysicalWrittenAsync(pwCandidate, cancellationToken)
+                .ConfigureAwait(false);
 
-            case JournalAppendOutcome.Conflict:
-                // Existing durable PW at a different location — never supersede; complete via it.
-                if (!TryGetDurablePhysicalWritten(accept.Sequence, out var existingPw))
-                {
+            switch (pwOutcome)
+            {
+                case JournalAppendOutcome.Applied:
+                case JournalAppendOutcome.IdempotentNoOp:
+                    // Journal location is now authoritative; drop the process-local marker first.
+                    ClearPrePhysicalWritten(accept.Sequence);
+                    physicalWrittenDurable = true;
+                    ReleaseCapacityReservation(accept.Sequence);
+                    ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
+                    await CompleteFromPhysicalWrittenAsync(accept, pwCandidate, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+
+                case JournalAppendOutcome.Conflict:
+                    // Existing durable PW at a different location — never supersede; complete via it.
+                    ClearPrePhysicalWritten(accept.Sequence);
+                    physicalWrittenDurable = true;
+                    if (!TryGetDurablePhysicalWritten(accept.Sequence, out var existingPw))
+                    {
+                        throw new InvalidOperationException(
+                            $"PhysicalWritten conflict for sequence {accept.Sequence} " +
+                            "but no durable PhysicalWritten was found.");
+                    }
+
+                    ReleaseCapacityReservation(accept.Sequence);
+                    await CompleteFromPhysicalWrittenAsync(accept, existingPw, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+
+                case JournalAppendOutcome.Rejected:
+                    // Unknown sequence or location length < ArtSize — not PhysicalWritten.
+                    // Do not release reservation; do not Present/IndexCommitted.
                     throw new InvalidOperationException(
-                        $"PhysicalWritten conflict for sequence {accept.Sequence} " +
-                        "but no durable PhysicalWritten was found.");
-                }
+                        $"PhysicalWritten rejected for sequence {accept.Sequence} " +
+                        "(prerequisite missing or location length below ArtSize).");
 
-                ReleaseCapacityReservation(accept.Sequence);
-                await CompleteFromPhysicalWrittenAsync(accept, existingPw, cancellationToken)
-                    .ConfigureAwait(false);
-                return;
-
-            case JournalAppendOutcome.Rejected:
-                // Unknown sequence or location length < ArtSize — not PhysicalWritten.
-                // Do not release reservation; do not Present/IndexCommitted.
-                throw new InvalidOperationException(
-                    $"PhysicalWritten rejected for sequence {accept.Sequence} " +
-                    "(prerequisite missing or location length below ArtSize).");
-
-            default:
-                throw new InvalidOperationException(
-                    $"Unexpected PhysicalWritten outcome {pwOutcome} for sequence {accept.Sequence}.");
+                default:
+                    throw new InvalidOperationException(
+                        $"Unexpected PhysicalWritten outcome {pwOutcome} for sequence {accept.Sequence}.");
+            }
         }
+        catch
+        {
+            if (!physicalWrittenDurable)
+            {
+                ClearPrePhysicalWritten(accept.Sequence);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Appends Accept bytes and registers the location until PhysicalWritten is durable.
+    /// A location sealed for rename is not frozen; Option 1 appends again on the active segment.
+    /// </summary>
+    private async Task<StoredArticleLocation> AppendAcceptLocationForPhysicalWrittenAsync(
+        JournalAcceptRecord accept,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= MaxPrePhysicalWrittenAppendAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
+            ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, accept.Sequence);
+
+            var rewrite = TestRewritePhysicalLocationAfterAppend;
+            TestRewritePhysicalLocationAfterAppend = null;
+            if (rewrite is not null)
+            {
+                location = rewrite(location);
+            }
+
+            if (!TryRegisterPrePhysicalWritten(accept.Sequence, location))
+            {
+                continue;
+            }
+
+            try
+            {
+                var afterSataHook = TestHookAfterSataBeforePhysicalWritten;
+                TestHookAfterSataBeforePhysicalWritten = null;
+                afterSataHook?.Invoke(accept.Sequence, location);
+                return location;
+            }
+            catch
+            {
+                ClearPrePhysicalWritten(accept.Sequence);
+                throw;
+            }
+        }
+
+        throw new IOException(
+            $"Accept sequence {accept.Sequence} could not register a pre-PhysicalWritten location.");
     }
 
     private bool TryGetDurablePhysicalWritten(ulong sequence, out JournalPhysicalWrittenRecord written)
@@ -1010,42 +1059,78 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         ThrowIfTestFault(PersistFaultPoint.BeforeIndexCommit, accept.Sequence);
 
-        if (_index.TryGet(accept.ArtId, out var present)
-            && present.State == ArticleStorageState.Present
-            && present.ArtHash == accept.ArtHash
-            && present.ArtSize == accept.ArtSize
-            && LocationsEqual(present.Location, written.Location))
+        if (ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
         {
             await AppendIndexCommittedAsync(accept, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        var metadata = new StoredArticleMetadata(
-            accept.ArtId,
-            accept.ArtHash,
-            accept.ArtSize,
-            written.Location,
-            ArticleStorageState.Present,
-            _timeProvider.GetUtcNow());
-
-        if (!_index.TryCommitPresent(in metadata))
+        var segmentId = written.Location.SegmentId.Value;
+        if (!TryEnterIndexPublication(segmentId))
         {
-            if (_index.TryGet(accept.ArtId, out var again)
-                && again.State == ArticleStorageState.Present
-                && again.ArtHash == accept.ArtHash
-                && again.ArtSize == accept.ArtSize
-                && LocationsEqual(again.Location, written.Location))
-            {
-                await AppendIndexCommittedAsync(accept, cancellationToken).ConfigureAwait(false);
-                return;
-            }
+            throw new IOException(
+                $"Index publication for sequence {accept.Sequence} lost the retirement fence.");
+        }
 
-            throw new InvalidOperationException(
-                $"Index commit failed for sequence {accept.Sequence} during recovery.");
+        try
+        {
+            var publicationHook = TestHookAfterPublicationEnteredBeforeIndexCommit;
+            TestHookAfterPublicationEnteredBeforeIndexCommit = null;
+            publicationHook?.Invoke(written.Location.SegmentId);
+
+            if (ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
+            {
+                // Death or a move landed before the index write. Do not publish over it.
+            }
+            else
+            {
+                var metadata = new StoredArticleMetadata(
+                    accept.ArtId,
+                    accept.ArtHash,
+                    accept.ArtSize,
+                    written.Location,
+                    ArticleStorageState.Present,
+                    _timeProvider.GetUtcNow());
+                if (!_index.TryCommitPresent(in metadata)
+                    && !ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
+                {
+                    throw new InvalidOperationException(
+                        $"Index commit failed for sequence {accept.Sequence} during recovery.");
+                }
+            }
+        }
+        finally
+        {
+            ExitIndexPublication(segmentId);
         }
 
         ThrowIfTestFault(PersistFaultPoint.AfterIndexCommit, accept.Sequence);
         await AppendIndexCommittedAsync(accept, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// True when <c>IndexCommitted</c> must close the sequence without <c>TryCommitPresent</c>.
+    /// Present at any location with the same identity stays where it is. Evicted or Invalid at
+    /// the PhysicalWritten location stays dead.
+    /// </summary>
+    private bool ShouldFinishPhysicalWrittenWithoutPublishing(
+        JournalAcceptRecord accept,
+        in StoredArticleLocation location)
+    {
+        if (!_index.TryGet(accept.ArtId, out var existing)
+            || existing.ArtHash != accept.ArtHash
+            || existing.ArtSize != accept.ArtSize)
+        {
+            return false;
+        }
+
+        if (existing.State == ArticleStorageState.Present)
+        {
+            return true;
+        }
+
+        return existing.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid
+            && LocationsEqual(existing.Location, location);
     }
 
     private async Task AppendIndexCommittedAsync(
@@ -1078,6 +1163,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     private void TryPopulateCacheAfterDurableCommit(JournalAcceptRecord accept)
     {
+        if (_index.TryGet(accept.ArtId, out var indexed)
+            && indexed.State != ArticleStorageState.Present)
+        {
+            return;
+        }
+
         var metadata = new StoredArticleMetadata(
             accept.ArtId,
             accept.ArtHash,
