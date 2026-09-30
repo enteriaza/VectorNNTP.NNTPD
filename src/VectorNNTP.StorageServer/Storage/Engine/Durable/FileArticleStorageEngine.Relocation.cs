@@ -306,33 +306,16 @@ public sealed partial class FileArticleStorageEngine
             var requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(intent.ArtSize);
             lock (_gate)
             {
-                var snap = volume.Reader.Read();
                 var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
-                var decision = volume.WithLedger(ledger =>
-                {
-                    if (!ledger.WouldFit(
-                            snap.UsedBytes,
-                            snap.TotalBytes,
-                            requiredBytes,
-                            ceiling))
-                    {
-                        return (
-                            Admitted: false,
-                            ArticleReservedBytes: ledger.ArticleReservedBytes,
-                            CompactionReservedBytes: ledger.CompactionReservedBytes,
-                            CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-                    }
-
-                    ledger.ReserveCompaction(
+                var decision = Admit(
+                    volume,
+                    requiredBytes,
+                    ceiling,
+                    static _ => false,
+                    ledger => ledger.ReserveCompaction(
                         intent.CompactionId,
                         intent.RelocationId,
-                        requiredBytes);
-                    return (
-                        Admitted: true,
-                        ArticleReservedBytes: ledger.ArticleReservedBytes,
-                        CompactionReservedBytes: ledger.CompactionReservedBytes,
-                        CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-                });
+                        requiredBytes));
                 if (!decision.Admitted)
                 {
                     FileArticleStorageEngineLogMessages.RejectedCompactionCapacity(
@@ -342,12 +325,12 @@ public sealed partial class FileArticleStorageEngine
                         intent.CompactionId,
                         intent.RelocationId,
                         requiredBytes,
-                        snap.UsedBytes,
+                        decision.Snapshot.UsedBytes,
                         decision.ArticleReservedBytes,
                         decision.CompactionReservedBytes,
                         decision.CheckpointReservedBytes,
-                        snap.TotalBytes,
-                        snap.AvailableBytes,
+                        decision.Snapshot.TotalBytes,
+                        decision.Snapshot.AvailableBytes,
                         _capacityMaximumUtilization,
                         _capacityCompactionHeadroom);
                     return new ArticleRelocationResult(

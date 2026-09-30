@@ -292,69 +292,35 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     {
         var segment = RequireSegmentVolume();
         var control = RequireControlVolume();
-        var segmentSnap = segment.Reader.Read();
-        var segmentDecision = segment.WithLedger(ledger =>
-        {
-            if (!ledger.WouldFit(
-                    segmentSnap.UsedBytes,
-                    segmentSnap.TotalBytes,
-                    segmentBytes,
-                    _capacityMaximumUtilization))
-            {
-                return (
-                    Admitted: false,
-                    ArticleReservedBytes: ledger.ArticleReservedBytes,
-                    CompactionReservedBytes: ledger.CompactionReservedBytes,
-                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-            }
-
-            ledger.TentativeAdd(segmentBytes);
-            return (
-                Admitted: true,
-                ArticleReservedBytes: ledger.ArticleReservedBytes,
-                CompactionReservedBytes: ledger.CompactionReservedBytes,
-                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-        });
+        var segmentDecision = Admit(
+            segment,
+            segmentBytes,
+            _capacityMaximumUtilization,
+            static _ => false,
+            ledger => ledger.TentativeAdd(segmentBytes));
         if (!segmentDecision.Admitted)
         {
             FileArticleStorageEngineLogMessages.RejectedCapacity(
                 _logger,
                 record.ArtId.ToString() ?? string.Empty,
                 segmentBytes,
-                segmentSnap.UsedBytes,
+                segmentDecision.Snapshot.UsedBytes,
                 segmentDecision.ArticleReservedBytes,
                 segmentDecision.CompactionReservedBytes,
                 segmentDecision.CheckpointReservedBytes,
-                segmentSnap.TotalBytes,
-                segmentSnap.AvailableBytes,
+                segmentDecision.Snapshot.TotalBytes,
+                segmentDecision.Snapshot.AvailableBytes,
                 _capacityMaximumUtilization,
                 _capacityCompactionHeadroom);
             return false;
         }
 
-        var controlSnap = control.Reader.Read();
-        var journalDecision = control.WithLedger(ledger =>
-        {
-            if (!ledger.WouldFit(
-                    controlSnap.UsedBytes,
-                    controlSnap.TotalBytes,
-                    journalBytes,
-                    _capacityMaximumUtilization))
-            {
-                return (
-                    Admitted: false,
-                    ArticleReservedBytes: ledger.ArticleReservedBytes,
-                    CompactionReservedBytes: ledger.CompactionReservedBytes,
-                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-            }
-
-            ledger.TentativeAddJournal(journalBytes);
-            return (
-                Admitted: true,
-                ArticleReservedBytes: ledger.ArticleReservedBytes,
-                CompactionReservedBytes: ledger.CompactionReservedBytes,
-                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-        });
+        var journalDecision = Admit(
+            control,
+            journalBytes,
+            _capacityMaximumUtilization,
+            static _ => false,
+            ledger => ledger.TentativeAddJournal(journalBytes));
         if (!journalDecision.Admitted)
         {
             segment.WithLedger(ledger =>
@@ -366,39 +332,23 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 _logger,
                 record.ArtId.ToString() ?? string.Empty,
                 journalBytes,
-                controlSnap.UsedBytes,
+                journalDecision.Snapshot.UsedBytes,
                 journalDecision.ArticleReservedBytes,
                 journalDecision.CompactionReservedBytes,
                 journalDecision.CheckpointReservedBytes,
-                controlSnap.TotalBytes,
-                controlSnap.AvailableBytes,
+                journalDecision.Snapshot.TotalBytes,
+                journalDecision.Snapshot.AvailableBytes,
                 _capacityMaximumUtilization,
                 _capacityCompactionHeadroom);
             return false;
         }
 
-        var indexDecision = control.WithLedger(ledger =>
-        {
-            if (!ledger.WouldFit(
-                    controlSnap.UsedBytes,
-                    controlSnap.TotalBytes,
-                    indexBytes,
-                    _capacityMaximumUtilization))
-            {
-                return (
-                    Admitted: false,
-                    ArticleReservedBytes: ledger.ArticleReservedBytes,
-                    CompactionReservedBytes: ledger.CompactionReservedBytes,
-                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-            }
-
-            ledger.TentativeAddIndex(indexBytes);
-            return (
-                Admitted: true,
-                ArticleReservedBytes: ledger.ArticleReservedBytes,
-                CompactionReservedBytes: ledger.CompactionReservedBytes,
-                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
-        });
+        var indexDecision = Admit(
+            control,
+            indexBytes,
+            _capacityMaximumUtilization,
+            static _ => false,
+            ledger => ledger.TentativeAddIndex(indexBytes));
         if (indexDecision.Admitted)
         {
             return true;
@@ -418,12 +368,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _logger,
             record.ArtId.ToString() ?? string.Empty,
             indexBytes,
-            controlSnap.UsedBytes,
+            indexDecision.Snapshot.UsedBytes,
             indexDecision.ArticleReservedBytes,
             indexDecision.CompactionReservedBytes,
             indexDecision.CheckpointReservedBytes,
-            controlSnap.TotalBytes,
-            controlSnap.AvailableBytes,
+            indexDecision.Snapshot.TotalBytes,
+            indexDecision.Snapshot.AvailableBytes,
             _capacityMaximumUtilization,
             _capacityCompactionHeadroom);
         return false;
@@ -694,34 +644,35 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int frameBytes)
     {
         var volume = RequireControlVolume();
-        var snap = volume.Reader.Read();
         var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
-        return volume.WithLedger(ledger =>
+        var added = false;
+        var decision = Admit(
+            volume,
+            frameBytes,
+            ceiling,
+            ledger => ledger.HoldsCompactionJournalFrame(compactionId, kind, relocationId),
+            ledger => added = ledger.TryAddCompactionJournalFrame(compactionId, kind, relocationId, frameBytes));
+        if (decision.AlreadySatisfied || (decision.Admitted && !added))
         {
-            if (ledger.HoldsCompactionJournalFrame(compactionId, kind, relocationId))
-            {
-                return CompactionJournalAdmit.AlreadyHeld;
-            }
+            return CompactionJournalAdmit.AlreadyHeld;
+        }
 
-            if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, frameBytes, ceiling))
-            {
-                FileArticleStorageEngineLogMessages.RejectedCompactionJournalCapacity(
-                    _logger,
-                    compactionId,
-                    kind.ToString(),
-                    relocationId,
-                    frameBytes,
-                    snap.UsedBytes,
-                    ledger.ReservedBytes,
-                    snap.TotalBytes,
-                    ceiling);
-                return CompactionJournalAdmit.Denied;
-            }
+        if (decision.Admitted)
+        {
+            return CompactionJournalAdmit.NewlyReserved;
+        }
 
-            return ledger.TryAddCompactionJournalFrame(compactionId, kind, relocationId, frameBytes)
-                ? CompactionJournalAdmit.NewlyReserved
-                : CompactionJournalAdmit.AlreadyHeld;
-        });
+        FileArticleStorageEngineLogMessages.RejectedCompactionJournalCapacity(
+            _logger,
+            compactionId,
+            kind.ToString(),
+            relocationId,
+            frameBytes,
+            decision.Snapshot.UsedBytes,
+            decision.ReservedBytes,
+            decision.Snapshot.TotalBytes,
+            ceiling);
+        return CompactionJournalAdmit.Denied;
     }
 
     private void ReleaseCompactionJournalFrame(
@@ -1874,48 +1825,31 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return true;
         }
 
-        var snap = control.Reader.Read();
-        return control.WithLedger(ledger =>
-        {
-            if (ledger.HasUnboundIndex(sequence))
+        var added = false;
+        var decision = Admit(
+            control,
+            frameBytes,
+            _capacityMaximumUtilization,
+            ledger => ledger.HasUnboundIndex(sequence),
+            ledger =>
             {
-                return true;
-            }
-
-            if (!ledger.WouldFit(
-                    snap.UsedBytes,
-                    snap.TotalBytes,
-                    frameBytes,
-                    _capacityMaximumUtilization))
-            {
-                return false;
-            }
-
-            ledger.TentativeAddIndex(frameBytes);
-            ledger.BindIndexUnbound(sequence, frameBytes);
-            return true;
-        });
+                ledger.TentativeAddIndex(frameBytes);
+                ledger.BindIndexUnbound(sequence, frameBytes);
+                added = true;
+            });
+        return decision.AlreadySatisfied || added;
     }
 
     private bool TryReserveDirectIndexFrame(ArticleId artId, long frameBytes, double ceilingUtilization)
     {
         var control = RequireControlVolume();
-        var snap = control.Reader.Read();
-        var admitted = control.WithLedger(ledger =>
-        {
-            if (!ledger.WouldFit(
-                    snap.UsedBytes,
-                    snap.TotalBytes,
-                    frameBytes,
-                    ceilingUtilization))
-            {
-                return false;
-            }
-
-            ledger.TentativeAddDirectIndex(frameBytes);
-            return true;
-        });
-        if (admitted)
+        var decision = Admit(
+            control,
+            frameBytes,
+            ceilingUtilization,
+            static _ => false,
+            ledger => ledger.TentativeAddDirectIndex(frameBytes));
+        if (decision.Admitted)
         {
             return true;
         }
@@ -1924,12 +1858,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _logger,
             artId.ToString() ?? string.Empty,
             frameBytes,
-            snap.UsedBytes,
-            0,
-            0,
-            0,
-            snap.TotalBytes,
-            snap.AvailableBytes,
+            decision.Snapshot.UsedBytes,
+            decision.ArticleReservedBytes,
+            decision.CompactionReservedBytes,
+            decision.CheckpointReservedBytes,
+            decision.Snapshot.TotalBytes,
+            decision.Snapshot.AvailableBytes,
             ceilingUtilization,
             _capacityCompactionHeadroom);
         return false;
@@ -2020,38 +1954,32 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 return false;
             }
 
-            var snap = volume.Reader.Read();
             var added = false;
-            var admitted = volume.WithLedger(ledger =>
+            var decision = Admit(
+                volume,
+                requiredBytes,
+                _capacityMaximumUtilization,
+                ledger => ledger.HasUnwrittenSegmentCopy(accept.Sequence),
+                ledger =>
+                {
+                    if (ledger.HoldsArticle(accept.Sequence))
+                    {
+                        ledger.AddSegmentCopy(accept.Sequence, requiredBytes);
+                    }
+                    else
+                    {
+                        ledger.TentativeAdd(requiredBytes);
+                        ledger.BindSequence(accept.Sequence, requiredBytes);
+                    }
+
+                    added = true;
+                });
+            if (decision.AlreadySatisfied)
             {
-                if (ledger.HasUnwrittenSegmentCopy(accept.Sequence))
-                {
-                    return true;
-                }
+                return false;
+            }
 
-                if (!ledger.WouldFit(
-                        snap.UsedBytes,
-                        snap.TotalBytes,
-                        requiredBytes,
-                        _capacityMaximumUtilization))
-                {
-                    return false;
-                }
-
-                if (ledger.HoldsArticle(accept.Sequence))
-                {
-                    ledger.AddSegmentCopy(accept.Sequence, requiredBytes);
-                }
-                else
-                {
-                    ledger.TentativeAdd(requiredBytes);
-                    ledger.BindSequence(accept.Sequence, requiredBytes);
-                }
-
-                added = true;
-                return true;
-            });
-            if (!admitted)
+            if (!decision.Admitted)
             {
                 throw new PersistCompletionDeferredException(
                     $"Accept sequence {accept.Sequence} cannot reserve {requiredBytes} bytes until capacity is free.");
