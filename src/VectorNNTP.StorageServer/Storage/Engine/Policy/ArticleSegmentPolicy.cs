@@ -22,8 +22,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// <para>
 /// Under admission pressure, ordering prefers highest <see cref="SegmentInfo.SizeBytes"/>
 /// (physical recovery potential after retire+reclaim), then highest DeadBytes, then lowest
-/// SegmentId — only among candidates that pass progressive compaction-headroom feasibility
-/// (room for one minimum article record, not the entire LiveBytes).
+/// SegmentId — only among candidates whose entire <see cref="SegmentInfo.LiveBytes"/> fits
+/// under MaxUtil + CompactionHeadroom. Zero-live Closed segments are feasible without
+/// destination slack.
 /// </para>
 /// <para>
 /// Reclamation victims are Retired segments only, ordered by lowest <see cref="SegmentId"/>.
@@ -297,12 +298,12 @@ public sealed class ArticleSegmentPolicy
     }
 
     /// <summary>
-    /// Catalogue-only preflight: whether this Closed segment can make useful compaction progress
-    /// under MaxUtil + CompactionHeadroom given current Used/reservations (Phase 5F.2 / 5F.5).
-    /// Does not reserve bytes. Zero-live Closed segments are feasible (commit/retire/reclaim only).
-    /// When live bytes remain, feasibility requires room for one minimum physical article record
-    /// (<see cref="CapacityAdmissionPressureSnapshot.MinimumAdmissionRequiredBytes"/>), not the
-    /// entire <see cref="SegmentInfo.LiveBytes"/> — relocation admits per article authoritatively.
+    /// Catalogue-only preflight: whether this Closed segment's complete
+    /// <see cref="SegmentInfo.LiveBytes"/> fits under MaxUtil + CompactionHeadroom
+    /// (Phase 5F.2 / 5F.9). Does not reserve bytes and does not read SATA.
+    /// Zero-live Closed segments are immediately feasible (commit/retire/reclaim only).
+    /// Finish requires every Present article to be copied before the source file can be
+    /// reclaimed, so a single minimum record fitting is not sufficient.
     /// </summary>
     public static bool IsCompactionFeasibleUnderHeadroom(
         in SegmentInfo segment,
@@ -314,30 +315,6 @@ public sealed class ArticleSegmentPolicy
         }
 
         if (segment.LiveBytes <= 0)
-        {
-            return true;
-        }
-
-        var ceilingUtilization = pressure.MaximumUtilization + pressure.CompactionHeadroom;
-        return ProcessLocalCapacityLedger.WouldFit(
-            pressure.UsedBytes,
-            pressure.ArticleReservedBytes,
-            pressure.CompactionReservedBytes,
-            pressure.TotalBytes,
-            pressure.MinimumAdmissionRequiredBytes,
-            ceilingUtilization);
-    }
-
-    /// <summary>
-    /// Diagnostic: whether the entire <see cref="SegmentInfo.LiveBytes"/> would fit under the
-    /// compaction headroom ceiling in one claim. Not used as a hard pressure-selection gate
-    /// (Phase 5F.5); runtime compaction relocates one article at a time.
-    /// </summary>
-    public static bool WouldEntireLiveBytesFitUnderHeadroom(
-        in SegmentInfo segment,
-        in CapacityAdmissionPressureSnapshot pressure)
-    {
-        if (!pressure.CapacityAdmissionEnabled || segment.LiveBytes <= 0)
         {
             return true;
         }

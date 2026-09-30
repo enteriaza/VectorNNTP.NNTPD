@@ -159,7 +159,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         Assert.True(engine.TryEvict(drop.ArtId));
         Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var before));
 
-        // Used at Total → MaxUtil and MaxUtil+Headroom both reject even a minimum-record relocate.
+        // Used at Total → MaxUtil and MaxUtil+Headroom both reject a full-LiveBytes relocate.
         capacity.UsedBytes = capacity.TotalBytes;
         Assert.True(engine.ObserveCapacityAdmissionPressure().IsUnderAdmissionPressure);
         Assert.False(
@@ -330,24 +330,21 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
 
         var segment = Seg(1, size: 200, live: 120, dead: 80);
         var withoutCompRes = CapacityAdmissionPressureSnapshot.FromCapacityState(
-            new StorageCapacitySnapshot(total, UsedBytes: 840, AvailableBytes: 160),
+            new StorageCapacitySnapshot(total, UsedBytes: 780, AvailableBytes: 220),
             articleReservedBytes: 0,
             compactionReservedBytes: 0,
             maximumUtilization: maxUtil,
             compactionHeadroom: headroom);
         var withCompRes = CapacityAdmissionPressureSnapshot.FromCapacityState(
-            new StorageCapacitySnapshot(total, UsedBytes: 840, AvailableBytes: 160),
+            new StorageCapacitySnapshot(total, UsedBytes: 780, AvailableBytes: 220),
             articleReservedBytes: 0,
             compactionReservedBytes: 50,
             maximumUtilization: maxUtil,
             compactionHeadroom: headroom);
 
-        // Compaction ceiling 0.90×1000 = 900. Progressive gate uses MinimumRecordLength:
-        // 840+min fits; 840+50+min does not. Full LiveBytes remains available for diagnostics.
+        // Compaction ceiling 0.90×1000 = 900: 780+120 fits; 780+50+120 does not.
         Assert.True(ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(in segment, in withoutCompRes));
         Assert.False(ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(in segment, in withCompRes));
-        Assert.False(
-            ArticleSegmentPolicy.WouldEntireLiveBytesFitUnderHeadroom(in segment, in withoutCompRes));
         Assert.True(withCompRes.AdmissionRecoveryTargetBytes > withoutCompRes.AdmissionRecoveryTargetBytes);
     }
 
