@@ -279,6 +279,24 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     internal bool TestFailNextLogicalDeath { get; set; }
 
+    /// <summary>
+    /// Invoked after a cache-miss index snapshot and before the segment read.
+    /// Tests only; cleared before invoke. Must not be used to hold the index lock across IO.
+    /// </summary>
+    internal Action<ArticleId, StoredArticleLocation>? TestHookAfterIndexSnapshotBeforeSegmentRead { get; set; }
+
+    /// <summary>
+    /// Invoked after a failed read is judged current and before the expected-location
+    /// invalidation compare-and-set. Tests only; cleared before invoke. Runs outside the index lock.
+    /// </summary>
+    internal Action<ArticleId, StoredArticleLocation>? TestHookBeforeExpectedInvalidation { get; set; }
+
+    /// <summary>
+    /// Number of upcoming indexed proven reads to treat as failures without segment IO.
+    /// Tests only. Relocation reads are unaffected.
+    /// </summary>
+    internal int TestFailNextIndexedProvenReads { get; set; }
+
     /// <summary>Exception kind for <see cref="TestFaultPoint"/> (tests).</summary>
     internal enum PersistFaultExceptionKind : byte
     {
@@ -735,34 +753,78 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return false;
         }
 
-        if (!_segments.TryReadProven(
-                metadata.Location,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize,
+        var hook = TestHookAfterIndexSnapshotBeforeSegmentRead;
+        TestHookAfterIndexSnapshotBeforeSegmentRead = null;
+        hook?.Invoke(artId, metadata.Location);
+
+        return TryReadIndexedLocation(in metadata, allowOneRelocationRetry: true, out result);
+    }
+
+    /// <summary>
+    /// Reads <paramref name="snapshot"/> without holding the index lock across segment IO.
+    /// A failed read invalidates only when the index still names that same location and identity.
+    /// A newer location is attempted at most once and is not invalidated by the stale failure.
+    /// </summary>
+    private bool TryReadIndexedLocation(
+        in StoredArticleMetadata snapshot,
+        bool allowOneRelocationRetry,
+        out ArticleReadResult result)
+    {
+        result = default;
+        var failProvenRead = TestFailNextIndexedProvenReads > 0;
+        if (failProvenRead)
+        {
+            TestFailNextIndexedProvenReads--;
+        }
+
+        if (failProvenRead
+            || !_segments.TryReadProven(
+                snapshot.Location,
+                snapshot.ArtId,
+                snapshot.ArtHash,
+                snapshot.ArtSize,
                 out var artData)
             || !ArticleStorageIntegrity.TryProve(
                 artData.Span,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize))
+                snapshot.ArtId,
+                snapshot.ArtHash,
+                snapshot.ArtSize))
         {
-            _ = TryInvalidate(artId);
+            if (!_index.TryGet(snapshot.ArtId, out var current)
+                || current.State != ArticleStorageState.Present)
+            {
+                return false;
+            }
+
+            var stillCurrent = LocationsEqual(current.Location, snapshot.Location)
+                && current.ArtHash == snapshot.ArtHash
+                && current.ArtSize == snapshot.ArtSize;
+            if (!stillCurrent)
+            {
+                if (allowOneRelocationRetry)
+                {
+                    return TryReadIndexedLocation(in current, allowOneRelocationRetry: false, out result);
+                }
+
+                return false;
+            }
+
+            _ = TryInvalidatePresentAt(in snapshot);
             return false;
         }
 
         var durableBefore = _index.DurableWriteCount;
-        _index.TouchHint(artId, _timeProvider.GetUtcNow());
+        _index.TouchHint(snapshot.ArtId, _timeProvider.GetUtcNow());
         if (_index.DurableWriteCount != durableBefore)
         {
             throw new InvalidOperationException("TouchHint must not perform durable index writes.");
         }
 
-        _ = _index.TryGet(artId, out metadata);
-        result = new ArticleReadResult(metadata, artData);
+        _ = _index.TryGet(snapshot.ArtId, out var published);
+        result = new ArticleReadResult(published, artData);
 
         // Best-effort populate; Put rejection must not fail the durable read.
-        if (TryCreateCacheRecord(in metadata, artData, out var cacheRecord))
+        if (TryCreateCacheRecord(in published, artData, out var cacheRecord))
         {
             _ = _articleCache.Put(in cacheRecord);
         }
@@ -1077,6 +1139,43 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         var location = await appender.AppendAsync(artData, cancellationToken).ConfigureAwait(false);
         _ = Interlocked.Increment(ref _physicalAppendCount);
         return location;
+    }
+
+    /// <summary>
+    /// Invalidates <paramref name="expected"/> only if the index still names that location and
+    /// identity in the same critical section as the transition. Accounting uses the matched entry.
+    /// </summary>
+    private bool TryInvalidatePresentAt(in StoredArticleMetadata expected)
+    {
+        var hook = TestHookBeforeExpectedInvalidation;
+        TestHookBeforeExpectedInvalidation = null;
+        hook?.Invoke(expected.ArtId, expected.Location);
+
+        if (!_index.TryInvalidatePresentAt(
+                expected.ArtId,
+                expected.Location,
+                expected.ArtHash,
+                expected.ArtSize,
+                _timeProvider.GetUtcNow(),
+                out var transitioned))
+        {
+            return false;
+        }
+
+        try
+        {
+            Catalogue.ApplyLiveDeadDelta(
+                transitioned.Location.SegmentId,
+                liveDelta: -transitioned.Location.Length,
+                deadDelta: transitioned.Location.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            // Catalogue entry may be absent in edge tests; logical index transition still stands.
+        }
+
+        BestEffortCacheRemove(expected.ArtId);
+        return true;
     }
 
     private bool TransitionLogicalDeath(ArticleId artId, ArticleStorageState state)

@@ -241,6 +241,53 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Invalidates a Present article only when the locked entry still matches
+    /// <paramref name="expectedLocation"/>, <paramref name="expectedArtHash"/>, and
+    /// <paramref name="expectedArtSize"/>.
+    /// </summary>
+    /// <remarks>
+    /// Compare and durable transition share one index critical section. A mismatch, including
+    /// a concurrent relocation, leaves the entry unchanged. Already Evicted or Invalid entries
+    /// are not rewritten. Does not update segment Live/Dead accounting.
+    /// </remarks>
+    /// <param name="artId">Article to invalidate.</param>
+    /// <param name="expectedLocation">Physical location that was read and failed.</param>
+    /// <param name="expectedArtHash">ArtHash observed for that failed read.</param>
+    /// <param name="expectedArtSize">ArtSize observed for that failed read.</param>
+    /// <param name="utcNow">Timestamp stored on the Invalid entry.</param>
+    /// <param name="transitioned">The Invalid entry written when the compare succeeds.</param>
+    /// <returns><see langword="true"/> when this call transitioned Present to Invalid.</returns>
+    public bool TryInvalidatePresentAt(
+        ArticleId artId,
+        in StoredArticleLocation expectedLocation,
+        ulong expectedArtHash,
+        int expectedArtSize,
+        DateTimeOffset utcNow,
+        out StoredArticleMetadata transitioned)
+    {
+        transitioned = default;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_entries.TryGetValue(artId, out var existing)
+                || existing.ArtId != artId
+                || existing.State != ArticleStorageState.Present
+                || existing.ArtHash != expectedArtHash
+                || existing.ArtSize != expectedArtSize
+                || !LocationsEqual(existing.Location, expectedLocation))
+            {
+                return false;
+            }
+
+            var updated = existing with { State = ArticleStorageState.Invalid, LastAccessUtc = utcNow };
+            AppendDurableUnlocked(updated);
+            _entries[artId] = updated;
+            transitioned = updated;
+            return true;
+        }
+    }
+
     /// <inheritdoc />
     /// <remarks>
     /// Soft in-memory LastAccess hint only. Must not require a durable NVMe write; loss across
