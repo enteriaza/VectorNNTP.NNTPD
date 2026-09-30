@@ -62,6 +62,8 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private long _durableWriteCount;
     private long _touchHintCount;
     private ulong _installedSnapshotGeneration;
+    private ArticleId[] _snapshotArticleIds = [];
+    private CheckpointCapacityReservation? _checkpointCapacity;
     private int _snapshotWriters;
     private int _maxSnapshotWriters;
     private bool _disposed;
@@ -129,6 +131,15 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <summary>Highest number of snapshot writers inside the single-flight section (tests).</summary>
     internal int MaxSnapshotWriters => Volatile.Read(ref _maxSnapshotWriters);
 
+    /// <summary>
+    /// Attaches process-local checkpoint reservations. Null leaves checkpoint IO unchanged.
+    /// </summary>
+    internal void AttachCheckpointCapacity(CheckpointCapacityReservation capacity)
+    {
+        ArgumentNullException.ThrowIfNull(capacity);
+        _checkpointCapacity = capacity;
+    }
+
     /// <summary>Invoked once a snapshot has left the index gate and before the temp file is written (tests).</summary>
     internal Action? TestDuringSnapshotWrite { get; set; }
 
@@ -159,6 +170,18 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// Must not call back into this index.
     /// </summary>
     internal Action? TestBeforeReplacementInstall { get; set; }
+
+    /// <summary>
+    /// Invoked under the index gate before a durable frame is written (tests).
+    /// Throwing leaves the index file unchanged when it runs before the write.
+    /// </summary>
+    internal Action? TestBeforeDurableAppend { get; set; }
+
+    /// <summary>
+    /// Invoked after a checkpoint replacement is authoritative and the index gate is not held.
+    /// Reports Present rows in the installed snapshot and the covered length of the retired prefix.
+    /// </summary>
+    internal Action<IndexPrefixRetirement>? OnIndexPrefixRetired { get; set; }
 
     /// <summary>Number of soft TouchHint calls (tests).</summary>
     public long TouchHintCount
@@ -259,11 +282,22 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     }
 
     /// <inheritdoc />
-    public bool TryCommitPresent(in StoredArticleMetadata metadata)
+    public bool TryCommitPresent(in StoredArticleMetadata metadata) =>
+        TryCommitPresentReporting(metadata, out _) is DurableIndexAppend.Appended or DurableIndexAppend.Unchanged;
+
+    /// <summary>
+    /// Commits Present and reports whether a new physical frame was appended.
+    /// <paramref name="frameOffset"/> is the file offset of that frame when the result is
+    /// <see cref="DurableIndexAppend.Appended"/>.
+    /// </summary>
+    internal DurableIndexAppend TryCommitPresentReporting(
+        in StoredArticleMetadata metadata,
+        out long frameOffset)
     {
+        frameOffset = -1;
         if (metadata.State != ArticleStorageState.Present)
         {
-            return false;
+            return DurableIndexAppend.Rejected;
         }
 
         lock (_gate)
@@ -276,16 +310,17 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                     && existing.ArtSize == metadata.ArtSize
                     && LocationsEqual(existing.Location, metadata.Location))
                 {
-                    return true;
+                    return DurableIndexAppend.Unchanged;
                 }
 
                 // Same identity + different location requires TryRelocate; hash/size conflict rejected.
-                return false;
+                return DurableIndexAppend.Rejected;
             }
 
+            frameOffset = _stream.Length;
             AppendDurableUnlocked(metadata);
             _entries[metadata.ArtId] = metadata;
-            return true;
+            return DurableIndexAppend.Appended;
         }
     }
 
@@ -295,8 +330,27 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         in StoredArticleLocation expectedLocation,
         in StoredArticleLocation newLocation,
         ulong artHash,
-        int artSize)
+        int artSize) =>
+        TryRelocateReporting(
+            artId,
+            expectedLocation,
+            newLocation,
+            artHash,
+            artSize,
+            out _);
+
+    /// <summary>
+    /// Relocates and reports the file offset of the new Present frame when a frame was appended.
+    /// </summary>
+    internal ArticleRelocateOutcome TryRelocateReporting(
+        ArticleId artId,
+        in StoredArticleLocation expectedLocation,
+        in StoredArticleLocation newLocation,
+        ulong artHash,
+        int artSize,
+        out long frameOffset)
     {
+        frameOffset = -1;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -322,6 +376,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             }
 
             var updated = existing with { Location = newLocation };
+            frameOffset = _stream.Length;
             AppendDurableUnlocked(updated);
             _entries[artId] = updated;
             return ArticleRelocateOutcome.Relocated;
@@ -331,7 +386,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <inheritdoc />
     public bool TrySetState(ArticleId artId, ArticleStorageState state, DateTimeOffset utcNow)
     {
-        if (TryTransitionPresentOnce(artId, state, utcNow, out _))
+        if (TryTransitionPresentOnce(artId, state, utcNow, out _, out _))
         {
             return true;
         }
@@ -356,9 +411,11 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         ArticleId artId,
         ArticleStorageState state,
         DateTimeOffset utcNow,
-        out StoredArticleMetadata transitioned)
+        out StoredArticleMetadata transitioned,
+        out long frameOffset)
     {
         transitioned = default;
+        frameOffset = -1;
         if (state is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
         {
             return false;
@@ -374,6 +431,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             }
 
             transitioned = existing with { State = state, LastAccessUtc = utcNow };
+            frameOffset = _stream.Length;
             AppendDurableUnlocked(transitioned);
             _entries[artId] = transitioned;
             return true;
@@ -403,9 +461,31 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         ulong expectedArtHash,
         int expectedArtSize,
         DateTimeOffset utcNow,
-        out StoredArticleMetadata transitioned)
+        out StoredArticleMetadata transitioned) =>
+        TryInvalidatePresentAtReporting(
+            artId,
+            expectedLocation,
+            expectedArtHash,
+            expectedArtSize,
+            utcNow,
+            out transitioned,
+            out _);
+
+    /// <summary>
+    /// Same compare-and-append as <see cref="TryInvalidatePresentAt"/>, also reporting the file offset
+    /// of the Invalid frame when one was written.
+    /// </summary>
+    internal bool TryInvalidatePresentAtReporting(
+        ArticleId artId,
+        in StoredArticleLocation expectedLocation,
+        ulong expectedArtHash,
+        int expectedArtSize,
+        DateTimeOffset utcNow,
+        out StoredArticleMetadata transitioned,
+        out long frameOffset)
     {
         transitioned = default;
+        frameOffset = -1;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -420,6 +500,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             }
 
             var updated = existing with { State = ArticleStorageState.Invalid, LastAccessUtc = utcNow };
+            frameOffset = _stream.Length;
             AppendDurableUnlocked(updated);
             _entries[artId] = updated;
             transitioned = updated;
@@ -529,6 +610,11 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             EnsureAlignedForCheckpoint();
             var snapshot = WriteSnapshotBody();
             var deltaBytes = RetireCoveredPrefix(snapshot);
+            OnIndexPrefixRetired?.Invoke(new IndexPrefixRetirement(
+                snapshot.CoveredIndexLength,
+                ArticleIndexDeltaFile.HeaderLength,
+                snapshot.Generation,
+                _snapshotArticleIds));
             return new ArticleIndexCheckpointResult(snapshot, deltaBytes);
         }
         finally
@@ -559,6 +645,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     {
         var tempPath = SnapshotTempPath();
         var installed = false;
+        ulong? reservationId = null;
         try
         {
             StoredArticleMetadata[] copy;
@@ -575,6 +662,23 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
 
                 coveredIndexLength = _stream.Length;
                 generation = _installedSnapshotGeneration + 1;
+                var articleIds = new ArticleId[copy.Length];
+                for (var i = 0; i < copy.Length; i++)
+                {
+                    articleIds[i] = copy[i].ArtId;
+                }
+
+                _snapshotArticleIds = articleIds;
+            }
+
+            if (_checkpointCapacity is not null)
+            {
+                var encodedLength = ArticleIndexSnapshotCodec.EncodedLength(copy.Length);
+                reservationId = _checkpointCapacity.TryReserve(encodedLength);
+                if (reservationId is null)
+                {
+                    throw new CheckpointCapacityDeniedException(encodedLength);
+                }
             }
 
             TestDuringSnapshotWrite?.Invoke();
@@ -617,13 +721,24 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
         catch (Exception ex)
         {
-            FileArticleIndexLogMessages.SnapshotFailed(_logger, ex, tempPath);
+            if (ex is not CheckpointCapacityDeniedException)
+            {
+                FileArticleIndexLogMessages.SnapshotFailed(_logger, ex, tempPath);
+            }
+
             if (!installed)
             {
                 TryDelete(tempPath);
             }
 
             throw;
+        }
+        finally
+        {
+            if (reservationId is ulong id)
+            {
+                _checkpointCapacity!.Release(id);
+            }
         }
     }
 
@@ -647,11 +762,30 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     {
         var replPath = ReplacementTempPath();
         var moved = false;
+        ulong? reservationId = null;
         try
         {
-            var copyEnd = WriteReplacementPrefix(snapshot, replPath);
+            var copyEnd = MeasureReplacementCopyEnd(snapshot);
+            var stable = copyEnd - snapshot.CoveredIndexLength;
+            if (_checkpointCapacity is not null)
+            {
+                var bytes = checked(ArticleIndexDeltaFile.HeaderLength + stable);
+                reservationId = _checkpointCapacity.TryReserve(bytes);
+                if (reservationId is null)
+                {
+                    throw new CheckpointCapacityDeniedException(bytes);
+                }
+            }
+
+            WriteReplacementPrefixAt(snapshot, replPath, copyEnd);
             TestDuringReplacementWrite?.Invoke();
-            var deltaBytes = InstallReplacement(snapshot, replPath, copyEnd, ref moved);
+            var deltaBytes = InstallReplacement(
+                snapshot,
+                replPath,
+                copyEnd,
+                ref moved,
+                reservationId,
+                stable);
             FileArticleIndexLogMessages.CheckpointInstalled(
                 _logger,
                 _indexPath,
@@ -667,66 +801,102 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                 TryDelete(replPath);
             }
 
-            FileArticleIndexLogMessages.CheckpointFailed(_logger, ex, _indexPath);
+            if (ex is not CheckpointCapacityDeniedException)
+            {
+                FileArticleIndexLogMessages.CheckpointFailed(_logger, ex, _indexPath);
+            }
+
             throw;
+        }
+        finally
+        {
+            if (reservationId is ulong id)
+            {
+                _checkpointCapacity!.Release(id);
+            }
         }
     }
 
-    private long WriteReplacementPrefix(ArticleIndexSnapshotHeader snapshot, string replPath)
+    private long MeasureReplacementCopyEnd(ArticleIndexSnapshotHeader snapshot)
     {
-        long copyEnd;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var frameBase = FrameBaseUnlocked();
-            copyEnd = _stream.Length;
+            var copyEnd = _stream.Length;
             ValidateSnapshotCoverage(snapshot.CoveredIndexLength, copyEnd, frameBase);
+            return copyEnd;
         }
+    }
 
+    private void WriteReplacementPrefixAt(ArticleIndexSnapshotHeader snapshot, string replPath, long copyEnd)
+    {
         using var read = OpenIndexReadStream();
         using var repl = CreateReplacementStream(replPath);
         ArticleIndexDeltaFile.WriteHeader(repl, snapshot.Generation);
         var stable = copyEnd - snapshot.CoveredIndexLength;
         CopyRange(read, snapshot.CoveredIndexLength, copyEnd, repl);
         AssertSameBytes(read, snapshot.CoveredIndexLength, repl, ArticleIndexDeltaFile.HeaderLength, stable);
-        return copyEnd;
     }
 
     private long InstallReplacement(
         ArticleIndexSnapshotHeader snapshot,
         string replPath,
         long copyEnd,
-        ref bool moved)
+        ref bool moved,
+        ulong? reservationId,
+        long reservedPayload)
     {
-        lock (_gate)
+        while (true)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            var end = _stream.Length;
-            if (end < copyEnd)
+            long extra;
+            lock (_gate)
             {
-                throw new InvalidOperationException("Article index shrank during checkpoint.");
-            }
-
-            var payload = end - snapshot.CoveredIndexLength;
-            using (var repl = OpenReplacementStream(replPath))
-            {
-                _ = repl.Seek(0, SeekOrigin.End);
-                CopyRange(_stream, copyEnd, end, repl);
-                TestBeforeReplacementFlush?.Invoke();
-                repl.Flush(flushToDisk: true);
-                if (repl.Length != ArticleIndexDeltaFile.HeaderLength + payload)
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                var end = _stream.Length;
+                if (end < copyEnd)
                 {
-                    throw new ArticleIndexCorruptException(
-                        $"Article index replacement length {repl.Length} does not match the covered tail {payload}.",
-                        snapshot.CoveredIndexLength);
+                    throw new InvalidOperationException("Article index shrank during checkpoint.");
                 }
 
-                AssertSameBytes(_stream, snapshot.CoveredIndexLength, repl, ArticleIndexDeltaFile.HeaderLength, payload);
-                TestBeforeReplacementInstall?.Invoke();
+                var payload = end - snapshot.CoveredIndexLength;
+                if (_checkpointCapacity is null || payload <= reservedPayload)
+                {
+                    using (var repl = OpenReplacementStream(replPath))
+                    {
+                        _ = repl.Seek(0, SeekOrigin.End);
+                        CopyRange(_stream, copyEnd, end, repl);
+                        TestBeforeReplacementFlush?.Invoke();
+                        repl.Flush(flushToDisk: true);
+                        if (repl.Length != ArticleIndexDeltaFile.HeaderLength + payload)
+                        {
+                            throw new ArticleIndexCorruptException(
+                                $"Article index replacement length {repl.Length} does not match the covered tail {payload}.",
+                                snapshot.CoveredIndexLength);
+                        }
+
+                        AssertSameBytes(
+                            _stream,
+                            snapshot.CoveredIndexLength,
+                            repl,
+                            ArticleIndexDeltaFile.HeaderLength,
+                            payload);
+                        TestBeforeReplacementInstall?.Invoke();
+                    }
+
+                    ReplaceIndexUnlocked(replPath, ref moved);
+                    return payload;
+                }
+
+                extra = payload - reservedPayload;
             }
 
-            ReplaceIndexUnlocked(replPath, ref moved);
-            return payload;
+            if (reservationId is not ulong id || !_checkpointCapacity!.TryIncrease(id, extra))
+            {
+                throw new CheckpointCapacityDeniedException(extra);
+            }
+
+            reservedPayload = checked(reservedPayload + extra);
         }
     }
 
@@ -942,8 +1112,118 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>Current index file length. Tests and capacity binding use it to see whether a frame landed.</summary>
+    internal long DurableLength
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _stream.Length;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Physical index frames that still occupy the authoritative index.
+    /// A replacement whose generation matches the snapshot contributes every snapshot row
+    /// plus every frame in the replacement payload. Any earlier index file is scanned in full
+    /// because its prefix has not been replaced. Snapshot rows are not added in that case.
+    /// </summary>
+    internal RetainedIndexFrame[] CopyRetainedIndexFrames()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var restore = _stream.Position;
+            try
+            {
+                var length = _stream.Length;
+                var snapshotPath = SnapshotPath();
+                var hasSnapshot = File.Exists(snapshotPath);
+                var replacementInstalled = false;
+                ArticleIndexSnapshotHeader snapshot = default;
+                if (hasSnapshot
+                    && ArticleIndexDeltaFile.TryReadHeader(_stream, length, out var fileGeneration))
+                {
+                    snapshot = ArticleIndexSnapshotCodec.ReadHeader(snapshotPath);
+                    replacementInstalled = fileGeneration == snapshot.Generation;
+                }
+
+                var frames = new List<RetainedIndexFrame>();
+                if (replacementInstalled)
+                {
+                    var rows = new Dictionary<ArticleId, StoredArticleMetadata>();
+                    _ = ArticleIndexSnapshotCodec.Apply(snapshotPath, rows);
+                    foreach (var row in rows.Values)
+                    {
+                        frames.Add(new RetainedIndexFrame(row.ArtId, FileOffset: -1, snapshot.Generation));
+                    }
+
+                    CollectIndexFramesUnlocked(ArticleIndexDeltaFile.HeaderLength, length, frames);
+                }
+                else
+                {
+                    var start = ArticleIndexDeltaFile.TryReadHeader(_stream, length, out _)
+                        ? ArticleIndexDeltaFile.HeaderLength
+                        : 0L;
+                    CollectIndexFramesUnlocked(start, length, frames);
+                }
+
+                return frames.ToArray();
+            }
+            finally
+            {
+                _stream.Position = restore;
+            }
+        }
+    }
+
+    private void CollectIndexFramesUnlocked(long start, long length, List<RetainedIndexFrame> frames)
+    {
+        if (length < start)
+        {
+            return;
+        }
+
+        var position = _stream.Position;
+        try
+        {
+            _stream.Position = start;
+            var frame = new byte[ArticleIndexRecordCodec.RecordLength];
+            var offset = start;
+            while (offset + frame.Length <= length)
+            {
+                var filled = 0;
+                while (filled < frame.Length)
+                {
+                    var read = _stream.Read(frame, filled, frame.Length - filled);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    filled += read;
+                }
+
+                if (ArticleIndexRecordCodec.TryDecode(frame, out _, out var metadata, out _))
+                {
+                    frames.Add(new RetainedIndexFrame(metadata.ArtId, offset, SnapshotGeneration: 0));
+                }
+
+                offset += frame.Length;
+            }
+        }
+        finally
+        {
+            _stream.Position = position;
+        }
+    }
+
     private void AppendDurableUnlocked(in StoredArticleMetadata metadata)
     {
+        TestBeforeDurableAppend?.Invoke();
         var frame = ArticleIndexRecordCodec.Encode(metadata);
         _stream.Seek(0, SeekOrigin.End);
         _stream.Write(frame, 0, frame.Length);
@@ -1116,3 +1396,36 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
 internal readonly record struct ArticleIndexCheckpointResult(
     ArticleIndexSnapshotHeader Snapshot,
     long DeltaBytes);
+
+/// <summary>Whether <see cref="FileArticleIndex.TryCommitPresent"/> appended a physical frame.</summary>
+internal enum DurableIndexAppend
+{
+    /// <summary>No frame was written.</summary>
+    Rejected = 0,
+
+    /// <summary>The same Present frame was already durable.</summary>
+    Unchanged = 1,
+
+    /// <summary>A new Present frame was appended.</summary>
+    Appended = 2,
+}
+
+/// <summary>Physical index frames that survived an installed index replacement.</summary>
+/// <param name="CoveredIndexLength">Prefix of the previous index file that the replacement omitted.</param>
+/// <param name="NewFrameBase">Offset of the first copied frame in the installed replacement.</param>
+/// <param name="SnapshotGeneration">Generation of the snapshot that now holds one current row per article.</param>
+/// <param name="SnapshotArticleIds">Article ids of every snapshot row, independent of logical state.</param>
+internal readonly record struct IndexPrefixRetirement(
+    long CoveredIndexLength,
+    long NewFrameBase,
+    ulong SnapshotGeneration,
+    ArticleId[] SnapshotArticleIds);
+
+/// <summary>One physical index frame still occupying authoritative index storage.</summary>
+/// <param name="ArtId">Article the frame names.</param>
+/// <param name="FileOffset">Offset in the current index file, or -1 when the frame lives in the snapshot.</param>
+/// <param name="SnapshotGeneration">Snapshot generation when <paramref name="FileOffset"/> is -1; otherwise 0.</param>
+internal readonly record struct RetainedIndexFrame(
+    ArticleId ArtId,
+    long FileOffset,
+    ulong SnapshotGeneration);

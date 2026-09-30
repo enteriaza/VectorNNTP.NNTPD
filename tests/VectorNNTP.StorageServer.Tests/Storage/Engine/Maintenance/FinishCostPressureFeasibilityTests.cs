@@ -5,6 +5,7 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Storage.Engine.Policy;
@@ -41,7 +42,9 @@ public sealed class FinishCostPressureFeasibilityTests
         Assert.True(before.LiveBytes > SegmentRecordCodec.MinimumRecordLength);
 
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.60);
-        capacity.UsedBytes = ceiling - SegmentRecordCodec.MinimumRecordLength;
+        var segmentCopies = engine.ProcessLocalArticleReservedBytes;
+        capacity.UsedBytes = ceiling - SegmentRecordCodec.MinimumRecordLength - segmentCopies;
+        Assert.True(capacity.UsedBytes >= 0);
         var pressure = engine.ObserveCapacityAdmissionPressure();
         Assert.True(pressure.IsUnderAdmissionPressure);
         Assert.True(
@@ -128,17 +131,41 @@ public sealed class FinishCostPressureFeasibilityTests
         Assert.Equal(0, closed.LiveBytes);
         Assert.True(closed.SizeBytes > 0);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        var journalFrames = ArticleJournalFrameCodec.CompactionBeginFrameLength
+            + ArticleJournalFrameCodec.CompactionCommittedFrameLength
+            + ArticleJournalFrameCodec.CompactionRetiredFrameLength;
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(
+            capacity.TotalBytes,
+            0.50 + 0.05);
+        capacity.UsedBytes = ceiling - engine.ProcessLocalReservedBytes - journalFrames;
         var pressure = engine.ObserveCapacityAdmissionPressure();
         Assert.True(pressure.IsUnderAdmissionPressure);
+        var articleBytes = SegmentRecordCodec.RecordLengthForArtSize(keep.ArtSize);
+        Assert.True(articleBytes > journalFrames);
         Assert.False(
             ProcessLocalCapacityLedger.WouldFit(
                 pressure.UsedBytes,
-                0,
-                0,
+                pressure.ArticleReservedBytes,
+                pressure.CompactionReservedBytes,
                 pressure.TotalBytes,
-                SegmentRecordCodec.MinimumRecordLength,
-                pressure.MaximumUtilization + pressure.CompactionHeadroom));
+                articleBytes,
+                pressure.MaximumUtilization + pressure.CompactionHeadroom,
+                pressure.CheckpointReservedBytes,
+                pressure.JournalReservedBytes,
+                pressure.IndexReservedBytes,
+                pressure.CompactionJournalReservedBytes));
+        Assert.True(
+            ProcessLocalCapacityLedger.WouldFit(
+                pressure.UsedBytes,
+                pressure.ArticleReservedBytes,
+                pressure.CompactionReservedBytes,
+                pressure.TotalBytes,
+                journalFrames,
+                pressure.MaximumUtilization + pressure.CompactionHeadroom,
+                pressure.CheckpointReservedBytes,
+                pressure.JournalReservedBytes,
+                pressure.IndexReservedBytes,
+                pressure.CompactionJournalReservedBytes));
         Assert.True(ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(in closed, in pressure));
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);

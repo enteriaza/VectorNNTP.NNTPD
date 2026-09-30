@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
@@ -149,9 +150,23 @@ public sealed partial class FileArticleStorageEngine
             meta.ArtSize,
             expectedSource);
 
-        var intentOutcome = await _journal
-            .AppendRelocationIntentAsync(intent, cancellationToken)
+        var intentAppend = await AppendReservedCompactionJournalFrameAsync(
+                compactionId,
+                CompactionJournalFrameKind.Intent,
+                relocationId,
+                ArticleJournalFrameCodec.RelocationIntentFrameLength,
+                ct => _journal.AppendRelocationIntentAsync(intent, ct),
+                cancellationToken)
             .ConfigureAwait(false);
+        if (intentAppend.CapacityDenied)
+        {
+            return new ArticleRelocationResult(
+                ArticleRelocationOutcome.RejectedCapacity,
+                artId,
+                Reason: "compaction-journal-intent-capacity");
+        }
+
+        var intentOutcome = intentAppend.Outcome;
         if (intentOutcome == JournalAppendOutcome.Conflict)
         {
             return new ArticleRelocationResult(
@@ -284,24 +299,41 @@ public sealed partial class FileArticleStorageEngine
         CancellationToken cancellationToken)
     {
         var reservedCompaction = false;
+        var reservedIndex = false;
         if (_capacityAdmissionEnabled)
         {
-            if (_capacityReader is null)
-            {
-                throw new InvalidOperationException(
-                    "Capacity admission is enabled but no IStorageCapacityReader is configured.");
-            }
-
+            var volume = RequireSegmentVolume();
             var requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(intent.ArtSize);
             lock (_gate)
             {
-                var snap = _capacityReader.Read();
+                var snap = volume.Reader.Read();
                 var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
-                if (!_capacityLedger.WouldFit(
-                        snap.UsedBytes,
-                        snap.TotalBytes,
-                        requiredBytes,
-                        ceiling))
+                var decision = volume.WithLedger(ledger =>
+                {
+                    if (!ledger.WouldFit(
+                            snap.UsedBytes,
+                            snap.TotalBytes,
+                            requiredBytes,
+                            ceiling))
+                    {
+                        return (
+                            Admitted: false,
+                            ArticleReservedBytes: ledger.ArticleReservedBytes,
+                            CompactionReservedBytes: ledger.CompactionReservedBytes,
+                            CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+                    }
+
+                    ledger.ReserveCompaction(
+                        intent.CompactionId,
+                        intent.RelocationId,
+                        requiredBytes);
+                    return (
+                        Admitted: true,
+                        ArticleReservedBytes: ledger.ArticleReservedBytes,
+                        CompactionReservedBytes: ledger.CompactionReservedBytes,
+                        CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+                });
+                if (!decision.Admitted)
                 {
                     FileArticleStorageEngineLogMessages.RejectedCompactionCapacity(
                         _logger,
@@ -311,8 +343,9 @@ public sealed partial class FileArticleStorageEngine
                         intent.RelocationId,
                         requiredBytes,
                         snap.UsedBytes,
-                        _capacityLedger.ArticleReservedBytes,
-                        _capacityLedger.CompactionReservedBytes,
+                        decision.ArticleReservedBytes,
+                        decision.CompactionReservedBytes,
+                        decision.CheckpointReservedBytes,
                         snap.TotalBytes,
                         snap.AvailableBytes,
                         _capacityMaximumUtilization,
@@ -323,11 +356,21 @@ public sealed partial class FileArticleStorageEngine
                         Reason: "storage-capacity");
                 }
 
-                _capacityLedger.ReserveCompaction(
-                    intent.CompactionId,
-                    intent.RelocationId,
-                    requiredBytes);
                 reservedCompaction = true;
+                if (!TryReserveDirectIndexFrame(
+                        intent.ArtId,
+                        ArticleIndexRecordCodec.RecordLength,
+                        _capacityMaximumUtilization + _capacityCompactionHeadroom))
+                {
+                    ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+                    reservedCompaction = false;
+                    return new ArticleRelocationResult(
+                        ArticleRelocationOutcome.RejectedCapacity,
+                        intent.ArtId,
+                        Reason: "index-capacity");
+                }
+
+                reservedIndex = true;
             }
 
             var reservedHook = TestHookAfterCompactionCapacityReserved;
@@ -364,9 +407,29 @@ public sealed partial class FileArticleStorageEngine
                 intent.CompactionId,
                 intent.RelocationId,
                 destination);
-            var writtenOutcome = await _journal
-                .AppendRelocationWrittenAsync(written, cancellationToken)
+            var writtenAppend = await AppendReservedCompactionJournalFrameAsync(
+                    intent.CompactionId,
+                    CompactionJournalFrameKind.Written,
+                    intent.RelocationId,
+                    ArticleJournalFrameCodec.RelocationWrittenFrameLength,
+                    ct => _journal.AppendRelocationWrittenAsync(written, ct),
+                    cancellationToken)
                 .ConfigureAwait(false);
+            if (writtenAppend.CapacityDenied)
+            {
+                if (reservedIndex)
+                {
+                    RollbackDirectIndexFrame(ArticleIndexRecordCodec.RecordLength);
+                    reservedIndex = false;
+                }
+
+                return new ArticleRelocationResult(
+                    ArticleRelocationOutcome.RejectedCapacity,
+                    intent.ArtId,
+                    Reason: "compaction-journal-written-capacity");
+            }
+
+            var writtenOutcome = writtenAppend.Outcome;
             if (writtenOutcome == JournalAppendOutcome.Conflict)
             {
                 throw new InvalidOperationException(
@@ -381,13 +444,18 @@ public sealed partial class FileArticleStorageEngine
                     $"relocation {intent.RelocationId}.");
             }
 
-            return FinishIndexRelocate(intent, destination);
+            return FinishIndexRelocate(intent, destination, ref reservedIndex);
         }
         catch
         {
             if (reservedCompaction)
             {
                 ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+            }
+
+            if (reservedIndex)
+            {
+                RollbackDirectIndexFrame(ArticleIndexRecordCodec.RecordLength);
             }
 
             throw;
@@ -398,7 +466,13 @@ public sealed partial class FileArticleStorageEngine
     {
         lock (_gate)
         {
-            _ = _capacityLedger.ReleaseCompaction(compactionId, relocationId);
+            if (!_capacityAdmissionEnabled)
+            {
+                return;
+            }
+
+            _ = RequireSegmentVolume().WithLedger(
+                ledger => ledger.ReleaseCompaction(compactionId, relocationId));
         }
     }
 
@@ -421,12 +495,14 @@ public sealed partial class FileArticleStorageEngine
         }
 
         // Do not append another destination when Written already exists.
-        return FinishIndexRelocate(intent, written.DestinationLocation);
+        var reservedIndex = false;
+        return FinishIndexRelocate(intent, written.DestinationLocation, ref reservedIndex);
     }
 
     private ArticleRelocationResult FinishIndexRelocate(
         JournalRelocationIntentRecord intent,
-        StoredArticleLocation destination)
+        StoredArticleLocation destination,
+        ref bool indexFrameReserved)
     {
         ThrowIfRelocationFault(RelocationFaultPoint.AfterWrittenBeforeIndex);
 
@@ -434,14 +510,66 @@ public sealed partial class FileArticleStorageEngine
         TestHookBeforeIndexRelocate = null;
         hook?.Invoke();
 
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        if (!indexFrameReserved
+            && _capacityAdmissionEnabled
+            && !(_index.TryGet(intent.ArtId, out var current)
+                 && current.State == ArticleStorageState.Present
+                 && LocationsEqual(current.Location, destination)))
+        {
+            if (!TryReserveDirectIndexFrame(
+                    intent.ArtId,
+                    frameBytes,
+                    _capacityMaximumUtilization + _capacityCompactionHeadroom))
+            {
+                return new ArticleRelocationResult(
+                    ArticleRelocationOutcome.RejectedCapacity,
+                    intent.ArtId,
+                    Reason: "index-capacity");
+            }
+
+            indexFrameReserved = true;
+        }
+
+        long frameOffset = -1;
+        var lengthBefore = indexFrameReserved ? _index.DurableLength : 0L;
         ArticleRelocationResult result = default;
-        Catalogue.ExecuteLocked(() => result = FinishIndexRelocateUnlocked(intent, destination));
+        try
+        {
+            Catalogue.ExecuteLocked(() =>
+                result = FinishIndexRelocateUnlocked(intent, destination, ref frameOffset));
+            if (indexFrameReserved)
+            {
+                if (result.Outcome == ArticleRelocationOutcome.Relocated)
+                {
+                    BindDirectIndexFrame(intent.ArtId, frameOffset, frameBytes);
+                }
+                else
+                {
+                    RollbackDirectIndexFrame(frameBytes);
+                }
+
+                indexFrameReserved = false;
+            }
+        }
+        catch
+        {
+            if (indexFrameReserved)
+            {
+                FinishDirectIndexFrameAfterThrow(intent.ArtId, lengthBefore, frameBytes);
+                indexFrameReserved = false;
+            }
+
+            throw;
+        }
+
         return result;
     }
 
     private ArticleRelocationResult FinishIndexRelocateUnlocked(
         JournalRelocationIntentRecord intent,
-        StoredArticleLocation destination)
+        StoredArticleLocation destination,
+        ref long frameOffset)
     {
         if (_index.TryGet(intent.ArtId, out var current)
             && current.State == ArticleStorageState.Present
@@ -453,12 +581,13 @@ public sealed partial class FileArticleStorageEngine
                 destination);
         }
 
-        var outcome = _index.TryRelocate(
+        var outcome = _index.TryRelocateReporting(
             intent.ArtId,
             intent.ExpectedSourceLocation,
             destination,
             intent.ArtHash,
-            intent.ArtSize);
+            intent.ArtSize,
+            out frameOffset);
 
         switch (outcome)
         {

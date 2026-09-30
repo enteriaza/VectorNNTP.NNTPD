@@ -315,7 +315,8 @@ public sealed class ArticleSegmentPolicy
     /// <summary>
     /// Catalogue-only preflight: whether this Closed segment's complete
     /// <see cref="SegmentInfo.LiveBytes"/> fits under MaxUtil + CompactionHeadroom
-    /// (Phase 5F.2 / 5F.9). Does not reserve bytes and does not read SATA.
+    /// (Phase 5F.2 / 5F.9), including <see cref="CapacityAdmissionPressureSnapshot.CheckpointReservedBytes"/>.
+    /// Does not reserve bytes and does not read SATA.
     /// Zero-live Closed segments are immediately feasible (commit/retire/reclaim only).
     /// Finish requires every Present article to be copied before the source file can be
     /// reclaimed, so a single minimum record fitting is not sufficient.
@@ -341,7 +342,11 @@ public sealed class ArticleSegmentPolicy
             pressure.CompactionReservedBytes,
             pressure.TotalBytes,
             segment.LiveBytes,
-            ceilingUtilization);
+            ceilingUtilization,
+            pressure.CheckpointReservedBytes,
+            pressure.JournalReservedBytes,
+            pressure.IndexReservedBytes,
+            pressure.CompactionJournalReservedBytes);
     }
 
     /// <summary>

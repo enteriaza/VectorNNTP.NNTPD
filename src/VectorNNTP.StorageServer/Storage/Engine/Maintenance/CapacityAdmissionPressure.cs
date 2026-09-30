@@ -14,7 +14,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <param name="UsedBytes">DriveInfo used bytes from the capacity snapshot.</param>
 /// <param name="TotalBytes">DriveInfo total bytes from the capacity snapshot.</param>
 /// <param name="AvailableBytes">DriveInfo available bytes from the capacity snapshot.</param>
-/// <param name="ArticleReservedBytes">Process-local Accept reservations awaiting PhysicalWritten.</param>
+/// <param name="ArticleReservedBytes">Process-local segment-copy reservations on this volume's ledger.</param>
 /// <param name="CompactionReservedBytes">Process-local compaction destination reservations.</param>
 /// <param name="MaximumUtilization">Article admission utilization ceiling fraction.</param>
 /// <param name="CompactionHeadroom">Additional utilization allowed for compaction destinations.</param>
@@ -27,6 +27,22 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// </param>
 /// <param name="MinimumAdmissionRequiredBytes">
 /// Required-bytes floor used for pressure / recovery-target (segment minimum record length).
+/// </param>
+/// <param name="CheckpointReservedBytes">
+/// Process-local bytes reserved for checkpoint temporary files. Included in the article
+/// recovery target and in compaction feasibility. Zero when no checkpoint temp is reserved.
+/// </param>
+/// <param name="JournalReservedBytes">
+/// Process-local journal-sequence reservations on this volume's ledger. Included in admission
+/// and compaction feasibility. Zero when the control volume is a different ledger.
+/// </param>
+/// <param name="IndexReservedBytes">
+/// Process-local Present-frame reservations on this volume's ledger. Included in admission
+/// and compaction feasibility. Zero when the control volume is a different ledger.
+/// </param>
+/// <param name="CompactionJournalReservedBytes">
+/// Process-local compaction-journal frame reservations on this volume's ledger. Included in
+/// admission and compaction feasibility. Zero when the control volume is a different ledger.
 /// </param>
 public readonly record struct CapacityAdmissionPressureSnapshot(
     bool CapacityAdmissionEnabled,
@@ -41,7 +57,11 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
     long ArticleCeilingBytes,
     long CompactionCeilingBytes,
     long AdmissionRecoveryTargetBytes,
-    long MinimumAdmissionRequiredBytes)
+    long MinimumAdmissionRequiredBytes,
+    long CheckpointReservedBytes = 0,
+    long JournalReservedBytes = 0,
+    long IndexReservedBytes = 0,
+    long CompactionJournalReservedBytes = 0)
 {
     /// <summary>Empty snapshot when capacity admission is disabled.</summary>
     public static CapacityAdmissionPressureSnapshot Disabled { get; } = new(
@@ -57,7 +77,11 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
         ArticleCeilingBytes: 0,
         CompactionCeilingBytes: 0,
         AdmissionRecoveryTargetBytes: 0,
-        MinimumAdmissionRequiredBytes: SegmentRecordCodec.MinimumRecordLength);
+        MinimumAdmissionRequiredBytes: SegmentRecordCodec.MinimumRecordLength,
+        CheckpointReservedBytes: 0,
+        JournalReservedBytes: 0,
+        IndexReservedBytes: 0,
+        CompactionJournalReservedBytes: 0);
 
     /// <summary>
     /// Builds a snapshot from a capacity read and reservation counters using ledger arithmetic.
@@ -68,7 +92,11 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
         long compactionReservedBytes,
         double maximumUtilization,
         double compactionHeadroom,
-        long minimumAdmissionRequiredBytes = SegmentRecordCodec.MinimumRecordLength)
+        long minimumAdmissionRequiredBytes = SegmentRecordCodec.MinimumRecordLength,
+        long checkpointReservedBytes = 0,
+        long journalReservedBytes = 0,
+        long indexReservedBytes = 0,
+        long compactionJournalReservedBytes = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(minimumAdmissionRequiredBytes);
 
@@ -84,7 +112,11 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
             compactionReservedBytes,
             capacity.TotalBytes,
             maximumUtilization,
-            minimumAdmissionRequiredBytes);
+            minimumAdmissionRequiredBytes,
+            checkpointReservedBytes,
+            journalReservedBytes,
+            indexReservedBytes,
+            compactionJournalReservedBytes);
 
         return new CapacityAdmissionPressureSnapshot(
             CapacityAdmissionEnabled: true,
@@ -99,7 +131,11 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
             ArticleCeilingBytes: articleCeiling,
             CompactionCeilingBytes: compactionCeiling,
             AdmissionRecoveryTargetBytes: recoveryTarget,
-            MinimumAdmissionRequiredBytes: minimumAdmissionRequiredBytes);
+            MinimumAdmissionRequiredBytes: minimumAdmissionRequiredBytes,
+            CheckpointReservedBytes: checkpointReservedBytes,
+            JournalReservedBytes: journalReservedBytes,
+            IndexReservedBytes: indexReservedBytes,
+            CompactionJournalReservedBytes: compactionJournalReservedBytes);
     }
 }
 

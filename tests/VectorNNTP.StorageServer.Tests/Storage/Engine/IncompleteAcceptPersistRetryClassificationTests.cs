@@ -41,7 +41,7 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         await engine.DrainPendingAsync(cts.Token);
 
         Assert.Equal(1, engine.PersistRetryScheduledCount);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
     }
@@ -156,7 +156,7 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
 
         await engine.RecoverAsync(CancellationToken.None);
 
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
         // One Accept-only SATA append; hook wrote PW for that same location (IdempotentNoOp).
@@ -184,7 +184,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
 
         await engine.RecoverAsync(CancellationToken.None);
 
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.Equal(priorLocation.SegmentId.Value, read.Metadata.Location.SegmentId.Value);

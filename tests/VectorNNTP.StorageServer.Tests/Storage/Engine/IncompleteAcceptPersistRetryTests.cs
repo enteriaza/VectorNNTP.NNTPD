@@ -85,7 +85,7 @@ public sealed class IncompleteAcceptPersistRetryTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await engine.DrainPendingAsync(cts.Token);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
@@ -176,11 +176,12 @@ public sealed class IncompleteAcceptPersistRetryTests
                   || engine.Journal.EnumerateIncomplete().Count == 0,
             TimeSpan.FromSeconds(5));
 
-        // After durable PW, reservation must already be released even if index work failed once.
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        // After durable PW, the written segment copy stays reserved even if index work failed once.
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
 
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
     }

@@ -11,6 +11,8 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
+using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 using VectorNNTP.StorageServer.Tests.Logging;
 
@@ -58,23 +60,25 @@ public sealed class ProcessLocalCapacityAdmissionTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<cap-thr@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         var total = 10_000L;
         var maxUtil = 0.80;
         var maxAllowed = (long)(total * maxUtil);
 
-        var capacity = new MutableCapacityReader(total, used: maxAllowed - required);
+        var capacity = new MutableCapacityReader(total, used: maxAllowed - occupied);
         await using var engine = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maxUtil),
             capacityReader: capacity);
 
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
 
         capacity.UsedBytes = maxAllowed;
         var rejected = await engine.AcceptAsync(CreateRecord("<cap-thr-2@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, rejected.Outcome);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
     }
 
     [Fact]
@@ -106,18 +110,20 @@ public sealed class ProcessLocalCapacityAdmissionTests
             WithCapacity(dir.Options),
             capacityReader: capacity);
         var first = CreateRecord("<cap-dup@seg.test>", "a\r\n");
+        var required = SegmentRecordCodec.RecordLengthForArtSize(first.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(first.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(first, CancellationToken.None);
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
         var dup = await engine.AcceptAsync(first, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Duplicate, dup.Outcome);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
         var conflict = CreateRecord("<cap-dup@seg.test>", "b\r\n");
         var conflictResult = await engine.AcceptAsync(conflict, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Conflict, conflictResult.Outcome);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
     }
 
     [Fact]
@@ -131,15 +137,17 @@ public sealed class ProcessLocalCapacityAdmissionTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<cap-hold@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.Equal(1, engine.ProcessLocalReservationCount);
 
-        // Suspended Accept is not queued; RecoverAsync completes PhysicalWritten and releases.
+        // Suspended Accept is not queued; RecoverAsync completes PhysicalWritten and keeps the copy.
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalReservationCount);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalReservationCount);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
@@ -154,22 +162,24 @@ public sealed class ProcessLocalCapacityAdmissionTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<cap-sata@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
         // SATA I/O failure must not become RejectedCapacity; reservation stays while Accept is outstanding.
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforeSataAppend;
         var fault = await Assert.ThrowsAsync<IOException>(
             () => engine.RecoverAsync(CancellationToken.None));
         Assert.Contains("BeforeSataAppend", fault.Message, StringComparison.Ordinal);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.Single(engine.Journal.EnumerateIncomplete());
         Assert.NotEqual(ArticleAcceptOutcome.RejectedCapacity, accepted.Outcome);
 
-        // Retry without fault completes PhysicalWritten and releases.
+        // Retry without fault completes PhysicalWritten and keeps the written copy.
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
@@ -184,21 +194,23 @@ public sealed class ProcessLocalCapacityAdmissionTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<cap-pw-fail@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(record, CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforePhysicalWritten;
         _ = await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.Null(Assert.Single(engine.Journal.EnumerateIncomplete()).PhysicalWritten);
 
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
     [Fact]
-    public async Task L3_After_PhysicalWritten_reservation_released_before_index_work()
+    public async Task L3_After_PhysicalWritten_reservation_stays_through_index_work()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
@@ -208,17 +220,18 @@ public sealed class ProcessLocalCapacityAdmissionTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<cap-after-pw@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(record, CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
-        // Fault after durable PW (and after release) — reservation must already be zero.
+        // Fault after durable PW — the segment copy stays reserved through index work.
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.AfterPhysicalWritten;
         _ = await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.NotNull(Assert.Single(engine.Journal.EnumerateIncomplete()).PhysicalWritten);
 
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
@@ -237,16 +250,17 @@ public sealed class ProcessLocalCapacityAdmissionTests
             capacityReader: capacity);
         engine.SuspendBackgroundPersist = true;
         var probeRequired = SegmentRecordCodec.RecordLengthForArtSize(probe.ArtSize);
+        var occupied = probeRequired + ArticleJournalFrameCodec.SequenceReservationBytes(probe.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         Assert.Equal(
             ArticleAcceptOutcome.Accepted,
             (await engine.AcceptAsync(probe, CancellationToken.None)).Outcome);
-        Assert.Equal(probeRequired, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
 
         var rejected = await engine.AcceptAsync(
             CreateRecord("<cap-jp-reject@seg.test>", "y\r\n"),
             CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedPressure, rejected.Outcome);
-        Assert.Equal(probeRequired, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         Assert.Equal(1, engine.ProcessLocalReservationCount);
     }
 
@@ -261,13 +275,16 @@ public sealed class ProcessLocalCapacityAdmissionTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<cap-retry@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(record, CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
         engine.SuspendBackgroundPersist = false;
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(occupied, engine.ProcessLocalReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
@@ -275,11 +292,13 @@ public sealed class ProcessLocalCapacityAdmissionTests
     {
         using var dir = TempStorageDir.Create();
         const int attempts = 32;
-        var required = SegmentRecordCodec.RecordLengthForArtSize(
-            CreateRecord("<cap-conc-00@seg.test>").ArtSize);
-        // With MaximumUtilization=0.30 and Total=10*required, at most 3 articles fit.
+        var sample = CreateRecord("<cap-conc-00@seg.test>");
+        var pair = SegmentRecordCodec.RecordLengthForArtSize(sample.ArtSize)
+            + ArticleJournalFrameCodec.SequenceReservationBytes(sample.ArtSize)
+            + ArticleIndexRecordCodec.RecordLength;
+        // With MaximumUtilization=0.30 and Total=10*pair, at most 3 articles fit.
         // Suspend persist so PhysicalWritten cannot release reservations mid-admission race.
-        var total = required * 10L;
+        var total = pair * 10L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization: 0.30),
@@ -304,11 +323,13 @@ public sealed class ProcessLocalCapacityAdmissionTests
         var rejected = outcomes.Count(static o => o == ArticleAcceptOutcome.RejectedCapacity);
         Assert.Equal(3, accepted);
         Assert.Equal(attempts - 3, rejected);
-        Assert.Equal(required * 3L, engine.ProcessLocalReservedBytes);
+        Assert.Equal(pair * 3L, engine.ProcessLocalReservedBytes);
         Assert.Equal(3, engine.ProcessLocalReservationCount);
 
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(pair * 3L, engine.ProcessLocalReservedBytes);
+        Assert.Equal(3, engine.ProcessLocalReservationCount);
+        Assert.Equal(3, engine.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
@@ -351,6 +372,7 @@ public sealed class ProcessLocalCapacityAdmissionTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         var record = CreateRecord("<cap-restart@seg.test>");
+        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         await using (var engineA = FileArticleStorageEngine.Open(
                          WithCapacity(dir.Options),
                          capacityReader: capacity))
@@ -363,14 +385,20 @@ public sealed class ProcessLocalCapacityAdmissionTests
         await using var engineB = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options),
             capacityReader: capacity);
-        Assert.Equal(0, engineB.ProcessLocalReservedBytes);
+        Assert.Equal(
+            ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize),
+            engineB.ProcessLocalReservedBytes);
+        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
         await engineB.RecoverAsync(CancellationToken.None);
         Assert.True(engineB.TryRead(record.ArtId, out _));
-        Assert.Equal(0, engineB.ProcessLocalReservedBytes);
+        Assert.Equal(
+            required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength,
+            engineB.ProcessLocalReservedBytes);
+        Assert.Equal(1, engineB.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
-    public async Task S_T_Evict_does_not_mutate_ReservedBytes()
+    public async Task S_T_Evict_keeps_segment_and_journal_and_reserves_the_death_frame()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
@@ -378,18 +406,28 @@ public sealed class ProcessLocalCapacityAdmissionTests
             WithCapacity(dir.Options),
             capacityReader: capacity);
         var live = CreateRecord("<cap-live@seg.test>");
+        var liveRequired = SegmentRecordCodec.RecordLengthForArtSize(live.ArtSize);
+        var liveOccupied = liveRequired + ArticleJournalFrameCodec.SequenceReservationBytes(live.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(live, CancellationToken.None);
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
+        Assert.Equal(liveOccupied, engine.ProcessLocalReservedBytes);
 
         engine.SuspendBackgroundPersist = true;
         var pending = CreateRecord("<cap-pending@seg.test>");
-        var required = SegmentRecordCodec.RecordLengthForArtSize(pending.ArtSize);
+        var pendingOccupied = SegmentRecordCodec.RecordLengthForArtSize(pending.ArtSize)
+            + ArticleJournalFrameCodec.SequenceReservationBytes(pending.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         _ = await engine.AcceptAsync(pending, CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(liveOccupied + pendingOccupied, engine.ProcessLocalReservedBytes);
 
         Assert.True(engine.TryEvict(live.ArtId));
-        Assert.Equal(required, engine.ProcessLocalReservedBytes);
+        Assert.Equal(
+            liveOccupied + pendingOccupied + ArticleIndexRecordCodec.RecordLength,
+            engine.ProcessLocalReservedBytes);
+        Assert.Equal(liveRequired + SegmentRecordCodec.RecordLengthForArtSize(pending.ArtSize), engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(
+            ArticleJournalFrameCodec.SequenceReservationBytes(live.ArtSize)
+                + ArticleJournalFrameCodec.SequenceReservationBytes(pending.ArtSize),
+            engine.ProcessLocalJournalReservedBytes);
     }
 
     [Fact]

@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 namespace VectorNNTP.StorageServer.Configuration;
 
 /// <summary>
-/// Process-local SATA capacity admission under <c>StorageServer:Storage:Capacity</c>
+/// Process-local capacity admission under <c>StorageServer:Storage:Capacity</c>
 /// (Phase 5E.1 / 5E.2).
 /// </summary>
 /// <remarks>
@@ -12,18 +12,45 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// filesystem reservations. External writers and OS free-space races remain possible.
 /// </para>
 /// <para>
-/// When <see cref="Enabled"/> is <see langword="false"/> (default), Accept and compaction
-/// destination admission are unrestricted.
-/// When enabled:
+/// When <see cref="Enabled"/> is <see langword="false"/> (default), Accept, compaction destination
+/// admission, and checkpoints do not consult capacity and do not resolve volumes.
+/// When enabled, <c>SegmentDir</c> and <c>ControlDir</c> resolve to physical volumes.
+/// The same volume shares one reader and one ledger. Different volumes use a segment ledger
+/// and a control ledger. An unresolvable root fails closed.
 /// </para>
 /// <list type="bullet">
 /// <item>
-/// Article Accept:
-/// <c>(Used + ArticleReserved + CompactionReserved + Required) ≤ MaximumUtilization × Total</c>
+/// Article Accept reserves two independent amounts before the durable journal Accept.
+/// The segment ledger reserves one segment copy of
+/// <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>.
+/// Each later physical append reserves another copy of that size before it writes.
+/// Those reservations stay after durable PhysicalWritten until a later reclamation phase.
+/// The control ledger reserves the journal sequence <c>ArtSize + 132</c>
+/// (Accept + PhysicalWritten + IndexCommitted). That reservation stays through
+/// IndexCommitted and is released only after a successful journal checkpoint installs a
+/// replacement that omits that sequence.
+/// The control ledger also reserves 88 bytes before every durable index frame is appended.
+/// That includes Present, Evicted, Invalid, and a relocation's new Present frame. Each
+/// reservation stays through IndexCommitted and logical state changes, and is released only
+/// when an index checkpoint replacement retires that physical frame. Two physical frames for
+/// one article reserve 176 bytes while both remain.
+/// Each durable compaction-journal frame also reserves its exact length on the control ledger
+/// before the append, admitted under MaximumUtilization + CompactionHeadroom:
+/// CompactionBegin 36, RelocationIntent 92, RelocationWritten 48, CompactionCommitted 20,
+/// and CompactionRetired 36. Those reservations stay until a journal checkpoint replacement
+/// omits that entire compaction.
+/// On a shared volume these amounts share one ledger. Admission is
+/// <c>(Used + ArticleReserved + JournalReserved + IndexReserved + CompactionReserved + CompactionJournalReserved + CheckpointReserved + Required) ≤ MaximumUtilization × Total</c>
 /// </item>
 /// <item>
-/// Compaction relocation destination append:
-/// <c>(Used + ArticleReserved + CompactionReserved + Required) ≤ (MaximumUtilization + CompactionHeadroom) × Total</c>
+/// Compaction relocation destination append, on the segment ledger:
+/// <c>(Used + ArticleReserved + CompactionReserved + CheckpointReserved + Required) ≤ (MaximumUtilization + CompactionHeadroom) × Total</c>
+/// </item>
+/// <item>
+/// Checkpoint temporary files reserve their exact serialized length on the control ledger before
+/// the temp file is created, and release that reservation once the extra file is gone.
+/// Those reservations are checked against <see cref="MaximumUtilization"/>.
+/// On a shared volume the control ledger is the segment ledger.
 /// </item>
 /// </list>
 /// <para>

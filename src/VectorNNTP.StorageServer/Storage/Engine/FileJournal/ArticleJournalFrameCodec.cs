@@ -83,6 +83,35 @@ internal static class ArticleJournalFrameCodec
 
     private const int HeaderAfterLength = 1 + 1 + 2;
 
+    /// <summary>Durable CompactionBegin frame length.</summary>
+    public const int CompactionBeginFrameLength = 4 + HeaderAfterLength + (8 + 8 + 8) + 4;
+
+    /// <summary>Durable RelocationIntent frame length.</summary>
+    public const int RelocationIntentFrameLength =
+        4 + HeaderAfterLength + (8 + 8 + 8 + 4 + 8 + 8 + 4 + ArticleId.Length) + 4;
+
+    /// <summary>Durable RelocationWritten frame length.</summary>
+    public const int RelocationWrittenFrameLength = 4 + HeaderAfterLength + (8 + 8 + 8 + 8 + 4) + 4;
+
+    /// <summary>Durable CompactionCommitted frame length.</summary>
+    public const int CompactionCommittedFrameLength = 4 + HeaderAfterLength + 8 + 4;
+
+    /// <summary>Durable CompactionRetired frame length.</summary>
+    public const int CompactionRetiredFrameLength = 4 + HeaderAfterLength + (8 + 8 + 8) + 4;
+
+    /// <summary>
+    /// Bytes a durable Accept sequence can occupy before checkpoint retirement:
+    /// Accept frame plus PhysicalWritten frame plus IndexCommitted frame.
+    /// </summary>
+    public static long SequenceReservationBytes(int artSize)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(artSize);
+        var accept = 4 + HeaderAfterLength + (8 + 8 + 8 + 4 + ArticleId.Length + artSize) + 4;
+        const int physicalWritten = 4 + HeaderAfterLength + (8 + 8 + 8 + 4) + 4;
+        const int indexCommitted = 4 + HeaderAfterLength + 8 + 4;
+        return (long)accept + physicalWritten + indexCommitted;
+    }
+
     /// <summary>Encodes an Accept frame.</summary>
     public static byte[] EncodeAccept(JournalAcceptRecord record)
     {
@@ -186,8 +215,7 @@ internal static class ArticleJournalFrameCodec
             throw new ArgumentOutOfRangeException(nameof(record), "CompactionId must be non-zero.");
         }
 
-        const int bodyLength = 8 + 8 + 8;
-        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        const int total = CompactionBeginFrameLength;
         var buffer = new byte[total];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
         buffer[4] = (byte)ArticleJournalFrameType.CompactionBegin;
@@ -219,8 +247,7 @@ internal static class ArticleJournalFrameCodec
             throw new ArgumentOutOfRangeException(nameof(record), "Invalid source location.");
         }
 
-        var bodyLength = 8 + 8 + 8 + 4 + 8 + 8 + 4 + ArticleId.Length;
-        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        const int total = RelocationIntentFrameLength;
         var buffer = new byte[total];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
         buffer[4] = (byte)ArticleJournalFrameType.RelocationIntent;
@@ -261,8 +288,7 @@ internal static class ArticleJournalFrameCodec
             throw new ArgumentOutOfRangeException(nameof(record), "Invalid destination location.");
         }
 
-        const int bodyLength = 8 + 8 + 8 + 8 + 4;
-        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        const int total = RelocationWrittenFrameLength;
         var buffer = new byte[total];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
         buffer[4] = (byte)ArticleJournalFrameType.RelocationWritten;
@@ -286,8 +312,7 @@ internal static class ArticleJournalFrameCodec
             throw new ArgumentOutOfRangeException(nameof(record), "CompactionId must be non-zero.");
         }
 
-        const int bodyLength = 8;
-        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        const int total = CompactionCommittedFrameLength;
         var buffer = new byte[total];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
         buffer[4] = (byte)ArticleJournalFrameType.CompactionCommitted;
@@ -307,8 +332,7 @@ internal static class ArticleJournalFrameCodec
             throw new ArgumentOutOfRangeException(nameof(record), "CompactionId must be non-zero.");
         }
 
-        const int bodyLength = 8 + 8 + 8;
-        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        const int total = CompactionRetiredFrameLength;
         var buffer = new byte[total];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
         buffer[4] = (byte)ArticleJournalFrameType.CompactionRetired;

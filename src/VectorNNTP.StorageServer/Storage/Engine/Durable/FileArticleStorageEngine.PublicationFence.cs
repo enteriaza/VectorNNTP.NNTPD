@@ -6,7 +6,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 public sealed partial class FileArticleStorageEngine
 {
     /// <summary>Maximum fresh appends when a location was sealed before PhysicalWritten.</summary>
-    private const int MaxPrePhysicalWrittenAppendAttempts = 8;
+    internal const int MaxPrePhysicalWrittenAppendAttempts = 8;
 
     /// <summary>
     /// Invoked after this sequence has entered index publication and before
@@ -47,6 +47,15 @@ public sealed partial class FileArticleStorageEngine
 
             _prePhysicalWritten[sequence] = location;
             return true;
+        }
+    }
+
+    /// <summary>Marks <paramref name="segmentId"/> sealed so a later pre-PhysicalWritten register fails. Tests only.</summary>
+    internal void TestSealSegmentForPrePhysicalWritten(ulong segmentId)
+    {
+        lock (_publicationFence)
+        {
+            _ = _retirementSealed.Add(segmentId);
         }
     }
 

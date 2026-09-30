@@ -43,6 +43,16 @@ internal static class ArticleIndexSnapshotCodec
 
     private const int TrailerLength = 4;
 
+    /// <summary>
+    /// Encoded length of a snapshot with <paramref name="entryCount"/> records.
+    /// This is the byte count <see cref="Write"/> emits for that count.
+    /// </summary>
+    public static long EncodedLength(int entryCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(entryCount);
+        return checked(HeaderLength + ((long)entryCount * ArticleIndexRecordCodec.RecordLength) + TrailerLength);
+    }
+
     /// <summary>Writes one snapshot. Does not flush the stream.</summary>
     public static void Write(
         Stream stream,

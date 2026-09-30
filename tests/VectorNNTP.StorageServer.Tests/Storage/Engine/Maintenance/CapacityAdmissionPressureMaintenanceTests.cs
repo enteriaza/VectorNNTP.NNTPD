@@ -5,6 +5,7 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Storage.Engine.Policy;
@@ -215,7 +216,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                capacity.UsedBytes = total;
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
@@ -504,6 +505,14 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         long minimumDeadBytes = ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
         double minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
         new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes, minimumDeadRatio));
+
+    private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
+    {
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(
+            0,
+            ceiling - engine.ProcessLocalReservedBytes - ArticleJournalFrameCodec.RelocationWrittenFrameLength);
+    }
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,

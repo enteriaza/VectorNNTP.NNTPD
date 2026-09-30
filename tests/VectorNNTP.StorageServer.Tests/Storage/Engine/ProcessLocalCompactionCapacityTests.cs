@@ -6,6 +6,7 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
@@ -82,7 +83,10 @@ public sealed class ProcessLocalCompactionCapacityTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<cc-thr@seg.test>");
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        var total = required * 10L;
+        var pins = required
+            + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize)
+            + ArticleIndexRecordCodec.RecordLength;
+        var total = pins * 20L;
         // Admit Accept under MaxUtil=0.20 with Used=0; then raise Used for relocate.
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
@@ -92,14 +96,18 @@ public sealed class ProcessLocalCompactionCapacityTests
         var (sourceId, generation) = await AcceptCloseAsync(engine, record);
         var compactionId = await BeginAsync(engine, sourceId, generation);
 
-        // Compaction ceiling = 0.30 → budget 3*required. used 3r + req r → reject.
-        capacity.UsedBytes = required * 3L;
+        // Compaction ceiling includes the retained segment, journal, and index reservations,
+        // plus the destination copy and the new Present frame.
+        var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.30);
+        var newFrame = (long)ArticleIndexRecordCodec.RecordLength;
+        var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
+        capacity.UsedBytes = compactionCeiling - pins - required - newFrame - intent + 1;
         var rejected = await engine.RelocateArticleAsync(
             compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.RejectedCapacity, rejected.Outcome);
         Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
 
-        capacity.UsedBytes = required * 2L;
+        capacity.UsedBytes = compactionCeiling - pins - required - newFrame - intent;
         var accepted = await engine.RelocateArticleAsync(
             compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, accepted.Outcome);
@@ -128,7 +136,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         Assert.Equal(
             ArticleAcceptOutcome.Accepted,
             (await engine.AcceptAsync(pending, CancellationToken.None)).Outcome);
-        Assert.Equal(requiredPending, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(requiredLive + requiredPending, engine.ProcessLocalArticleReservedBytes);
 
         // Force reject: used + articleRes + requiredLive must exceed 0.70 * total.
         // Set used = TotalBytes so even with headroom nothing fits while article reservation is held.
@@ -138,11 +146,11 @@ public sealed class ProcessLocalCompactionCapacityTests
             compactionId, 1, sourceId, generation, live.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.RejectedCapacity, relocate.Outcome);
 
-        // Drop article reservation and free Used → compaction admits.
+        // Both physical copies stay reserved. Free Used so compaction still admits under headroom.
         capacity.UsedBytes = 0;
         engine.SuspendBackgroundPersist = false;
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(requiredLive + requiredPending, engine.ProcessLocalArticleReservedBytes);
         var relocateOk = await engine.RelocateArticleAsync(
             compactionId, 1, sourceId, generation, live.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, relocateOk.Outcome);
@@ -274,8 +282,9 @@ public sealed class ProcessLocalCompactionCapacityTests
     {
         using var dir = TempStorageDir.Create();
         const int articles = 8;
+        var body = new string('x', 400) + "\r\n";
         var records = Enumerable.Range(0, articles)
-            .Select(i => CreateRecord($"<cc-conc-{i:D2}@seg.test>"))
+            .Select(i => CreateRecord($"<cc-conc-{i:D2}@seg.test>", body))
             .ToArray();
         var required = SegmentRecordCodec.RecordLengthForArtSize(records[0].ArtSize);
         var total = required * 100L;
@@ -295,8 +304,20 @@ public sealed class ProcessLocalCompactionCapacityTests
         var sourceId = meta.Location.SegmentId;
         Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var info));
         var compactionId = await BeginAsync(engine, sourceId, info.Generation);
-        // Ceiling 0.55*100r = 55r; used 52r → at most 3 concurrent held reservations.
-        capacity.UsedBytes = required * 52L;
+        var pins = engine.ProcessLocalReservedBytes;
+        Assert.Equal(
+            (required * articles)
+                + engine.ProcessLocalJournalReservedBytes
+                + engine.ProcessLocalIndexReservedBytes,
+            pins);
+        // Ceiling 0.55*100r. Room for every intent plus exactly 3 destinations and
+        // 3 new Present frames. A fourth destination still exceeds that room even
+        // when the other intents have not been reserved yet.
+        var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
+        var frame = ArticleIndexRecordCodec.RecordLength;
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.55);
+        capacity.UsedBytes = ceiling - pins - (intent * articles) - (3L * (required + frame));
+        Assert.True(capacity.UsedBytes >= 0);
 
         var hold = new ManualResetEventSlim(false);
         var reserved = new CountdownEvent(3);
@@ -385,7 +406,7 @@ public sealed class ProcessLocalCompactionCapacityTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                capacity.UsedBytes = total;
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
         var incomplete = await coordinator.RunOnceAsync(CancellationToken.None);
@@ -394,6 +415,14 @@ public sealed class ProcessLocalCompactionCapacityTests
         Assert.False(incomplete.CompactionCommitted);
         Assert.True(incomplete.RelocatedArticleCount >= 1);
         Assert.Contains(engine.Journal.EnumerateOpenCompactions(), static c => !c.Committed);
+    }
+
+    private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
+    {
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(
+            0,
+            ceiling - engine.ProcessLocalReservedBytes - ArticleJournalFrameCodec.RelocationWrittenFrameLength);
     }
 
     private static ArticleStorageRuntimeOptions WithCapacity(

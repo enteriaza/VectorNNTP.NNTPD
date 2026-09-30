@@ -37,9 +37,30 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <para>
 /// Phase 5E.1 / 5E.2: optional process-local capacity reservation under
 /// <see cref="ArticleCapacityOptions"/>. Reservations are not kernel/cross-process filesystem
-/// reservations. Article Accept and compaction destination appends share process-local counters
-/// under distinct ceilings (<see cref="ArticleCapacityOptions.MaximumUtilization"/> vs
-/// MaximumUtilization + <see cref="ArticleCapacityOptions.CompactionHeadroom"/>).
+/// reservations. <see cref="CapacityVolumes"/> resolves <c>SegmentDir</c> and <c>ControlDir</c>
+/// only when admission is enabled. The same physical volume shares one reader and one ledger.
+/// Different volumes keep a segment ledger and a control ledger.
+/// Article Accept and compaction destination appends use the segment ledger.
+/// Accept uses <see cref="ArticleCapacityOptions.MaximumUtilization"/>.
+/// Compaction destination appends use that ceiling plus
+/// <see cref="ArticleCapacityOptions.CompactionHeadroom"/>.
+/// Each physical segment copy reserves <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>
+/// on the segment ledger before the append. That reservation stays after durable PhysicalWritten
+/// until a later reclamation phase. A retirement-seal retry reserves another copy before it appends.
+/// Each durable Accept also reserves <c>ArtSize + 132</c> on the control ledger for the journal
+/// sequence. That reservation is released only after a checkpoint replacement omits the sequence.
+/// The same Accept reserves 88 bytes on the control ledger before the durable Present index frame.
+/// Every later physical index frame, including Evicted, Invalid, and relocation Present, reserves
+/// another 88 bytes before it is appended. A reservation stays through IndexCommitted and logical
+/// state changes, and is released only when an index checkpoint replacement retires that physical frame.
+/// Each durable compaction-journal frame reserves its exact codec length on the control ledger
+/// under MaximumUtilization + CompactionHeadroom immediately before it is appended:
+/// CompactionBegin 36, RelocationIntent 92, RelocationWritten 48, CompactionCommitted 20,
+/// CompactionRetired 36. Those reservations stay until a journal checkpoint replacement omits
+/// that entire compaction. SequenceFence stays inside the checkpoint image reservation.
+/// A checkpoint reserves the exact serialized temp length on the control ledger against
+/// MaximumUtilization before the temp file is created. On a shared volume that ledger is the
+/// segment ledger, so the reservation stays in both decisions until the extra temp file is gone.
 /// </para>
 /// <para>
 /// Phase 4A: logical death updates in-memory segment Live/Dead using
@@ -50,8 +71,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <para>
 /// Phase 5F.1a: <c>_pendingSequences</c> is a transient execution queue over durable incomplete
 /// journal work. Retryable persist failures (<see cref="IOException"/>,
-/// <see cref="UnauthorizedAccessException"/>) requeue with backoff without releasing article
-/// capacity reservations. Non-retryable fail-closed outcomes (e.g. unusable PhysicalWritten,
+/// <see cref="UnauthorizedAccessException"/>) requeue with backoff and keep reservations for
+/// segment copies already written. Non-retryable failures release only copies that were not
+/// written. Non-retryable fail-closed outcomes (e.g. unusable PhysicalWritten,
 /// PhysicalWritten rejected, catalogue/integrity failures) are not requeued. After
 /// <see cref="RecoverAsync"/>, any still-incomplete sequences are re-linked into the pending
 /// queue when background persist is enabled.
@@ -65,11 +87,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly IArticleMemoryCache _articleCache;
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IStorageCapacityReader? _capacityReader;
+    private readonly CapacityVolume? _segmentCapacity;
+    private readonly CapacityVolume? _controlCapacity;
     private readonly bool _capacityAdmissionEnabled;
     private readonly double _capacityMaximumUtilization;
     private readonly double _capacityCompactionHeadroom;
-    private readonly ProcessLocalCapacityLedger _capacityLedger = new();
     private readonly object _gate = new();
     private readonly Queue<ulong> _pendingSequences = new();
     private readonly HashSet<ulong> _pendingSet = new();
@@ -92,21 +114,34 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         IArticleMemoryCache articleCache,
         ILogger logger,
         TimeProvider timeProvider,
-        IStorageCapacityReader? capacityReader,
+        CapacityVolumes capacity,
         bool capacityAdmissionEnabled,
         double capacityMaximumUtilization,
         double capacityCompactionHeadroom)
     {
+        ArgumentNullException.ThrowIfNull(capacity);
         _journal = journal;
         _segments = segments;
         _index = index;
         _articleCache = articleCache;
         _logger = logger;
         _timeProvider = timeProvider;
-        _capacityReader = capacityReader;
+        _segmentCapacity = capacity.Segment;
+        _controlCapacity = capacity.Control;
         _capacityAdmissionEnabled = capacityAdmissionEnabled;
         _capacityMaximumUtilization = capacityMaximumUtilization;
         _capacityCompactionHeadroom = capacityCompactionHeadroom;
+        if (capacityAdmissionEnabled)
+        {
+            var checkpointCapacity = CreateCheckpointCapacity();
+            journal.CheckpointCapacity = checkpointCapacity;
+            index.AttachCheckpointCapacity(checkpointCapacity);
+            index.OnIndexPrefixRetired = ApplyIndexPrefixRetirement;
+            ReconstructJournalSequenceReservations();
+            ReconstructIndexPresentReservations();
+            ReconstructCompactionJournalReservations();
+        }
+
         _worker = Task.Run(() => RunPhysicalWorkerAsync(_workerCts.Token));
     }
 
@@ -142,94 +177,615 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>Number of SATA appends performed by this engine instance (tests).</summary>
     public long PhysicalAppendCount => Volatile.Read(ref _physicalAppendCount);
 
-    /// <summary>Process-local article + compaction reserved bytes (tests / diagnostics).</summary>
-    internal long ProcessLocalReservedBytes
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _capacityLedger.ReservedBytes;
-            }
-        }
-    }
+    /// <summary>Segment-volume capacity, or null when admission is disabled.</summary>
+    internal CapacityVolume? SegmentCapacity => _segmentCapacity;
 
-    /// <summary>Process-local article Accept reserved bytes (tests).</summary>
-    internal long ProcessLocalArticleReservedBytes
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _capacityLedger.ArticleReservedBytes;
-            }
-        }
-    }
+    /// <summary>Control-volume capacity, or null when admission is disabled.</summary>
+    internal CapacityVolume? ControlCapacity => _controlCapacity;
 
-    /// <summary>Process-local compaction destination reserved bytes (tests).</summary>
-    internal long ProcessLocalCompactionReservedBytes
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _capacityLedger.CompactionReservedBytes;
-            }
-        }
-    }
+    /// <summary>Process-local article + compaction + checkpoint bytes on the segment ledger (tests / diagnostics).</summary>
+    internal long ProcessLocalReservedBytes =>
+        ReadSegmentLedger(static ledger => ledger.ReservedBytes);
+
+    /// <summary>Process-local article Accept reserved bytes on the segment ledger (tests).</summary>
+    internal long ProcessLocalArticleReservedBytes =>
+        ReadSegmentLedger(static ledger => ledger.ArticleReservedBytes);
+
+    /// <summary>Process-local compaction destination reserved bytes on the segment ledger (tests).</summary>
+    internal long ProcessLocalCompactionReservedBytes =>
+        ReadSegmentLedger(static ledger => ledger.CompactionReservedBytes);
 
     /// <summary>Number of Accept sequences holding an article capacity reservation (tests).</summary>
-    internal int ProcessLocalReservationCount
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _capacityLedger.ReservationCount;
-            }
-        }
-    }
+    internal int ProcessLocalReservationCount =>
+        ReadSegmentLedger(static ledger => ledger.ReservationCount);
+
+    /// <summary>Number of physical segment-copy reservations on the segment ledger (tests).</summary>
+    internal int ProcessLocalSegmentCopyCount =>
+        ReadSegmentLedger(static ledger => ledger.SegmentCopyCount);
+
+    /// <summary>Journal-sequence reserved bytes on the control ledger (tests).</summary>
+    internal long ProcessLocalJournalReservedBytes =>
+        ReadControlLedger(static ledger => ledger.JournalReservedBytes);
+
+    /// <summary>Number of journal sequences holding a reservation on the control ledger (tests).</summary>
+    internal int ProcessLocalJournalReservationCount =>
+        ReadControlLedger(static ledger => ledger.JournalReservationCount);
+
+    /// <summary>Present-frame reserved bytes on the control ledger, including not-yet-appended holds (tests).</summary>
+    internal long ProcessLocalIndexReservedBytes =>
+        ReadControlLedger(static ledger => ledger.IndexReservedBytes);
+
+    /// <summary>Physical Present frames holding an index reservation on the control ledger (tests).</summary>
+    internal int ProcessLocalIndexFrameCount =>
+        ReadControlLedger(static ledger => ledger.IndexFrameCount);
+
+    /// <summary>Compaction-journal frame bytes reserved on the control ledger (tests).</summary>
+    internal long ProcessLocalCompactionJournalReservedBytes =>
+        ReadControlLedger(static ledger => ledger.CompactionJournalReservedBytes);
+
+    /// <summary>Compaction-journal frames reserved on the control ledger (tests).</summary>
+    internal int ProcessLocalCompactionJournalFrameCount =>
+        ReadControlLedger(static ledger => ledger.CompactionJournalFrameCount);
 
     /// <summary>Number of compaction relocation keys holding a reservation (tests).</summary>
-    internal int ProcessLocalCompactionReservationCount
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _capacityLedger.CompactionReservationCount;
-            }
-        }
-    }
+    internal int ProcessLocalCompactionReservationCount =>
+        ReadSegmentLedger(static ledger => ledger.CompactionReservationCount);
 
     /// <summary>
-    /// Observes current DriveInfo capacity and process-local reservations for maintenance
-    /// pressure decisions (Phase 5F.2). Does not mutate reservations. Capacity read is outside
-    /// <c>_gate</c>; reservation counters are sampled under the gate.
+    /// Observes segment-volume capacity and that ledger's reservations for maintenance
+    /// pressure decisions (Phase 5F.2). Does not mutate reservations. The capacity read is
+    /// outside the volume lock; reservation counters are sampled under it.
+    /// Checkpoint bytes are those currently on the segment ledger, which includes control
+    /// checkpoint reservations only when both directories share that volume.
     /// </summary>
     internal CapacityAdmissionPressureSnapshot ObserveCapacityAdmissionPressure()
     {
-        if (!_capacityAdmissionEnabled || _capacityReader is null)
+        if (!_capacityAdmissionEnabled || _segmentCapacity is null)
         {
             return CapacityAdmissionPressureSnapshot.Disabled;
         }
 
-        var snap = _capacityReader.Read();
-        long articleReserved;
-        long compactionReserved;
-        lock (_gate)
-        {
-            articleReserved = _capacityLedger.ArticleReservedBytes;
-            compactionReserved = _capacityLedger.CompactionReservedBytes;
-        }
+        var snap = _segmentCapacity.Reader.Read();
+        var counters = _segmentCapacity.WithLedger(static ledger => (
+            ledger.ArticleReservedBytes,
+            ledger.CompactionReservedBytes,
+            ledger.CheckpointReservedBytes,
+            ledger.JournalReservedBytes,
+            ledger.IndexReservedBytes,
+            ledger.CompactionJournalReservedBytes));
 
         return CapacityAdmissionPressureSnapshot.FromCapacityState(
             in snap,
-            articleReserved,
-            compactionReserved,
+            counters.ArticleReservedBytes,
+            counters.CompactionReservedBytes,
+            _capacityMaximumUtilization,
+            _capacityCompactionHeadroom,
+            checkpointReservedBytes: counters.CheckpointReservedBytes,
+            journalReservedBytes: counters.JournalReservedBytes,
+            indexReservedBytes: counters.IndexReservedBytes,
+            compactionJournalReservedBytes: counters.CompactionJournalReservedBytes);
+    }
+
+    private T ReadControlLedger<T>(Func<ProcessLocalCapacityLedger, T> read)
+        where T : struct
+    {
+        if (_controlCapacity is null)
+        {
+            return default;
+        }
+
+        return _controlCapacity.WithLedger(read);
+    }
+
+    private T ReadSegmentLedger<T>(Func<ProcessLocalCapacityLedger, T> read)
+        where T : struct
+    {
+        if (_segmentCapacity is null)
+        {
+            return default;
+        }
+
+        return _segmentCapacity.WithLedger(read);
+    }
+
+    private bool TryReserveAcceptPair(ArticleRecord record, long segmentBytes, long journalBytes, long indexBytes)
+    {
+        var segment = RequireSegmentVolume();
+        var control = RequireControlVolume();
+        var segmentSnap = segment.Reader.Read();
+        var segmentDecision = segment.WithLedger(ledger =>
+        {
+            if (!ledger.WouldFit(
+                    segmentSnap.UsedBytes,
+                    segmentSnap.TotalBytes,
+                    segmentBytes,
+                    _capacityMaximumUtilization))
+            {
+                return (
+                    Admitted: false,
+                    ArticleReservedBytes: ledger.ArticleReservedBytes,
+                    CompactionReservedBytes: ledger.CompactionReservedBytes,
+                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+            }
+
+            ledger.TentativeAdd(segmentBytes);
+            return (
+                Admitted: true,
+                ArticleReservedBytes: ledger.ArticleReservedBytes,
+                CompactionReservedBytes: ledger.CompactionReservedBytes,
+                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+        });
+        if (!segmentDecision.Admitted)
+        {
+            FileArticleStorageEngineLogMessages.RejectedCapacity(
+                _logger,
+                record.ArtId.ToString() ?? string.Empty,
+                segmentBytes,
+                segmentSnap.UsedBytes,
+                segmentDecision.ArticleReservedBytes,
+                segmentDecision.CompactionReservedBytes,
+                segmentDecision.CheckpointReservedBytes,
+                segmentSnap.TotalBytes,
+                segmentSnap.AvailableBytes,
+                _capacityMaximumUtilization,
+                _capacityCompactionHeadroom);
+            return false;
+        }
+
+        var controlSnap = control.Reader.Read();
+        var journalDecision = control.WithLedger(ledger =>
+        {
+            if (!ledger.WouldFit(
+                    controlSnap.UsedBytes,
+                    controlSnap.TotalBytes,
+                    journalBytes,
+                    _capacityMaximumUtilization))
+            {
+                return (
+                    Admitted: false,
+                    ArticleReservedBytes: ledger.ArticleReservedBytes,
+                    CompactionReservedBytes: ledger.CompactionReservedBytes,
+                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+            }
+
+            ledger.TentativeAddJournal(journalBytes);
+            return (
+                Admitted: true,
+                ArticleReservedBytes: ledger.ArticleReservedBytes,
+                CompactionReservedBytes: ledger.CompactionReservedBytes,
+                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+        });
+        if (!journalDecision.Admitted)
+        {
+            segment.WithLedger(ledger =>
+            {
+                ledger.RollbackUnbound(segmentBytes);
+                return 0;
+            });
+            FileArticleStorageEngineLogMessages.RejectedCapacity(
+                _logger,
+                record.ArtId.ToString() ?? string.Empty,
+                journalBytes,
+                controlSnap.UsedBytes,
+                journalDecision.ArticleReservedBytes,
+                journalDecision.CompactionReservedBytes,
+                journalDecision.CheckpointReservedBytes,
+                controlSnap.TotalBytes,
+                controlSnap.AvailableBytes,
+                _capacityMaximumUtilization,
+                _capacityCompactionHeadroom);
+            return false;
+        }
+
+        var indexDecision = control.WithLedger(ledger =>
+        {
+            if (!ledger.WouldFit(
+                    controlSnap.UsedBytes,
+                    controlSnap.TotalBytes,
+                    indexBytes,
+                    _capacityMaximumUtilization))
+            {
+                return (
+                    Admitted: false,
+                    ArticleReservedBytes: ledger.ArticleReservedBytes,
+                    CompactionReservedBytes: ledger.CompactionReservedBytes,
+                    CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+            }
+
+            ledger.TentativeAddIndex(indexBytes);
+            return (
+                Admitted: true,
+                ArticleReservedBytes: ledger.ArticleReservedBytes,
+                CompactionReservedBytes: ledger.CompactionReservedBytes,
+                CheckpointReservedBytes: ledger.CheckpointReservedBytes);
+        });
+        if (indexDecision.Admitted)
+        {
+            return true;
+        }
+
+        control.WithLedger(ledger =>
+        {
+            ledger.RollbackUnboundJournal(journalBytes);
+            return 0;
+        });
+        segment.WithLedger(ledger =>
+        {
+            ledger.RollbackUnbound(segmentBytes);
+            return 0;
+        });
+        FileArticleStorageEngineLogMessages.RejectedCapacity(
+            _logger,
+            record.ArtId.ToString() ?? string.Empty,
+            indexBytes,
+            controlSnap.UsedBytes,
+            indexDecision.ArticleReservedBytes,
+            indexDecision.CompactionReservedBytes,
+            indexDecision.CheckpointReservedBytes,
+            controlSnap.TotalBytes,
+            controlSnap.AvailableBytes,
             _capacityMaximumUtilization,
             _capacityCompactionHeadroom);
+        return false;
     }
+
+    private void RollbackUnboundAccept(
+        bool reservedSegment,
+        bool reservedJournal,
+        bool reservedIndex,
+        long segmentBytes,
+        long journalBytes,
+        long indexBytes)
+    {
+        if (reservedSegment)
+        {
+            RequireSegmentVolume().WithLedger(ledger =>
+            {
+                ledger.RollbackUnbound(segmentBytes);
+                return 0;
+            });
+        }
+
+        if (reservedJournal)
+        {
+            RequireControlVolume().WithLedger(ledger =>
+            {
+                ledger.RollbackUnboundJournal(journalBytes);
+                return 0;
+            });
+        }
+
+        if (reservedIndex)
+        {
+            RequireControlVolume().WithLedger(ledger =>
+            {
+                ledger.RollbackUnboundIndex(indexBytes);
+                return 0;
+            });
+        }
+    }
+
+    private void ReconstructJournalSequenceReservations()
+    {
+        var retained = _journal.CopyRetainedJournalSequences();
+        if (retained.Length == 0)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            foreach (var (sequence, artSize) in retained)
+            {
+                if (ledger.HoldsJournal(sequence))
+                {
+                    continue;
+                }
+
+                var bytes = ArticleJournalFrameCodec.SequenceReservationBytes(artSize);
+                ledger.TentativeAddJournal(bytes);
+                ledger.BindJournalSequence(sequence, bytes);
+            }
+
+            return 0;
+        });
+    }
+
+    private void ReleaseRetiredJournalSequences(ulong[] omittedSequences)
+    {
+        if (!_capacityAdmissionEnabled || omittedSequences.Length == 0)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            foreach (var sequence in omittedSequences)
+            {
+                _ = ledger.ReleaseJournal(sequence);
+            }
+
+            return 0;
+        });
+    }
+
+    private void ReleaseRetiredCompactionJournals(ulong[] omittedCompactionIds)
+    {
+        if (!_capacityAdmissionEnabled || omittedCompactionIds.Length == 0)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            foreach (var compactionId in omittedCompactionIds)
+            {
+                _ = ledger.ReleaseCompactionJournal(compactionId);
+            }
+
+            return 0;
+        });
+    }
+
+    private void ReconstructCompactionJournalReservations()
+    {
+        var compactions = _journal.EnumerateCompactions();
+        if (compactions.Count == 0)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            foreach (var compaction in compactions)
+            {
+                AddRetainedCompactionJournalFrame(
+                    ledger,
+                    compaction.Begin.CompactionId,
+                    CompactionJournalFrameKind.Begin,
+                    relocationId: 0,
+                    ArticleJournalFrameCodec.CompactionBeginFrameLength);
+                foreach (var relocation in compaction.Relocations)
+                {
+                    AddRetainedCompactionJournalFrame(
+                        ledger,
+                        compaction.Begin.CompactionId,
+                        CompactionJournalFrameKind.Intent,
+                        relocation.Intent.RelocationId,
+                        ArticleJournalFrameCodec.RelocationIntentFrameLength);
+                    if (relocation.Written is not null)
+                    {
+                        AddRetainedCompactionJournalFrame(
+                            ledger,
+                            compaction.Begin.CompactionId,
+                            CompactionJournalFrameKind.Written,
+                            relocation.Intent.RelocationId,
+                            ArticleJournalFrameCodec.RelocationWrittenFrameLength);
+                    }
+                }
+
+                if (compaction.Committed)
+                {
+                    AddRetainedCompactionJournalFrame(
+                        ledger,
+                        compaction.Begin.CompactionId,
+                        CompactionJournalFrameKind.Committed,
+                        relocationId: 0,
+                        ArticleJournalFrameCodec.CompactionCommittedFrameLength);
+                }
+
+                if (compaction.Retired is not null)
+                {
+                    AddRetainedCompactionJournalFrame(
+                        ledger,
+                        compaction.Begin.CompactionId,
+                        CompactionJournalFrameKind.Retired,
+                        relocationId: 0,
+                        ArticleJournalFrameCodec.CompactionRetiredFrameLength);
+                }
+            }
+
+            return 0;
+        });
+    }
+
+    private static void AddRetainedCompactionJournalFrame(
+        ProcessLocalCapacityLedger ledger,
+        ulong compactionId,
+        CompactionJournalFrameKind kind,
+        ulong relocationId,
+        int bytes)
+    {
+        if (ledger.HoldsCompactionJournalFrame(compactionId, kind, relocationId))
+        {
+            return;
+        }
+
+        _ = ledger.TryAddCompactionJournalFrame(compactionId, kind, relocationId, bytes);
+    }
+
+    private enum CompactionJournalAdmit
+    {
+        Denied = 0,
+        AlreadyHeld = 1,
+        NewlyReserved = 2,
+    }
+
+    private readonly record struct CompactionJournalAppend(JournalAppendOutcome Outcome, bool CapacityDenied);
+
+    private async ValueTask<CompactionJournalAppend> AppendReservedCompactionJournalFrameAsync(
+        ulong compactionId,
+        CompactionJournalFrameKind kind,
+        ulong relocationId,
+        int frameBytes,
+        Func<CancellationToken, ValueTask<JournalAppendOutcome>> append,
+        CancellationToken cancellationToken)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return new CompactionJournalAppend(
+                await append(cancellationToken).ConfigureAwait(false),
+                CapacityDenied: false);
+        }
+
+        if (CompactionJournalFrameIsDurable(compactionId, kind, relocationId))
+        {
+            return new CompactionJournalAppend(
+                await append(cancellationToken).ConfigureAwait(false),
+                CapacityDenied: false);
+        }
+
+        var admit = TryAdmitCompactionJournalFrame(compactionId, kind, relocationId, frameBytes);
+        if (admit == CompactionJournalAdmit.Denied)
+        {
+            return new CompactionJournalAppend(JournalAppendOutcome.Rejected, CapacityDenied: true);
+        }
+
+        try
+        {
+            var outcome = await append(cancellationToken).ConfigureAwait(false);
+            if (admit == CompactionJournalAdmit.NewlyReserved
+                && outcome is not (JournalAppendOutcome.Applied or JournalAppendOutcome.IdempotentNoOp))
+            {
+                ReleaseCompactionJournalFrame(compactionId, kind, relocationId);
+            }
+
+            return new CompactionJournalAppend(outcome, CapacityDenied: false);
+        }
+        catch
+        {
+            if (admit == CompactionJournalAdmit.NewlyReserved
+                && !CompactionJournalFrameIsDurable(compactionId, kind, relocationId))
+            {
+                ReleaseCompactionJournalFrame(compactionId, kind, relocationId);
+            }
+
+            throw;
+        }
+    }
+
+    private bool CompactionJournalFrameIsDurable(
+        ulong compactionId,
+        CompactionJournalFrameKind kind,
+        ulong relocationId)
+    {
+        if (!_journal.TryGetCompaction(compactionId, out var snapshot))
+        {
+            return false;
+        }
+
+        return kind switch
+        {
+            CompactionJournalFrameKind.Begin => true,
+            CompactionJournalFrameKind.Committed => snapshot.Committed,
+            CompactionJournalFrameKind.Retired => snapshot.Retired is not null,
+            CompactionJournalFrameKind.Intent => snapshot.Relocations.Any(
+                relocation => relocation.Intent.RelocationId == relocationId),
+            CompactionJournalFrameKind.Written => snapshot.Relocations.Any(
+                relocation => relocation.Intent.RelocationId == relocationId && relocation.Written is not null),
+            _ => false,
+        };
+    }
+
+    private CompactionJournalAdmit TryAdmitCompactionJournalFrame(
+        ulong compactionId,
+        CompactionJournalFrameKind kind,
+        ulong relocationId,
+        int frameBytes)
+    {
+        var volume = RequireControlVolume();
+        var snap = volume.Reader.Read();
+        var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
+        return volume.WithLedger(ledger =>
+        {
+            if (ledger.HoldsCompactionJournalFrame(compactionId, kind, relocationId))
+            {
+                return CompactionJournalAdmit.AlreadyHeld;
+            }
+
+            if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, frameBytes, ceiling))
+            {
+                FileArticleStorageEngineLogMessages.RejectedCompactionJournalCapacity(
+                    _logger,
+                    compactionId,
+                    kind.ToString(),
+                    relocationId,
+                    frameBytes,
+                    snap.UsedBytes,
+                    ledger.ReservedBytes,
+                    snap.TotalBytes,
+                    ceiling);
+                return CompactionJournalAdmit.Denied;
+            }
+
+            return ledger.TryAddCompactionJournalFrame(compactionId, kind, relocationId, frameBytes)
+                ? CompactionJournalAdmit.NewlyReserved
+                : CompactionJournalAdmit.AlreadyHeld;
+        });
+    }
+
+    private void ReleaseCompactionJournalFrame(
+        ulong compactionId,
+        CompactionJournalFrameKind kind,
+        ulong relocationId)
+    {
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            _ = ledger.ReleaseCompactionJournalFrame(compactionId, kind, relocationId);
+            return 0;
+        });
+    }
+
+    private void ReconstructIndexPresentReservations()
+    {
+        var retained = _index.CopyRetainedIndexFrames();
+        if (retained.Length == 0)
+        {
+            return;
+        }
+
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            foreach (var frame in retained)
+            {
+                ledger.AddRetainedIndexFrame(
+                    frame.ArtId,
+                    frame.FileOffset,
+                    frame.SnapshotGeneration,
+                    frameBytes);
+            }
+
+            return 0;
+        });
+    }
+
+    private void ApplyIndexPrefixRetirement(IndexPrefixRetirement retirement)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            ledger.ApplyIndexPrefixRetirement(
+                retirement.CoveredIndexLength,
+                retirement.NewFrameBase,
+                retirement.SnapshotGeneration,
+                ArticleIndexRecordCodec.RecordLength,
+                retirement.SnapshotArticleIds);
+            return 0;
+        });
+    }
+
+    private CapacityVolume RequireSegmentVolume() =>
+        _segmentCapacity ?? throw new InvalidOperationException(
+            "Capacity admission is enabled but no segment capacity volume is configured.");
+
+    private CapacityVolume RequireControlVolume() =>
+        _controlCapacity ?? throw new InvalidOperationException(
+            "Capacity admission is enabled but no control capacity volume is configured.");
 
     /// <summary>
     /// True when every Closed segment has completed historical extent accounting.
@@ -298,6 +854,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
+    /// Optional rewrite applied to each Accept-only append until the function returns null.
+    /// Tests only. A null result clears the hook and keeps the real location.
+    /// Used to force retirement-seal retries onto a sealed segment id.
+    /// </summary>
+    internal Func<StoredArticleLocation, StoredArticleLocation?>? TestRewriteSealedPhysicalLocation
+    {
+        get;
+        set;
+    }
+
+    /// <summary>
     /// When true, the next <see cref="TryEvict"/> / <see cref="TryInvalidate"/> on a Present
     /// article returns false before durable <c>TrySetState</c> (tests only; auto-cleared).
     /// </summary>
@@ -347,16 +914,49 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// (<c>MaxBytes = 0</c>) is used.
     /// </param>
     /// <param name="capacityReader">
-    /// Optional physical capacity source for process-local admission. When capacity admission is
-    /// enabled and this is null, a <see cref="CacheDirectoryCapacityReader"/> over
-    /// <see cref="ArticleStorageRuntimeOptions.SegmentDir"/> is used.
+    /// Optional segment-volume capacity source. When admission is enabled, the volumes share one
+    /// physical volume, and this is null, a <see cref="CacheDirectoryCapacityReader"/> over
+    /// <see cref="ArticleStorageRuntimeOptions.SegmentDir"/> is used for that shared volume.
+    /// When the volumes differ and this is null, that reader is created for the segment volume only.
     /// </param>
     public static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         ILogger? logger = null,
         TimeProvider? timeProvider = null,
         IArticleMemoryCache? articleCache = null,
-        IStorageCapacityReader? capacityReader = null)
+        IStorageCapacityReader? capacityReader = null) =>
+        Open(
+            options,
+            volumeProbe: null,
+            capacityReader,
+            controlCapacityReader: null,
+            logger,
+            timeProvider,
+            articleCache);
+
+    /// <summary>
+    /// Opens the engine with an explicit volume probe and optional per-volume readers.
+    /// </summary>
+    /// <param name="options">Validated control/segment directory bounds.</param>
+    /// <param name="volumeProbe">
+    /// Volume resolver. Used only when admission is enabled. When null, the OS probe is used.
+    /// </param>
+    /// <param name="capacityReader">Optional segment-volume capacity source.</param>
+    /// <param name="controlCapacityReader">
+    /// Optional control-volume capacity source used only when the control volume differs from the
+    /// segment volume.
+    /// </param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="timeProvider">Optional time provider.</param>
+    /// <param name="articleCache">Optional process-local cache.</param>
+    internal static FileArticleStorageEngine Open(
+        ArticleStorageRuntimeOptions options,
+        IStorageVolumeProbe? volumeProbe,
+        IStorageCapacityReader? capacityReader = null,
+        IStorageCapacityReader? controlCapacityReader = null,
+        ILogger? logger = null,
+        TimeProvider? timeProvider = null,
+        IArticleMemoryCache? articleCache = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -371,11 +971,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             journal = FileArticleJournal.Open(options, log);
             segments = FileSegmentStore.Open(options, log);
             index = FileArticleIndex.Open(options, log);
-            IStorageCapacityReader? capacity = capacityReader;
-            if (options.CapacityAdmissionEnabled && capacity is null)
-            {
-                capacity = new CacheDirectoryCapacityReader(options.SegmentDir);
-            }
+            var capacity = CapacityVolumes.Resolve(
+                options.SegmentDir,
+                options.ControlDir,
+                options.CapacityAdmissionEnabled,
+                capacityReader,
+                controlCapacityReader,
+                volumeProbe);
 
             var engine = new FileArticleStorageEngine(
                 journal,
@@ -430,8 +1032,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
 
         JournalAcceptRecord journalRecord;
-        var reservedForAccept = false;
-        var requiredBytes = 0L;
+        var reservedSegment = false;
+        var reservedJournal = false;
+        var reservedIndex = false;
+        var segmentBytes = 0L;
+        var journalBytes = 0L;
+        var indexBytes = 0L;
         lock (_gate)
         {
             if (_index.TryGet(record.ArtId, out var existing)
@@ -449,36 +1055,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             if (_capacityAdmissionEnabled)
             {
-                if (_capacityReader is null)
+                segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+                journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
+                indexBytes = ArticleIndexRecordCodec.RecordLength;
+                if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
                 {
-                    throw new InvalidOperationException(
-                        "Capacity admission is enabled but no IStorageCapacityReader is configured.");
-                }
-
-                requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-                var snap = _capacityReader.Read();
-                if (!_capacityLedger.WouldFit(
-                        snap.UsedBytes,
-                        snap.TotalBytes,
-                        requiredBytes,
-                        _capacityMaximumUtilization))
-                {
-                    FileArticleStorageEngineLogMessages.RejectedCapacity(
-                        _logger,
-                        record.ArtId.ToString() ?? string.Empty,
-                        requiredBytes,
-                        snap.UsedBytes,
-                        _capacityLedger.ArticleReservedBytes,
-                        _capacityLedger.CompactionReservedBytes,
-                        snap.TotalBytes,
-                        snap.AvailableBytes,
-                        _capacityMaximumUtilization,
-                        _capacityCompactionHeadroom);
                     return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
                 }
 
-                _capacityLedger.TentativeAdd(requiredBytes);
-                reservedForAccept = true;
+                reservedSegment = true;
+                reservedJournal = true;
+                reservedIndex = true;
             }
 
             try
@@ -492,11 +1079,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         out journalRecord!,
                         out var rejectOutcome))
                 {
-                    if (reservedForAccept)
-                    {
-                        _capacityLedger.RollbackUnbound(requiredBytes);
-                        reservedForAccept = false;
-                    }
+                    RollbackUnboundAccept(
+                        reservedSegment,
+                        reservedJournal,
+                        reservedIndex,
+                        segmentBytes,
+                        journalBytes,
+                        indexBytes);
+                    reservedSegment = false;
+                    reservedJournal = false;
+                    reservedIndex = false;
 
                     return Task.FromResult(rejectOutcome switch
                     {
@@ -508,19 +1100,45 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     });
                 }
 
-                if (reservedForAccept)
+                if (reservedSegment)
                 {
-                    _capacityLedger.BindSequence(journalRecord.Sequence, requiredBytes);
-                    reservedForAccept = false;
+                    RequireSegmentVolume().WithLedger(ledger =>
+                    {
+                        ledger.BindSequence(journalRecord.Sequence, segmentBytes);
+                        return 0;
+                    });
+                    reservedSegment = false;
+                }
+
+                if (reservedJournal)
+                {
+                    RequireControlVolume().WithLedger(ledger =>
+                    {
+                        ledger.BindJournalSequence(journalRecord.Sequence, journalBytes);
+                        return 0;
+                    });
+                    reservedJournal = false;
+                }
+
+                if (reservedIndex)
+                {
+                    RequireControlVolume().WithLedger(ledger =>
+                    {
+                        ledger.BindIndexUnbound(journalRecord.Sequence, indexBytes);
+                        return 0;
+                    });
+                    reservedIndex = false;
                 }
             }
             catch
             {
-                if (reservedForAccept)
-                {
-                    _capacityLedger.RollbackUnbound(requiredBytes);
-                }
-
+                RollbackUnboundAccept(
+                    reservedSegment,
+                    reservedJournal,
+                    reservedIndex,
+                    segmentBytes,
+                    journalBytes,
+                    indexBytes);
                 throw;
             }
 
@@ -710,8 +1328,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                           && m.Location.SegmentId.Value == sourceId.Value);
             if (!sourceStillPresent)
             {
-                _ = _journal.AppendCompactionCommittedAsync(
-                        new JournalCompactionCommittedRecord(1, compaction.Begin.CompactionId),
+                _ = AppendReservedCompactionJournalFrameAsync(
+                        compaction.Begin.CompactionId,
+                        CompactionJournalFrameKind.Committed,
+                        relocationId: 0,
+                        ArticleJournalFrameCodec.CompactionCommittedFrameLength,
+                        ct => _journal.AppendCompactionCommittedAsync(
+                            new JournalCompactionCommittedRecord(1, compaction.Begin.CompactionId),
+                            ct),
                         CancellationToken.None)
                     .AsTask()
                     .GetAwaiter()
@@ -762,7 +1386,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         if (LocationsEqual(indexMeta.Location, intent.ExpectedSourceLocation))
         {
-            var outcome = _index.TryRelocate(
+            var outcome = RelocatePresentFrame(
                 intent.ArtId,
                 intent.ExpectedSourceLocation,
                 written.DestinationLocation,
@@ -841,9 +1465,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         try
         {
-            var released = _journal.CheckpointTruncateCommitted();
+            var released = _journal.CheckpointTruncateCommittedReporting(
+                out var omittedSequences,
+                out var omittedCompactions);
+            ReleaseRetiredJournalSequences(omittedSequences);
+            ReleaseRetiredCompactionJournals(omittedCompactions);
             FileArticleStorageEngineLogMessages.CheckpointCompleted(_logger, released);
             return released;
+        }
+        catch (CheckpointCapacityDeniedException)
+        {
+            return 0;
         }
         catch (Exception ex)
         {
@@ -1026,8 +1658,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 written.Location.SegmentId.Value,
                 written.Location.Offset,
                 written.Location.Length);
-            // Durable PW already owns physical capacity; release before index work (idempotent).
-            ReleaseCapacityReservation(accept.Sequence);
+            // Durable PhysicalWritten does not release the segment-copy reservation.
             await CompleteFromPhysicalWrittenAsync(accept, written, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -1038,7 +1669,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
-        EnsureAcceptReservationOrDefer(accept);
         var proven = _segments.FindProvenLocations(
             accept.ArtId,
             accept.ArtHash,
@@ -1086,7 +1716,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     // Journal location is now authoritative; drop the process-local marker first.
                     ClearPrePhysicalWritten(accept.Sequence);
                     physicalWrittenDurable = true;
-                    ReleaseCapacityReservation(accept.Sequence);
                     ThrowIfTestFault(PersistFaultPoint.AfterPhysicalWritten, accept.Sequence);
                     await CompleteFromPhysicalWrittenAsync(accept, pwCandidate, cancellationToken)
                         .ConfigureAwait(false);
@@ -1104,7 +1733,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                             "but no durable PhysicalWritten was found.");
                     }
 
-                    ReleaseCapacityReservation(accept.Sequence);
                     await CompleteFromPhysicalWrittenAsync(accept, existingPw, cancellationToken)
                         .ConfigureAwait(false);
                     MarkUnpublishedProvenCopiesDead(accept.ArtId, proven);
@@ -1134,44 +1762,354 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// Re-binds a released Accept reservation before another physical attempt.
-    /// Throws <see cref="PersistCompletionDeferredException"/> when admission cannot fit,
-    /// without appending.
+    /// Appends the Present frame for <paramref name="sequence"/> after its 88-byte reservation is held.
+    /// Returns <see langword="false"/> when the index rejects the frame and nothing was written.
     /// </summary>
-    private void EnsureAcceptReservationOrDefer(JournalAcceptRecord accept)
+    private bool PublishPresentFrame(ulong sequence, in StoredArticleMetadata metadata)
+    {
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        if (_capacityAdmissionEnabled && !EnsureUnboundIndexReservation(sequence, frameBytes))
+        {
+            throw new PersistCompletionDeferredException(
+                $"Cannot reserve the {frameBytes}-byte index Present frame for sequence {sequence}.");
+        }
+
+        var lengthBefore = _index.DurableLength;
+        try
+        {
+            var append = _index.TryCommitPresentReporting(metadata, out var frameOffset);
+            switch (append)
+            {
+                case DurableIndexAppend.Appended:
+                    BindIndexFrameFromSequence(sequence, metadata.ArtId, frameOffset);
+                    return true;
+                case DurableIndexAppend.Unchanged:
+                    ReleaseUnboundIndexReservation(sequence);
+                    return true;
+                default:
+                    ReleaseUnboundIndexReservation(sequence);
+                    return false;
+            }
+        }
+        catch
+        {
+            if (_index.DurableLength >= lengthBefore + frameBytes)
+            {
+                BindIndexFrameFromSequence(sequence, metadata.ArtId, lengthBefore);
+            }
+            else
+            {
+                ReleaseUnboundIndexReservation(sequence);
+            }
+
+            throw;
+        }
+    }
+
+    private ArticleRelocateOutcome RelocatePresentFrame(
+        ArticleId artId,
+        in StoredArticleLocation expectedLocation,
+        in StoredArticleLocation newLocation,
+        ulong artHash,
+        int artSize)
+    {
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        var reserved = false;
+        if (_capacityAdmissionEnabled)
+        {
+            if (!TryReserveDirectIndexFrame(
+                    artId,
+                    frameBytes,
+                    _capacityMaximumUtilization + _capacityCompactionHeadroom))
+            {
+                throw new PersistCompletionDeferredException(
+                    $"Cannot reserve the {frameBytes}-byte index Present frame for {artId}.");
+            }
+
+            reserved = true;
+        }
+
+        var lengthBefore = _index.DurableLength;
+        try
+        {
+            var outcome = _index.TryRelocateReporting(
+                artId,
+                expectedLocation,
+                newLocation,
+                artHash,
+                artSize,
+                out var frameOffset);
+            if (!reserved)
+            {
+                return outcome;
+            }
+
+            if (outcome == ArticleRelocateOutcome.Relocated)
+            {
+                BindDirectIndexFrame(artId, frameOffset, frameBytes);
+            }
+            else
+            {
+                RollbackDirectIndexFrame(frameBytes);
+            }
+
+            return outcome;
+        }
+        catch
+        {
+            if (reserved)
+            {
+                FinishDirectIndexFrameAfterThrow(artId, lengthBefore, frameBytes);
+            }
+
+            throw;
+        }
+    }
+
+    private bool EnsureUnboundIndexReservation(ulong sequence, long frameBytes)
+    {
+        var control = RequireControlVolume();
+        if (control.WithLedger(ledger => ledger.HasUnboundIndex(sequence)))
+        {
+            return true;
+        }
+
+        var snap = control.Reader.Read();
+        return control.WithLedger(ledger =>
+        {
+            if (ledger.HasUnboundIndex(sequence))
+            {
+                return true;
+            }
+
+            if (!ledger.WouldFit(
+                    snap.UsedBytes,
+                    snap.TotalBytes,
+                    frameBytes,
+                    _capacityMaximumUtilization))
+            {
+                return false;
+            }
+
+            ledger.TentativeAddIndex(frameBytes);
+            ledger.BindIndexUnbound(sequence, frameBytes);
+            return true;
+        });
+    }
+
+    private bool TryReserveDirectIndexFrame(ArticleId artId, long frameBytes, double ceilingUtilization)
+    {
+        var control = RequireControlVolume();
+        var snap = control.Reader.Read();
+        var admitted = control.WithLedger(ledger =>
+        {
+            if (!ledger.WouldFit(
+                    snap.UsedBytes,
+                    snap.TotalBytes,
+                    frameBytes,
+                    ceilingUtilization))
+            {
+                return false;
+            }
+
+            ledger.TentativeAddDirectIndex(frameBytes);
+            return true;
+        });
+        if (admitted)
+        {
+            return true;
+        }
+
+        FileArticleStorageEngineLogMessages.RejectedCapacity(
+            _logger,
+            artId.ToString() ?? string.Empty,
+            frameBytes,
+            snap.UsedBytes,
+            0,
+            0,
+            0,
+            snap.TotalBytes,
+            snap.AvailableBytes,
+            ceilingUtilization,
+            _capacityCompactionHeadroom);
+        return false;
+    }
+
+    private void BindIndexFrameFromSequence(ulong sequence, ArticleId artId, long frameOffset)
     {
         if (!_capacityAdmissionEnabled)
         {
             return;
         }
 
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            if (ledger.HasUnboundIndex(sequence))
+            {
+                ledger.BindIndexFrameFromSequence(sequence, artId, frameOffset);
+            }
+
+            return 0;
+        });
+    }
+
+    private void BindDirectIndexFrame(ArticleId artId, long frameOffset, long frameBytes)
+    {
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            ledger.BindDirectIndexFrame(artId, frameOffset, frameBytes);
+            return 0;
+        });
+    }
+
+    private void RollbackDirectIndexFrame(long frameBytes)
+    {
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            ledger.RollbackDirectIndex(frameBytes);
+            return 0;
+        });
+    }
+
+    private void FinishDirectIndexFrameAfterThrow(ArticleId artId, long lengthBefore, long frameBytes)
+    {
+        if (_index.DurableLength >= lengthBefore + frameBytes)
+        {
+            BindDirectIndexFrame(artId, lengthBefore, frameBytes);
+            return;
+        }
+
+        RollbackDirectIndexFrame(frameBytes);
+    }
+
+    private void ReleaseUnboundIndexReservation(ulong sequence)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        RequireControlVolume().WithLedger(ledger =>
+        {
+            _ = ledger.ReleaseUnboundIndex(sequence);
+            return 0;
+        });
+    }
+
+    /// <summary>
+    /// Reserves one segment-volume copy of <c>ArtSize + 56</c> before a physical append
+    /// when no unwritten copy reservation is already held.
+    /// Returns true when this call added a reservation.
+    /// Adoption must not call this. A failed reservation throws
+    /// <see cref="PersistCompletionDeferredException"/> and does not append.
+    /// Phase 2D recovery re-append reuses this helper.
+    /// </summary>
+    private bool ReserveSegmentCopyBeforeAppend(JournalAcceptRecord accept)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return false;
+        }
+
+        var volume = RequireSegmentVolume();
         var requiredBytes = SegmentRecordCodec.RecordLengthForArtSize(accept.ArtSize);
         lock (_gate)
         {
-            if (_capacityLedger.HoldsArticle(accept.Sequence))
+            if (volume.WithLedger(ledger => ledger.HasUnwrittenSegmentCopy(accept.Sequence)))
             {
-                return;
+                return false;
             }
 
-            if (_capacityReader is null)
+            var snap = volume.Reader.Read();
+            var added = false;
+            var admitted = volume.WithLedger(ledger =>
             {
-                throw new InvalidOperationException(
-                    "Capacity admission is enabled but no IStorageCapacityReader is configured.");
-            }
+                if (ledger.HasUnwrittenSegmentCopy(accept.Sequence))
+                {
+                    return true;
+                }
 
-            var snap = _capacityReader.Read();
-            if (!_capacityLedger.WouldFit(
-                    snap.UsedBytes,
-                    snap.TotalBytes,
-                    requiredBytes,
-                    _capacityMaximumUtilization))
+                if (!ledger.WouldFit(
+                        snap.UsedBytes,
+                        snap.TotalBytes,
+                        requiredBytes,
+                        _capacityMaximumUtilization))
+                {
+                    return false;
+                }
+
+                if (ledger.HoldsArticle(accept.Sequence))
+                {
+                    ledger.AddSegmentCopy(accept.Sequence, requiredBytes);
+                }
+                else
+                {
+                    ledger.TentativeAdd(requiredBytes);
+                    ledger.BindSequence(accept.Sequence, requiredBytes);
+                }
+
+                added = true;
+                return true;
+            });
+            if (!admitted)
             {
                 throw new PersistCompletionDeferredException(
                     $"Accept sequence {accept.Sequence} cannot reserve {requiredBytes} bytes until capacity is free.");
             }
 
-            _capacityLedger.TentativeAdd(requiredBytes);
-            _capacityLedger.BindSequence(accept.Sequence, requiredBytes);
+            return added;
+        }
+    }
+
+    private void NoteSegmentCopyWritten(ulong sequence)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        var volume = RequireSegmentVolume();
+        lock (_gate)
+        {
+            _ = volume.WithLedger(ledger =>
+            {
+                ledger.NoteSegmentCopyWritten(sequence);
+                return true;
+            });
+        }
+    }
+
+    private void ReleaseUnwrittenSegmentCopy(ulong sequence)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _ = RequireSegmentVolume().WithLedger(ledger => ledger.ReleaseUnwrittenSegmentCopy(sequence));
+        }
+    }
+
+    /// <summary>Releases segment-copy reservations that were never physically written.</summary>
+    private void ReleaseUnwrittenSegmentCopies(ulong sequence)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _ = RequireSegmentVolume().WithLedger(ledger =>
+            {
+                while (ledger.ReleaseUnwrittenSegmentCopy(sequence))
+                {
+                }
+
+                return true;
+            });
         }
     }
 
@@ -1270,7 +2208,25 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         for (var attempt = 1; attempt <= MaxPrePhysicalWrittenAppendAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
+            var addedReservation = ReserveSegmentCopyBeforeAppend(accept);
+            StoredArticleLocation location;
+            var appended = false;
+            try
+            {
+                location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
+                appended = true;
+                NoteSegmentCopyWritten(accept.Sequence);
+            }
+            catch
+            {
+                if (addedReservation && !appended)
+                {
+                    ReleaseUnwrittenSegmentCopy(accept.Sequence);
+                }
+
+                throw;
+            }
+
             ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, accept.Sequence);
 
             var rewrite = TestRewritePhysicalLocationAfterAppend;
@@ -1278,6 +2234,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             if (rewrite is not null)
             {
                 location = rewrite(location);
+            }
+
+            var sealRewrite = TestRewriteSealedPhysicalLocation;
+            if (sealRewrite is not null)
+            {
+                var rewritten = sealRewrite(location);
+                if (rewritten is { } next)
+                {
+                    location = next;
+                }
+                else
+                {
+                    TestRewriteSealedPhysicalLocation = null;
+                }
             }
 
             if (!TryRegisterPrePhysicalWritten(accept.Sequence, location))
@@ -1316,14 +2286,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         written = default;
         return false;
-    }
-
-    private void ReleaseCapacityReservation(ulong sequence)
-    {
-        lock (_gate)
-        {
-            _ = _capacityLedger.Release(sequence);
-        }
     }
 
     private async Task CompleteFromPhysicalWrittenAsync(
@@ -1387,7 +2349,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     written.Location,
                     ArticleStorageState.Present,
                     _timeProvider.GetUtcNow());
-                if (!_index.TryCommitPresent(in metadata)
+                if (!PublishPresentFrame(accept.Sequence, in metadata)
                     && !ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
                 {
                     throw new InvalidOperationException(
@@ -1539,57 +2501,187 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         var hook = TestHookBeforeExpectedInvalidation;
         TestHookBeforeExpectedInvalidation = null;
         hook?.Invoke(expected.ArtId, expected.Location);
+        var matched = expected;
 
-        var invalidated = false;
-        var expectedArtId = expected.ArtId;
-        var expectedLocation = expected.Location;
-        var expectedArtHash = expected.ArtHash;
-        var expectedArtSize = expected.ArtSize;
-        Catalogue.ExecuteLocked(() =>
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        var reserved = false;
+        long lengthBefore = 0;
+        try
         {
-            if (!_index.TryInvalidatePresentAt(
-                    expectedArtId,
-                    expectedLocation,
-                    expectedArtHash,
-                    expectedArtSize,
-                    _timeProvider.GetUtcNow(),
-                    out var transitioned))
+            while (true)
             {
-                return;
-            }
+                var invalidated = false;
+                long frameOffset = -1;
+                var reserveBeforeAppend = false;
+                var expectedArtId = expected.ArtId;
+                var expectedLocation = expected.Location;
+                var expectedArtHash = expected.ArtHash;
+                var expectedArtSize = expected.ArtSize;
+                Catalogue.ExecuteLocked(() =>
+                {
+                    if (_capacityAdmissionEnabled && !reserved)
+                    {
+                        reserveBeforeAppend = IndexInvalidateWouldAppend(matched);
+                        return;
+                    }
 
-            try
-            {
-                Catalogue.ApplyLiveDeadDelta(
-                    transitioned.Location.SegmentId,
-                    liveDelta: -transitioned.Location.Length,
-                    deadDelta: transitioned.Location.Length);
-            }
-            catch (InvalidOperationException)
-            {
-                // Catalogue entry may be absent in edge tests; logical index transition still stands.
-            }
+                    if (!_index.TryInvalidatePresentAtReporting(
+                            expectedArtId,
+                            expectedLocation,
+                            expectedArtHash,
+                            expectedArtSize,
+                            _timeProvider.GetUtcNow(),
+                            out var transitioned,
+                            out frameOffset))
+                    {
+                        return;
+                    }
 
-            invalidated = true;
-        });
+                    try
+                    {
+                        Catalogue.ApplyLiveDeadDelta(
+                            transitioned.Location.SegmentId,
+                            liveDelta: -transitioned.Location.Length,
+                            deadDelta: transitioned.Location.Length);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Catalogue entry may be absent in edge tests; logical index transition still stands.
+                    }
 
-        if (invalidated)
-        {
-            BestEffortCacheRemove(expected.ArtId);
+                    invalidated = true;
+                });
+
+                if (reserveBeforeAppend)
+                {
+                    if (!TryReserveDirectIndexFrame(
+                            expected.ArtId,
+                            frameBytes,
+                            _capacityMaximumUtilization))
+                    {
+                        return false;
+                    }
+
+                    reserved = true;
+                    lengthBefore = _index.DurableLength;
+                    continue;
+                }
+
+                if (reserved)
+                {
+                    if (frameOffset >= 0)
+                    {
+                        BindDirectIndexFrame(expected.ArtId, frameOffset, frameBytes);
+                    }
+                    else
+                    {
+                        RollbackDirectIndexFrame(frameBytes);
+                    }
+
+                    reserved = false;
+                }
+
+                if (invalidated)
+                {
+                    BestEffortCacheRemove(expected.ArtId);
+                }
+
+                return invalidated;
+            }
         }
+        catch
+        {
+            if (reserved)
+            {
+                FinishDirectIndexFrameAfterThrow(expected.ArtId, lengthBefore, frameBytes);
+            }
 
-        return invalidated;
+            throw;
+        }
     }
+
+    private bool IndexInvalidateWouldAppend(in StoredArticleMetadata expected) =>
+        _index.TryGet(expected.ArtId, out var existing)
+        && existing.State == ArticleStorageState.Present
+        && existing.ArtHash == expected.ArtHash
+        && existing.ArtSize == expected.ArtSize
+        && LocationsEqual(existing.Location, expected.Location);
 
     private bool TransitionLogicalDeath(ArticleId artId, ArticleStorageState state)
     {
-        var changed = false;
-        Catalogue.ExecuteLocked(() => changed = TransitionLogicalDeathUnlocked(artId, state));
-        return changed;
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        var reserved = false;
+        long lengthBefore = 0;
+        try
+        {
+            while (true)
+            {
+                var changed = false;
+                long frameOffset = -1;
+                var reserveBeforeAppend = false;
+                Catalogue.ExecuteLocked(() =>
+                {
+                    if (_capacityAdmissionEnabled && !reserved && IndexDeathWouldAppend(artId))
+                    {
+                        reserveBeforeAppend = true;
+                        return;
+                    }
+
+                    changed = TransitionLogicalDeathUnlocked(artId, state, out frameOffset);
+                });
+
+                if (reserveBeforeAppend)
+                {
+                    if (!TryReserveDirectIndexFrame(artId, frameBytes, _capacityMaximumUtilization))
+                    {
+                        if (_index.TryGet(artId, out var current) && current.State == state)
+                        {
+                            BestEffortCacheRemove(artId);
+                            return true;
+                        }
+
+                        return false;
+                    }
+
+                    reserved = true;
+                    lengthBefore = _index.DurableLength;
+                    continue;
+                }
+
+                if (reserved)
+                {
+                    if (frameOffset >= 0)
+                    {
+                        BindDirectIndexFrame(artId, frameOffset, frameBytes);
+                    }
+                    else
+                    {
+                        RollbackDirectIndexFrame(frameBytes);
+                    }
+
+                    reserved = false;
+                }
+
+                return changed;
+            }
+        }
+        catch
+        {
+            if (reserved)
+            {
+                FinishDirectIndexFrameAfterThrow(artId, lengthBefore, frameBytes);
+            }
+
+            throw;
+        }
     }
 
-    private bool TransitionLogicalDeathUnlocked(ArticleId artId, ArticleStorageState state)
+    private bool IndexDeathWouldAppend(ArticleId artId) =>
+        _index.TryGet(artId, out var existing) && existing.State == ArticleStorageState.Present;
+
+    private bool TransitionLogicalDeathUnlocked(ArticleId artId, ArticleStorageState state, out long frameOffset)
     {
+        frameOffset = -1;
         if (!_index.TryGet(artId, out var snapshot))
         {
             return false;
@@ -1614,8 +2706,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         // Only the caller that actually changes Present applies the live→dead delta.
         // A second evict observes the terminal state and must not count the bytes again.
-        if (!_index.TryTransitionPresentOnce(artId, state, _timeProvider.GetUtcNow(), out var transitioned))
+        if (!_index.TryTransitionPresentOnce(
+                artId,
+                state,
+                _timeProvider.GetUtcNow(),
+                out var transitioned,
+                out frameOffset))
         {
+            frameOffset = -1;
             if (_index.TryGet(artId, out snapshot) && snapshot.State == state)
             {
                 BestEffortCacheRemove(artId);
@@ -1737,9 +2835,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         }
                         else
                         {
-                            // Keep the incomplete Accept. Release the process-local pin and
-                            // retry later on the blocked path. Do not publish.
-                            ReleaseCapacityReservation(sequence);
+                            // Keep the incomplete Accept. Release only copies that were not written.
+                            ReleaseUnwrittenSegmentCopies(sequence);
+                            ReleaseUnboundIndexReservation(sequence);
                             FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
                                 _logger,
                                 sequence,

@@ -91,12 +91,18 @@ public sealed partial class FileArticleStorageEngine
         // Durable CompactionBegin when starting a new transaction (continuation skips this).
         if (!_journal.TryGetCompaction(compactionId, out _))
         {
-            var beginOutcome = await _journal
-                .AppendCompactionBeginAsync(
-                    new JournalCompactionBeginRecord(1, compactionId, sourceSegmentId, sourceGeneration),
+            var beginAppend = await AppendReservedCompactionJournalFrameAsync(
+                    compactionId,
+                    CompactionJournalFrameKind.Begin,
+                    relocationId: 0,
+                    ArticleJournalFrameCodec.CompactionBeginFrameLength,
+                    ct => _journal.AppendCompactionBeginAsync(
+                        new JournalCompactionBeginRecord(1, compactionId, sourceSegmentId, sourceGeneration),
+                        ct),
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (beginOutcome is JournalAppendOutcome.Rejected or JournalAppendOutcome.Conflict)
+            if (beginAppend.CapacityDenied
+                || beginAppend.Outcome is JournalAppendOutcome.Rejected or JournalAppendOutcome.Conflict)
             {
                 return new ArticleCompactionResult(
                     ArticleCompactionOutcome.Failed,
@@ -108,7 +114,9 @@ public sealed partial class FileArticleStorageEngine
                     AbandonedCount: 0,
                     RemainingPresentOnSource: CountPresentOnSource(sourceSegmentId),
                     CompactionCommittedAppended: false,
-                    Reason: "compaction-begin-" + beginOutcome);
+                    Reason: beginAppend.CapacityDenied
+                        ? "compaction-begin-capacity"
+                        : "compaction-begin-" + beginAppend.Outcome);
             }
         }
 
@@ -227,13 +235,19 @@ public sealed partial class FileArticleStorageEngine
                 Reason: fenceReason);
         }
 
-        var commitOutcome = await _journal
-            .AppendCompactionCommittedAsync(
-                new JournalCompactionCommittedRecord(1, compactionId),
+        var commitAppend = await AppendReservedCompactionJournalFrameAsync(
+                compactionId,
+                CompactionJournalFrameKind.Committed,
+                relocationId: 0,
+                ArticleJournalFrameCodec.CompactionCommittedFrameLength,
+                ct => _journal.AppendCompactionCommittedAsync(
+                    new JournalCompactionCommittedRecord(1, compactionId),
+                    ct),
                 cancellationToken)
             .ConfigureAwait(false);
+        var commitOutcome = commitAppend.Outcome;
 
-        if (commitOutcome is JournalAppendOutcome.Rejected or JournalAppendOutcome.Conflict)
+        if (commitAppend.CapacityDenied || commitOutcome is JournalAppendOutcome.Rejected or JournalAppendOutcome.Conflict)
         {
             return new ArticleCompactionResult(
                 ArticleCompactionOutcome.Failed,
@@ -245,7 +259,9 @@ public sealed partial class FileArticleStorageEngine
                 abandoned,
                 RemainingPresentOnSource: 0,
                 CompactionCommittedAppended: false,
-                Reason: "compaction-committed-" + commitOutcome);
+                Reason: commitAppend.CapacityDenied
+                    ? "compaction-committed-capacity"
+                    : "compaction-committed-" + commitOutcome);
         }
 
         return new ArticleCompactionResult(

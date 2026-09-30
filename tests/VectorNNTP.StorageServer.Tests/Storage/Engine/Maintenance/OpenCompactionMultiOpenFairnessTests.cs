@@ -28,7 +28,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var (c2Source, c2Id) = await CreateOpenAllDeadBeginAsync(engine, capacity, "a-c2");
         Assert.True(c1Id < c2Id);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var attempted = new List<(SegmentId Source, ulong CompactionId)>();
         var coordinator = CreateCoordinator(engine);
         coordinator.TestHookAfterOpenUncommittedAttempted = (src, id, _) => attempted.Add((src, id));
@@ -63,7 +63,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var (c3Source, c3Id) = await CreateOpenAllDeadBeginAsync(engine, capacity, "b-c3");
         Assert.True(c1Id < c2Id && c2Id < c3Id);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var attempted = new List<ulong>();
         var coordinator = CreateCoordinator(engine);
         coordinator.TestHookAfterOpenUncommittedAttempted = (_, id, _) => attempted.Add(id);
@@ -97,7 +97,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var closedId = await CreateClosedAllDeadSegmentAsync(engine, capacity, "c-s3");
         Assert.True(c1Id < c2Id);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var openAttempts = new List<ulong>();
         SegmentId? closedSelected = null;
         var coordinator = CreateCoordinator(engine);
@@ -376,7 +376,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "j-c1");
         var (c2Source, c2Id) = await CreateOpenAllDeadBeginAsync(engine, capacity, "j-c2");
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(c2Source, result.SegmentId);
@@ -419,6 +419,23 @@ public sealed class OpenCompactionMultiOpenFairnessTests
     private static StorageMaintenanceCoordinator CreateCoordinator(FileArticleStorageEngine engine) =>
         new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
 
+    private static long LeaveRoomForJournalOnlyCompaction(FileArticleStorageEngine engine)
+    {
+        var frames = ArticleJournalFrameCodec.CompactionBeginFrameLength
+            + ArticleJournalFrameCodec.CompactionCommittedFrameLength
+            + ArticleJournalFrameCodec.CompactionRetiredFrameLength;
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(0, ceiling - engine.ProcessLocalReservedBytes - frames);
+    }
+
+    private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
+    {
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(
+            0,
+            ceiling - engine.ProcessLocalReservedBytes - ArticleJournalFrameCodec.RelocationWrittenFrameLength);
+    }
+
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
         double maximumUtilization,
@@ -456,7 +473,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                capacity.UsedBytes = capacity.TotalBytes;
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
 

@@ -38,7 +38,7 @@ public sealed record StorageServerRuntimeOptions(
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
 /// <param name="CapacityAdmissionEnabled">Process-local capacity admission (Phase 5E.1 / 5E.2).</param>
 /// <param name="CapacityMaximumUtilization">
-/// Article Accept ceiling: max <c>(Used + ArtRes + CompRes + Required) / Total</c>.
+/// Article Accept ceiling: max <c>(Used + ArtRes + CompRes + CheckpointRes + Required) / Total</c>.
 /// </param>
 /// <param name="CapacityCompactionHeadroom">
 /// Utilisation delta added to <paramref name="CapacityMaximumUtilization"/> for compaction

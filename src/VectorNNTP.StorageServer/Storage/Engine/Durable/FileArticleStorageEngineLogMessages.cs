@@ -20,7 +20,7 @@ internal static partial class FileArticleStorageEngineLogMessages
     [LoggerMessage(
         EventId = 3415,
         Level = LogLevel.Warning,
-        Message = "Article Accept rejected by process-local capacity (artId={ArtId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
+        Message = "Article Accept rejected by process-local capacity (artId={ArtId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, CheckpointReservedBytes={CheckpointReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
     public static partial void RejectedCapacity(
         ILogger logger,
         string ArtId,
@@ -28,6 +28,7 @@ internal static partial class FileArticleStorageEngineLogMessages
         long UsedBytes,
         long ArticleReservedBytes,
         long CompactionReservedBytes,
+        long CheckpointReservedBytes,
         long TotalBytes,
         long AvailableBytes,
         double MaximumUtilization,
@@ -36,7 +37,7 @@ internal static partial class FileArticleStorageEngineLogMessages
     [LoggerMessage(
         EventId = 3416,
         Level = LogLevel.Warning,
-        Message = "Compaction relocation rejected by process-local capacity (artId={ArtId}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocationId={RelocationId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
+        Message = "Compaction relocation rejected by process-local capacity (artId={ArtId}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocationId={RelocationId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, CheckpointReservedBytes={CheckpointReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization}, CompactionHeadroom={CompactionHeadroom})")]
     public static partial void RejectedCompactionCapacity(
         ILogger logger,
         string ArtId,
@@ -47,10 +48,41 @@ internal static partial class FileArticleStorageEngineLogMessages
         long UsedBytes,
         long ArticleReservedBytes,
         long CompactionReservedBytes,
+        long CheckpointReservedBytes,
         long TotalBytes,
         long AvailableBytes,
         double MaximumUtilization,
         double CompactionHeadroom);
+
+    [LoggerMessage(
+        EventId = 3425,
+        Level = LogLevel.Warning,
+        Message = "Compaction journal frame rejected by process-local capacity (CompactionId={CompactionId}, FrameKind={FrameKind}, RelocationId={RelocationId}, RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ReservedBytes={ReservedBytes}, TotalBytes={TotalBytes}, CeilingUtilization={CeilingUtilization})")]
+    public static partial void RejectedCompactionJournalCapacity(
+        ILogger logger,
+        ulong CompactionId,
+        string FrameKind,
+        ulong RelocationId,
+        long RequiredBytes,
+        long UsedBytes,
+        long ReservedBytes,
+        long TotalBytes,
+        double CeilingUtilization);
+
+    [LoggerMessage(
+        EventId = 3424,
+        Level = LogLevel.Warning,
+        Message = "Checkpoint temporary allocation denied by process-local capacity (RequiredBytes={RequiredBytes}, UsedBytes={UsedBytes}, ArticleReservedBytes={ArticleReservedBytes}, CompactionReservedBytes={CompactionReservedBytes}, CheckpointReservedBytes={CheckpointReservedBytes}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, MaximumUtilization={MaximumUtilization})")]
+    public static partial void CheckpointCapacityDenied(
+        ILogger logger,
+        long RequiredBytes,
+        long UsedBytes,
+        long ArticleReservedBytes,
+        long CompactionReservedBytes,
+        long CheckpointReservedBytes,
+        long TotalBytes,
+        long AvailableBytes,
+        double MaximumUtilization);
 
     [LoggerMessage(
         EventId = 3402,

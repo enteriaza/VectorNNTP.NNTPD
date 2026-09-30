@@ -72,7 +72,9 @@ public sealed class NonRetryablePersistCompletionTests
 
         Assert.True(engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.PersistRetryScheduledCount);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         Assert.Equal(ArticleStorageState.Present, meta.State);

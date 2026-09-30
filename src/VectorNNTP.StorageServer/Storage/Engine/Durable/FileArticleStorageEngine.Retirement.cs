@@ -135,9 +135,26 @@ public sealed partial class FileArticleStorageEngine
             compactionId,
             sourceId,
             beginGeneration);
-        var appendOutcome = await _journal
-            .AppendCompactionRetiredAsync(retiredRecord, cancellationToken)
+        var retiredAppend = await AppendReservedCompactionJournalFrameAsync(
+                compactionId,
+                CompactionJournalFrameKind.Retired,
+                relocationId: 0,
+                ArticleJournalFrameCodec.CompactionRetiredFrameLength,
+                ct => _journal.AppendCompactionRetiredAsync(retiredRecord, ct),
+                cancellationToken)
             .ConfigureAwait(false);
+        if (retiredAppend.CapacityDenied)
+        {
+            return new ArticleSegmentRetirementResult(
+                ArticleSegmentRetirementOutcome.Failed,
+                compactionId,
+                sourceId,
+                beginGeneration,
+                CompactionRetiredAppended: false,
+                Reason: "compaction-retired-capacity");
+        }
+
+        var appendOutcome = retiredAppend.Outcome;
 
         if (appendOutcome == JournalAppendOutcome.Conflict)
         {

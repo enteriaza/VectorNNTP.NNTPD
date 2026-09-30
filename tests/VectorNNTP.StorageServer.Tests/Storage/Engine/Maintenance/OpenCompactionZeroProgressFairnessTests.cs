@@ -27,7 +27,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
         var (c1Source, c1CompactionId) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "a-c1");
         var s2Id = await CreateClosedAllDeadSegmentAsync(engine, capacity, "a-s2");
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         Assert.True(engine.ObserveCapacityAdmissionPressure().IsUnderAdmissionPressure);
         Assert.Contains(engine.Journal.EnumerateOpenCompactions(), c => c.Begin.CompactionId == c1CompactionId && !c.Committed);
 
@@ -109,7 +109,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                capacity.UsedBytes = capacity.TotalBytes;
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
         var coordinator = CreateCoordinator(engine);
@@ -226,7 +226,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
         Assert.True(c1Id < c2Id);
 
         var s3Id = await CreateClosedAllDeadSegmentAsync(engine, capacity, "f-s3");
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
@@ -274,8 +274,8 @@ public sealed class OpenCompactionZeroProgressFairnessTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                // Block further compaction under 0.95 ceiling while leaving article MaxUtil 0.90 room.
-                capacity.UsedBytes = (long)(total * 0.95);
+                // Block the next relocation while the in-flight Written frame still fits.
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
         var coordinator = CreateCoordinator(engine);
@@ -290,7 +290,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
         _ = pressure;
 
         var s2Id = await CreateClosedAllDeadSegmentAsync(engine, capacity, "g-s2");
-        capacity.UsedBytes = (long)(total * 0.95);
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
@@ -312,7 +312,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
 
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "h-c1");
         var s2Id = await CreateClosedAllDeadSegmentAsync(engine, capacity, "h-s2");
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
@@ -329,6 +329,23 @@ public sealed class OpenCompactionZeroProgressFairnessTests
 
     private static StorageMaintenanceCoordinator CreateCoordinator(FileArticleStorageEngine engine) =>
         new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+
+    private static long LeaveRoomForJournalOnlyCompaction(FileArticleStorageEngine engine)
+    {
+        var frames = ArticleJournalFrameCodec.CompactionBeginFrameLength
+            + ArticleJournalFrameCodec.CompactionCommittedFrameLength
+            + ArticleJournalFrameCodec.CompactionRetiredFrameLength;
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(0, ceiling - engine.ProcessLocalReservedBytes - frames);
+    }
+
+    private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
+    {
+        var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
+        return Math.Max(
+            0,
+            ceiling - engine.ProcessLocalReservedBytes - ArticleJournalFrameCodec.RelocationWrittenFrameLength);
+    }
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
@@ -367,7 +384,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
             if (!firstDone.IsSet)
             {
                 firstDone.Set();
-                capacity.UsedBytes = capacity.TotalBytes;
+                capacity.UsedBytes = LeaveRoomForWrittenFrame(engine);
             }
         };
 
