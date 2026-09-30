@@ -1,5 +1,7 @@
 using System.IO.Pipelines;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
@@ -51,6 +53,57 @@ public sealed class ArticlePlacementTests
         Assert.False(StorageServerPlacementSelector.TrySelect([], out _));
     }
 
+    [Fact]
+    public void Selector_ReplicaIsNextEligible_AndNeverReselectsFirst()
+    {
+        var entries = new StorageServerFleetEntry[]
+        {
+            Entry("cache02.example", 2, available: 10, port: 563),
+            Entry("cache09.example", 9, available: 50, port: 563),
+            Entry("cache03.example", 3, available: 50, port: 563),
+            Entry("noport.example", 1, available: 500, port: null),
+        };
+        Assert.True(StorageServerPlacementSelector.TrySelect(entries, out var first));
+        Assert.Equal("cache03.example", first.Fqdn);
+        Assert.True(StorageServerPlacementSelector.TrySelectExcluding(entries, first.Fqdn, out var replica));
+        Assert.Equal("cache09.example", replica.Fqdn);
+        Assert.NotEqual(first.Fqdn, replica.Fqdn);
+
+        var onlyFirst = new StorageServerFleetEntry[] { first, Entry("noport.example", 1, available: 500, port: null) };
+        Assert.False(StorageServerPlacementSelector.TrySelectExcluding(onlyFirst, first.Fqdn, out _));
+    }
+
+    [Fact]
+    public void Selector_ReplicaTieBreak_UsesAvailableBytesThenServerIdThenFqdn()
+    {
+        var entries = new StorageServerFleetEntry[]
+        {
+            Entry("m.example", 4, available: 20, port: 563),
+            Entry("a.example", 4, available: 20, port: 563),
+            Entry("b.example", 8, available: 20, port: 563),
+        };
+        Assert.True(StorageServerPlacementSelector.TrySelect(entries, out var first));
+        Assert.Equal("a.example", first.Fqdn);
+        Assert.True(StorageServerPlacementSelector.TrySelectExcluding(entries, first.Fqdn, out var replica));
+        Assert.Equal("m.example", replica.Fqdn);
+    }
+
+    [Fact]
+    public void Selector_ReplicaExcludesStaleAndMissingPort()
+    {
+        var registry = new StorageServerRegistry();
+        registry.ApplyAdvertisement(Advertisement("stale.example", 1, 900, 563), Now.AddSeconds(-10));
+        registry.ApplyAdvertisement(Advertisement("noport.example", 2, 800, port: null), Now);
+        registry.ApplyAdvertisement(Advertisement("cache03.example", 3, 100, 563), Now);
+        registry.ApplyAdvertisement(Advertisement("cache04.example", 4, 40, 563), Now);
+        var active = registry.GetActive(Now);
+        Assert.True(StorageServerPlacementSelector.TrySelect(active, out var first));
+        Assert.Equal("cache03.example", first.Fqdn);
+        Assert.True(StorageServerPlacementSelector.TrySelectExcluding(active, first.Fqdn, out var replica));
+        Assert.Equal("cache04.example", replica.Fqdn);
+        Assert.DoesNotContain(active, static entry => entry.Fqdn == "stale.example");
+    }
+
     [Theory]
     [InlineData(InboundArticleProducer.TakeThis)]
     [InlineData(InboundArticleProducer.IHave)]
@@ -100,6 +153,286 @@ public sealed class ArticlePlacementTests
         await RunAsync(article, persister, client, RegistryWithTarget());
         Assert.Equal(1, client.Calls);
         Assert.Equal(1, persister.Count);
+    }
+
+    [Theory]
+    [InlineData(InboundArticleProducer.TakeThis)]
+    [InlineData(InboundArticleProducer.IHave)]
+    [InlineData(InboundArticleProducer.Post)]
+    public async Task LocalProducer_PlacesFirstAndOneReplica(InboundArticleProducer producer)
+    {
+        var client = new RecordingPlacement { ExpectedCalls = 2 };
+        var article = CanonicalArticleText.CreateQueued("<replica@example.test>", producer);
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        await RunAsync(article, new OrderedPersister(), client, TwoTargets(), logs);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Equal("cache02.example", client.Targets[1].Fqdn);
+        AssertSameArtData(article.Record, client.Records[0]);
+        AssertSameArtData(article.Record, client.Records[1]);
+        Assert.Contains(2620, logs.EventIds);
+        Assert.Contains(2630, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task MessageIdFetch_DoesNotPlace()
+    {
+        var client = new RecordingPlacement();
+        var article = CanonicalArticleText.CreateQueued("<fetched@example.test>", InboundArticleProducer.BackFiller);
+        await RunAsync(article, new OrderedPersister(), client, TwoTargets());
+        Assert.Equal(0, client.Calls);
+    }
+
+    [Fact]
+    public async Task NoSecondEligible_LeavesSingleCopy()
+    {
+        var client = new RecordingPlacement();
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<single@example.test>", InboundArticleProducer.TakeThis);
+        await RunAsync(article, new OrderedPersister(), client, RegistryWithTarget(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Contains(2636, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is (>= 2630 and <= 2635) or (>= 2637 and <= 2641));
+    }
+
+    [Theory]
+    [InlineData(ArticlePlacementKind.Conflict, 2622)]
+    [InlineData(ArticlePlacementKind.RejectedPressure, 2624)]
+    [InlineData(ArticlePlacementKind.RejectedCapacity, 2623)]
+    [InlineData(ArticlePlacementKind.RejectedInvalid, 2625)]
+    [InlineData(ArticlePlacementKind.TransportFailure, 2627)]
+    [InlineData(ArticlePlacementKind.AcknowledgementNotObserved, 2629)]
+    public async Task FirstFailure_DoesNotAttemptReplica(ArticlePlacementKind kind, int eventId)
+    {
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(kind, kind == ArticlePlacementKind.TransportFailure ? "IOException" : null),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var persister = new OrderedPersister();
+        var article = CanonicalArticleText.CreateQueued("<gate@example.test>", InboundArticleProducer.Post);
+        await RunAsync(article, persister, client, TwoTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(1, persister.Count);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Contains(eventId, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+    }
+
+    [Theory]
+    [InlineData(ArticlePlacementKind.Accepted, 2630)]
+    [InlineData(ArticlePlacementKind.Duplicate, 2631)]
+    [InlineData(ArticlePlacementKind.Conflict, 2632)]
+    [InlineData(ArticlePlacementKind.RejectedPressure, 2634)]
+    [InlineData(ArticlePlacementKind.RejectedCapacity, 2633)]
+    [InlineData(ArticlePlacementKind.RejectedInvalid, 2635)]
+    [InlineData(ArticlePlacementKind.TransportFailure, 2637)]
+    [InlineData(ArticlePlacementKind.Cancelled, 2639)]
+    [InlineData(ArticlePlacementKind.AcknowledgementNotObserved, 2640)]
+    public async Task ReplicaOutcome_DoesNotSelectAThirdServer(ArticlePlacementKind replicaKind, int eventId)
+    {
+        var failure = replicaKind == ArticlePlacementKind.TransportFailure ? "IOException" : null;
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(replicaKind, failure),
+            ],
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var persister = new OrderedPersister();
+        var article = CanonicalArticleText.CreateQueued("<outcome@example.test>", InboundArticleProducer.IHave);
+        await RunAsync(article, persister, client, ThreeTargets(), logs);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, persister.Count);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Equal("cache02.example", client.Targets[1].Fqdn);
+        Assert.Contains(eventId, logs.EventIds);
+        AssertSameArtData(article.Record, client.Records[0]);
+        AssertSameArtData(article.Record, client.Records[1]);
+    }
+
+    [Fact]
+    public async Task FirstDuplicate_StillAttemptsReplica()
+    {
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Duplicate),
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+            ],
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        await RunAsync(
+            CanonicalArticleText.CreateQueued("<dup-first@example.test>", InboundArticleProducer.TakeThis),
+            new OrderedPersister(),
+            client,
+            TwoTargets(),
+            logs);
+        Assert.Equal(2, client.Calls);
+        Assert.Contains(2621, logs.EventIds);
+        Assert.Contains(2630, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task ReplicaTimeout_DoesNotRetry()
+    {
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "timeout"),
+            ],
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var persister = new OrderedPersister();
+        await RunAsync(
+            CanonicalArticleText.CreateQueued("<timeout@example.test>", InboundArticleProducer.TakeThis),
+            persister,
+            client,
+            ThreeTargets(),
+            logs);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, persister.Count);
+        Assert.Contains(2638, logs.EventIds);
+        Assert.DoesNotContain(2637, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task ReplicaDropAfterEnd_DoesNotResend()
+    {
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved),
+            ],
+        };
+        var persister = new OrderedPersister();
+        await RunAsync(
+            CanonicalArticleText.CreateQueued("<ambiguous@example.test>", InboundArticleProducer.Post),
+            persister,
+            client,
+            ThreeTargets());
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, persister.Count);
+        Assert.Equal(ArticlePlacementKind.AcknowledgementNotObserved, client.Outcomes[1].Kind);
+    }
+
+    [Fact]
+    public async Task CancellationBeforeFirstAcceptance_DoesNotAttemptReplica()
+    {
+        using var cts = new CancellationTokenSource();
+        var client = new RecordingPlacement
+        {
+            CancelAt = CancelPoint.FirstCallReturnsCancelled,
+            Cancel = cts,
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        await PlaceDirectAsync(
+            CanonicalArticleText.CreateQueued("<cancel-first@example.test>", InboundArticleProducer.TakeThis),
+            client,
+            TwoTargets(),
+            cts.Token,
+            logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(ArticlePlacementKind.Cancelled, client.Outcomes[0].Kind);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Contains(2628, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+    }
+
+    [Fact]
+    public async Task CancellationAfterFirstAcceptance_DoesNotStartReplica()
+    {
+        using var cts = new CancellationTokenSource();
+        var client = new RecordingPlacement
+        {
+            CancelAt = CancelPoint.AfterFirstAccepted,
+            Cancel = cts,
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        await PlaceDirectAsync(
+            CanonicalArticleText.CreateQueued("<cancel-between@example.test>", InboundArticleProducer.TakeThis),
+            client,
+            TwoTargets(),
+            cts.Token,
+            logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(ArticlePlacementKind.Accepted, client.Outcomes[0].Kind);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Contains(2620, logs.EventIds);
+        Assert.Contains(2641, logs.EventIds);
+        Assert.DoesNotContain(2630, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task CancellationDuringReplica_DoesNotSelectAThirdServer()
+    {
+        using var cts = new CancellationTokenSource();
+        var client = new RecordingPlacement
+        {
+            CancelAt = CancelPoint.SecondCallReturnsCancelled,
+            Cancel = cts,
+            Sequence = [new ArticlePlacementResult(ArticlePlacementKind.Accepted)],
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        await PlaceDirectAsync(
+            CanonicalArticleText.CreateQueued("<cancel-replica@example.test>", InboundArticleProducer.IHave),
+            client,
+            ThreeTargets(),
+            cts.Token,
+            logs);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(ArticlePlacementKind.Accepted, client.Outcomes[0].Kind);
+        Assert.Equal(ArticlePlacementKind.Cancelled, client.Outcomes[1].Kind);
+        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
+        Assert.Equal("cache02.example", client.Targets[1].Fqdn);
+        Assert.DoesNotContain(client.Targets, static target => target.Fqdn == "cache03.example");
+        Assert.Contains(2639, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task ReplicaAccepted_IsNotFollowedByAnotherPlacement()
+    {
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+            ],
+        };
+        await RunAsync(
+            CanonicalArticleText.CreateQueued("<kept@example.test>", InboundArticleProducer.Post),
+            new OrderedPersister(),
+            client,
+            ThreeTargets());
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(ArticlePlacementKind.Accepted, client.Outcomes[1].Kind);
+    }
+
+    [Fact]
+    public void Placement_DoesNotReferenceLookupOrReadPool()
+    {
+        var placementFields = typeof(ArticlePlacementClient).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.DoesNotContain(placementFields, static field => field.FieldType.Name.Contains("Lookup", StringComparison.Ordinal));
+        var writerFields = typeof(IncomingSpoolWriterService).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.DoesNotContain(writerFields, static field => field.FieldType.Name.Contains("Lookup", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            typeof(StorageArticleLookupService).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            static method => method.Name.Contains("Replica", StringComparison.Ordinal)
+                || method.Name.Contains("Primary", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -173,12 +506,73 @@ public sealed class ArticlePlacementTests
         Assert.False(placed.Succeeded);
     }
 
-    private static async Task RunAsync(
+    private static Task RunAsync(
         InboundArticle article,
         OrderedPersister persister,
         RecordingPlacement client,
         StorageServerRegistry registry,
-        DateTimeOffset? time = null)
+        ListLogger<IncomingSpoolWriterService>? logs = null,
+        DateTimeOffset? time = null) =>
+        RunCoreAsync(article, persister, client, registry, logs, time);
+
+    private static async Task PlaceDirectAsync(
+        InboundArticle article,
+        RecordingPlacement client,
+        StorageServerRegistry registry,
+        CancellationToken cancellationToken,
+        ListLogger<IncomingSpoolWriterService>? logs = null)
+    {
+        var writer = CreateWriter(new OrderedPersister(), client, registry, logs, time: null);
+        var place = typeof(IncomingSpoolWriterService).GetMethod(
+            "PlaceAfterPersistAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(place);
+        try
+        {
+            var pending = (Task)place.Invoke(writer, [article, cancellationToken])!;
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
+    private static IncomingSpoolWriterService CreateWriter(
+        OrderedPersister persister,
+        RecordingPlacement client,
+        StorageServerRegistry registry,
+        ListLogger<IncomingSpoolWriterService>? logs,
+        DateTimeOffset? time)
+    {
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        return new IncomingSpoolWriterService(
+            queue,
+            persister,
+            Options.Create(new NntpdOptions
+            {
+                ArticleIngestion = new ArticleIngestionOptions
+                {
+                    MinWorkers = 1,
+                    MaxWorkers = 1,
+                    ScaleIntervalSeconds = 3600,
+                    OverviewDbMinPublisherWorkers = 1,
+                    OverviewDbMaxPublisherWorkers = 1,
+                },
+            }),
+            (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(time ?? Now),
+            placement: client,
+            placementRegistry: registry);
+    }
+
+    private static async Task RunCoreAsync(
+        InboundArticle article,
+        OrderedPersister persister,
+        RecordingPlacement client,
+        StorageServerRegistry registry,
+        ListLogger<IncomingSpoolWriterService>? logs,
+        DateTimeOffset? time)
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = new IncomingSpoolWriterService(
@@ -195,23 +589,46 @@ public sealed class ArticlePlacementTests
                     OverviewDbMaxPublisherWorkers = 1,
                 },
             }),
-            NullLogger<IncomingSpoolWriterService>.Instance,
+            (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(time ?? Now),
             placement: client,
             placementRegistry: registry);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
         await persister.Completed.Task.WaitAsync(cts.Token);
         if (article.Producer is InboundArticleProducer.TakeThis or InboundArticleProducer.IHave or InboundArticleProducer.Post
-            && client.Calls == 0
             && !client.FailIfCalled)
         {
-            await client.Placed.Task.WaitAsync(cts.Token);
+            await client.Finished.Task.WaitAsync(cts.Token);
         }
 
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
+    }
+
+    private static void AssertSameArtData(ArticleRecord expected, ArticleRecord actual)
+    {
+        Assert.True(MemoryMarshal.TryGetArray(expected.ArtData, out var expectedArray));
+        Assert.True(MemoryMarshal.TryGetArray(actual.ArtData, out var actualArray));
+        Assert.Same(expectedArray.Array, actualArray.Array);
+        Assert.Equal(expectedArray.Offset, actualArray.Offset);
+        Assert.Equal(expectedArray.Count, actualArray.Count);
+    }
+
+    private static StorageServerRegistry TwoTargets()
+    {
+        var registry = RegistryWithTarget();
+        registry.ApplyAdvertisement(Advertisement("cache02.example", 2, 100, 564), Now);
+        return registry;
+    }
+
+    private static StorageServerRegistry ThreeTargets()
+    {
+        var registry = TwoTargets();
+        registry.ApplyAdvertisement(Advertisement("cache03.example", 3, 10, 565), Now);
+        return registry;
     }
 
     private static StorageServerRegistry RegistryWithTarget()
@@ -246,8 +663,20 @@ public sealed class ArticlePlacementTests
         }
     }
 
+    private enum CancelPoint
+    {
+        None,
+        FirstCallReturnsCancelled,
+        AfterFirstAccepted,
+        SecondCallReturnsCancelled,
+    }
+
     private sealed class RecordingPlacement : IArticlePlacementClient
     {
+        private readonly List<StorageServerFleetEntry> _targets = [];
+        private readonly List<ArticleRecord> _records = [];
+        private readonly List<ArticlePlacementResult> _outcomes = [];
+
         public int Calls { get; private set; }
 
         public bool SawPersist { get; private set; }
@@ -258,7 +687,21 @@ public sealed class ArticlePlacementTests
 
         public ArticlePlacementResult Result { get; init; } = new(ArticlePlacementKind.Accepted);
 
-        public TaskCompletionSource Placed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ArticlePlacementResult[]? Sequence { get; init; }
+
+        public int ExpectedCalls { get; init; } = 1;
+
+        public CancelPoint CancelAt { get; init; }
+
+        public CancellationTokenSource? Cancel { get; init; }
+
+        public IReadOnlyList<StorageServerFleetEntry> Targets => _targets;
+
+        public IReadOnlyList<ArticleRecord> Records => _records;
+
+        public IReadOnlyList<ArticlePlacementResult> Outcomes => _outcomes;
+
+        public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ValueTask<ArticlePlacementResult> PlaceAsync(
             ArticleRecord record,
@@ -270,11 +713,66 @@ public sealed class ArticlePlacementTests
                 throw new InvalidOperationException("Placement dialed without an eligible server.");
             }
 
-            Calls++;
+            var call = ++Calls;
             SawPersist = true;
             Last = record;
-            Placed.TrySetResult();
-            return ValueTask.FromResult(Result);
+            _targets.Add(target);
+            _records.Add(record);
+
+            ArticlePlacementResult outcome;
+            if (CancelAt == CancelPoint.FirstCallReturnsCancelled && call == 1)
+            {
+                Cancel!.Cancel();
+                outcome = new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
+            }
+            else if (CancelAt == CancelPoint.AfterFirstAccepted && call == 1)
+            {
+                outcome = new ArticlePlacementResult(ArticlePlacementKind.Accepted);
+                Cancel!.Cancel();
+            }
+            else if (CancelAt == CancelPoint.SecondCallReturnsCancelled && call == 2)
+            {
+                Cancel!.Cancel();
+                outcome = new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
+            }
+            else if (cancellationToken.IsCancellationRequested)
+            {
+                outcome = new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
+            }
+            else
+            {
+                outcome = Sequence is { } sequence && call - 1 < sequence.Length
+                    ? sequence[call - 1]
+                    : Result;
+            }
+
+            _outcomes.Add(outcome);
+            if (call >= ExpectedCalls)
+            {
+                Finished.TrySetResult();
+            }
+
+            return ValueTask.FromResult(outcome);
+        }
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<int> EventIds { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            EventIds.Add(eventId.Id);
         }
     }
 

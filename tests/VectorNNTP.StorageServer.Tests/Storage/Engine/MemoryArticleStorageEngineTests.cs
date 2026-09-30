@@ -281,6 +281,76 @@ public sealed class MemoryArticleStorageEngineTests
         Assert.Equal(record.ArtSize, engine.Journal.OutstandingRecoverableBytes);
     }
 
+    [Fact]
+    public async Task PresentSameContent_IsDuplicate_AndLeavesOriginal()
+    {
+        await using var engine = CreateEngine();
+        var record = CreateRecord("<same@example.test>", "alpha\r\n");
+        var first = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, first.Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+
+        var again = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Duplicate, again.Outcome);
+        Assert.Equal(0ul, again.Sequence);
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task PresentDifferentContent_IsConflict_AndDoesNotOverwrite()
+    {
+        await using var engine = CreateEngine();
+        var original = CreateRecord("<conflict@example.test>", "alpha\r\n");
+        var conflicting = CreateRecord("<conflict@example.test>", "beta\r\n");
+        Assert.Equal(original.ArtId, conflicting.ArtId);
+        Assert.NotEqual(original.ArtHash, conflicting.ArtHash);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(original, CancellationToken.None)).Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+
+        var conflict = await engine.AcceptAsync(conflicting, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Conflict, conflict.Outcome);
+        Assert.True(engine.TryRead(original.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(original.ArtData.Span));
+        Assert.False(read.ArtData.Span.SequenceEqual(conflicting.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task EvictedSameContent_IsAcceptedAtNewLocation()
+    {
+        await using var engine = CreateEngine();
+        var record = CreateRecord("<evicted@example.test>", "alpha\r\n");
+        var first = await engine.AcceptAsync(record, CancellationToken.None);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(engine.TryEvict(record.ArtId));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+
+        var again = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, again.Outcome);
+        Assert.True(again.Sequence > first.Sequence);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task InvalidSameContent_IsAcceptedAtNewLocation()
+    {
+        await using var engine = CreateEngine();
+        var record = CreateRecord("<invalid@example.test>", "alpha\r\n");
+        var first = await engine.AcceptAsync(record, CancellationToken.None);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(engine.TryInvalidate(record.ArtId));
+        Assert.False(engine.TryRead(record.ArtId, out _));
+
+        var again = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, again.Outcome);
+        Assert.True(again.Sequence > first.Sequence);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
     private static MemoryArticleStorageEngine CreateEngine()
     {
         var options = new ArticleStorageRuntimeOptions(

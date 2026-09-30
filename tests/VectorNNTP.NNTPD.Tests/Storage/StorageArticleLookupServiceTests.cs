@@ -74,6 +74,46 @@ public sealed class StorageArticleLookupServiceTests
     }
 
     [Fact]
+    public async Task TwoPresentCopies_AreRetainedByExistingFanout()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            time);
+
+        await rabbit.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+
+        var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
+        var publication = await WaitForPublicationAsync(factory);
+        Assert.True(StorageArticleLookupWireProtocol.TryParseRequestV1(publication.Body, out var request, out _));
+        Assert.NotNull(request);
+
+        var consume = factory.LastConnection!.RpcChannels.First(static c => c.ConsumedQueue is not null);
+        await consume.DeliverAsync(
+            publication.CorrelationId,
+            StorageArticleLookupWireProtocol.SerializeResponseV1(CreateResponse(request!, 2, "cache02.usenet.ninja")));
+        await consume.DeliverAsync(
+            publication.CorrelationId,
+            StorageArticleLookupWireProtocol.SerializeResponseV1(CreateResponse(request!, 3, "cache03.usenet.ninja")));
+
+        var result = await lookupTask;
+        Assert.Equal(StorageArticleLookupOutcome.Found, result.Outcome);
+        Assert.Equal(2, result.ServerId);
+        Assert.Equal("cache02.usenet.ninja", result.Fqdn);
+        Assert.NotNull(result.Alternates);
+        var alternate = await result.Alternates!.WaitForAlternateAsync(CancellationToken.None);
+        Assert.Equal(3, alternate!.Value.ServerId);
+        Assert.Equal("cache03.usenet.ninja", alternate.Value.Fqdn);
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task NobodyOwns_TimesOutCleanly()
     {
         var factory = new FakeRabbitMqConnectionFactory();

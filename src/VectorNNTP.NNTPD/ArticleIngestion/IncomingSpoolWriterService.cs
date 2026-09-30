@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.OverviewDb;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
@@ -271,8 +272,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     }
 
     /// <summary>
-    /// One STORE attempt after the spool file is durable. Failures stay in this method
-    /// so they cannot requeue OverviewDB work or undo persistence.
+    /// First STORE after persist, then at most one best-effort replica STORE.
+    /// Ingest success is the first Accepted or Duplicate result. Failures stay in this
+    /// method so they cannot requeue OverviewDB work or undo persistence.
     /// </summary>
     private async Task PlaceAfterPersistAsync(InboundArticle article, CancellationToken cancellationToken)
     {
@@ -351,6 +353,13 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                         elapsed);
                     break;
             }
+
+            if (!result.Succeeded)
+            {
+                return;
+            }
+
+            await PlaceReplicaAsync(article.Record, artId, active, target, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -368,6 +377,126 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 Elapsed(started));
         }
     }
+
+    /// <summary>
+    /// One replica STORE to the next eligible server in <paramref name="active"/>.
+    /// Uses the same <paramref name="record"/> bytes. Does not retry or select a third server.
+    /// </summary>
+    private async Task PlaceReplicaAsync(
+        ArticleRecord record,
+        string artId,
+        IReadOnlyList<StorageServerFleetEntry> active,
+        StorageServerFleetEntry first,
+        CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.GetTimestamp();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            ArticlePlacementLogMessages.ReplicaNotStarted(_logger, artId, first.ServerId, Elapsed(started));
+            return;
+        }
+
+        if (!StorageServerPlacementSelector.TrySelectExcluding(active, first.Fqdn, out var replica)
+            || replica.VatpPort is not int port)
+        {
+            ArticlePlacementLogMessages.ReplicaNoTarget(_logger, artId, first.ServerId, Elapsed(started));
+            return;
+        }
+
+        try
+        {
+            var result = await _placement!.PlaceAsync(record, replica, cancellationToken).ConfigureAwait(false);
+            var elapsed = Elapsed(started);
+            switch (result.Kind)
+            {
+                case ArticlePlacementKind.Accepted:
+                    ArticlePlacementLogMessages.ReplicaAccepted(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Duplicate:
+                    ArticlePlacementLogMessages.ReplicaDuplicate(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Conflict:
+                    ArticlePlacementLogMessages.ReplicaConflict(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedCapacity:
+                    ArticlePlacementLogMessages.ReplicaRejectedCapacity(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedPressure:
+                    ArticlePlacementLogMessages.ReplicaRejectedPressure(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedInvalid:
+                    ArticlePlacementLogMessages.ReplicaRejectedInvalid(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Cancelled:
+                    ArticlePlacementLogMessages.ReplicaCancelled(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.AcknowledgementNotObserved:
+                    ArticlePlacementLogMessages.ReplicaAcknowledgementNotObserved(
+                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
+                    break;
+                default:
+                    if (IsTimeout(result.Failure))
+                    {
+                        ArticlePlacementLogMessages.ReplicaTimedOut(
+                            _logger,
+                            artId,
+                            first.ServerId,
+                            replica.ServerId,
+                            port,
+                            replica.Fqdn,
+                            result.Failure ?? "timeout",
+                            elapsed);
+                    }
+                    else
+                    {
+                        ArticlePlacementLogMessages.ReplicaTransportFailed(
+                            _logger,
+                            artId,
+                            first.ServerId,
+                            replica.ServerId,
+                            port,
+                            replica.Fqdn,
+                            result.Failure ?? result.Kind.ToString(),
+                            elapsed);
+                    }
+
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ArticlePlacementLogMessages.ReplicaCancelled(
+                _logger,
+                artId,
+                first.ServerId,
+                replica.ServerId,
+                port,
+                replica.Fqdn,
+                Elapsed(started));
+        }
+        catch (Exception ex)
+        {
+            ArticlePlacementLogMessages.ReplicaTransportFailed(
+                _logger,
+                artId,
+                first.ServerId,
+                replica.ServerId,
+                port,
+                replica.Fqdn,
+                ex.GetType().Name,
+                Elapsed(started));
+        }
+    }
+
+    private static bool IsTimeout(string? failure) =>
+        failure is not null && failure.Contains("timeout", StringComparison.OrdinalIgnoreCase);
 
     private static long Elapsed(long started) =>
         (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
