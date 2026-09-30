@@ -81,7 +81,9 @@ public static class VatpFrameParser
             or (byte)VatpFrameType.End
             or (byte)VatpFrameType.Fail
             or (byte)VatpFrameType.Cancel
-            or (byte)VatpFrameType.Window;
+            or (byte)VatpFrameType.Window
+            or (byte)VatpFrameType.Store
+            or (byte)VatpFrameType.Result;
 
     private static VatpErrorCode ValidateHeader(in VatpFrameHeader header, uint maxFramePayload)
     {
@@ -137,6 +139,8 @@ public static class VatpFrameParser
             case VatpFrameType.End:
             case VatpFrameType.Cancel:
             case VatpFrameType.Window:
+            case VatpFrameType.Store:
+            case VatpFrameType.Result:
                 return header.StreamId == VatpProtocol.ConnectionStreamId
                     ? VatpErrorCode.InvalidStreamId
                     : VatpErrorCode.None;
@@ -164,6 +168,16 @@ public static class VatpFrameParser
                 return header.PayloadLength == VatpProtocol.OpenPayloadLength
                     ? VatpErrorCode.None
                     : VatpErrorCode.InvalidOpen;
+
+            case VatpFrameType.Store:
+                return header.PayloadLength == VatpProtocol.StorePayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength;
+
+            case VatpFrameType.Result:
+                return header.PayloadLength == VatpProtocol.ResultPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength;
 
             case VatpFrameType.Meta:
                 return header.PayloadLength == VatpProtocol.MetaPayloadLength

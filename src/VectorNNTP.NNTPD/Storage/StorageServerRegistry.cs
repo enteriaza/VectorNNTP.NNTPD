@@ -22,13 +22,17 @@ public enum StorageServerFleetState
 /// <param name="UsedBytes">Latest advertised used storage bytes.</param>
 /// <param name="AvailableBytes">Latest advertised available storage bytes.</param>
 /// <param name="LastSeen">UTC time when the latest advertisement was applied.</param>
+/// <param name="VatpPort">
+/// Advertised TLS VATP port. Null entries stay in the liveness view and are not placement targets.
+/// </param>
 public readonly record struct StorageServerFleetEntry(
     int ServerId,
     string Fqdn,
     long TotalBytes,
     long UsedBytes,
     long AvailableBytes,
-    DateTimeOffset LastSeen)
+    DateTimeOffset LastSeen,
+    int? VatpPort = null)
 {
     /// <summary>
     /// Classifies this entry relative to <paramref name="utcNow"/> using
@@ -89,7 +93,8 @@ public sealed class StorageServerRegistry : IStorageServerRegistry
             advertisement.TotalBytes,
             advertisement.UsedBytes,
             advertisement.AvailableBytes,
-            receivedAtUtc.ToUniversalTime());
+            receivedAtUtc.ToUniversalTime(),
+            advertisement.VatpPort);
 
         _entries.AddOrUpdate(key, entry, (_, _) => entry);
     }

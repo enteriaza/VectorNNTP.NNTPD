@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Acme;
@@ -152,12 +153,29 @@ public static class StorageServerServiceCollectionExtensions
                 sp.GetRequiredService<StorageArticleLookupConsumerService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
-        builder.Services.AddSingleton(static provider => new StorageVatpListenerService(
-            provider.GetRequiredService<StorageServerRuntimeOptions>(),
-            provider.GetRequiredService<VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider>(),
-            provider.GetRequiredService<IStorageArticleOpenBoundary>(),
-            provider.GetRequiredService<IAcmeCertificateReadiness>(),
-            provider.GetRequiredService<ILogger<StorageVatpListenerService>>()));
+        builder.Services.AddSingleton(static provider =>
+        {
+            var runtime = provider.GetRequiredService<StorageServerRuntimeOptions>();
+            var slots = runtime.Storage.JournalHardLimitBytes / ArticleResourceLimits.MaxArticleBytes;
+            if (slots < 1)
+            {
+                slots = 1;
+            }
+
+            if (slots > int.MaxValue)
+            {
+                slots = int.MaxValue;
+            }
+
+            return new StorageVatpListenerService(
+                runtime,
+                provider.GetRequiredService<VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider>(),
+                provider.GetRequiredService<IStorageArticleOpenBoundary>(),
+                provider.GetRequiredService<IAcmeCertificateReadiness>(),
+                provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),
+                provider.GetRequiredService<StorageEngineApplicationService>(),
+                new StoreAssemblyAdmission((int)slots));
+        });
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>
                 provider.GetRequiredService<StorageVatpListenerService>()));

@@ -2,21 +2,30 @@ using System.Buffers;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Listener;
 
 /// <summary>
 /// VATP server session: client HELLO, then OPEN served from
 /// <see cref="IStorageArticleOpenBoundary"/> as META, credit-paced DATA/FIN, and END.
+/// STORE is a separate receive stream that calls <see cref="IArticleStorageEngine.AcceptAsync"/>
+/// and replies with RESULT.
 /// </summary>
-public sealed class StorageVatpSession : IAsyncDisposable
+public sealed partial class StorageVatpSession : IAsyncDisposable
 {
+    /// <summary>Local receive-stream correlation. Not a wire field and not a storage key.</summary>
+    private static readonly Guid StoreReceiveCorrelation = new("5f5f5f5f-5f5f-5f5f-5f5f-5f5f5f5f5f5f");
+
     private readonly IStorageVatpTransport _transport;
     private readonly IStorageArticleOpenBoundary _openBoundary;
     private readonly StorageServerListenerRuntimeOptions _listener;
     private readonly ArticleTransferLimits _limits;
     private readonly ILogger _logger;
+    private readonly IArticleStorageEngine? _placementEngine;
+    private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly Dictionary<uint, SendStream> _streams = [];
+    private readonly Dictionary<uint, StoreStream> _storeStreams = [];
     private readonly ArticleTransferReadyRing _readyRing = new();
     private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
     private bool _clientHelloComplete;
@@ -29,7 +38,9 @@ public sealed class StorageVatpSession : IAsyncDisposable
         IStorageArticleOpenBoundary openBoundary,
         StorageServerListenerRuntimeOptions listener,
         ILogger logger,
-        ArticleTransferLimits? limits = null)
+        ArticleTransferLimits? limits = null,
+        IArticleStorageEngine? placementEngine = null,
+        StoreAssemblyAdmission? storeAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(openBoundary);
@@ -40,6 +51,8 @@ public sealed class StorageVatpSession : IAsyncDisposable
         _listener = listener;
         _limits = limits ?? ArticleTransferLimits.Default;
         _logger = logger;
+        _placementEngine = placementEngine;
+        _storeAdmission = storeAdmission;
     }
 
     /// <summary>Runs until peer close, cancellation, or fatal protocol error.</summary>
@@ -140,7 +153,9 @@ public sealed class StorageVatpSession : IAsyncDisposable
         }
         finally
         {
+            ReleaseStoreSlots();
             _streams.Clear();
+            _storeStreams.Clear();
             _readyRing.Clear();
             ArrayPool<byte>.Shared.Return(readBuffer);
             ArrayPool<byte>.Shared.Return(parseBuffer);
@@ -167,6 +182,14 @@ public sealed class StorageVatpSession : IAsyncDisposable
                 return await HandleHelloAsync(frame, cancellationToken).ConfigureAwait(false);
             case VatpFrameType.Open:
                 return await HandleOpenAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.Store:
+                return await HandleStoreAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.Meta:
+                return await HandleStoreMetaAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.Data:
+                return await HandleStoreDataAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.End:
+                return await HandleStoreEndAsync(frame, cancellationToken).ConfigureAwait(false);
             case VatpFrameType.Window:
                 return await HandleWindowAsync(frame, cancellationToken).ConfigureAwait(false);
             case VatpFrameType.Cancel:
@@ -234,7 +257,10 @@ public sealed class StorageVatpSession : IAsyncDisposable
             return true;
         }
 
-        if (streamId == VatpProtocol.ConnectionStreamId || _streams.ContainsKey(streamId) || _streams.Count >= _limits.MaxStreamsPerConnection)
+        if (streamId == VatpProtocol.ConnectionStreamId
+            || _streams.ContainsKey(streamId)
+            || _storeStreams.ContainsKey(streamId)
+            || _streams.Count + _storeStreams.Count >= _limits.MaxStreamsPerConnection)
         {
             await WriteFailAsync(streamId, streamId == VatpProtocol.ConnectionStreamId
                     ? VatpErrorCode.InvalidStreamId
@@ -322,6 +348,20 @@ public sealed class StorageVatpSession : IAsyncDisposable
     private async Task<bool> HandleCancelAsync(VatpParsedFrame frame, CancellationToken cancellationToken)
     {
         var streamId = frame.Header.StreamId;
+        if (_storeStreams.TryGetValue(streamId, out var store))
+        {
+            if (store.AcceptStarted)
+            {
+                return true;
+            }
+
+            _ = store.Receive.TryCancel();
+            RemoveStore(streamId);
+            StorageVatpSessionLogMessages.TransferCancelled(_logger, streamId);
+            await WriteFailAsync(streamId, VatpErrorCode.Cancelled, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
         if (!_streams.Remove(streamId, out var stream))
         {
             await WriteFailAsync(streamId, VatpErrorCode.UnknownStream, cancellationToken).ConfigureAwait(false);

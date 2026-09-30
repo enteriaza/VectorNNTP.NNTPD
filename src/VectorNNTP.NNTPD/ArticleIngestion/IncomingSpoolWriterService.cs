@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles.OverviewDb;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
@@ -6,6 +7,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Newsgroups;
+using VectorNNTP.NNTPD.Storage;
 
 namespace VectorNNTP.NNTPD.ArticleIngestion;
 
@@ -43,6 +45,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly IngestionPipelineMetrics? _pipeline;
     private readonly TimeProvider _time;
     private readonly Func<IngestionPressureSnapshot>? _samplePressure;
+    private readonly IArticlePlacementClient? _placement;
+    private readonly IStorageServerRegistry? _placementRegistry;
     private readonly CancellationTokenSource _articleRunCts = new();
     private readonly CancellationTokenSource _overviewRunCts = new();
     private Task? _execution;
@@ -65,7 +69,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IOverviewDbHandoffPublisher? overviewHandoff = null,
         IngestionPipelineMetrics? pipelineMetrics = null,
         IPathSurveyWriter? pathSurvey = null,
-        Func<IngestionPressureSnapshot>? samplePressure = null)
+        Func<IngestionPressureSnapshot>? samplePressure = null,
+        IArticlePlacementClient? placement = null,
+        IStorageServerRegistry? placementRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -83,6 +89,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _overviewHandoff = overviewHandoff ?? NullOverviewDbHandoffPublisher.Instance;
         _pipeline = pipelineMetrics;
         _samplePressure = samplePressure;
+        _placement = placement;
+        _placementRegistry = placementRegistry;
     }
 
     /// <inheritdoc />
@@ -234,6 +242,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
             _pipeline?.RecordPersist(persistStart);
             persisted = true;
+            await PlaceAfterPersistAsync(article, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -260,6 +269,108 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
         }
     }
+
+    /// <summary>
+    /// One STORE attempt after the spool file is durable. Failures stay in this method
+    /// so they cannot requeue OverviewDB work or undo persistence.
+    /// </summary>
+    private async Task PlaceAfterPersistAsync(InboundArticle article, CancellationToken cancellationToken)
+    {
+        if (article.Producer is not (
+            InboundArticleProducer.TakeThis
+            or InboundArticleProducer.IHave
+            or InboundArticleProducer.Post))
+        {
+            return;
+        }
+
+        if (_placement is null || _placementRegistry is null)
+        {
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var artId = article.Record.ArtId.ToLowerHexString();
+        try
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+                return;
+            }
+
+            var active = _placementRegistry.GetActive(_time.GetUtcNow());
+            if (!StorageServerPlacementSelector.TrySelect(active, out var target) || target.VatpPort is not int port)
+            {
+                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started));
+                return;
+            }
+
+            var result = await _placement.PlaceAsync(article.Record, target, cancellationToken).ConfigureAwait(false);
+            var elapsed = Elapsed(started);
+            switch (result.Kind)
+            {
+                case ArticlePlacementKind.Accepted:
+                    ArticlePlacementLogMessages.Accepted(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Duplicate:
+                    ArticlePlacementLogMessages.Duplicate(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Conflict:
+                    ArticlePlacementLogMessages.Conflict(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedCapacity:
+                    ArticlePlacementLogMessages.RejectedCapacity(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedPressure:
+                    ArticlePlacementLogMessages.RejectedPressure(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedInvalid:
+                    ArticlePlacementLogMessages.RejectedInvalid(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Cancelled:
+                    ArticlePlacementLogMessages.Cancelled(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.AcknowledgementNotObserved:
+                    ArticlePlacementLogMessages.AcknowledgementNotObserved(
+                        _logger,
+                        artId,
+                        target.ServerId,
+                        port,
+                        target.Fqdn,
+                        elapsed);
+                    break;
+                default:
+                    ArticlePlacementLogMessages.TransportFailed(
+                        _logger,
+                        artId,
+                        target.ServerId,
+                        port,
+                        target.Fqdn,
+                        result.Failure ?? result.Kind.ToString(),
+                        elapsed);
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+        }
+        catch (Exception ex)
+        {
+            ArticlePlacementLogMessages.TransportFailed(
+                _logger,
+                artId,
+                0,
+                0,
+                string.Empty,
+                ex.GetType().Name,
+                Elapsed(started));
+        }
+    }
+
+    private static long Elapsed(long started) =>
+        (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
 
     /// <summary>
     /// Writes the post-queue INN <c>news</c> event. Failures are logged and

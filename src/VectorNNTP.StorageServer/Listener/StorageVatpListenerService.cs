@@ -9,6 +9,8 @@ using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Listener;
 
@@ -23,6 +25,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
     private readonly IStorageArticleOpenBoundary _openBoundary;
     private readonly IAcmeCertificateReadiness _readiness;
     private readonly ILogger<StorageVatpListenerService> _logger;
+    private readonly StorageEngineApplicationService? _placementHost;
+    private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly object _gate = new();
     private readonly List<Socket> _listenSockets = [];
     private readonly ConcurrentDictionary<Task, byte> _connections = new();
@@ -50,7 +54,9 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         ITlsCertificateContextProvider certificates,
         IStorageArticleOpenBoundary openBoundary,
         IAcmeCertificateReadiness readiness,
-        ILogger<StorageVatpListenerService> logger)
+        ILogger<StorageVatpListenerService> logger,
+        StorageEngineApplicationService? placementHost = null,
+        StoreAssemblyAdmission? storeAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(certificates);
@@ -62,6 +68,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _openBoundary = openBoundary;
         _readiness = readiness;
         _logger = logger;
+        _placementHost = placementHost;
+        _storeAdmission = storeAdmission;
     }
 
     private static IAcmeCertificateReadiness CreateReadyGate()
@@ -370,11 +378,16 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
                 ssl,
                 _runtime.Listener.IoProgressTimeout,
                 leaveInnerStreamOpen: true);
+            IArticleStorageEngine? placementEngine = _placementHost is { IsReady: true } host
+                ? host.Engine
+                : null;
             await using var vatpSession = new StorageVatpSession(
                 transport,
                 _openBoundary,
                 _runtime.Listener,
-                _logger);
+                _logger,
+                placementEngine: placementEngine,
+                storeAdmission: _storeAdmission);
             await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -344,6 +344,7 @@ public static class NntpdServiceCollectionExtensions
 
         services.TryAddSingleton<VatpConnectionPool>();
         services.TryAddSingleton<IVatpArticleClient, VatpArticleClient>();
+        services.TryAddSingleton<IArticlePlacementClient, ArticlePlacementClient>();
 
         services.TryAddSingleton<ArticleWorkRpcService>();
         services.TryAddSingleton<IArticleWorkRpcClient>(

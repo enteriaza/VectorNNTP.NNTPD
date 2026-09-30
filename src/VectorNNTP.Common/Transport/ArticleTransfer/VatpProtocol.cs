@@ -52,6 +52,12 @@ public static class VatpProtocol
     /// <summary>OPEN ArticleId field length in bytes.</summary>
     public const int ArticleIdLength = 32;
 
+    /// <summary>STORE payload size: 32-byte <see cref="Articles.ArticleId"/>.</summary>
+    public const int StorePayloadLength = ArticleIdLength;
+
+    /// <summary>RESULT payload size: one outcome byte.</summary>
+    public const int ResultPayloadLength = 1;
+
     /// <summary>
     /// HELLO magic <c>VNATP01\0</c> (8 bytes).
     /// </summary>

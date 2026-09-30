@@ -114,4 +114,16 @@ internal static partial class StorageVatpSessionLogMessages
         Level = LogLevel.Debug,
         Message = "Storage VATP transfer cancelled streamId={StreamId}")]
     public static partial void TransferCancelled(ILogger logger, uint StreamId);
+
+    [LoggerMessage(
+        EventId = 5506,
+        Level = LogLevel.Information,
+        Message = "Storage VATP STORE completed artId={ArtId} outcome={Outcome} attempt=1")]
+    public static partial void StoreCompleted(ILogger logger, string ArtId, string Outcome);
+
+    [LoggerMessage(
+        EventId = 5507,
+        Level = LogLevel.Warning,
+        Message = "Storage VATP STORE failed artId={ArtId} failure={Failure} attempt=1")]
+    public static partial void StoreFailed(ILogger logger, string ArtId, string Failure);
 }

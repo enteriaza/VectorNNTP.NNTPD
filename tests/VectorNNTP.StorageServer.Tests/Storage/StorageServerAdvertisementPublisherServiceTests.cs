@@ -59,6 +59,7 @@ public sealed class StorageServerAdvertisementPublisherServiceTests
         Assert.Equal(10_000, advertisement.TotalBytes);
         Assert.Equal(4_000, advertisement.UsedBytes);
         Assert.Equal(6_000, advertisement.AvailableBytes);
+        Assert.Equal(runtime.BindPortTls, advertisement.VatpPort);
 
         time.Advance(CacheFleetTopology.AdvertisementInterval);
         await WaitForAsync(() => publisher.PublishedCount >= 2, TimeSpan.FromSeconds(2));

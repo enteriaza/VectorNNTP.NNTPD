@@ -28,7 +28,43 @@ public sealed class StorageServerAdvertisementWireProtocolTests
         Assert.Equal(original.UsedBytes, parsed.UsedBytes);
         Assert.Equal(original.AvailableBytes, parsed.AvailableBytes);
         Assert.Equal(original.Timestamp, parsed.Timestamp);
+        Assert.Null(parsed.VatpPort);
         Assert.DoesNotContain("usagePercent", Encoding.UTF8.GetString(bytes), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("vatpPort", Encoding.UTF8.GetString(bytes), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SerializeAndParse_RoundTripsOptionalVatpPort()
+    {
+        var original = new StorageServerAdvertisement(
+            1,
+            3,
+            "cache03.usenet.ninja",
+            1_000_000_000,
+            250_000_000,
+            750_000_000,
+            DateTimeOffset.Parse("2026-09-29T12:00:00Z"),
+            563);
+        var bytes = StorageServerAdvertisementWireProtocol.SerializeV1(original);
+        Assert.True(StorageServerAdvertisementWireProtocol.TryParseV1(bytes, out var parsed, out var reason));
+        Assert.Equal(string.Empty, reason);
+        Assert.Equal(563, parsed!.VatpPort);
+    }
+
+    [Fact]
+    public void TryParse_ToleratesUnknownProperties_AndRejectsInvalidVatpPort()
+    {
+        var withUnknown = """
+            {"version":1,"serverId":1,"fqdn":"cache01.usenet.ninja","totalBytes":1,"usedBytes":0,"availableBytes":1,"timestamp":"2026-09-29T12:00:00.0000000Z","future":true,"vatpPort":563}
+            """u8.ToArray();
+        Assert.True(StorageServerAdvertisementWireProtocol.TryParseV1(withUnknown, out var parsed, out _));
+        Assert.Equal(563, parsed!.VatpPort);
+
+        var invalid = """
+            {"version":1,"serverId":1,"fqdn":"cache01.usenet.ninja","totalBytes":1,"usedBytes":0,"availableBytes":1,"timestamp":"2026-09-29T12:00:00.0000000Z","vatpPort":0}
+            """u8.ToArray();
+        Assert.False(StorageServerAdvertisementWireProtocol.TryParseV1(invalid, out _, out var reason));
+        Assert.Contains("vatpPort", reason, StringComparison.Ordinal);
     }
 
     [Fact]

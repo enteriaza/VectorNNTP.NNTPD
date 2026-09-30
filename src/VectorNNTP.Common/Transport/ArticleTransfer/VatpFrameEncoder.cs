@@ -44,6 +44,31 @@ public static class VatpFrameEncoder
         return Encode(VatpFrameType.Open, streamId, payload, flags: 0);
     }
 
+    /// <summary>Encodes STORE with a 32-byte ArticleId.</summary>
+    public static EncodedFrame EncodeStore(uint streamId, ReadOnlySpan<byte> articleId)
+    {
+        ThrowIfConnectionStream(streamId);
+        if (articleId.Length != VatpProtocol.StorePayloadLength)
+        {
+            throw new ArgumentException(
+                $"ArticleId must be {VatpProtocol.StorePayloadLength} bytes.",
+                nameof(articleId));
+        }
+
+        var payload = new byte[VatpProtocol.StorePayloadLength];
+        articleId.CopyTo(payload);
+        return Encode(VatpFrameType.Store, streamId, payload, flags: 0);
+    }
+
+    /// <summary>Encodes RESULT with one <c>ArticleAcceptOutcome</c> byte.</summary>
+    public static EncodedFrame EncodeResult(uint streamId, byte outcome)
+    {
+        ThrowIfConnectionStream(streamId);
+        var payload = new byte[VatpProtocol.ResultPayloadLength];
+        payload[0] = outcome;
+        return Encode(VatpFrameType.Result, streamId, payload, flags: 0);
+    }
+
     /// <summary>Encodes META from a prebuilt 76-byte payload.</summary>
     public static EncodedFrame EncodeMeta(uint streamId, ReadOnlyMemory<byte> metaPayload)
     {

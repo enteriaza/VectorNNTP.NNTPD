@@ -132,7 +132,8 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             capacity.TotalBytes,
             capacity.UsedBytes,
             capacity.AvailableBytes,
-            _timeProvider.GetUtcNow());
+            _timeProvider.GetUtcNow(),
+            _runtime.BindPortTls);
 
         var body = StorageServerAdvertisementWireProtocol.SerializeV1(advertisement);
         await _publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);

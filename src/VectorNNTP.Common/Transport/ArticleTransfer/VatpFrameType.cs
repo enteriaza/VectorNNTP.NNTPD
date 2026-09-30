@@ -28,4 +28,15 @@ public enum VatpFrameType : byte
 
     /// <summary>Flow-control credit add. StreamId must be non-zero. Payload: <c>u32</c>.</summary>
     Window = 0x07,
+
+    /// <summary>
+    /// Client stores one article. StreamId must be non-zero. Payload: 32-byte <c>ArticleId</c>.
+    /// </summary>
+    Store = 0x08,
+
+    /// <summary>
+    /// Server placement outcome after <c>AcceptAsync</c> returns. StreamId must be non-zero.
+    /// Payload: one byte, the <c>ArticleAcceptOutcome</c> value.
+    /// </summary>
+    Result = 0x09,
 }

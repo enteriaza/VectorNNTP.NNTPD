@@ -11,6 +11,8 @@ namespace VectorNNTP.Common.Messaging.Cache;
 /// <remarks>
 /// Property names are <c>version</c>, <c>serverId</c>, <c>fqdn</c>, <c>totalBytes</c>,
 /// <c>usedBytes</c>, <c>availableBytes</c>, and <c>timestamp</c> (UTC ISO-8601 round-trip).
+/// Optional <c>vatpPort</c> (<c>1</c>–<c>65535</c>) is written when present. Unknown
+/// properties are ignored. A missing <c>vatpPort</c> parses as no placement port.
 /// AMQP <c>Expiration</c>, <c>AppId</c>, and <c>MessageId</c> are never JSON fields.
 /// Serialization writes compact UTF-8 with no indentation.
 /// </remarks>
@@ -51,6 +53,11 @@ public static class StorageServerAdvertisementWireProtocol
             throw new InvalidOperationException("StorageServer advertisement byte counts must be non-negative.");
         }
 
+        if (advertisement.VatpPort is < 1 or > 65535)
+        {
+            throw new InvalidOperationException("StorageServer advertisement vatpPort must be in the range 1–65535.");
+        }
+
         var writer = new ArrayBufferWriter<byte>();
         using var jsonWriter = new Utf8JsonWriter(writer, new JsonWriterOptions
         {
@@ -67,6 +74,11 @@ public static class StorageServerAdvertisementWireProtocol
         jsonWriter.WriteNumber("usedBytes", advertisement.UsedBytes);
         jsonWriter.WriteNumber("availableBytes", advertisement.AvailableBytes);
         jsonWriter.WriteString("timestamp", advertisement.Timestamp.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        if (advertisement.VatpPort is int vatpPort)
+        {
+            jsonWriter.WriteNumber("vatpPort", vatpPort);
+        }
+
         jsonWriter.WriteEndObject();
         jsonWriter.Flush();
         return writer.WrittenSpan.ToArray();
@@ -145,6 +157,24 @@ public static class StorageServerAdvertisementWireProtocol
                 return false;
             }
 
+            int? vatpPort = null;
+            if (root.TryGetProperty("vatpPort", out var portProperty))
+            {
+                if (portProperty.ValueKind != JsonValueKind.Number || !portProperty.TryGetInt32(out var parsedPort))
+                {
+                    reason = "Advertisement vatpPort must be an integer.";
+                    return false;
+                }
+
+                if (parsedPort is < 1 or > 65535)
+                {
+                    reason = "Advertisement vatpPort must be in the range 1–65535.";
+                    return false;
+                }
+
+                vatpPort = parsedPort;
+            }
+
             advertisement = new StorageServerAdvertisement(
                 version,
                 serverId,
@@ -152,7 +182,8 @@ public static class StorageServerAdvertisementWireProtocol
                 totalBytes,
                 usedBytes,
                 availableBytes,
-                timestamp);
+                timestamp,
+                vatpPort);
             reason = string.Empty;
             return true;
         }
