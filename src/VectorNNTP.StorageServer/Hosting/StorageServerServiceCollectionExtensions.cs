@@ -110,7 +110,7 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IStorageCapacityReader>(static sp =>
             new CacheDirectoryCapacityReader(sp.GetRequiredService<StorageServerRuntimeOptions>().CacheDir));
         builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
-        builder.Services.TryAddSingleton<IStorageArticlePresence>(static _ => NullStorageArticlePresence.Instance);
+        builder.Services.TryAddSingleton<IStorageArticlePresence, DurableIndexArticlePresence>();
         builder.Services.TryAddSingleton<StorageArticleLookupConsumerService>();
 
         // Owns Open+Recover+Dispose. Resolve via this singleton only (no second engine factory).

@@ -6,9 +6,8 @@ namespace VectorNNTP.StorageServer.Storage;
 /// Local article-presence probe used by the <c>cache.requests</c> lookup consumer.
 /// </summary>
 /// <remarks>
-/// Future durable index implementations satisfy this seam. The current host
-/// registers <see cref="NullStorageArticlePresence"/> until the article storage
-/// engine index is wired.
+/// <see cref="DurableIndexArticlePresence"/> is the host implementation. It reports
+/// Present index entries only. <see cref="NullStorageArticlePresence"/> remains for tests.
 /// </remarks>
 public interface IStorageArticlePresence
 {
