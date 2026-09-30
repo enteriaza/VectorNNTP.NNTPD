@@ -506,6 +506,252 @@ public sealed class ArticlePlacementTests
         Assert.False(placed.Succeeded);
     }
 
+    [Fact]
+    public async Task SecondCopySenderDisabled_DoesNotStartReplicaStore()
+    {
+        var client = new RecordingPlacement { ExpectedCalls = 1 };
+        var registry = TwoTargets();
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<nosender@example.test>", InboundArticleProducer.Post);
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(new NntpdOptions
+            {
+                Replication = new ReplicationOptions { SecondCopySender = false },
+                ArticleIngestion = new ArticleIngestionOptions
+                {
+                    MinWorkers = 1,
+                    MaxWorkers = 1,
+                    ScaleIntervalSeconds = 3600,
+                },
+            }),
+            logs,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: ReplicationIntentStore.Open(Directory.CreateTempSubdirectory("vnntp-5h3a-off-").FullName));
+        await InvokePlace(writer, article);
+        Assert.Equal(1, client.Calls);
+        Assert.Contains(2642, logs.EventIds);
+        Assert.DoesNotContain(2630, logs.EventIds);
+    }
+
+    [Fact]
+    public async Task MissingPinStore_DoesNotStartReplicaStore()
+    {
+        var client = new RecordingPlacement { ExpectedCalls = 1 };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<nopin@example.test>", InboundArticleProducer.Post);
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(new NntpdOptions
+            {
+                Replication = new ReplicationOptions
+                {
+                    SecondCopySender = true,
+                    Directory = Directory.CreateTempSubdirectory("vnntp-5h3a-missing-").FullName,
+                },
+                ArticleIngestion = new ArticleIngestionOptions
+                {
+                    MinWorkers = 1,
+                    MaxWorkers = 1,
+                    ScaleIntervalSeconds = 3600,
+                },
+            }),
+            logs,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: TwoTargets());
+        await InvokePlace(writer, article);
+        Assert.Equal(1, client.Calls);
+        Assert.Contains(2643, logs.EventIds);
+    }
+
+    [Theory]
+    [InlineData(ArticlePlacementKind.Conflict, null)]
+    [InlineData(ArticlePlacementKind.AcknowledgementNotObserved, null)]
+    [InlineData(ArticlePlacementKind.TransportFailure, "timeout")]
+    public async Task PinnedReplica_IsNotRetargetedWhenAServerAppears(
+        ArticlePlacementKind replicaKind,
+        string? failure)
+    {
+        var registry = new StorageServerRegistry();
+        registry.ApplyAdvertisement(Advertisement("cache03.example", 3, 500, 565), Now);
+        registry.ApplyAdvertisement(Advertisement("cache02.example", 2, 100, 564), Now);
+        var enabled = EnableSecondCopy();
+        var article = CanonicalArticleText.CreateQueued("<pin-race@example.test>", InboundArticleProducer.Post);
+        var client = new RecordingPlacement
+        {
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(replicaKind, failure),
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.Duplicate),
+            ],
+            BeforeStore = (call, target) =>
+            {
+                if (call != 2)
+                {
+                    return;
+                }
+
+                Assert.Equal(2, target.ServerId);
+                Assert.True(enabled.Intent.TryGet(article.Record.ArtId, out var pinned));
+                Assert.Equal(3, pinned.SourceServerId);
+                Assert.Equal(2, pinned.TargetServerId);
+                registry.ApplyAdvertisement(Advertisement("cache01.example", 1, 100_000, 563), Now);
+                var competing = enabled.Intent.TryEstablish(article.Record.ArtId, 3, 1);
+                Assert.False(competing.Created);
+                Assert.Equal(2, competing.Intent.TargetServerId);
+            },
+        };
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(enabled.Options),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await InvokePlace(writer, article);
+        await InvokePlace(writer, article);
+        Assert.Equal(4, client.Calls);
+        Assert.Equal(3, client.Targets[0].ServerId);
+        Assert.Equal(2, client.Targets[1].ServerId);
+        Assert.Equal(1, client.Targets[2].ServerId);
+        Assert.Equal(2, client.Targets[3].ServerId);
+        Assert.Equal("cache02.example", client.Targets[3].Fqdn);
+        Assert.True(enabled.Intent.TryGet(article.Record.ArtId, out var still));
+        Assert.Equal(2, still.TargetServerId);
+        Assert.Equal(3, still.SourceServerId);
+    }
+
+    [Fact]
+    public async Task ExistingPin_IsDialedInsteadOfReselecting()
+    {
+        var registry = ThreeTargets();
+        var enabled = EnableSecondCopy();
+        var article = CanonicalArticleText.CreateQueued("<pinned-before@example.test>", InboundArticleProducer.Post);
+        var created = enabled.Intent.TryEstablish(article.Record.ArtId, 1, 3);
+        Assert.True(created.Created);
+        var client = new RecordingPlacement { ExpectedCalls = 2 };
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(enabled.Options),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await InvokePlace(writer, article);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, client.Targets[0].ServerId);
+        Assert.Equal(3, client.Targets[1].ServerId);
+        Assert.Equal("cache03.example", client.Targets[1].Fqdn);
+        Assert.True(enabled.Intent.TryGet(article.Record.ArtId, out var pin));
+        Assert.Equal(ReplicationIntentState.Pending, pin.State);
+        Assert.Equal(1, pin.SourceServerId);
+        Assert.Equal(3, pin.TargetServerId);
+        var competing = enabled.Intent.TryEstablish(article.Record.ArtId, 1, 2);
+        Assert.False(competing.Created);
+        Assert.Equal(3, competing.Intent.TargetServerId);
+    }
+
+    [Fact]
+    public async Task FailedReplica_LeavesThePinPendingOnTheSameTarget()
+    {
+        var enabled = EnableSecondCopy();
+        var article = CanonicalArticleText.CreateQueued("<pending-pin@example.test>", InboundArticleProducer.Post);
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "timeout"),
+            ],
+        };
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(enabled.Options),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: ThreeTargets(),
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await InvokePlace(writer, article);
+        Assert.Equal(2, client.Calls);
+        Assert.True(enabled.Intent.TryGet(article.Record.ArtId, out var pin));
+        Assert.Equal(ReplicationIntentState.Pending, pin.State);
+        Assert.Equal(client.Targets[1].ServerId, pin.TargetServerId);
+        Assert.Equal(client.Targets[0].ServerId, pin.SourceServerId);
+    }
+
+    [Fact]
+    public async Task StaleRosterTarget_IsDialedWithoutSelectingAnotherServer()
+    {
+        var registry = new StorageServerRegistry();
+        registry.ApplyAdvertisement(Advertisement("cache01.example", 1, 1000, 563), Now);
+        var enabled = EnableSecondCopy();
+        enabled.Roster.Observe(2, "cache02-offline.example", 564);
+        var article = CanonicalArticleText.CreateQueued("<offline-pin@example.test>", InboundArticleProducer.Post);
+        Assert.True(enabled.Intent.TryEstablish(article.Record.ArtId, 1, 2).Created);
+        var client = new RecordingPlacement
+        {
+            ExpectedCalls = 2,
+            Sequence =
+            [
+                new ArticlePlacementResult(ArticlePlacementKind.Accepted),
+                new ArticlePlacementResult(ArticlePlacementKind.Duplicate),
+            ],
+        };
+        var writer = new IncomingSpoolWriterService(
+            new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 }),
+            new OrderedPersister(),
+            Options.Create(enabled.Options),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await InvokePlace(writer, article);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, client.Targets[0].ServerId);
+        Assert.Equal(2, client.Targets[1].ServerId);
+        Assert.Equal("cache02-offline.example", client.Targets[1].Fqdn);
+        Assert.Equal(564, client.Targets[1].VatpPort);
+        Assert.True(enabled.Intent.TryGet(article.Record.ArtId, out var pin));
+        Assert.Equal(2, pin.TargetServerId);
+        Assert.Equal(ReplicationIntentState.Pending, pin.State);
+    }
+
+    private static async Task InvokePlace(IncomingSpoolWriterService writer, InboundArticle article)
+    {
+        var place = typeof(IncomingSpoolWriterService).GetMethod(
+            "PlaceAfterPersistAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(place);
+        try
+        {
+            var pending = (Task)place.Invoke(writer, [article, CancellationToken.None])!;
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
     private static Task RunAsync(
         InboundArticle article,
         OrderedPersister persister,
@@ -545,25 +791,18 @@ public sealed class ArticlePlacementTests
         ListLogger<IncomingSpoolWriterService>? logs,
         DateTimeOffset? time)
     {
+        var enabled = EnableSecondCopy();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         return new IncomingSpoolWriterService(
             queue,
             persister,
-            Options.Create(new NntpdOptions
-            {
-                ArticleIngestion = new ArticleIngestionOptions
-                {
-                    MinWorkers = 1,
-                    MaxWorkers = 1,
-                    ScaleIntervalSeconds = 3600,
-                    OverviewDbMinPublisherWorkers = 1,
-                    OverviewDbMaxPublisherWorkers = 1,
-                },
-            }),
+            Options.Create(enabled.Options),
             (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(time ?? Now),
             placement: client,
-            placementRegistry: registry);
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
     }
 
     private static async Task RunCoreAsync(
@@ -574,25 +813,18 @@ public sealed class ArticlePlacementTests
         ListLogger<IncomingSpoolWriterService>? logs,
         DateTimeOffset? time)
     {
+        var enabled = EnableSecondCopy();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = new IncomingSpoolWriterService(
             queue,
             persister,
-            Options.Create(new NntpdOptions
-            {
-                ArticleIngestion = new ArticleIngestionOptions
-                {
-                    MinWorkers = 1,
-                    MaxWorkers = 1,
-                    ScaleIntervalSeconds = 3600,
-                    OverviewDbMinPublisherWorkers = 1,
-                    OverviewDbMaxPublisherWorkers = 1,
-                },
-            }),
+            Options.Create(enabled.Options),
             (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(time ?? Now),
             placement: client,
-            placementRegistry: registry);
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -616,6 +848,35 @@ public sealed class ArticlePlacementTests
         Assert.Equal(expectedArray.Offset, actualArray.Offset);
         Assert.Equal(expectedArray.Count, actualArray.Count);
     }
+
+    private static EnabledSecondCopy EnableSecondCopy()
+    {
+        var directory = Directory.CreateTempSubdirectory("vnntp-5h3a-").FullName;
+        return new EnabledSecondCopy(
+            new NntpdOptions
+            {
+                Replication = new ReplicationOptions
+                {
+                    SecondCopySender = true,
+                    Directory = directory,
+                },
+                ArticleIngestion = new ArticleIngestionOptions
+                {
+                    MinWorkers = 1,
+                    MaxWorkers = 1,
+                    ScaleIntervalSeconds = 3600,
+                    OverviewDbMinPublisherWorkers = 1,
+                    OverviewDbMaxPublisherWorkers = 1,
+                },
+            },
+            ReplicationIntentStore.Open(directory),
+            DurableStorageServerRoster.Open(directory));
+    }
+
+    private readonly record struct EnabledSecondCopy(
+        NntpdOptions Options,
+        ReplicationIntentStore Intent,
+        DurableStorageServerRoster Roster);
 
     private static StorageServerRegistry TwoTargets()
     {
@@ -695,6 +956,8 @@ public sealed class ArticlePlacementTests
 
         public CancellationTokenSource? Cancel { get; init; }
 
+        public Action<int, StorageServerFleetEntry>? BeforeStore { get; init; }
+
         public IReadOnlyList<StorageServerFleetEntry> Targets => _targets;
 
         public IReadOnlyList<ArticleRecord> Records => _records;
@@ -718,6 +981,7 @@ public sealed class ArticlePlacementTests
             Last = record;
             _targets.Add(target);
             _records.Add(record);
+            BeforeStore?.Invoke(call, target);
 
             ArticlePlacementResult outcome;
             if (CancelAt == CancelPoint.FirstCallReturnsCancelled && call == 1)

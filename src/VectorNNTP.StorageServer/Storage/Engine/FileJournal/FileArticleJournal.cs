@@ -352,6 +352,46 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     }
 
     /// <summary>
+    /// Copies incomplete Accept identity under the journal lock.
+    /// The lock is not held after this method returns. ArtData is not read or copied.
+    /// </summary>
+    internal JournalReservationIdentity[] CopyIncompleteIdentities()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var count = 0;
+            foreach (var state in _bySequence.Values)
+            {
+                if (!state.IndexCommitted)
+                {
+                    count++;
+                }
+            }
+
+            var rows = new JournalReservationIdentity[count];
+            var index = 0;
+            foreach (var state in _bySequence.Values)
+            {
+                if (state.IndexCommitted)
+                {
+                    continue;
+                }
+
+                var accept = state.Accept;
+                rows[index++] = new JournalReservationIdentity(
+                    accept.ArtId,
+                    accept.ArtHash,
+                    accept.ArtSize,
+                    accept.Sequence,
+                    state.PhysicalWritten is not null);
+            }
+
+            return rows;
+        }
+    }
+
+    /// <summary>
     /// Test-only fault injection for checkpoint durability ordering (InternalsVisibleTo).
     /// </summary>
     internal enum CheckpointFaultPoint

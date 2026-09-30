@@ -222,4 +222,27 @@ internal static partial class ArticlePlacementLogMessages
         Level = LogLevel.Information,
         Message = "Article replica not started artId={ArtId} firstServerId={FirstServerId} outcome=Cancelled elapsedMs={ElapsedMs} attempt=2")]
     public static partial void ReplicaNotStarted(ILogger logger, string ArtId, int FirstServerId, long ElapsedMs);
+
+    [LoggerMessage(
+        EventId = 2642,
+        Level = LogLevel.Information,
+        Message = "Article replica not started artId={ArtId} firstServerId={FirstServerId} outcome=SecondCopySenderDisabled elapsedMs={ElapsedMs} attempt=2")]
+    public static partial void SecondCopySenderDisabled(ILogger logger, string ArtId, int FirstServerId, long ElapsedMs);
+
+    [LoggerMessage(
+        EventId = 2643,
+        Level = LogLevel.Warning,
+        Message = "Article replica not started artId={ArtId} firstServerId={FirstServerId} outcome=PinNotDurable elapsedMs={ElapsedMs} attempt=2")]
+    public static partial void ReplicaPinNotDurable(ILogger logger, string ArtId, int FirstServerId, long ElapsedMs);
+
+    [LoggerMessage(
+        EventId = 2644,
+        Level = LogLevel.Warning,
+        Message = "Article replica not started artId={ArtId} firstServerId={FirstServerId} targetServerId={TargetServerId} outcome=PinnedTargetUndialable elapsedMs={ElapsedMs} attempt=2")]
+    public static partial void PinnedTargetUndialable(
+        ILogger logger,
+        string ArtId,
+        int FirstServerId,
+        int TargetServerId,
+        long ElapsedMs);
 }

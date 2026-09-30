@@ -386,4 +386,13 @@ public sealed class NntpdOptions : AcmeCloudflareOptions, IApplicationLifecycleO
     /// </remarks>
     [Required]
     public ArticleIngestionOptions ArticleIngestion { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets second-copy replication settings.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReplicationOptions.SecondCopySender"/> defaults to false. Exactly one NNTPD
+    /// process in a fleet may set it. This process does not discover or lock out other senders.
+    /// </remarks>
+    public ReplicationOptions Replication { get; set; } = new();
 }

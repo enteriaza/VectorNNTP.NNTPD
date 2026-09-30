@@ -1258,6 +1258,12 @@ Example (user scope, PowerShell — replace secret values locally; do not commit
 
 `ServerId` has **no default**. It must be configured explicitly as an integer from `1` through `255` (for example via `Nntpd:ServerId` / `NNTPD__SERVERID`, `BackFiller:ServerId`, or `StorageServer:ServerId`). Missing, null, unparsable, `0`, negative, or greater-than-`255` values cause a hard startup failure. A missing value is distinguishable from an explicit `0` (both fail). The CLR default must not make an omitted setting appear valid (`int?` remains unset until configured). Host labels use invariant `D2` formatting (`01`…`09`, then `10`…`255`).
 
+## NNTPD second-copy sender
+
+`Nntpd:Replication:SecondCopySender` defaults to `false`. Exactly one NNTPD process in a fleet may set it to `true`. NNTPD does not elect a leader and does not stop another process that is also configured as the sender. When the flag is `false`, primary StorageServer placement still runs and the replica STORE does not.
+
+When the flag is `true`, `Nntpd:Replication:Directory` is required. That directory holds the durable StorageServer roster (`roster/`) and the per-article second-copy pin (`intent/`). A valid advertisement that includes a VATP port adds or updates the roster entry for that `ServerId`. Advertisement silence does not remove it. FQDN and port changes update the same `ServerId`. Capacity from advertisements is not stored as replication state. The replica target is written and flushed before the replica STORE starts. A new pin is `Pending`. An explicit completion rewrites that same pin to `Completed` and does not change `ServerId`. Completion is not inferred from a StorageServer census. An existing pin is never replaced after timeout, conflict, or a lost acknowledgement. Decommissioning a StorageServer is not part of this configuration.
+
 ## StorageServer filesystem roots
 
 StorageServer keeps application logs, the NVMe control tier, and the SATA segment tier under separate roots:

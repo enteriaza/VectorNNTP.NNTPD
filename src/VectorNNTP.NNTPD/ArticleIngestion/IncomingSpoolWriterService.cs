@@ -48,6 +48,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly Func<IngestionPressureSnapshot>? _samplePressure;
     private readonly IArticlePlacementClient? _placement;
     private readonly IStorageServerRegistry? _placementRegistry;
+    private readonly IReplicationIntentStore? _replicationIntent;
+    private readonly IStorageServerRoster? _replicationRoster;
     private readonly CancellationTokenSource _articleRunCts = new();
     private readonly CancellationTokenSource _overviewRunCts = new();
     private Task? _execution;
@@ -72,7 +74,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IPathSurveyWriter? pathSurvey = null,
         Func<IngestionPressureSnapshot>? samplePressure = null,
         IArticlePlacementClient? placement = null,
-        IStorageServerRegistry? placementRegistry = null)
+        IStorageServerRegistry? placementRegistry = null,
+        IReplicationIntentStore? replicationIntent = null,
+        IStorageServerRoster? replicationRoster = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -92,6 +96,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _samplePressure = samplePressure;
         _placement = placement;
         _placementRegistry = placementRegistry;
+        _replicationIntent = replicationIntent;
+        _replicationRoster = replicationRoster;
     }
 
     /// <inheritdoc />
@@ -359,7 +365,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 return;
             }
 
-            await PlaceReplicaAsync(article.Record, artId, active, target, cancellationToken).ConfigureAwait(false);
+            await PlaceReplicaAsync(article.Record, active, target, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -379,27 +385,38 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     }
 
     /// <summary>
-    /// One replica STORE to the next eligible server in <paramref name="active"/>.
-    /// Uses the same <paramref name="record"/> bytes. Does not retry or select a third server.
+    /// One replica STORE. The target is the durable pin when one exists; otherwise the
+    /// existing 5H.2 selection is pinned before the STORE starts. A pin is never replaced.
     /// </summary>
     private async Task PlaceReplicaAsync(
         ArticleRecord record,
-        string artId,
         IReadOnlyList<StorageServerFleetEntry> active,
         StorageServerFleetEntry first,
         CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
+        var artId = record.ArtId.ToLowerHexString();
+        var replication = _options.Value.Replication ?? new ReplicationOptions();
+        if (!replication.SecondCopySender)
+        {
+            ArticlePlacementLogMessages.SecondCopySenderDisabled(_logger, artId, first.ServerId, Elapsed(started));
+            return;
+        }
+
+        if (_replicationIntent is not { IsSecondCopySender: true })
+        {
+            ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
+            return;
+        }
+
         if (cancellationToken.IsCancellationRequested)
         {
             ArticlePlacementLogMessages.ReplicaNotStarted(_logger, artId, first.ServerId, Elapsed(started));
             return;
         }
 
-        if (!StorageServerPlacementSelector.TrySelectExcluding(active, first.Fqdn, out var replica)
-            || replica.VatpPort is not int port)
+        if (!TryResolveReplicaDial(record.ArtId, active, first, out var replica, out var port))
         {
-            ArticlePlacementLogMessages.ReplicaNoTarget(_logger, artId, first.ServerId, Elapsed(started));
             return;
         }
 
@@ -493,6 +510,104 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 ex.GetType().Name,
                 Elapsed(started));
         }
+    }
+
+    private bool TryResolveReplicaDial(
+        ArticleId articleId,
+        IReadOnlyList<StorageServerFleetEntry> active,
+        StorageServerFleetEntry first,
+        out StorageServerFleetEntry replica,
+        out int port)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var artId = articleId.ToLowerHexString();
+        replica = default;
+        port = 0;
+        if (_replicationIntent is null)
+        {
+            ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
+            return false;
+        }
+
+        if (!_replicationIntent.TryGet(articleId, out var intent))
+        {
+            if (!StorageServerPlacementSelector.TrySelectExcluding(active, first.Fqdn, out var selected)
+                || selected.VatpPort is not int)
+            {
+                ArticlePlacementLogMessages.ReplicaNoTarget(_logger, artId, first.ServerId, Elapsed(started));
+                return false;
+            }
+
+            try
+            {
+                var pin = _replicationIntent.TryEstablish(articleId, first.ServerId, selected.ServerId);
+                intent = pin.Intent;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or InvalidDataException)
+            {
+                ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
+                return false;
+            }
+        }
+
+        if (!TryDialPinned(intent.TargetServerId, active, out replica) || replica.VatpPort is not int dialPort)
+        {
+            ArticlePlacementLogMessages.PinnedTargetUndialable(
+                _logger,
+                artId,
+                first.ServerId,
+                intent.TargetServerId,
+                Elapsed(started));
+            return false;
+        }
+
+        port = dialPort;
+        return true;
+    }
+
+    private bool TryDialPinned(
+        int serverId,
+        IReadOnlyList<StorageServerFleetEntry> active,
+        out StorageServerFleetEntry entry)
+    {
+        if (_replicationRoster is not null
+            && _replicationRoster.TryGet(serverId, out var roster)
+            && roster.VatpPort is >= 1 and <= 65535)
+        {
+            entry = new StorageServerFleetEntry(
+                roster.ServerId,
+                roster.Fqdn,
+                0,
+                0,
+                0,
+                _time.GetUtcNow(),
+                roster.VatpPort);
+            return true;
+        }
+
+        foreach (var candidate in active)
+        {
+            if (candidate.ServerId == serverId && candidate.VatpPort is >= 1 and <= 65535)
+            {
+                entry = candidate;
+                return true;
+            }
+        }
+
+        if (_placementRegistry is not null)
+        {
+            foreach (var candidate in _placementRegistry.Snapshot())
+            {
+                if (candidate.ServerId == serverId && candidate.VatpPort is >= 1 and <= 65535)
+                {
+                    entry = candidate;
+                    return true;
+                }
+            }
+        }
+
+        entry = default;
+        return false;
     }
 
     private static bool IsTimeout(string? failure) =>

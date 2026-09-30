@@ -138,6 +138,30 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Copies article identity under the index lock. The lock is not held after this method returns.
+    /// ArtData and segment locations are not copied.
+    /// </summary>
+    internal ArticleIndexIdentity[] CopyIdentities()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var rows = new ArticleIndexIdentity[_entries.Count];
+            var index = 0;
+            foreach (var metadata in _entries.Values)
+            {
+                rows[index++] = new ArticleIndexIdentity(
+                    metadata.ArtId,
+                    metadata.ArtHash,
+                    metadata.ArtSize,
+                    metadata.State);
+            }
+
+            return rows;
+        }
+    }
+
     /// <inheritdoc />
     public bool TryCommitPresent(in StoredArticleMetadata metadata)
     {

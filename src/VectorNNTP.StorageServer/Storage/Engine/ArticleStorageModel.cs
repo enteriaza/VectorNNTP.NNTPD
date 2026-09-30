@@ -535,6 +535,34 @@ public readonly record struct JournalIncompleteSequence(
     JournalPhysicalWrittenRecord? PhysicalWritten);
 
 /// <summary>
+/// Index identity used by the article census. Location and ArtData are omitted.
+/// </summary>
+/// <param name="ArtId">Canonical article identity.</param>
+/// <param name="ArtHash">XXH3-64 of ArtData.</param>
+/// <param name="ArtSize">Canonical ArtData length.</param>
+/// <param name="State">Logical index state.</param>
+internal readonly record struct ArticleIndexIdentity(
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize,
+    ArticleStorageState State);
+
+/// <summary>
+/// Incomplete-journal identity used by the article census. ArtData is omitted.
+/// </summary>
+/// <param name="ArtId">Canonical article identity.</param>
+/// <param name="ArtHash">XXH3-64 from the Accept frame.</param>
+/// <param name="ArtSize">ArtData length from the Accept frame.</param>
+/// <param name="Sequence">Owning journal sequence.</param>
+/// <param name="HasPhysicalWritten">True when PhysicalWritten is already durable for this sequence.</param>
+internal readonly record struct JournalReservationIdentity(
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize,
+    ulong Sequence,
+    bool HasPhysicalWritten);
+
+/// <summary>
 /// Intended durable compaction protocol (Phase 4B.1 design; journal frames in Phase 4B.2).
 /// </summary>
 /// <remarks>
