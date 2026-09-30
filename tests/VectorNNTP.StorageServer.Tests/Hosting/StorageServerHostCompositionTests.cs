@@ -58,7 +58,7 @@ public sealed class StorageServerHostCompositionTests
         Assert.IsType<StorageArticleLookupConsumerService>(application[5]);
         Assert.IsType<AcmeCertificateApplicationService>(application[6]);
         Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[7]);
-        Assert.IsType<NullStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
+        Assert.IsType<StorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.NotNull(host.Services.GetRequiredService<IStorageCapacityReader>());
         Assert.NotNull(host.Services.GetRequiredService<IStorageArticlePresence>());
         Assert.NotNull(host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>());

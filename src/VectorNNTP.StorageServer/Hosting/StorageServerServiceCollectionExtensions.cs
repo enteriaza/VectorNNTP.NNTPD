@@ -98,7 +98,7 @@ public static class StorageServerServiceCollectionExtensions
                 host.ShutdownTimeout = runtime.GracefulShutdownTimeout;
             });
 
-        builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, NullStorageArticleOpenBoundary>();
+        builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, StorageArticleOpenBoundary>();
 
         builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
             new DelegateRabbitMqConnectionNameProvider(() =>

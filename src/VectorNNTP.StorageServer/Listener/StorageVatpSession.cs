@@ -1,19 +1,23 @@
 using System.Buffers;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
 
 namespace VectorNNTP.StorageServer.Listener;
 
 /// <summary>
-/// Minimal VATP server session: requires client HELLO, replies with server HELLO,
-/// rejects OPEN with <see cref="VatpErrorCode.OpenRejected"/>, and ignores META/DATA.
+/// VATP server session: client HELLO, then OPEN served from
+/// <see cref="IStorageArticleOpenBoundary"/> as META, credit-paced DATA/FIN, and END.
 /// </summary>
 public sealed class StorageVatpSession : IAsyncDisposable
 {
     private readonly IStorageVatpTransport _transport;
     private readonly IStorageArticleOpenBoundary _openBoundary;
     private readonly StorageServerListenerRuntimeOptions _listener;
+    private readonly ArticleTransferLimits _limits;
     private readonly ILogger _logger;
+    private readonly Dictionary<uint, SendStream> _streams = [];
+    private readonly ArticleTransferReadyRing _readyRing = new();
     private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
     private bool _clientHelloComplete;
     private bool _serverHelloSent;
@@ -24,7 +28,8 @@ public sealed class StorageVatpSession : IAsyncDisposable
         IStorageVatpTransport transport,
         IStorageArticleOpenBoundary openBoundary,
         StorageServerListenerRuntimeOptions listener,
-        ILogger logger)
+        ILogger logger,
+        ArticleTransferLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(openBoundary);
@@ -33,6 +38,7 @@ public sealed class StorageVatpSession : IAsyncDisposable
         _transport = transport;
         _openBoundary = openBoundary;
         _listener = listener;
+        _limits = limits ?? ArticleTransferLimits.Default;
         _logger = logger;
     }
 
@@ -134,6 +140,8 @@ public sealed class StorageVatpSession : IAsyncDisposable
         }
         finally
         {
+            _streams.Clear();
+            _readyRing.Clear();
             ArrayPool<byte>.Shared.Return(readBuffer);
             ArrayPool<byte>.Shared.Return(parseBuffer);
             StorageVatpSessionLogMessages.ConnectionClosed(_logger);
@@ -159,6 +167,10 @@ public sealed class StorageVatpSession : IAsyncDisposable
                 return await HandleHelloAsync(frame, cancellationToken).ConfigureAwait(false);
             case VatpFrameType.Open:
                 return await HandleOpenAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.Window:
+                return await HandleWindowAsync(frame, cancellationToken).ConfigureAwait(false);
+            case VatpFrameType.Cancel:
+                return await HandleCancelAsync(frame, cancellationToken).ConfigureAwait(false);
             default:
                 await WriteFailAsync(
                         frame.Header.StreamId == VatpProtocol.ConnectionStreamId
@@ -222,17 +234,177 @@ public sealed class StorageVatpSession : IAsyncDisposable
             return true;
         }
 
+        if (streamId == VatpProtocol.ConnectionStreamId || _streams.ContainsKey(streamId) || _streams.Count >= _limits.MaxStreamsPerConnection)
+        {
+            await WriteFailAsync(streamId, streamId == VatpProtocol.ConnectionStreamId
+                    ? VatpErrorCode.InvalidStreamId
+                    : VatpErrorCode.StreamTableError, cancellationToken)
+                .ConfigureAwait(false);
+            return true;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         var result = _openBoundary.TryOpen(open.RequestId, open.ArticleId);
-        if (!result.Accepted)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!result.Accepted || result.Record.ParseStatus != ArticleParseStatus.CanonicalV1)
         {
             StorageVatpSessionLogMessages.OpenRejected(_logger, streamId, open.RequestId);
             await WriteFailAsync(streamId, VatpErrorCode.OpenRejected, cancellationToken).ConfigureAwait(false);
             return true;
         }
 
-        // Skeleton never accepts; keep a defensive FAIL if a future boundary returns Accepted.
-        await WriteFailAsync(streamId, VatpErrorCode.OpenRejected, cancellationToken).ConfigureAwait(false);
+        var record = result.Record;
+        var meta = ArticleCanonicalTransferMeta.FromRecord(in record, result.SelectedDateHeaderName);
+        var metaBytes = VatpMetaCodec.Encode(in meta);
+        var stream = new SendStream(
+            streamId,
+            record,
+            new ArticleTransferWindow(_limits.InitialStreamWindowBytes, _limits.MaxStreamCreditBytes));
+        _streams.Add(streamId, stream);
+        StorageVatpSessionLogMessages.OpenAccepted(_logger, streamId, open.RequestId);
+        await WriteEncodedAsync(VatpFrameEncoder.EncodeMeta(streamId, metaBytes), cancellationToken).ConfigureAwait(false);
+        stream.Phase = SendPhase.SendingData;
+        if (stream.SentBytes < record.ArtSize && stream.Window.HasCredit)
+        {
+            _readyRing.Enqueue(streamId);
+        }
+
+        await PumpDataAsync(cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    private async Task<bool> HandleWindowAsync(VatpParsedFrame frame, CancellationToken cancellationToken)
+    {
+        var streamId = frame.Header.StreamId;
+        if (frame.Payload.Length != VatpProtocol.WindowPayloadLength)
+        {
+            await WriteFailAsync(streamId, VatpErrorCode.InvalidFrameLength, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        Span<byte> windowBytes = stackalloc byte[VatpProtocol.WindowPayloadLength];
+        if (frame.Payload.IsSingleSegment)
+        {
+            frame.Payload.FirstSpan.CopyTo(windowBytes);
+        }
+        else
+        {
+            frame.Payload.CopyTo(windowBytes);
+        }
+
+        if (!VatpControlPayload.TryDecodeWindow(windowBytes, out var addCredit))
+        {
+            await WriteFailAsync(streamId, VatpErrorCode.InvalidFrameLength, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        if (addCredit == 0)
+        {
+            return true;
+        }
+
+        if (!_streams.TryGetValue(streamId, out var stream) || stream.Phase != SendPhase.SendingData)
+        {
+            await WriteFailAsync(streamId, VatpErrorCode.UnknownStream, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        _ = stream.Window.Add(addCredit);
+        if (stream.SentBytes < stream.Record.ArtSize)
+        {
+            _readyRing.Enqueue(streamId);
+        }
+
+        await PumpDataAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<bool> HandleCancelAsync(VatpParsedFrame frame, CancellationToken cancellationToken)
+    {
+        var streamId = frame.Header.StreamId;
+        if (!_streams.Remove(streamId, out var stream))
+        {
+            await WriteFailAsync(streamId, VatpErrorCode.UnknownStream, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        _readyRing.Remove(streamId);
+        stream.Phase = SendPhase.Cancelled;
+        StorageVatpSessionLogMessages.TransferCancelled(_logger, streamId);
+        return true;
+    }
+
+    private async Task PumpDataAsync(CancellationToken cancellationToken)
+    {
+        while (TryTakeDataFrame(out var encoded, out var completedStreamId))
+        {
+            await WriteEncodedAsync(encoded, cancellationToken).ConfigureAwait(false);
+            if (completedStreamId is { } streamId)
+            {
+                await WriteEncodedAsync(VatpFrameEncoder.EncodeEnd(streamId), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private bool TryTakeDataFrame(out VatpFrameEncoder.EncodedFrame encoded, out uint? completedStreamId)
+    {
+        encoded = default;
+        completedStreamId = null;
+        var attempts = _readyRing.Count;
+        while (attempts-- > 0 && _readyRing.TryTakeNext(out var streamId))
+        {
+            if (!_streams.TryGetValue(streamId, out var stream) || stream.Phase != SendPhase.SendingData)
+            {
+                continue;
+            }
+
+            var remaining = stream.Record.ArtSize - stream.SentBytes;
+            if (remaining <= 0)
+            {
+                CompleteStream(stream);
+                continue;
+            }
+
+            if (!stream.Window.HasCredit)
+            {
+                continue;
+            }
+
+            var length = ArticleTransferReadyRing.ComputeDataPayloadLength(
+                remaining,
+                stream.Window.Credit,
+                _maxFramePayload);
+            if (length <= 0 || !stream.Window.TryConsume(length))
+            {
+                continue;
+            }
+
+            var fin = length == remaining;
+            var payload = stream.Record.ArtData.Slice(stream.SentBytes, length);
+            stream.SentBytes += length;
+            encoded = VatpFrameEncoder.EncodeData(streamId, payload, fin);
+            if (stream.SentBytes < stream.Record.ArtSize)
+            {
+                _readyRing.Enqueue(streamId);
+            }
+            else
+            {
+                CompleteStream(stream);
+                completedStreamId = streamId;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private void CompleteStream(SendStream stream)
+    {
+        _readyRing.Remove(stream.StreamId);
+        stream.Phase = SendPhase.Completed;
+        _ = _streams.Remove(stream.StreamId);
+        StorageVatpSessionLogMessages.TransferCompleted(_logger, stream.StreamId);
     }
 
     private async Task WriteFailAsync(uint streamId, VatpErrorCode error, CancellationToken cancellationToken)
@@ -245,12 +417,55 @@ public sealed class StorageVatpSession : IAsyncDisposable
     {
         if (!encoded.Header.IsEmpty)
         {
-            await _transport.WriteAsync(encoded.Header, cancellationToken).ConfigureAwait(false);
+            await WriteFullyAsync(encoded.Header, cancellationToken).ConfigureAwait(false);
         }
 
         if (!encoded.Payload.IsEmpty)
         {
-            await _transport.WriteAsync(encoded.Payload, cancellationToken).ConfigureAwait(false);
+            await WriteFullyAsync(encoded.Payload, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task WriteFullyAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
+        var written = 0;
+        while (written < payload.Length)
+        {
+            var accepted = await _transport.WriteAsync(payload[written..], cancellationToken).ConfigureAwait(false);
+            if (accepted <= 0)
+            {
+                throw new IOException("Transport returned zero accepted bytes.");
+            }
+
+            written += accepted;
+        }
+    }
+
+    private enum SendPhase
+    {
+        SendingData,
+        Completed,
+        Cancelled,
+    }
+
+    private sealed class SendStream
+    {
+        public SendStream(uint streamId, ArticleRecord record, ArticleTransferWindow window)
+        {
+            StreamId = streamId;
+            Record = record;
+            Window = window;
+        }
+
+        public uint StreamId { get; }
+
+        public ArticleRecord Record { get; }
+
+        /// <summary>Mutable credit. Must stay a field so <see cref="ArticleTransferWindow.TryConsume"/> updates this stream.</summary>
+        public ArticleTransferWindow Window;
+
+        public int SentBytes { get; set; }
+
+        public SendPhase Phase { get; set; }
     }
 }

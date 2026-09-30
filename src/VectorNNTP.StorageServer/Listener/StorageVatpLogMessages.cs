@@ -96,4 +96,22 @@ internal static partial class StorageVatpSessionLogMessages
         Level = LogLevel.Debug,
         Message = "Storage VATP session closed")]
     public static partial void ConnectionClosed(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 5503,
+        Level = LogLevel.Debug,
+        Message = "Storage VATP OPEN accepted streamId={StreamId} requestId={RequestId}")]
+    public static partial void OpenAccepted(ILogger logger, uint StreamId, Guid RequestId);
+
+    [LoggerMessage(
+        EventId = 5504,
+        Level = LogLevel.Debug,
+        Message = "Storage VATP transfer completed streamId={StreamId}")]
+    public static partial void TransferCompleted(ILogger logger, uint StreamId);
+
+    [LoggerMessage(
+        EventId = 5505,
+        Level = LogLevel.Debug,
+        Message = "Storage VATP transfer cancelled streamId={StreamId}")]
+    public static partial void TransferCancelled(ILogger logger, uint StreamId);
 }
