@@ -20,9 +20,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 /// </para>
 /// <para>
 /// Replay applies a contiguous prefix of CRC-verified frames, one frame buffer at a time.
-/// An incomplete or corrupt <em>final</em> frame (no complete bytes after the failure) is
-/// truncated to the last good boundary. Corruption with trailing bytes after a failed frame
-/// fails closed via <see cref="ArticleJournalCorruptException"/>.
+/// An incomplete final frame, one that does not contain its declared length, is truncated
+/// to the last good boundary. A complete frame with an invalid CRC fails closed via
+/// <see cref="ArticleJournalCorruptException"/>, including when that frame is the final frame.
+/// Corruption with trailing bytes after a failed frame fails closed the same way.
 /// </para>
 /// <para>
 /// <see cref="IArticleJournal.OutstandingRecoverableBytes"/> tracks Accept ArtSize until
@@ -119,7 +120,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
     /// <summary>
     /// Opens or creates <c>article.journal</c> under <paramref name="options"/>.ControlDir,
-    /// replays durable state, and truncates a torn/corrupt final tail when required.
+    /// replays durable state, and truncates an incomplete final frame when required.
     /// </summary>
     public static FileArticleJournal Open(
         ArticleStorageRuntimeOptions options,
@@ -948,6 +949,23 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 return;
 
             case ArticleJournalFrameError.CorruptChecksum:
+                // Declared length is fully present. A bad CRC is corruption, including at EOF.
+                FileArticleJournalLogMessages.MidFileCorrupt(
+                    _logger,
+                    _journalPath,
+                    offset,
+                    error.ToString());
+                if (frameLength > 0 && offset + frameLength < fileLength)
+                {
+                    throw new ArticleJournalCorruptException(
+                        $"Article journal corrupt at offset {offset} ({error}) with trailing bytes after the failed frame.",
+                        offset);
+                }
+
+                throw new ArticleJournalCorruptException(
+                    $"Article journal corrupt at offset {offset} ({error}) (complete frame).",
+                    offset);
+
             case ArticleJournalFrameError.Corrupt:
                 if (frameLength > 0 && offset + frameLength < fileLength)
                 {

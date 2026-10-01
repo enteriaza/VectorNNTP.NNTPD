@@ -6,6 +6,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
@@ -137,12 +138,16 @@ public sealed class AcceptOnlyCrashOrphanTests
         encoded[^1] ^= 0xFF;
         Plant(dir, encoded);
 
-        await using var engine = OpenSuspended(dir);
-        await engine.RecoverAsync(CancellationToken.None);
-
-        Assert.Equal(1, engine.PhysicalAppendCount);
-        Assert.True(engine.TryRead(record.ArtId, out var read));
-        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => OpenSuspended(dir));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        var path = Path.Combine(
+            dir.Options.SegmentDir,
+            SegmentFileNames.Format(new SegmentId(1), SegmentFileKind.Active));
+        Assert.Equal(encoded, File.ReadAllBytes(path));
+        using var journal = FileArticleJournal.Open(dir.Options);
+        var incomplete = Assert.Single(journal.EnumerateIncomplete());
+        Assert.Equal(record.ArtId, incomplete.Accept.ArtId);
+        Assert.Null(incomplete.PhysicalWritten);
     }
 
     [Fact]

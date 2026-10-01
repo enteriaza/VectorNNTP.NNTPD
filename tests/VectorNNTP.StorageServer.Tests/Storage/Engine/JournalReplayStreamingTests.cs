@@ -278,7 +278,7 @@ public sealed class JournalReplayStreamingTests
     }
 
     [Fact]
-    public void CorruptFinalFrameAtEof_TruncatesTheTornTail()
+    public void CorruptFinalFrameAtEof_FailsClosed()
     {
         using var dir = TempControlDir.Create();
         var first = CreateRecord("<stream-tail-1@example.test>", "keep\r\n");
@@ -291,15 +291,12 @@ public sealed class JournalReplayStreamingTests
 
         var path = JournalPath(dir);
         var bytes = File.ReadAllBytes(path);
-        var firstLength = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0, 4));
         bytes[^1] ^= 0xFF;
         File.WriteAllBytes(path, bytes);
 
-        using var reopened = FileArticleJournal.Open(dir.Options);
-        Assert.True(reopened.TryGetOutstanding(first.ArtId, out _));
-        Assert.False(reopened.TryGetOutstanding(second.ArtId, out _));
-        Assert.Equal(first.ArtSize, reopened.OutstandingRecoverableBytes);
-        Assert.Equal(firstLength, reopened.JournalPhysicalBytes);
+        var ex = Assert.Throws<ArticleJournalCorruptException>(() => FileArticleJournal.Open(dir.Options));
+        Assert.Contains("complete frame", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
     }
 
     [Fact]

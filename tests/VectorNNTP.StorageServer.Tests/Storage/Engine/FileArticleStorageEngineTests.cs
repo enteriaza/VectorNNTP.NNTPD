@@ -472,15 +472,16 @@ public sealed class FileArticleStorageEngineTests
         }
 
         CorruptSegmentRecord(dir.Options.SegmentDir, location, flipPayload: true);
+        var segmentPath = Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*").Single();
+        var segmentBytes = File.ReadAllBytes(segmentPath);
 
-        await using var engineB = FileArticleStorageEngine.Open(dir.Options);
-        engineB.SuspendBackgroundPersist = true;
-        await Assert.ThrowsAsync<InvalidOperationException>(() => engineB.RecoverAsync(CancellationToken.None));
-        Assert.Single(engineB.Journal.EnumerateIncomplete());
-        Assert.Equal(0, engineB.PhysicalAppendCount);
-        Assert.False(
-            engineB.Index.TryGet(record.ArtId, out var meta)
-            && meta.State == ArticleStorageState.Present);
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => FileArticleStorageEngine.Open(dir.Options));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(segmentBytes, File.ReadAllBytes(segmentPath));
+        using var journal = FileArticleJournal.Open(dir.Options);
+        var incomplete = Assert.Single(journal.EnumerateIncomplete());
+        Assert.NotNull(incomplete.PhysicalWritten);
+        Assert.Equal(record.ArtId, incomplete.Accept.ArtId);
     }
 
     [Fact]
@@ -581,11 +582,15 @@ public sealed class FileArticleStorageEngineTests
         }
 
         CorruptSegmentRecord(dir.Options.SegmentDir, location, flipPayload: true);
+        var segmentPath = Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*").Single();
+        var segmentBytes = File.ReadAllBytes(segmentPath);
 
-        await using var engineB = FileArticleStorageEngine.Open(dir.Options);
-        Assert.False(engineB.TryRead(record.ArtId, out _));
-        Assert.True(engineB.Index.TryGet(record.ArtId, out var after));
-        Assert.Equal(ArticleStorageState.Invalid, after.State);
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => FileArticleStorageEngine.Open(dir.Options));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(segmentBytes, File.ReadAllBytes(segmentPath));
+        using var index = FileArticleIndex.Open(dir.Options);
+        Assert.True(index.TryGet(record.ArtId, out var after));
+        Assert.Equal(ArticleStorageState.Present, after.State);
     }
 
     [Fact]

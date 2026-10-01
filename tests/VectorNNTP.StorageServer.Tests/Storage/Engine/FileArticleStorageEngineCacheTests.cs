@@ -217,9 +217,13 @@ public sealed class FileArticleStorageEngineCacheTests
         CorruptSegmentPayload(dir.Options.SegmentDir, location);
         cache.Inner.Clear();
         cache.ResetCounters();
+        var segmentPath = Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*").Single();
+        var segmentBytes = File.ReadAllBytes(segmentPath);
 
-        await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
-        Assert.False(engineB.TryRead(record.ArtId, out _));
+        var ex = Assert.Throws<SegmentStoreCorruptException>(
+            () => FileArticleStorageEngine.Open(dir.Options, articleCache: cache));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(segmentBytes, File.ReadAllBytes(segmentPath));
         Assert.Equal(0, cache.PutCount);
         Assert.Equal(0, cache.Count);
     }

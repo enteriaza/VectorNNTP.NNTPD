@@ -293,6 +293,95 @@ public sealed class FileSegmentStoreTests
     }
 
     [Fact]
+    public async Task N2_CompleteFinalRecord_BadCrc_FailsClosed()
+    {
+        using var dir = TempSegmentDir.Create();
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
+            _ = await appender.AppendAsync(CreateArtData("<n2-keep@example.test>", "keep\r\n"), CancellationToken.None);
+            _ = await appender.AppendAsync(CreateArtData("<n2-bad@example.test>", "bad\r\n"), CancellationToken.None);
+        }
+
+        var path = Directory.EnumerateFiles(dir.SegmentDir, "seg-*.active").Single();
+        var bytes = File.ReadAllBytes(path);
+        bytes[^1] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public async Task N3_ValidFinalRecord_Reopens()
+    {
+        using var dir = TempSegmentDir.Create();
+        var article = CreateArtData("<n3-ok@example.test>", "ok\r\n");
+        StoredArticleLocation location;
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            location = await (await storeA.GetActiveAppenderAsync(CancellationToken.None))
+                .AppendAsync(article, CancellationToken.None);
+        }
+
+        using var storeB = FileSegmentStore.Open(dir.Options);
+        Assert.True(storeB.TryRead(location, out var read));
+        Assert.True(read.Span.SequenceEqual(article));
+    }
+
+    [Fact]
+    public async Task N4_CorruptRecordFollowedByBytes_FailsClosed()
+    {
+        using var dir = TempSegmentDir.Create();
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
+            _ = await appender.AppendAsync(CreateArtData("<n4-1@example.test>", "one\r\n"), CancellationToken.None);
+            _ = await appender.AppendAsync(CreateArtData("<n4-2@example.test>", "two\r\n"), CancellationToken.None);
+        }
+
+        var path = Directory.EnumerateFiles(dir.SegmentDir, "seg-*.active").Single();
+        var bytes = File.ReadAllBytes(path);
+        var firstLength = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(0, 4));
+        Assert.True(firstLength < bytes.Length);
+        bytes[firstLength - 1] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        Assert.Contains("CorruptChecksum", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public async Task N5_RetiredCorruptRecord_RemainsUnrepairedAndUnreadable()
+    {
+        using var dir = TempSegmentDir.Create();
+        StoredArticleLocation location;
+        SegmentId segmentId;
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
+            segmentId = appender.SegmentId;
+            location = await appender.AppendAsync(CreateArtData("<n5-ret@example.test>", "ret\r\n"), CancellationToken.None);
+            await storeA.CloseActiveAsync(CancellationToken.None);
+            Assert.True(storeA.TryGetSegmentInfo(segmentId, out var closed));
+            Assert.True(storeA.Catalogue.TryRetire(segmentId, closed.Generation, DateTimeOffset.UtcNow));
+        }
+
+        var path = Directory.EnumerateFiles(dir.SegmentDir, "seg-*.retired").Single();
+        var bytes = File.ReadAllBytes(path);
+        bytes[^1] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+
+        using var storeB = FileSegmentStore.Open(dir.Options);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.True(storeB.TryGetSegmentInfo(segmentId, out var retired));
+        Assert.Equal(SegmentState.Retired, retired.State);
+        Assert.False(storeB.TryRead(location, out _));
+    }
+
+    [Fact]
     public async Task O_CorruptFinalRecord_OnClosed_DoesNotBlockOpen_TargetedReadFails()
     {
         using var dir = TempSegmentDir.Create();

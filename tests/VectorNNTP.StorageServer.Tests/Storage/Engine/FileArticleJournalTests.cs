@@ -339,7 +339,7 @@ public sealed class FileArticleJournalTests
     }
 
     [Fact]
-    public void L_InvalidChecksumOnFinalFrame_TruncatedOnOpen()
+    public void L_InvalidChecksumOnFinalFrame_FailsClosed()
     {
         using var dir = TempControlDir.Create();
         var first = CreateRecord("<l-crc-1@example.test>", "keep\r\n");
@@ -365,12 +365,13 @@ public sealed class FileArticleJournalTests
                 out _));
         }
 
-        CorruptFinalFrameChecksum(Path.Combine(dir.ControlDir, FileArticleJournal.JournalFileName));
+        var path = Path.Combine(dir.ControlDir, FileArticleJournal.JournalFileName);
+        CorruptFinalFrameChecksum(path);
+        var corrupted = File.ReadAllBytes(path);
 
-        using var journalB = FileArticleJournal.Open(dir.Options);
-        Assert.True(journalB.TryGetOutstanding(first.ArtId, out _));
-        Assert.False(journalB.TryGetOutstanding(second.ArtId, out _));
-        Assert.Equal(first.ArtSize, journalB.OutstandingRecoverableBytes);
+        var ex = Assert.Throws<ArticleJournalCorruptException>(() => FileArticleJournal.Open(dir.Options));
+        Assert.Contains("complete frame", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(corrupted, File.ReadAllBytes(path));
     }
 
     [Fact]

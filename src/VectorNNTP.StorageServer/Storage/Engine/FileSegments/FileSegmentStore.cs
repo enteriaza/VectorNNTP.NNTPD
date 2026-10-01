@@ -22,8 +22,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// article persistence and location identity (<see cref="StoredArticleLocation"/>).
 /// </para>
 /// <para>
-/// Active segment: incomplete final record is truncated on open, and corruption before
-/// the valid end fails closed. Closed and retired segments are catalogued from filename,
+/// Active segment: an incomplete final record is truncated on open. A complete record
+/// with an invalid CRC fails closed, including when that record is the final record.
+/// Closed and retired segments are catalogued from filename,
 /// lifecycle, and file length only; payload CRC is proved on the targeted read path.
 /// </para>
 /// </remarks>
@@ -1040,10 +1041,11 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
 
             if (error == SegmentRecordCodec.DecodeError.Incomplete
-                || (error is SegmentRecordCodec.DecodeError.CorruptChecksum
-                    or SegmentRecordCodec.DecodeError.Corrupt
+                || (error == SegmentRecordCodec.DecodeError.Corrupt
                     && offset + Math.Max(recordLength, 0) >= bytes.Length))
             {
+                // Incomplete declared bytes, or a CRC-valid record that fails a later field check
+                // and reaches EOF. A complete record with a bad CRC is not this case.
                 FileSegmentStoreLogMessages.TruncatingTornTail(
                     _logger,
                     segmentId.Value,
@@ -1063,8 +1065,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 return offset;
             }
 
-            // CorruptLength / mid-file corruption on active: fail closed (do not guess).
-            // The prefix is not published, so a failed repair cannot become candidates.
+            // A complete record with a bad CRC, an illegal length, or corruption with bytes after
+            // it fails closed. The prefix is not published, so a failed repair cannot become candidates.
             FileSegmentStoreLogMessages.ClosedCorrupt(_logger, path, offset, error.ToString());
             throw new SegmentStoreCorruptException(
                 $"Active segment {segmentId} corrupt at offset {offset} ({error}).",
