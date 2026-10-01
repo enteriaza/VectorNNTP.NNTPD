@@ -8,52 +8,71 @@ namespace VectorNNTP.StorageServer.Tests.Configuration;
 public sealed class StorageServerCacheDirTests
 {
     [Fact]
-    public void Default_CacheDir_is_cache_slash()
+    public void Default_CacheDir_is_spool_cache()
     {
-        Assert.Equal("cache/", StorageServerOptions.DefaultCacheDir);
-        Assert.Equal("cache/", new StorageServerOptions().CacheDir);
+        Assert.Equal("spool/cache", ArticleStorageOptions.DefaultCacheDir);
+        Assert.Equal("spool/cache", new ArticleStorageOptions().CacheDir);
+        Assert.Equal("spool/cache", new StorageServerOptions().Storage.CacheDir);
     }
 
     [Fact]
     public void CreateValid_fixture_defaults_CacheDir_when_omitted()
     {
         var options = StorageServerTestOptions.CreateValid();
-        Assert.Equal(StorageServerOptions.DefaultCacheDir, options.CacheDir);
+        Assert.Equal(ArticleStorageOptions.DefaultCacheDir, options.Storage.CacheDir);
     }
 
     [Fact]
-    public void Configuration_binding_applies_configured_CacheDir()
+    public void Configuration_binding_applies_nested_CacheDir()
     {
         var configuration = StorageServerTestOptions.CreateValidConfiguration(
             new Dictionary<string, string?>
             {
-                ["StorageServer:CacheDir"] = "data/storage-cache",
+                ["StorageServer:Storage:CacheDir"] = "data/storage-cache",
             });
 
         var bound = new StorageServerOptions();
         configuration.GetSection(StorageServerOptions.SectionName).Bind(bound);
 
-        Assert.Equal("data/storage-cache", bound.CacheDir);
+        Assert.Equal("data/storage-cache", bound.Storage.CacheDir);
         Assert.True(ValidateOptionsResultSuccess(bound));
+    }
+
+    [Fact]
+    public void Old_StorageServer_CacheDir_key_is_not_used()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["StorageServer:CacheDir"] = "legacy/cache",
+            })
+            .Build();
+
+        var bound = new StorageServerOptions();
+        configuration.GetSection(StorageServerOptions.SectionName).Bind(bound);
+
+        Assert.Equal(ArticleStorageOptions.DefaultCacheDir, bound.Storage.CacheDir);
     }
 
     [Fact]
     public void Runtime_options_resolve_relative_CacheDir_via_ApplicationLocalPath()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = StorageServerOptions.DefaultCacheDir;
+        options.Storage.CacheDir = ArticleStorageOptions.DefaultCacheDir;
 
         var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-cachedir-base", Guid.NewGuid().ToString("N"));
         var runtime = StorageServerRuntimeOptionsFactory.Create(options, baseDir);
 
         var expected = ApplicationLocalPath.ResolveApplicationLocalPath(
-            StorageServerOptions.DefaultCacheDir,
+            ArticleStorageOptions.DefaultCacheDir,
             baseDir);
         Assert.Equal(expected, runtime.CacheDir);
+        Assert.Equal(expected, runtime.Storage.SegmentDir);
         Assert.Equal(
-            Path.GetFullPath(Path.Combine(baseDir, "cache")),
+            Path.GetFullPath(Path.Combine(baseDir, "spool", "cache")),
             runtime.CacheDir);
         Assert.False(Directory.Exists(runtime.CacheDir));
+        Assert.NotEqual(Path.GetFullPath(baseDir), runtime.CacheDir);
     }
 
     [Fact]
@@ -61,18 +80,19 @@ public sealed class StorageServerCacheDirTests
     {
         var absolute = Path.Combine(Path.GetTempPath(), "vectornntp-ss-cachedir-abs", Guid.NewGuid().ToString("N"));
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = absolute;
+        options.Storage.CacheDir = absolute;
 
         var runtime = StorageServerRuntimeOptionsFactory.Create(options);
         Assert.Equal(Path.GetFullPath(absolute), runtime.CacheDir);
     }
 
     [Fact]
-    public void Runtime_options_keep_LogDir_and_CacheDir_distinct()
+    public void Runtime_options_keep_LogDir_CacheDir_and_ControlDir_distinct()
     {
         var options = StorageServerTestOptions.CreateValid();
         options.LogDir = "/logs";
-        options.CacheDir = "cache/";
+        options.Storage.CacheDir = "spool/cache";
+        options.Storage.ControlDir = "spool/";
 
         var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-roots", Guid.NewGuid().ToString("N"));
         var runtime = StorageServerRuntimeOptionsFactory.Create(options, baseDir);
@@ -81,9 +101,16 @@ public sealed class StorageServerCacheDirTests
             ApplicationLocalPath.ResolveApplicationLocalPath("/logs", baseDir),
             runtime.LogDir);
         Assert.Equal(
-            ApplicationLocalPath.ResolveApplicationLocalPath("cache/", baseDir),
+            ApplicationLocalPath.ResolveApplicationLocalPath("spool/cache", baseDir),
             runtime.CacheDir);
+        Assert.Equal(
+            ApplicationLocalPath.ResolveApplicationLocalPath("spool/", baseDir),
+            runtime.ControlDir);
         Assert.NotEqual(runtime.LogDir, runtime.CacheDir);
+        Assert.NotEqual(runtime.ControlDir, runtime.CacheDir);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(baseDir, "spool")),
+            runtime.ControlDir);
     }
 
     [Theory]
@@ -93,23 +120,23 @@ public sealed class StorageServerCacheDirTests
     public void Validator_rejects_null_empty_or_whitespace_CacheDir(string? cacheDir)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = cacheDir!;
+        options.Storage.CacheDir = cacheDir!;
         var result = new StorageServerOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
-            static f => f.Contains("StorageServer:CacheDir", StringComparison.Ordinal));
+            static f => f.Contains("StorageServer:Storage:CacheDir", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Validator_accepts_valid_relative_and_absolute_CacheDir()
     {
         var relative = StorageServerTestOptions.CreateValid();
-        relative.CacheDir = "data/storage-cache";
+        relative.Storage.CacheDir = "data/storage-cache";
         Assert.False(new StorageServerOptionsValidator().Validate(null, relative).Failed);
 
         var absolute = StorageServerTestOptions.CreateValid();
-        absolute.CacheDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-cachedir-ok");
+        absolute.Storage.CacheDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-cachedir-ok");
         Assert.False(new StorageServerOptionsValidator().Validate(null, absolute).Failed);
     }
 
@@ -120,24 +147,26 @@ public sealed class StorageServerCacheDirTests
         Assert.NotEmpty(invalidChars);
 
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = "cache" + invalidChars[0] + "bad";
+        options.Storage.CacheDir = "cache" + invalidChars[0] + "bad";
         var result = new StorageServerOptionsValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
-            static f => f.Contains("StorageServer:CacheDir", StringComparison.Ordinal)
+            static f => f.Contains("StorageServer:Storage:CacheDir", StringComparison.Ordinal)
                         && f.Contains("invalid path characters", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Production_appsettings_declares_CacheDir_default()
+    public void Production_appsettings_declares_nested_CacheDir()
     {
         var path = FindAppsettings();
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-        var storage = doc.RootElement.GetProperty("StorageServer");
-        Assert.Equal("cache/", storage.GetProperty("CacheDir").GetString());
-        Assert.Equal("/logs", storage.GetProperty("LogDir").GetString());
-        Assert.Equal("control/", storage.GetProperty("Storage").GetProperty("ControlDir").GetString());
+        var server = doc.RootElement.GetProperty("StorageServer");
+        Assert.False(server.TryGetProperty("CacheDir", out _));
+        Assert.Equal("logs", server.GetProperty("LogDir").GetString());
+        var storage = server.GetProperty("Storage");
+        Assert.Equal("spool/cache", storage.GetProperty("CacheDir").GetString());
+        Assert.Equal("spool/", storage.GetProperty("ControlDir").GetString());
     }
 
     private static bool ValidateOptionsResultSuccess(StorageServerOptions options) =>

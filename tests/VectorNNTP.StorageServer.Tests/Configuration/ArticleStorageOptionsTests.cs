@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
@@ -12,7 +14,8 @@ public sealed class ArticleStorageOptionsTests
     public void Defaults_are_documented_values()
     {
         var storage = new ArticleStorageOptions();
-        Assert.Equal("control/", storage.ControlDir);
+        Assert.Equal("spool/cache", storage.CacheDir);
+        Assert.Equal("spool/", storage.ControlDir);
         Assert.Equal(64L * 1024 * 1024, storage.JournalSoftLimitBytes);
         Assert.Equal(128L * 1024 * 1024, storage.JournalHardLimitBytes);
         Assert.Equal(0, storage.JournalCheckpointThresholdBytes);
@@ -34,14 +37,20 @@ public sealed class ArticleStorageOptionsTests
     public void Runtime_resolves_ControlDir_and_keeps_CacheDir_as_SegmentDir()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = "cache/";
-        options.Storage.ControlDir = "control/";
+        options.Storage.CacheDir = "spool/cache";
+        options.Storage.ControlDir = "spool/";
         var runtime = StorageServerRuntimeOptionsFactory.Create(options, AppContext.BaseDirectory);
         Assert.Equal(
-            ApplicationLocalPath.ResolveApplicationLocalPath("cache/", AppContext.BaseDirectory),
+            ApplicationLocalPath.ResolveApplicationLocalPath("spool/cache", AppContext.BaseDirectory),
             runtime.CacheDir);
         Assert.Equal(
-            ApplicationLocalPath.ResolveApplicationLocalPath("control/", AppContext.BaseDirectory),
+            ApplicationLocalPath.ResolveApplicationLocalPath("spool/", AppContext.BaseDirectory),
+            runtime.ControlDir);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "spool", "cache")),
+            runtime.CacheDir);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "spool")),
             runtime.ControlDir);
         Assert.Equal(runtime.CacheDir, runtime.Storage.SegmentDir);
         Assert.Equal(runtime.ControlDir, runtime.Storage.ControlDir);
@@ -81,6 +90,7 @@ public sealed class ArticleStorageOptionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["StorageServer:ServerId"] = "1",
+                ["StorageServer:Storage:CacheDir"] = "sata/cache",
                 ["StorageServer:Storage:ControlDir"] = "nvme/control",
                 ["StorageServer:Storage:JournalSoftLimitBytes"] = "10",
                 ["StorageServer:Storage:JournalHardLimitBytes"] = "20",
@@ -97,6 +107,7 @@ public sealed class ArticleStorageOptionsTests
             .Build();
         var bound = new StorageServerOptions();
         configuration.GetSection(StorageServerOptions.SectionName).Bind(bound);
+        Assert.Equal("sata/cache", bound.Storage.CacheDir);
         Assert.Equal("nvme/control", bound.Storage.ControlDir);
         Assert.Equal(10, bound.Storage.JournalSoftLimitBytes);
         Assert.Equal(20, bound.Storage.JournalHardLimitBytes);
@@ -225,7 +236,11 @@ public sealed class ArticleStorageOptionsTests
         Assert.True(File.Exists(path));
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         var storage = doc.RootElement.GetProperty("StorageServer").GetProperty("Storage");
-        Assert.Equal("control/", storage.GetProperty("ControlDir").GetString());
+        Assert.False(doc.RootElement.GetProperty("StorageServer").TryGetProperty("CacheDir", out _));
+        Assert.Equal("spool/cache", storage.GetProperty("CacheDir").GetString());
+        Assert.Equal("spool/", storage.GetProperty("ControlDir").GetString());
+        Assert.Equal(0, storage.GetProperty("IndexCheckpointThresholdBytes").GetInt64());
+        Assert.Equal(134217728, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
         Assert.Equal(67108864, storage.GetProperty("JournalSoftLimitBytes").GetInt64());
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
         Assert.Equal(268435456, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
@@ -240,6 +255,34 @@ public sealed class ArticleStorageOptionsTests
         Assert.False(capacity.GetProperty("Enabled").GetBoolean());
         Assert.Equal(0.80, capacity.GetProperty("MaximumUtilization").GetDouble());
         Assert.Equal(0.10, capacity.GetProperty("CompactionHeadroom").GetDouble());
+        AssertJsonPropertiesMatchOptions(storage, typeof(ArticleStorageOptions));
+        AssertJsonPropertiesMatchOptions(storage.GetProperty("ArticleCache"), typeof(ArticleMemoryCacheOptions));
+        AssertJsonPropertiesMatchOptions(storage.GetProperty("Capacity"), typeof(ArticleCapacityOptions));
+        AssertJsonPropertiesMatchOptions(storage.GetProperty("Compaction"), typeof(ArticleCompactionPolicyOptions));
+
+        var probe = StorageServerTestOptions.CreateValid();
+        probe.Storage = new ArticleStorageOptions();
+        new ConfigurationBuilder().AddJsonFile(path).Build()
+            .GetSection(StorageServerOptions.SectionName)
+            .GetSection("Storage")
+            .Bind(probe.Storage);
+        var validation = new StorageServerOptionsValidator().Validate(Options.DefaultName, probe);
+        Assert.True(validation.Succeeded, string.Join("; ", validation.Failures ?? []));
+    }
+
+    private static void AssertJsonPropertiesMatchOptions(JsonElement element, Type optionsType)
+    {
+        var expected = optionsType
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(static property => property.CanWrite && property.SetMethod is { IsPublic: true })
+            .Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actual = element.EnumerateObject()
+            .Select(static property => property.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expected, actual);
     }
 
     [Fact]

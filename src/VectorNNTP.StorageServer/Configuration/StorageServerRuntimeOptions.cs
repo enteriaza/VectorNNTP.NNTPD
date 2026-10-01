@@ -32,7 +32,7 @@ public sealed record StorageServerRuntimeOptions(
 
 /// <summary>Validated article-storage engine runtime bounds.</summary>
 /// <param name="ControlDir">Resolved NVMe control-tier root.</param>
-/// <param name="SegmentDir">Resolved SATA segment root (same as <c>CacheDir</c>).</param>
+/// <param name="SegmentDir">Resolved SATA segment root (same path as <c>Storage:CacheDir</c>).</param>
 /// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
 /// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>

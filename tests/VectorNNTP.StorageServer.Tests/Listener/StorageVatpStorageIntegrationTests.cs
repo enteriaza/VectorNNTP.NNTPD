@@ -329,7 +329,7 @@ public sealed partial class StorageVatpArticleServingTests
         Directory.CreateDirectory(cache);
         Directory.CreateDirectory(control);
         var options = StorageServerTestOptions.CreateValid();
-        options.CacheDir = cache;
+        options.Storage.CacheDir = cache;
         options.Storage.ControlDir = control;
         options.Storage.ArticleCache.MaxBytes = cacheMaxBytes;
         var runtime = StorageServerRuntimeOptionsFactory.Create(options, StorageServerTestOptions.CreateValidAcme(options));

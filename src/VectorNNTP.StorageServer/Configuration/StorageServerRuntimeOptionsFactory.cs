@@ -81,7 +81,7 @@ public static class StorageServerRuntimeOptionsFactory
 
         var listener = options.Listener ?? throw new InvalidOperationException("StorageServer:Listener is required.");
         var storage = options.Storage ?? throw new InvalidOperationException("StorageServer:Storage is required.");
-        var cacheDir = ApplicationLocalPath.ResolveApplicationLocalPath(options.CacheDir, contentRootPath);
+        var cacheDir = ApplicationLocalPath.ResolveApplicationLocalPath(storage.CacheDir, contentRootPath);
         var controlDir = ApplicationLocalPath.ResolveApplicationLocalPath(storage.ControlDir, contentRootPath);
 
         return new StorageServerRuntimeOptions(

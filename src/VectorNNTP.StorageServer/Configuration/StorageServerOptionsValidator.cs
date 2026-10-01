@@ -148,10 +148,6 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             options.LogDir,
             "StorageServer:LogDir",
             failures);
-        ValidateFilesystemPath(
-            options.CacheDir,
-            "StorageServer:CacheDir",
-            failures);
         ValidateStorage(options, failures);
     }
 
@@ -163,6 +159,10 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             return;
         }
 
+        ValidateFilesystemPath(
+            options.Storage.CacheDir,
+            "StorageServer:Storage:CacheDir",
+            failures);
         ValidateFilesystemPath(
             options.Storage.ControlDir,
             "StorageServer:Storage:ControlDir",

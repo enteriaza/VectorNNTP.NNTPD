@@ -8,14 +8,17 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// <remarks>
 /// <para>
 /// Separates the NVMe control/durability tier (<see cref="ControlDir"/>) from the SATA
-/// segment tier (<see cref="StorageServerOptions.CacheDir"/>). Phase 1 validates and
+/// segment tier (<see cref="CacheDir"/>). Phase 1 validates and
 /// resolves these paths; it does not create on-disk trees or select a database engine.
 /// </para>
 /// </remarks>
 public sealed class ArticleStorageOptions
 {
+    /// <summary>Default relative SATA segment/cache directory.</summary>
+    public const string DefaultCacheDir = "spool/cache";
+
     /// <summary>Default relative NVMe control directory.</summary>
-    public const string DefaultControlDir = "control/";
+    public const string DefaultControlDir = "spool/";
 
     /// <summary>Default soft journal pressure threshold in bytes (64 MiB).</summary>
     public const long DefaultJournalSoftLimitBytes = 64L * 1024 * 1024;
@@ -37,13 +40,26 @@ public sealed class ArticleStorageOptions
     public const long DefaultSegmentTargetSizeBytes = 256L * 1024 * 1024;
 
     /// <summary>
+    /// Gets or sets the SATA segment/cache root for append-oriented immutable article segments.
+    /// </summary>
+    /// <remarks>
+    /// Relative paths resolve through
+    /// <see cref="VectorNNTP.NNTPD.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
+    /// against <see cref="AppContext.BaseDirectory"/>. Absolute paths stay absolute.
+    /// Distinct from <see cref="ControlDir"/> and <see cref="StorageServerOptions.LogDir"/>.
+    /// Need not exist at validation time; validation must not create contents.
+    /// </remarks>
+    [Required(AllowEmptyStrings = false)]
+    public string CacheDir { get; set; } = DefaultCacheDir;
+
+    /// <summary>
     /// Gets or sets the NVMe control-tier root (journal, index, segment catalogue, telemetry).
     /// </summary>
     /// <remarks>
     /// Relative paths resolve through
     /// <see cref="VectorNNTP.NNTPD.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
     /// against <see cref="AppContext.BaseDirectory"/>. Distinct from
-    /// <see cref="StorageServerOptions.CacheDir"/> and <see cref="StorageServerOptions.LogDir"/>.
+    /// <see cref="CacheDir"/> and <see cref="StorageServerOptions.LogDir"/>.
     /// Need not exist at validation time; validation must not create contents.
     /// </remarks>
     [Required(AllowEmptyStrings = false)]

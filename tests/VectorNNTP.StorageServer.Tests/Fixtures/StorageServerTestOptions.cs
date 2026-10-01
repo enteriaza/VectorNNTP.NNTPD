@@ -56,7 +56,7 @@ internal static class StorageServerTestOptions
             ["StorageServer:AcmeStateDir"] = acmeDir,
             ["StorageServer:CertificateDirectory"] = acmeDir,
             ["StorageServer:GracefulShutdownTimeout"] = "00:00:30",
-            ["StorageServer:CacheDir"] = cacheDir,
+            ["StorageServer:Storage:CacheDir"] = cacheDir,
             ["StorageServer:Storage:ControlDir"] = controlDir,
             ["AcmeCertificatePassword"] = SecretPfx,
             ["CloudFlareApiKey"] = SecretToken,

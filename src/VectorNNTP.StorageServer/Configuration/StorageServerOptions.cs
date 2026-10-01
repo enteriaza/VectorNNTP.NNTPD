@@ -37,9 +37,6 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>Default application log directory.</summary>
     public const string DefaultLogDir = "/logs";
 
-    /// <summary>Default relative article storage cache directory.</summary>
-    public const string DefaultCacheDir = "cache/";
-
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
 
@@ -133,19 +130,7 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     public string LogDir { get; set; } = DefaultLogDir;
 
     /// <summary>
-    /// Gets or sets the root filesystem directory used for the article storage cache.
-    /// </summary>
-    /// <remarks>
-    /// Relative paths resolve through Common
-    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
-    /// <see cref="AppContext.BaseDirectory"/>. Distinct from <see cref="LogDir"/> and
-    /// <see cref="ArticleStorageOptions.ControlDir"/>. This root is the SATA / segment
-    /// data tier. Does not imply any on-disk layout under this root.
-    /// </remarks>
-    public string CacheDir { get; set; } = DefaultCacheDir;
-
-    /// <summary>
-    /// Gets or sets article-storage engine options (NVMe control tier and journal bounds).
+    /// Gets or sets article-storage engine options (NVMe control tier, SATA cache tier, and journal bounds).
     /// </summary>
     [Required]
     public ArticleStorageOptions Storage { get; set; } = new();
