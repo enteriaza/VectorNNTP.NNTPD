@@ -302,6 +302,50 @@ public sealed class JournalSequenceCapacityReservationTests
     }
 
     [Fact]
+    public async Task Checkpoint_ReopenFailure_PreventsSubsequentAccept()
+    {
+        using var dir = TempStorageDir.Create();
+        await using var engine = Open(dir);
+        var committed = CreateRecord("<jr-reopen-done@seg.test>");
+        _ = await engine.AcceptAsync(committed, CancellationToken.None);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        engine.SuspendBackgroundPersist = true;
+        var incomplete = CreateRecord("<jr-reopen-open@seg.test>", "open\r\n");
+        Assert.Equal(
+            ArticleAcceptOutcome.Accepted,
+            (await engine.AcceptAsync(incomplete, CancellationToken.None)).Outcome);
+
+        engine.Journal.CheckpointTestFault = point =>
+        {
+            if (point == FileArticleJournal.CheckpointFaultPoint.AfterMoveBeforeReopen)
+            {
+                throw new IOException("reopen-fault");
+            }
+        };
+
+        var fault = Assert.Throws<IOException>(() => engine.CheckpointTruncateCommitted());
+        Assert.Contains("reopen-fault", fault.Message, StringComparison.Ordinal);
+        Assert.Throws<ObjectDisposedException>(() => engine.Journal.JournalPhysicalBytes);
+
+        // The live journal property is unusable after fail-closed. The replaced file is the length.
+        var journalPath = Path.Combine(dir.Options.ControlDir, FileArticleJournal.JournalFileName);
+        var physicalBytes = new FileInfo(journalPath).Length;
+        var reserved = engine.ProcessLocalJournalReservedBytes;
+        Assert.True(reserved > 0);
+        Assert.Equal(2, engine.ProcessLocalJournalReservationCount);
+
+        var fresh = CreateRecord("<jr-reopen-new@seg.test>", "new\r\n");
+        _ = await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => engine.AcceptAsync(fresh, CancellationToken.None));
+
+        Assert.Equal(physicalBytes, new FileInfo(journalPath).Length);
+        Assert.False(engine.Index.TryGet(fresh.ArtId, out _));
+        Assert.Equal(reserved, engine.ProcessLocalJournalReservedBytes);
+        Assert.Equal(2, engine.ProcessLocalJournalReservationCount);
+        Assert.False(engine.ArticleCache.TryGet(fresh.ArtId, out _));
+    }
+
+    [Fact]
     public async Task Restart_reconstructs_only_sequences_still_in_the_authoritative_journal()
     {
         using var dir = TempStorageDir.Create();
