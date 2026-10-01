@@ -209,7 +209,8 @@ public sealed class CheckpointCapacityReservationTests
             releaseSnapshot.Task.GetAwaiter().GetResult();
         };
 
-        var fence = ArticleJournalFrameCodec.EncodeSequenceFence(2).Length;
+        var fence = ArticleJournalFrameCodec.EncodeSequenceFence(2).Length
+            + ArticleJournalFrameCodec.SegmentIdFenceFrameLength;
         var snapshotBytes = ArticleIndexSnapshotCodec.EncodedLength(1);
         var firstRequired = SegmentRecordCodec.RecordLengthForArtSize(first.ArtSize);
         var journalHeld = ArticleJournalFrameCodec.SequenceReservationBytes(first.ArtSize);
@@ -334,7 +335,8 @@ public sealed class CheckpointCapacityReservationTests
             (await engine.AcceptAsync(CreateRecord("<ckpt-deny@seg.test>"), CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         var before = engine.Journal.JournalPhysicalBytes;
-        var image = ArticleJournalFrameCodec.EncodeSequenceFence(2).Length;
+        var image = ArticleJournalFrameCodec.EncodeSequenceFence(2).Length
+            + ArticleJournalFrameCodec.SegmentIdFenceFrameLength;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(reader.TotalBytes, 0.80);
         reader.UsedBytes = ceiling - image + 1;
 
@@ -537,7 +539,10 @@ public sealed class CheckpointCapacityReservationTests
         Assert.True(engine.CheckpointTruncateCommitted() > 0);
         _ = engine.Index.Checkpoint();
 
-        Assert.Equal(ArticleJournalFrameCodec.EncodeSequenceFence(2).Length, reserved[0]);
+        Assert.Equal(
+            ArticleJournalFrameCodec.EncodeSequenceFence(2).Length
+            + ArticleJournalFrameCodec.SegmentIdFenceFrameLength,
+            reserved[0]);
         Assert.Contains(ArticleIndexSnapshotCodec.EncodedLength(1), reserved);
         Assert.Contains((long)ArticleIndexDeltaFile.HeaderLength, reserved);
         Assert.DoesNotContain(100L, reserved);

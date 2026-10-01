@@ -59,6 +59,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     private readonly string _journalPath;
     private FileStream _stream;
     private ulong _nextSequence = 1;
+
+    /// <summary>Next segment id to allocate. Zero means no segment has been reserved.</summary>
+    private ulong _nextSegmentId;
     private ulong _nextCompactionId = 1;
     private long _outstandingRecoverableBytes;
     private StorageWritePressure _lastLoggedPressure = (StorageWritePressure)byte.MaxValue;
@@ -89,6 +92,71 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             {
                 return _nextSequence;
             }
+        }
+    }
+
+    /// <summary>
+    /// Gets the next segment id to allocate. Zero means no segment has been reserved in this journal.
+    /// </summary>
+    internal ulong NextSegmentId
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _nextSegmentId;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Durably reserves <paramref name="segmentId"/> before its segment file is created.
+    /// The stored fence is the next id to allocate. A crash may leave that id unused.
+    /// A repeat of an already-durable reservation does not append another frame.
+    /// </summary>
+    /// <remarks>
+    /// Called under the segment write gate. This method takes the journal lock and returns
+    /// before the caller creates the file. Callers must not already hold the journal lock.
+    /// </remarks>
+    internal void ReserveSegmentId(ulong segmentId)
+    {
+        if (segmentId == 0 || segmentId == ulong.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(segmentId));
+        }
+
+        var next = segmentId + 1;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_nextSegmentId > next)
+            {
+                throw new InvalidOperationException(
+                    $"Segment id {segmentId} is below the durable fence {_nextSegmentId}.");
+            }
+
+            if (_nextSegmentId == next)
+            {
+                return;
+            }
+
+            var frame = ArticleJournalFrameCodec.EncodeSegmentIdFence(next);
+            if (_pending is PendingJournalFrame.SegmentIdFenceOperation pending)
+            {
+                if (pending.NextSegmentId != next)
+                {
+                    throw PendingOwnedByOther();
+                }
+            }
+            else if (_pending is not null)
+            {
+                throw PendingOwnedByOther();
+            }
+
+            AppendFrameUnlocked(
+                frame,
+                offset => new PendingJournalFrame.SegmentIdFenceOperation(offset, next, frame));
+            _nextSegmentId = next;
         }
     }
 
@@ -816,6 +884,12 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     {
         var fence = ArticleJournalFrameCodec.EncodeSequenceFence(_nextSequence);
         destination.Write(fence, 0, fence.Length);
+        if (_nextSegmentId > 0)
+        {
+            var segmentFence = ArticleJournalFrameCodec.EncodeSegmentIdFence(_nextSegmentId);
+            destination.Write(segmentFence, 0, segmentFence.Length);
+        }
+
         foreach (var state in incomplete)
         {
             var acceptFrame = ArticleJournalFrameCodec.EncodeAccept(state.IncompleteAccept);
@@ -965,6 +1039,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                     decoded.IndexCommitted,
                     decoded.SequenceFence);
                 break;
+            case ArticleJournalFrameType.SegmentIdFence:
+                ApplySegmentIdFenceUnlocked(decoded.SegmentIdFence);
+                break;
             default:
                 ApplyCompactionFrameUnlocked(decoded);
                 break;
@@ -1109,6 +1186,19 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
             default:
                 throw new ArticleJournalCorruptException($"Unknown journal frame type {(byte)type}.");
+        }
+    }
+
+    private void ApplySegmentIdFenceUnlocked(ulong? nextSegmentId)
+    {
+        if (nextSegmentId is not ulong value || value == 0)
+        {
+            throw new ArticleJournalCorruptException("SegmentIdFence frame missing body.");
+        }
+
+        if (value > _nextSegmentId)
+        {
+            _nextSegmentId = value;
         }
     }
 
@@ -1735,6 +1825,20 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 && compaction.FrameType == FrameType
                 && compaction.CompactionId == CompactionId
                 && compaction.RelocationId == RelocationId;
+        }
+
+        public sealed class SegmentIdFenceOperation : PendingJournalFrame
+        {
+            public SegmentIdFenceOperation(long offset, ulong nextSegmentId, byte[] payload)
+                : base(offset, payload)
+            {
+                NextSegmentId = nextSegmentId;
+            }
+
+            public ulong NextSegmentId { get; }
+
+            public override bool SameOwner(PendingJournalFrame other) =>
+                other is SegmentIdFenceOperation fence && fence.NextSegmentId == NextSegmentId;
         }
     }
 

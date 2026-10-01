@@ -152,6 +152,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityAdmissionEnabled = capacityAdmissionEnabled;
         _capacityMaximumUtilization = capacityMaximumUtilization;
         _capacityCompactionHeadroom = capacityCompactionHeadroom;
+        segments.AdoptSegmentIdFloor(journal.NextSegmentId);
+        segments.ReserveSegmentId = journal.ReserveSegmentId;
         journal.RetainRetiredCompaction = segmentId =>
             Catalogue.TryGet(segmentId, out var info) && info.State != SegmentState.Retired;
         if (capacityAdmissionEnabled)

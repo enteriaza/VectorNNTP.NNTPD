@@ -308,7 +308,11 @@ public sealed class CompactionJournalCapacityReservationTests
             ArticleJournalFrameCodec.CompactionBeginFrameLength
             + ArticleJournalFrameCodec.RelocationIntentFrameLength,
             engine.ProcessLocalCompactionJournalReservedBytes);
-        Assert.Equal(before + ArticleJournalFrameCodec.RelocationIntentFrameLength, engine.Journal.JournalPhysicalBytes);
+        Assert.Equal(
+            before
+            + ArticleJournalFrameCodec.RelocationIntentFrameLength
+            + ArticleJournalFrameCodec.SegmentIdFenceFrameLength,
+            engine.Journal.JournalPhysicalBytes);
         Assert.True(engine.Journal.TryGetCompaction(compactionId, out var snap));
         Assert.Null(Assert.Single(snap.Relocations).Written);
         Assert.Equal(

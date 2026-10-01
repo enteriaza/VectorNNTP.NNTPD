@@ -136,7 +136,8 @@ public sealed class CapacityAdmissionSampleRaceTests
         Assert.Empty(engine.Journal.EnumerateIncomplete());
 
         var reserved = engine.ProcessLocalReservedBytes;
-        var fence = ArticleJournalFrameCodec.EncodeSequenceFence(accepted.Sequence + 1).Length;
+        var fence = ArticleJournalFrameCodec.EncodeSequenceFence(accepted.Sequence + 1).Length
+            + ArticleJournalFrameCodec.SegmentIdFenceFrameLength;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
         var stale = ceiling - reserved - fence;
         Assert.True(stale >= releasedBytes);

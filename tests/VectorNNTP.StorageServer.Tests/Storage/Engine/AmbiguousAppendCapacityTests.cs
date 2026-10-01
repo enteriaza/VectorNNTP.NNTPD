@@ -1269,14 +1269,15 @@ public sealed class AmbiguousAppendCapacityTests
         var writes = 0;
         engine.Journal.TestAfterWriteBeforeFlush = (_, _, _) =>
         {
-            if (Interlocked.Increment(ref writes) == 4)
+            // Begin, intent, SegmentIdFence for the destination, written, then committed.
+            if (Interlocked.Increment(ref writes) == 5)
             {
                 throw new IOException("flush-failed");
             }
         };
         engine.Journal.TestBeforeDurableFlush = () =>
         {
-            if (writes == 4)
+            if (writes == 5)
             {
                 throw new IOException("second-flush");
             }

@@ -71,6 +71,38 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal Action? TestHookDuringProvenLocationScan { get; set; }
 
     /// <summary>
+    /// Durably reserves the next segment id before the file is created.
+    /// Null keeps file-derived allocation for store-only tests. The engine always sets this.
+    /// </summary>
+    internal Action<ulong>? ReserveSegmentId { get; set; }
+
+    /// <summary>
+    /// Invoked after the segment id is durably reserved and before the file is created.
+    /// Tests only. A throw leaves the id reserved and the file absent.
+    /// </summary>
+    internal Action<ulong>? TestHookAfterSegmentIdReserved { get; set; }
+
+    /// <summary>
+    /// Raises the next segment id to <paramref name="nextSegmentId"/> when that value is higher.
+    /// Zero is ignored. Never lowers the allocator.
+    /// </summary>
+    internal void AdoptSegmentIdFloor(ulong nextSegmentId)
+    {
+        if (nextSegmentId == 0)
+        {
+            return;
+        }
+
+        lock (_writeGate)
+        {
+            if (nextSegmentId > _nextSegmentId)
+            {
+                _nextSegmentId = nextSegmentId;
+            }
+        }
+    }
+
+    /// <summary>
     /// Bytes read while proving the active append offset. Closed and retired discovery
     /// must leave this at zero. Tests use it as a regression guard.
     /// </summary>
@@ -750,7 +782,11 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return;
         }
 
-        CreateActiveUnlocked(_nextSegmentId++, DateTimeOffset.UtcNow);
+        var id = _nextSegmentId;
+        ReserveSegmentId?.Invoke(id);
+        TestHookAfterSegmentIdReserved?.Invoke(id);
+        _nextSegmentId = id + 1;
+        CreateActiveUnlocked(id, DateTimeOffset.UtcNow);
     }
 
     private void CreateActiveUnlocked(ulong id, DateTimeOffset utcNow)

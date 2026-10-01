@@ -19,7 +19,8 @@ internal enum SegmentFileKind : byte
 /// </summary>
 /// <remarks>
 /// Twenty zero-padded decimal digits sort naturally by <see cref="SegmentId"/> and avoid
-/// collisions. The lifecycle suffix is renamed on close/retire; SegmentId is never reused.
+/// collisions. The lifecycle suffix is renamed on close/retire. SegmentId is never reused:
+/// the journal SegmentIdFence is the durable high-water mark, including after the file is gone.
 /// </remarks>
 internal static partial class SegmentFileNames
 {

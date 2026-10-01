@@ -21,6 +21,11 @@ internal enum ArticleJournalFrameType : byte
     RelocationWritten = 7,
     CompactionCommitted = 8,
     CompactionRetired = 9,
+
+    /// <summary>
+    /// Next <see cref="SegmentId"/> to allocate. Survives checkpoint and reclamation.
+    /// </summary>
+    SegmentIdFence = 10,
 }
 
 /// <summary>Frame decode classification for open/replay.</summary>
@@ -55,6 +60,9 @@ internal readonly struct ArticleJournalDecodedFrame
     public JournalCompactionCommittedRecord? CompactionCommitted { get; init; }
 
     public JournalCompactionRetiredRecord? CompactionRetired { get; init; }
+
+    /// <summary>Next segment id to allocate, when this frame is <see cref="ArticleJournalFrameType.SegmentIdFence"/>.</summary>
+    public ulong? SegmentIdFence { get; init; }
 }
 
 /// <summary>
@@ -98,6 +106,9 @@ internal static class ArticleJournalFrameCodec
 
     /// <summary>Durable CompactionRetired frame length.</summary>
     public const int CompactionRetiredFrameLength = 4 + HeaderAfterLength + (8 + 8 + 8) + 4;
+
+    /// <summary>Durable SegmentIdFence frame length. Same shape as <see cref="EncodeSequenceFence"/>.</summary>
+    public const int SegmentIdFenceFrameLength = 4 + HeaderAfterLength + 8 + 4;
 
     /// <summary>
     /// Bytes a durable Accept sequence can occupy before checkpoint retirement:
@@ -203,6 +214,27 @@ internal static class ArticleJournalFrameCodec
         buffer[6] = 0;
         buffer[7] = 0;
         BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(8, 8), nextSequence);
+        WriteCrc(buffer, 16);
+        return buffer;
+    }
+
+    /// <summary>Encodes the next segment id to allocate. Zero is not a segment id.</summary>
+    public static byte[] EncodeSegmentIdFence(ulong nextSegmentId)
+    {
+        if (nextSegmentId == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(nextSegmentId), "Segment id fence must be non-zero.");
+        }
+
+        const int bodyLength = 8;
+        var total = 4 + HeaderAfterLength + bodyLength + 4;
+        var buffer = new byte[total];
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
+        buffer[4] = (byte)ArticleJournalFrameType.SegmentIdFence;
+        buffer[5] = SchemaVersion;
+        buffer[6] = 0;
+        buffer[7] = 0;
+        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(8, 8), nextSegmentId);
         WriteCrc(buffer, 16);
         return buffer;
     }
@@ -520,6 +552,22 @@ internal static class ArticleJournalFrameCodec
                 }
 
                 decoded = new ArticleJournalDecodedFrame { Type = type, CompactionRetired = retired };
+                return true;
+            case ArticleJournalFrameType.SegmentIdFence:
+                if (body.Length != 8)
+                {
+                    error = ArticleJournalFrameError.Corrupt;
+                    return false;
+                }
+
+                var nextSegmentId = BinaryPrimitives.ReadUInt64LittleEndian(body);
+                if (nextSegmentId == 0)
+                {
+                    error = ArticleJournalFrameError.Corrupt;
+                    return false;
+                }
+
+                decoded = new ArticleJournalDecodedFrame { Type = type, SegmentIdFence = nextSegmentId };
                 return true;
             default:
                 error = ArticleJournalFrameError.Corrupt;
