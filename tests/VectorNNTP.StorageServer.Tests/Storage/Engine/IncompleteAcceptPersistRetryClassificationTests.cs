@@ -168,24 +168,29 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
+        var record = CreateRecord("<5f1c-conflict@seg.test>");
+        StoredArticleLocation priorLocation;
+        await using (var engineA = FileArticleStorageEngine.Open(
+            WithCapacity(dir.Options),
+            capacityReader: capacity))
+        {
+            engineA.SuspendBackgroundPersist = true;
+            var accepted = await engineA.AcceptAsync(record, CancellationToken.None);
+            Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
+
+            // Proven copy already on disk. A restarted recovery adopts it instead of appending again.
+            var priorAppender = await engineA.Segments.GetActiveAppenderAsync(CancellationToken.None);
+            priorLocation = await priorAppender.AppendAsync(record.ArtData, CancellationToken.None);
+        }
+
         await using var engine = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options),
             capacityReader: capacity);
         engine.SuspendBackgroundPersist = true;
-        var record = CreateRecord("<5f1c-conflict@seg.test>");
-        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        var accepted = await engine.AcceptAsync(record, CancellationToken.None);
-        Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
-
-        // Proven copy already on disk. Recovery adopts it instead of appending again.
-        var priorAppender = await engine.Segments.GetActiveAppenderAsync(CancellationToken.None);
-        var priorLocation = await priorAppender.AppendAsync(record.ArtData, CancellationToken.None);
-
         await engine.RecoverAsync(CancellationToken.None);
 
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
-        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out var read));
         Assert.Equal(priorLocation.SegmentId.Value, read.Metadata.Location.SegmentId.Value);

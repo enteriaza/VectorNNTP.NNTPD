@@ -157,6 +157,42 @@ public sealed partial class FileArticleStorageEngine
         {
             _ = _persistRetryAttempts.Remove(sequence);
             _ = _persistBlockedRetryAttempts.Remove(sequence);
+            _ = _acceptWithoutPhysicalBytes.Remove(sequence);
+        }
+    }
+
+    /// <summary>
+    /// True when this process journaled <paramref name="accept"/> and can still prove that
+    /// no physical append of that sequence has been attempted. A pending or unreconciled
+    /// segment tail, or an Evicted or Invalid index row, keeps discovery.
+    /// </summary>
+    private bool CanSkipProvenLocationScan(JournalAcceptRecord accept)
+    {
+        lock (_gate)
+        {
+            if (!_acceptWithoutPhysicalBytes.Contains(accept.Sequence))
+            {
+                return false;
+            }
+        }
+
+        if (_index.TryGet(accept.ArtId, out var existing)
+            && existing.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
+        {
+            return false;
+        }
+
+        return !_segments.HasPendingOrUnreconciledTail();
+    }
+
+    /// <summary>
+    /// Drops the never-written mark so the next attempt searches for physical bytes.
+    /// </summary>
+    private void RemoveAcceptWithoutPhysicalBytes(ulong sequence)
+    {
+        lock (_gate)
+        {
+            _ = _acceptWithoutPhysicalBytes.Remove(sequence);
         }
     }
 

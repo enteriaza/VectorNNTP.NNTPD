@@ -109,6 +109,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly HashSet<ulong> _persistInFlight = new();
     private readonly Dictionary<ulong, int> _persistRetryAttempts = new();
     private readonly Dictionary<ulong, int> _persistBlockedRetryAttempts = new();
+
+    /// <summary>
+    /// Accept sequences journaled by this process that have not attempted a physical append
+    /// which could leave bytes. Not durable: a restarted process does not rebuild it, so
+    /// replayed Accept-only sequences are absent and keep physical orphan discovery.
+    /// Evicted and Invalid re-accepts are never inserted.
+    /// </summary>
+    private readonly HashSet<ulong> _acceptWithoutPhysicalBytes = new();
     private readonly SemaphoreSlim _workerSignal = new(0, int.MaxValue);
     private readonly CancellationTokenSource _workerCts = new();
     private readonly Task _worker;
@@ -1105,6 +1113,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     reservedIndex = false;
                 }
 
+                if (!_index.TryGet(record.ArtId, out var indexed)
+                    || indexed.State is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
+                {
+                    _ = _acceptWithoutPhysicalBytes.Add(journalRecord.Sequence);
+                }
+
                 _pendingAcceptAdmission = null;
             }
             catch (Exception ex)
@@ -1687,15 +1701,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         // Accept-only: adopt one proven physical copy when the bytes match this Accept.
         // Otherwise append. Unproven records are never published.
+        // A sequence journaled in this process that has never attempted a physical append
+        // has no orphan to adopt. Replayed, retried-after-write, Evicted, and Invalid
+        // sequences still search.
         FileArticleStorageEngineLogMessages.RecoverAcceptOnly(
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
-        var proven = _segments.FindProvenLocations(
-            accept.ArtId,
-            accept.ArtHash,
-            accept.ArtSize,
-            accept.ArtData.Span);
+        var proven = CanSkipProvenLocationScan(accept)
+            ? []
+            : _segments.FindProvenLocations(
+                accept.ArtId,
+                accept.ArtHash,
+                accept.ArtSize,
+                accept.ArtData.Span);
         StoredArticleLocation location;
         if (proven.Count > 0 && TryChooseProvenLocation(accept, proven, out var chosen))
         {
@@ -2214,11 +2233,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             {
                 location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
                 appended = true;
+
+                // The record is in the segment. A later PhysicalWritten failure must rediscover it.
+                RemoveAcceptWithoutPhysicalBytes(accept.Sequence);
                 NoteSegmentCopyWritten(accept.Sequence);
             }
             catch (Exception ex)
             {
                 var createdPending = ex is UnreconciledDurableTailException { CreatedByThisCall: true };
+                if (createdPending)
+                {
+                    // This call left a pending record or an unreconciled tail. Bytes may exist.
+                    RemoveAcceptWithoutPhysicalBytes(accept.Sequence);
+                }
+
                 if (addedReservation && !appended && !createdPending)
                 {
                     ReleaseUnwrittenSegmentCopy(accept.Sequence);

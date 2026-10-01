@@ -1146,6 +1146,28 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         return matches;
     }
 
+    /// <summary>
+    /// True when any segment still has a process-local pending record or an unreconciled tail.
+    /// Those bytes are not yet a committed <c>SizeBytes</c> prefix, so an Accept that has not
+    /// itself written must not skip orphan discovery while they exist.
+    /// </summary>
+    internal bool HasPendingOrUnreconciledTail()
+    {
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            foreach (var runtime in _segments.Values)
+            {
+                if (runtime.PendingRecord is not null || runtime.TailUnreconciled)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     private readonly record struct ProvenLocationScanTarget(
         SegmentId SegmentId,
         string Path,

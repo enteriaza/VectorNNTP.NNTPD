@@ -257,20 +257,26 @@ public sealed class SegmentCopyCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
+        var record = CreateRecord("<seg-adopt@seg.test>");
+        StoredArticleLocation prior;
+        await using (var engineA = Open(dir, capacity))
+        {
+            engineA.SuspendBackgroundPersist = true;
+            _ = await engineA.AcceptAsync(record, CancellationToken.None);
+            var appender = await engineA.Segments.GetActiveAppenderAsync(CancellationToken.None);
+            prior = await appender.AppendAsync(record.ArtData, CancellationToken.None);
+        }
+
         await using var engine = Open(dir, capacity);
         engine.SuspendBackgroundPersist = true;
-        var record = CreateRecord("<seg-adopt@seg.test>");
-        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        _ = await engine.AcceptAsync(record, CancellationToken.None);
-        var appender = await engine.Segments.GetActiveAppenderAsync(CancellationToken.None);
-        _ = await appender.AppendAsync(record.ArtData, CancellationToken.None);
-
         await engine.RecoverAsync(CancellationToken.None);
 
         Assert.Equal(0, engine.PhysicalAppendCount);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
-        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
-        Assert.True(engine.TryRead(record.ArtId, out _));
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalSegmentCopyCount);
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.Equal(prior.SegmentId.Value, read.Metadata.Location.SegmentId.Value);
+        Assert.Equal(prior.Offset, read.Metadata.Location.Offset);
     }
 
     [Fact]
