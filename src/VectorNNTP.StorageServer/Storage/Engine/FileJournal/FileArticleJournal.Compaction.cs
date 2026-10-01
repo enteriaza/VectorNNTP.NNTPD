@@ -496,10 +496,11 @@ public sealed partial class FileArticleJournal
         compaction.Retired = record;
     }
 
-    private void WriteOpenCompactionFramesUnlocked(Stream temp)
+    private void WriteOpenCompactionFramesUnlocked(Stream temp, ulong[] omittedCompactionIds)
     {
+        var omitted = new HashSet<ulong>(omittedCompactionIds);
         foreach (var compaction in _compactions.Values
-                     .Where(static s => s.Retired is null)
+                     .Where(compaction => !omitted.Contains(compaction.Begin.CompactionId))
                      .OrderBy(static s => s.Begin.CompactionId))
         {
             var begin = ArticleJournalFrameCodec.EncodeCompactionBegin(compaction.Begin);
@@ -519,6 +520,12 @@ public sealed partial class FileArticleJournal
             {
                 var committedFrame = ArticleJournalFrameCodec.EncodeCompactionCommitted(committed);
                 temp.Write(committedFrame, 0, committedFrame.Length);
+            }
+
+            if (compaction.Retired is { } retired)
+            {
+                var retiredFrame = ArticleJournalFrameCodec.EncodeCompactionRetired(retired);
+                temp.Write(retiredFrame, 0, retiredFrame.Length);
             }
         }
     }

@@ -151,6 +151,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityAdmissionEnabled = capacityAdmissionEnabled;
         _capacityMaximumUtilization = capacityMaximumUtilization;
         _capacityCompactionHeadroom = capacityCompactionHeadroom;
+        journal.RetainRetiredCompaction = segmentId =>
+            Catalogue.TryGet(segmentId, out var info) && info.State != SegmentState.Retired;
         if (capacityAdmissionEnabled)
         {
             var checkpointCapacity = CreateCheckpointCapacity();

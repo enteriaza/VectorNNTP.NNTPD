@@ -29,6 +29,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 /// <see cref="IArticleJournal.OutstandingRecoverableBytes"/> tracks Accept ArtSize until
 /// IndexCommitted. <see cref="IArticleJournal.JournalPhysicalBytes"/> tracks on-disk file
 /// length and may remain larger until <see cref="CheckpointTruncateCommitted"/>.
+/// A durable CompactionRetired frame stays in the replacement image while
+/// <see cref="RetainRetiredCompaction"/> reports the source is still present and not
+/// catalogue-Retired. It is omitted only when that source is already Retired or absent.
 /// </para>
 /// </remarks>
 public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, IAsyncDisposable
@@ -42,6 +45,14 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     private readonly object _gate = new();
     private readonly object _checkpointSerial = new();
     private bool _retainCheckpointTempReservation;
+
+    /// <summary>
+    /// When set by the engine, a durable <c>CompactionRetired</c> compaction is kept in the
+    /// checkpoint image while this returns <see langword="true"/>. The engine returns true only
+    /// when the source segment is still present and not catalogue-Retired. A null callback
+    /// omits every Retired compaction, which is the journal-only checkpoint.
+    /// </summary>
+    internal Func<SegmentId, bool>? RetainRetiredCompaction { get; set; }
     private readonly Dictionary<ulong, SequenceState> _bySequence = new();
     private readonly Dictionary<ArticleId, ulong> _outstandingArtIdToSequence = new();
     private readonly Dictionary<ulong, CompactionState> _compactions = new();
@@ -637,17 +648,19 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             ThrowIfPendingJournalAppendUnlocked();
-            if (!TryCollectCheckpointPlanUnlocked(out var incomplete, out var committedKeys))
+            if (!TryCollectCheckpointPlanUnlocked(
+                    out var incomplete,
+                    out var committedKeys,
+                    out var omittedCompactions))
             {
                 return 0;
             }
 
-            var retiredCompactions = CopyRetiredCompactionIdsUnlocked();
             var before = _stream.Length;
-            InstallReplacementJournalUnlocked(incomplete);
-            PublishCheckpointMemoryUnlocked(committedKeys);
+            InstallReplacementJournalUnlocked(incomplete, omittedCompactions);
+            PublishCheckpointMemoryUnlocked(committedKeys, omittedCompactions);
             omittedSequences = committedKeys;
-            omittedCompactionIds = retiredCompactions;
+            omittedCompactionIds = omittedCompactions;
             return LogCheckpointUnlocked(before);
         }
     }
@@ -670,20 +683,22 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 {
                     ObjectDisposedException.ThrowIf(_disposed, this);
                     ThrowIfPendingJournalAppendUnlocked();
-                    if (!TryCollectCheckpointPlanUnlocked(out var incomplete, out var committedKeys))
+                    if (!TryCollectCheckpointPlanUnlocked(
+                            out var incomplete,
+                            out var committedKeys,
+                            out var omittedCompactions))
                     {
                         return 0;
                     }
 
-                    var image = MaterializeCheckpointImageUnlocked(incomplete);
+                    var image = MaterializeCheckpointImageUnlocked(incomplete, omittedCompactions);
                     if (image.Length <= reservedBytes)
                     {
-                        var retiredCompactions = CopyRetiredCompactionIdsUnlocked();
                         var before = _stream.Length;
                         InstallReplacementJournalFromImageUnlocked(image);
-                        PublishCheckpointMemoryUnlocked(committedKeys);
+                        PublishCheckpointMemoryUnlocked(committedKeys, omittedCompactions);
                         omittedSequences = committedKeys;
-                        omittedCompactionIds = retiredCompactions;
+                        omittedCompactionIds = omittedCompactions;
                         return LogCheckpointUnlocked(before);
                     }
 
@@ -720,7 +735,8 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
     private bool TryCollectCheckpointPlanUnlocked(
         out SequenceState[] incomplete,
-        out ulong[] committedKeys)
+        out ulong[] committedKeys,
+        out ulong[] omittedCompactionIds)
     {
         incomplete = _bySequence.Values
             .Where(static s => !s.IndexCommitted)
@@ -730,27 +746,45 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             .Where(static kv => kv.Value.IndexCommitted)
             .Select(static kv => kv.Key)
             .ToArray();
-        var hasRetiredCompaction = _compactions.Values.Any(static c => c.Retired is not null);
-        return committedKeys.Length != 0 || hasRetiredCompaction;
+        omittedCompactionIds = SelectOmittedRetiredCompactionsUnlocked();
+        return committedKeys.Length != 0 || omittedCompactionIds.Length != 0;
     }
 
-    private ulong[] CopyRetiredCompactionIdsUnlocked() =>
-        _compactions
-            .Where(static kv => kv.Value.Retired is not null)
-            .Select(static kv => kv.Key)
-            .ToArray();
+    /// <summary>
+    /// Retired compactions whose source is already catalogue-Retired or absent.
+    /// A source that is still Closed is not included. The set is captured once per plan
+    /// so the image and the in-memory removal use the same decision.
+    /// </summary>
+    private ulong[] SelectOmittedRetiredCompactionsUnlocked()
+    {
+        var omitted = new List<ulong>();
+        foreach (var entry in _compactions)
+        {
+            if (entry.Value.Retired is null)
+            {
+                continue;
+            }
 
-    private void PublishCheckpointMemoryUnlocked(ulong[] committedKeys)
+            if (RetainRetiredCompaction is not null
+                && RetainRetiredCompaction(entry.Value.Begin.SourceSegmentId))
+            {
+                continue;
+            }
+
+            omitted.Add(entry.Key);
+        }
+
+        return omitted.ToArray();
+    }
+
+    private void PublishCheckpointMemoryUnlocked(ulong[] committedKeys, ulong[] omittedCompactionIds)
     {
         foreach (var key in committedKeys)
         {
             _ = _bySequence.Remove(key);
         }
 
-        foreach (var retiredId in _compactions
-                     .Where(static kv => kv.Value.Retired is not null)
-                     .Select(static kv => kv.Key)
-                     .ToArray())
+        foreach (var retiredId in omittedCompactionIds)
         {
             _ = _compactions.Remove(retiredId);
         }
@@ -768,14 +802,17 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         return released;
     }
 
-    private byte[] MaterializeCheckpointImageUnlocked(SequenceState[] incomplete)
+    private byte[] MaterializeCheckpointImageUnlocked(SequenceState[] incomplete, ulong[] omittedCompactionIds)
     {
         using var buffer = new MemoryStream();
-        WriteCheckpointBodyUnlocked(buffer, incomplete);
+        WriteCheckpointBodyUnlocked(buffer, incomplete, omittedCompactionIds);
         return buffer.ToArray();
     }
 
-    private void WriteCheckpointBodyUnlocked(Stream destination, SequenceState[] incomplete)
+    private void WriteCheckpointBodyUnlocked(
+        Stream destination,
+        SequenceState[] incomplete,
+        ulong[] omittedCompactionIds)
     {
         var fence = ArticleJournalFrameCodec.EncodeSequenceFence(_nextSequence);
         destination.Write(fence, 0, fence.Length);
@@ -790,7 +827,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             }
         }
 
-        WriteOpenCompactionFramesUnlocked(destination);
+        WriteOpenCompactionFramesUnlocked(destination, omittedCompactionIds);
     }
 
     /// <inheritdoc />
@@ -1364,8 +1401,8 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     /// replaced file, restores the previous journal stream when possible; otherwise marks
     /// the instance disposed/unusable.
     /// </summary>
-    private void InstallReplacementJournalUnlocked(SequenceState[] incomplete) =>
-        InstallReplacementJournalCoreUnlocked(temp => WriteCheckpointBodyUnlocked(temp, incomplete));
+    private void InstallReplacementJournalUnlocked(SequenceState[] incomplete, ulong[] omittedCompactionIds) =>
+        InstallReplacementJournalCoreUnlocked(temp => WriteCheckpointBodyUnlocked(temp, incomplete, omittedCompactionIds));
 
     private void InstallReplacementJournalFromImageUnlocked(byte[] image) =>
         InstallReplacementJournalCoreUnlocked(temp => temp.Write(image, 0, image.Length));
