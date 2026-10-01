@@ -122,6 +122,7 @@ public sealed class JournalCheckpointMaintenanceTests
         Assert.Null(compaction.Retired);
         Assert.Contains(sink.Events, static e => IsEvent(e, 3021));
         Assert.Contains(sink.Events, static e => IsEvent(e, 3022));
+        AssertDurationMsNonNegative(Assert.Single(sink.Events, static e => IsEvent(e, 3022)));
     }
 
     [Fact]
@@ -143,6 +144,7 @@ public sealed class JournalCheckpointMaintenanceTests
         Assert.Equal(StorageMaintenanceOutcome.NoWork, result.Outcome);
         Assert.Single(engine.Journal.EnumerateIncomplete());
         Assert.Contains(sink.Events, static e => IsEvent(e, 3023));
+        AssertDurationMsNonNegative(Assert.Single(sink.Events, static e => IsEvent(e, 3023)));
         Assert.DoesNotContain(sink.Events, static e => e.Level == LogEventLevel.Error);
     }
 
@@ -330,6 +332,19 @@ public sealed class JournalCheckpointMaintenanceTests
     private static bool IsEvent(LogEvent logEvent, int eventId) =>
         logEvent.Properties.TryGetValue("EventId", out var value)
         && value.ToString().Contains(eventId.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+    private static void AssertDurationMsNonNegative(LogEvent logEvent)
+    {
+        var duration = Assert.Contains("DurationMs", logEvent.Properties);
+        var raw = duration.ToString().Trim('"');
+        Assert.True(
+            double.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var ms));
+        Assert.True(ms >= 0);
+    }
 
     private static SerilogLoggerFactory CreateLoggerFactory(CollectingSink sink)
     {

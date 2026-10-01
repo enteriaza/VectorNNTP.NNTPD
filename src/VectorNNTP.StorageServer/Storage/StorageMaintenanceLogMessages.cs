@@ -128,17 +128,21 @@ internal static partial class StorageMaintenanceLogMessages
     [LoggerMessage(
         EventId = 3022,
         Level = LogLevel.Information,
-        Message = "Journal checkpoint omitted committed journal bytes (MaintenanceRunId={MaintenanceRunId}, ReleasedBytes={ReleasedBytes})")]
+        Message = "Journal checkpoint omitted committed journal bytes (MaintenanceRunId={MaintenanceRunId}, ReleasedBytes={ReleasedBytes}, DurationMs={DurationMs})")]
     public static partial void JournalCheckpointOmitted(
         ILogger logger,
         ulong MaintenanceRunId,
-        long ReleasedBytes);
+        long ReleasedBytes,
+        double DurationMs);
 
     [LoggerMessage(
         EventId = 3023,
         Level = LogLevel.Debug,
-        Message = "Journal checkpoint had nothing to omit (MaintenanceRunId={MaintenanceRunId})")]
-    public static partial void JournalCheckpointNothingToOmit(ILogger logger, ulong MaintenanceRunId);
+        Message = "Journal checkpoint had nothing to omit (MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs})")]
+    public static partial void JournalCheckpointNothingToOmit(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        double DurationMs);
 
     [LoggerMessage(
         EventId = 3024,

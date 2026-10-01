@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
@@ -457,14 +458,20 @@ public sealed class StorageMaintenanceCoordinator
             _journalCheckpointThresholdBytes);
         try
         {
+            var started = Stopwatch.GetTimestamp();
             var released = _engine.CheckpointTruncateCommitted();
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             if (released > 0)
             {
-                StorageMaintenanceLogMessages.JournalCheckpointOmitted(_logger, maintenanceRunId, released);
+                StorageMaintenanceLogMessages.JournalCheckpointOmitted(
+                    _logger,
+                    maintenanceRunId,
+                    released,
+                    durationMs);
             }
             else
             {
-                StorageMaintenanceLogMessages.JournalCheckpointNothingToOmit(_logger, maintenanceRunId);
+                StorageMaintenanceLogMessages.JournalCheckpointNothingToOmit(_logger, maintenanceRunId, durationMs);
             }
         }
         catch (UnreconciledDurableTailException ex)
