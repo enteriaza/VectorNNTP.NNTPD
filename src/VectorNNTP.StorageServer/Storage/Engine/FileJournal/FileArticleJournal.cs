@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,10 +19,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 /// alone is not treated as the durability boundary.
 /// </para>
 /// <para>
-/// Replay applies a contiguous prefix of CRC-verified frames. An incomplete or corrupt
-/// <em>final</em> frame (no complete bytes after the failure) is truncated to the last
-/// good boundary. Corruption with trailing bytes after a failed frame fails closed via
-/// <see cref="ArticleJournalCorruptException"/>.
+/// Replay applies a contiguous prefix of CRC-verified frames, one frame buffer at a time.
+/// An incomplete or corrupt <em>final</em> frame (no complete bytes after the failure) is
+/// truncated to the last good boundary. Corruption with trailing bytes after a failed frame
+/// fails closed via <see cref="ArticleJournalCorruptException"/>.
 /// </para>
 /// <para>
 /// <see cref="IArticleJournal.OutstandingRecoverableBytes"/> tracks Accept ArtSize until
@@ -122,7 +123,27 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     /// </summary>
     public static FileArticleJournal Open(
         ArticleStorageRuntimeOptions options,
+        ILogger? logger = null) =>
+        OpenCore(options, logger, replayReadLimit: null);
+
+    /// <summary>
+    /// Opens the journal and caps each replay read to the count returned by
+    /// <paramref name="replayReadLimit"/>. Tests only. Production open does not use this.
+    /// A non-positive count is surfaced as a zero-byte read.
+    /// </summary>
+    internal static FileArticleJournal Open(
+        ArticleStorageRuntimeOptions options,
+        Func<int, int> replayReadLimit,
         ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(replayReadLimit);
+        return OpenCore(options, logger, replayReadLimit);
+    }
+
+    private static FileArticleJournal OpenCore(
+        ArticleStorageRuntimeOptions options,
+        ILogger? logger,
+        Func<int, int>? replayReadLimit)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -130,13 +151,15 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         var log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(options.ControlDir);
         var path = Path.Combine(options.ControlDir, JournalFileName);
-        var stream = new FileStream(
-            path,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None,
-            bufferSize: 64 * 1024,
-            FileOptions.None);
+        FileStream stream = replayReadLimit is null
+            ? new FileStream(
+                path,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 64 * 1024,
+                FileOptions.None)
+            : new ReplayReadLimitFileStream(path, replayReadLimit);
 
         var journal = new FileArticleJournal(options, path, stream, log);
         try
@@ -517,6 +540,12 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     internal bool TestFailTailTruncate { get; set; }
 
     /// <summary>
+    /// Largest single buffer allocated to hold one frame during replay.
+    /// Zero when replay does not buffer a frame. Tests only.
+    /// </summary>
+    internal int LargestReplayFrameBufferBytes { get; private set; }
+
+    /// <summary>
     /// When set, the encoded checkpoint image is reserved before the temporary journal is created.
     /// Null leaves checkpoint IO unchanged and does not consult capacity.
     /// </summary>
@@ -768,26 +797,55 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 0);
         }
 
-        var buffer = new byte[(int)fileLength];
         _stream.Seek(0, SeekOrigin.Begin);
-        var read = _stream.Read(buffer, 0, buffer.Length);
-        if (read != buffer.Length)
+        Span<byte> lengthPrefix = stackalloc byte[4];
+        long offset = 0;
+        while (offset < fileLength)
         {
-            throw new IOException($"Short read replaying article journal ({read}/{buffer.Length}).");
-        }
+            var remaining = fileLength - offset;
+            if (remaining < 4)
+            {
+                HandleDecodeFailureUnlocked(offset, frameLength: 0, fileLength, ArticleJournalFrameError.Incomplete);
+                break;
+            }
 
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var span = buffer.AsSpan(offset);
+            ReadReplayExact(lengthPrefix);
+            var total = BinaryPrimitives.ReadUInt32LittleEndian(lengthPrefix);
+            if (total < ArticleJournalFrameCodec.MinimumFrameLength
+                || total > ArticleJournalFrameCodec.MaxFrameLength)
+            {
+                var declared = (int)Math.Min(total, int.MaxValue);
+                HandleDecodeFailureUnlocked(offset, declared, fileLength, ArticleJournalFrameError.CorruptLength);
+                break;
+            }
+
+            var declaredLength = (int)total;
+            if (declaredLength > remaining)
+            {
+                HandleDecodeFailureUnlocked(offset, declaredLength, fileLength, ArticleJournalFrameError.Incomplete);
+                break;
+            }
+
+            var frame = new byte[declaredLength];
+            if (declaredLength > LargestReplayFrameBufferBytes)
+            {
+                LargestReplayFrameBufferBytes = declaredLength;
+            }
+
+            lengthPrefix.CopyTo(frame);
+            if (declaredLength > 4)
+            {
+                ReadReplayExact(frame.AsSpan(4));
+            }
+
             if (!ArticleJournalFrameCodec.TryDecode(
-                    span,
-                    out var type,
+                    frame,
+                    out _,
                     out var frameLength,
                     out var decoded,
                     out var error))
             {
-                HandleDecodeFailureUnlocked(offset, frameLength, buffer.Length, error);
+                HandleDecodeFailureUnlocked(offset, frameLength, fileLength, error);
                 break;
             }
 
@@ -796,6 +854,26 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         }
 
         _stream.Seek(0, SeekOrigin.End);
+    }
+
+    /// <summary>
+    /// Fills <paramref name="destination"/> from the journal stream.
+    /// A short read inside the length captured at the start of replay fails closed.
+    /// </summary>
+    private void ReadReplayExact(Span<byte> destination)
+    {
+        var filled = 0;
+        while (filled < destination.Length)
+        {
+            var read = _stream.Read(destination[filled..]);
+            if (read == 0)
+            {
+                throw new IOException(
+                    $"Short read replaying article journal ({filled}/{destination.Length}).");
+            }
+
+            filled += read;
+        }
     }
 
     private void ApplyDecodedFrameUnlocked(in ArticleJournalDecodedFrame decoded)
@@ -1541,6 +1619,49 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 && compaction.FrameType == FrameType
                 && compaction.CompactionId == CompactionId
                 && compaction.RelocationId == RelocationId;
+        }
+    }
+
+    /// <summary>
+    /// Test-only <see cref="FileStream"/> whose <see cref="Read(Span{byte})"/> returns at most the
+    /// count selected by the test. Production open never constructs it.
+    /// </summary>
+    private sealed class ReplayReadLimitFileStream : FileStream
+    {
+        private readonly Func<int, int> _limit;
+
+        public ReplayReadLimitFileStream(string path, Func<int, int> limit)
+            : base(
+                path,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 64 * 1024,
+                FileOptions.None)
+        {
+            _limit = limit;
+        }
+
+        /// <inheritdoc />
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            var allow = _limit(buffer.Length);
+            if (allow <= 0)
+            {
+                return 0;
+            }
+
+            if (allow > buffer.Length)
+            {
+                allow = buffer.Length;
+            }
+
+            return base.Read(buffer[..allow]);
         }
     }
 }
