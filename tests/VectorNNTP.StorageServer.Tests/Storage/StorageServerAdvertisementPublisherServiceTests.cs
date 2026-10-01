@@ -43,7 +43,8 @@ public sealed class StorageServerAdvertisementPublisherServiceTests
         var channel = Assert.Single(connection.PublishChannels);
         var publication = Assert.Single(channel.Publications);
         Assert.Equal(CacheFleetTopology.BroadcastExchangeName, publication.Exchange);
-        Assert.Equal(string.Empty, publication.RoutingKey);
+        Assert.Equal(CacheFleetTopology.BroadcastExchangeName, publication.RoutingKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(publication.RoutingKey);
         Assert.Equal(CacheFleetTopology.AdvertisementExpirationMilliseconds, publication.ExpirationMilliseconds);
         Assert.Equal(StorageServerAdvertisementWireProtocol.JsonContentType, publication.ContentType);
         Assert.Equal(runtime.Fqdn, publication.AppId);

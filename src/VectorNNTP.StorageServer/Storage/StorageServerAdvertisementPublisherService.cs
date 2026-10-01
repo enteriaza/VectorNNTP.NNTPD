@@ -143,7 +143,9 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             await channel.PublishConfirmedAsync(
                     new RabbitMqConfirmedPublication(
                         CacheFleetTopology.BroadcastExchangeName,
-                        RoutingKey: string.Empty,
+                        // Fanout ignores the key. The common publisher rejects empty keys;
+                        // the exchange name matches the other durable fanout publications.
+                        RoutingKey: CacheFleetTopology.BroadcastExchangeName,
                         MessageId: Guid.NewGuid().ToString("D"),
                         AppId: _runtime.Fqdn,
                         CorrelationId: null,
