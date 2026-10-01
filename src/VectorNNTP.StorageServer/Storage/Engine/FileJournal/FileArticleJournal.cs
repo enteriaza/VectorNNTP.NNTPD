@@ -238,8 +238,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 && _bySequence.TryGetValue(existingSeq, out var existing)
                 && !existing.IndexCommitted)
             {
-                record = existing.Accept;
-                rejectOutcome = existing.Accept.ArtHash == artHash && existing.Accept.ArtSize == artSize
+                var retained = existing.IncompleteAccept;
+                record = retained;
+                rejectOutcome = retained.ArtHash == artHash && retained.ArtSize == artSize
                     ? ArticleAcceptOutcome.Duplicate
                     : ArticleAcceptOutcome.Conflict;
                 return false;
@@ -335,7 +336,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 return ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
-            if (record.Location.Length < state.Accept.ArtSize)
+            if (record.Location.Length < state.ArtSize)
             {
                 return ValueTask.FromResult(JournalAppendOutcome.Rejected);
             }
@@ -386,8 +387,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                     encodedIndexCommitted));
             state.IndexCommitted = true;
             state.IndexCommittedRecord = record;
-            _ = _outstandingArtIdToSequence.Remove(state.Accept.ArtId);
-            _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.Accept.ArtSize);
+            _ = _outstandingArtIdToSequence.Remove(state.IncompleteAccept.ArtId);
+            _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.ArtSize);
+            state.ReleaseAcceptPayload();
             LogPressureIfChangedUnlocked();
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }
@@ -403,7 +405,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 && _bySequence.TryGetValue(sequence, out var state)
                 && !state.IndexCommitted)
             {
-                record = state.Accept;
+                record = state.IncompleteAccept;
                 return true;
             }
 
@@ -420,8 +422,8 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             ObjectDisposedException.ThrowIf(_disposed, this);
             return _bySequence.Values
                 .Where(static s => !s.IndexCommitted)
-                .OrderBy(static s => s.Accept.Sequence)
-                .Select(static s => new JournalIncompleteSequence(s.Accept, s.PhysicalWritten))
+                .OrderBy(static s => s.Sequence)
+                .Select(static s => new JournalIncompleteSequence(s.IncompleteAccept, s.PhysicalWritten))
                 .ToArray();
         }
     }
@@ -453,7 +455,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                     continue;
                 }
 
-                var accept = state.Accept;
+                var accept = state.IncompleteAccept;
                 rows[index++] = new JournalReservationIdentity(
                     accept.ArtId,
                     accept.ArtHash,
@@ -479,10 +481,44 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             var index = 0;
             foreach (var state in _bySequence.Values)
             {
-                rows[index++] = (state.Accept.Sequence, state.Accept.ArtSize);
+                rows[index++] = (state.Sequence, state.ArtSize);
             }
 
             return rows;
+        }
+    }
+
+    /// <summary>
+    /// Test view of whether a sequence still roots its Accept record. Production code does not call this.
+    /// </summary>
+    internal readonly record struct SequenceRetention(
+        ulong Sequence,
+        int ArtSize,
+        bool IndexCommitted,
+        JournalPhysicalWrittenRecord? PhysicalWritten,
+        JournalAcceptRecord? RetainedAccept);
+
+    /// <summary>
+    /// Reads sequence metadata and the Accept reference still rooted by journal state.
+    /// </summary>
+    internal bool TryGetSequenceRetention(ulong sequence, out SequenceRetention retention)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_bySequence.TryGetValue(sequence, out var state))
+            {
+                retention = default;
+                return false;
+            }
+
+            retention = new SequenceRetention(
+                state.Sequence,
+                state.ArtSize,
+                state.IndexCommitted,
+                state.PhysicalWritten,
+                state.RetainedAccept);
+            return true;
         }
     }
 
@@ -687,7 +723,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     {
         incomplete = _bySequence.Values
             .Where(static s => !s.IndexCommitted)
-            .OrderBy(static s => s.Accept.Sequence)
+            .OrderBy(static s => s.Sequence)
             .ToArray();
         committedKeys = _bySequence
             .Where(static kv => kv.Value.IndexCommitted)
@@ -744,7 +780,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         destination.Write(fence, 0, fence.Length);
         foreach (var state in incomplete)
         {
-            var acceptFrame = ArticleJournalFrameCodec.EncodeAccept(state.Accept);
+            var acceptFrame = ArticleJournalFrameCodec.EncodeAccept(state.IncompleteAccept);
             destination.Write(acceptFrame, 0, acceptFrame.Length);
             if (state.PhysicalWritten is { } physicalWritten)
             {
@@ -1047,7 +1083,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             return;
         }
 
-        if (record.Location.Length < state.Accept.ArtSize)
+        if (record.Location.Length < state.ArtSize)
         {
             throw new ArticleJournalCorruptException(
                 $"PhysicalWritten length mismatch for sequence {record.Sequence}.");
@@ -1077,8 +1113,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
         state.IndexCommitted = true;
         state.IndexCommittedRecord = record;
-        _ = _outstandingArtIdToSequence.Remove(state.Accept.ArtId);
-        _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.Accept.ArtSize);
+        _ = _outstandingArtIdToSequence.Remove(state.IncompleteAccept.ArtId);
+        _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.ArtSize);
+        state.ReleaseAcceptPayload();
     }
 
     private void AppendFrameUnlocked(byte[] frame, Func<long, PendingJournalFrame> ownerAt)
@@ -1490,15 +1527,39 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         return !File.Exists(path);
     }
 
-    private sealed class SequenceState(JournalAcceptRecord accept)
+    /// <summary>
+    /// One journal sequence. The full <see cref="JournalAcceptRecord"/> is rooted only while the
+    /// sequence is incomplete. Durable IndexCommitted drops that reference and keeps metadata.
+    /// </summary>
+    private sealed class SequenceState
     {
-        public JournalAcceptRecord Accept { get; } = accept;
+        public SequenceState(JournalAcceptRecord accept)
+        {
+            ArgumentNullException.ThrowIfNull(accept);
+            Accept = accept;
+            Sequence = accept.Sequence;
+            ArtSize = accept.ArtSize;
+        }
+
+        public ulong Sequence { get; }
+
+        public int ArtSize { get; }
 
         public JournalPhysicalWrittenRecord? PhysicalWritten { get; set; }
 
         public bool IndexCommitted { get; set; }
 
         public JournalIndexCommittedRecord? IndexCommittedRecord { get; set; }
+
+        /// <summary>Full Accept while incomplete. Null after durable IndexCommitted.</summary>
+        private JournalAcceptRecord? Accept { get; set; }
+
+        public JournalAcceptRecord IncompleteAccept =>
+            Accept ?? throw new InvalidOperationException("Incomplete journal sequence has no Accept record.");
+
+        public JournalAcceptRecord? RetainedAccept => Accept;
+
+        public void ReleaseAcceptPayload() => Accept = null;
     }
 
     /// <summary>
