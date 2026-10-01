@@ -249,7 +249,14 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
             _pipeline?.RecordPersist(persistStart);
             persisted = true;
-            await PlaceAfterPersistAsync(article, cancellationToken).ConfigureAwait(false);
+            if (article.Producer == InboundArticleProducer.BackFiller)
+            {
+                await StoreBackFillerAsync(article, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await PlaceAfterPersistAsync(article, cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -275,6 +282,140 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
         }
+    }
+
+    /// <summary>
+    /// One VATP STORE of a BackFiller article to one active StorageServer.
+    /// </summary>
+    /// <remarks>
+    /// The target is the active registry entry with a dialable VATP port and the lowest
+    /// <see cref="StorageServerFleetEntry.ServerId"/>, then ordinal FQDN. Advertised free
+    /// space is ignored. This method does not call
+    /// <see cref="StorageServerPlacementSelector"/>, <see cref="PlaceAfterPersistAsync"/>,
+    /// <see cref="PlaceReplicaAsync"/>, or <see cref="IReplicationIntentStore"/>.
+    /// Accepted and Duplicate are terminal success. Every other
+    /// <see cref="ArticlePlacementKind"/> is logged once and not retried.
+    /// </remarks>
+    private async Task StoreBackFillerAsync(InboundArticle article, CancellationToken cancellationToken)
+    {
+        if (_placement is null || _placementRegistry is null)
+        {
+            return;
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var artId = article.Record.ArtId.ToLowerHexString();
+        try
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+                return;
+            }
+
+            if (!TrySelectBackFillerTarget(_placementRegistry.GetActive(_time.GetUtcNow()), out var target)
+                || target.VatpPort is not int port)
+            {
+                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started));
+                return;
+            }
+
+            var result = await _placement.PlaceAsync(article.Record, target, cancellationToken).ConfigureAwait(false);
+            var elapsed = Elapsed(started);
+            switch (result.Kind)
+            {
+                case ArticlePlacementKind.Accepted:
+                    ArticlePlacementLogMessages.Accepted(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Duplicate:
+                    ArticlePlacementLogMessages.Duplicate(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Conflict:
+                    ArticlePlacementLogMessages.Conflict(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedCapacity:
+                    ArticlePlacementLogMessages.RejectedCapacity(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedPressure:
+                    ArticlePlacementLogMessages.RejectedPressure(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.RejectedInvalid:
+                    ArticlePlacementLogMessages.RejectedInvalid(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.Cancelled:
+                    ArticlePlacementLogMessages.Cancelled(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
+                    break;
+                case ArticlePlacementKind.AcknowledgementNotObserved:
+                    ArticlePlacementLogMessages.AcknowledgementNotObserved(
+                        _logger,
+                        artId,
+                        target.ServerId,
+                        port,
+                        target.Fqdn,
+                        elapsed);
+                    break;
+                default:
+                    ArticlePlacementLogMessages.TransportFailed(
+                        _logger,
+                        artId,
+                        target.ServerId,
+                        port,
+                        target.Fqdn,
+                        result.Failure ?? result.Kind.ToString(),
+                        elapsed);
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+        }
+        catch (Exception ex)
+        {
+            ArticlePlacementLogMessages.TransportFailed(
+                _logger,
+                artId,
+                0,
+                0,
+                string.Empty,
+                ex.GetType().Name,
+                Elapsed(started));
+        }
+    }
+
+    /// <summary>
+    /// Chooses one dialable active StorageServer for <see cref="StoreBackFillerAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// Lowest <see cref="StorageServerFleetEntry.ServerId"/>, then ordinal FQDN.
+    /// Entries without a VATP port from 1 through 65535 are skipped. Free space,
+    /// replica ranking, and placement persistence are not used.
+    /// </remarks>
+    private static bool TrySelectBackFillerTarget(
+        IReadOnlyList<StorageServerFleetEntry> active,
+        out StorageServerFleetEntry selected)
+    {
+        ArgumentNullException.ThrowIfNull(active);
+        selected = default;
+        var found = false;
+        foreach (var entry in active)
+        {
+            if (entry.VatpPort is not (>= 1 and <= 65535))
+            {
+                continue;
+            }
+
+            if (!found
+                || entry.ServerId < selected.ServerId
+                || (entry.ServerId == selected.ServerId
+                    && string.CompareOrdinal(entry.Fqdn, selected.Fqdn) < 0))
+            {
+                selected = entry;
+                found = true;
+            }
+        }
+
+        return found;
     }
 
     /// <summary>

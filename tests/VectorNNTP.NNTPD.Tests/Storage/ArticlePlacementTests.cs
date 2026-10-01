@@ -122,12 +122,19 @@ public sealed class ArticlePlacementTests
     }
 
     [Fact]
-    public async Task BackFiller_DoesNotPlace()
+    public async Task BackFiller_StoresOnceOnTheLowestServerId()
     {
         var client = new RecordingPlacement();
+        var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf@example.test>", InboundArticleProducer.BackFiller);
-        await RunAsync(article, new OrderedPersister(), client, RegistryWithTarget());
-        Assert.Equal(0, client.Calls);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(2, client.Targets[0].ServerId);
+        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
+        Assert.Equal(article.Record.ArtId, client.Last.ArtId);
+        Assert.Contains(2620, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+        Assert.False(intent.TryGet(article.Record.ArtId, out _));
     }
 
     [Fact]
@@ -175,12 +182,119 @@ public sealed class ArticlePlacementTests
     }
 
     [Fact]
-    public async Task MessageIdFetch_DoesNotPlace()
+    public async Task BackFiller_Duplicate_IsOneStoreAndDoesNotReplicate()
     {
-        var client = new RecordingPlacement();
-        var article = CanonicalArticleText.CreateQueued("<fetched@example.test>", InboundArticleProducer.BackFiller);
-        await RunAsync(article, new OrderedPersister(), client, TwoTargets());
-        Assert.Equal(0, client.Calls);
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(ArticlePlacementKind.Duplicate),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<bf-dup@example.test>", InboundArticleProducer.BackFiller);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
+        Assert.Contains(2621, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+        Assert.False(intent.TryGet(article.Record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task BackFiller_Conflict_LogsAndDoesNotStoreAgain()
+    {
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(ArticlePlacementKind.Conflict),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<bf-conflict@example.test>", InboundArticleProducer.BackFiller);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(2, client.Targets[0].ServerId);
+        Assert.Contains(2622, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+        Assert.False(intent.TryGet(article.Record.ArtId, out _));
+    }
+
+    [Theory]
+    [InlineData(ArticlePlacementKind.RejectedCapacity, 2623)]
+    [InlineData(ArticlePlacementKind.RejectedPressure, 2624)]
+    [InlineData(ArticlePlacementKind.RejectedInvalid, 2625)]
+    public async Task BackFiller_Rejection_DoesNotTryAnotherServer(ArticlePlacementKind kind, int eventId)
+    {
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(kind),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<bf-reject@example.test>", InboundArticleProducer.BackFiller);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
+        Assert.Contains(eventId, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+        Assert.False(intent.TryGet(article.Record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task BackFiller_TransportFailure_DoesNotTryAnotherServer()
+    {
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "IOException"),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued("<bf-transport@example.test>", InboundArticleProducer.BackFiller);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(2, client.Targets[0].ServerId);
+        Assert.Contains(2627, logs.EventIds);
+        Assert.DoesNotContain(logs.EventIds, static id => id is >= 2630 and <= 2641);
+        Assert.False(intent.TryGet(article.Record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task PeerProducer_StillPrefersFreeSpaceAndOneReplica()
+    {
+        var client = new RecordingPlacement { ExpectedCalls = 2 };
+        var article = CanonicalArticleText.CreateQueued("<peer-rank@example.test>", InboundArticleProducer.Post);
+        var intent = await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets());
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(9, client.Targets[0].ServerId);
+        Assert.Equal("highspace.example", client.Targets[0].Fqdn);
+        Assert.Equal(2, client.Targets[1].ServerId);
+        Assert.True(intent.TryGet(article.Record.ArtId, out var pin));
+        Assert.Equal(9, pin.SourceServerId);
+        Assert.Equal(2, pin.TargetServerId);
+    }
+
+    [Fact]
+    public async Task BackFiller_ConcurrentArticles_DoNotShareStoreState()
+    {
+        var client = new ConcurrentPlacement();
+        var first = CanonicalArticleText.CreateQueued("<bf-a@example.test>", InboundArticleProducer.BackFiller);
+        var second = CanonicalArticleText.CreateQueued("<bf-b@example.test>", InboundArticleProducer.BackFiller);
+        var intent = await RunManyAsync([first, second], client, DivergentTargets(), workers: 2);
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(2, client.Targets.Select(static target => target.ServerId).Distinct().Single());
+        Assert.Contains(client.Records, record => record.ArtId.Equals(first.Record.ArtId));
+        Assert.Contains(client.Records, record => record.ArtId.Equals(second.Record.ArtId));
+        Assert.NotEqual(first.Record.ArtId, second.Record.ArtId);
+        Assert.False(intent.TryGet(first.Record.ArtId, out _));
+        Assert.False(intent.TryGet(second.Record.ArtId, out _));
+    }
+
+    [Fact]
+    public async Task BackFiller_SameArticleConcurrently_StoresTwice()
+    {
+        var client = new ConcurrentPlacement();
+        var first = CanonicalArticleText.CreateQueued("<bf-same@example.test>", InboundArticleProducer.BackFiller);
+        var second = CanonicalArticleText.CreateQueued("<bf-same@example.test>", InboundArticleProducer.BackFiller);
+        Assert.Equal(first.Record.ArtId, second.Record.ArtId);
+        var intent = await RunManyAsync([first, second], client, DivergentTargets(), workers: 2);
+        Assert.Equal(2, client.Calls);
+        Assert.All(client.Records, record => Assert.Equal(first.Record.ArtId, record.ArtId));
+        Assert.Equal(2, client.Targets.Select(static target => target.ServerId).Distinct().Single());
+        Assert.False(intent.TryGet(first.Record.ArtId, out _));
     }
 
     [Fact]
@@ -805,6 +919,70 @@ public sealed class ArticlePlacementTests
             replicationRoster: enabled.Roster);
     }
 
+    private static async Task<ReplicationIntentStore> RunObservedAsync(
+        InboundArticle article,
+        OrderedPersister persister,
+        RecordingPlacement client,
+        StorageServerRegistry registry,
+        ListLogger<IncomingSpoolWriterService>? logs = null)
+    {
+        var enabled = EnableSecondCopy();
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            persister,
+            Options.Create(enabled.Options),
+            (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await writer.StartAsync(CancellationToken.None);
+        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await persister.Completed.Task.WaitAsync(cts.Token);
+        if (!client.FailIfCalled)
+        {
+            await client.Finished.Task.WaitAsync(cts.Token);
+        }
+
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
+        return enabled.Intent;
+    }
+
+    private static async Task<ReplicationIntentStore> RunManyAsync(
+        InboundArticle[] articles,
+        ConcurrentPlacement client,
+        StorageServerRegistry registry,
+        int workers)
+    {
+        var enabled = EnableSecondCopy(workers);
+        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
+        var writer = new IncomingSpoolWriterService(
+            queue,
+            new OrderedPersister(),
+            Options.Create(enabled.Options),
+            NullLogger<IncomingSpoolWriterService>.Instance,
+            timeProvider: new FixedTime(Now),
+            placement: client,
+            placementRegistry: registry,
+            replicationIntent: enabled.Intent,
+            replicationRoster: enabled.Roster);
+        await writer.StartAsync(CancellationToken.None);
+        foreach (var article in articles)
+        {
+            Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await client.BothStored.Task.WaitAsync(cts.Token);
+        queue.Complete();
+        await writer.StopAsync(CancellationToken.None);
+        return enabled.Intent;
+    }
+
     private static async Task RunCoreAsync(
         InboundArticle article,
         OrderedPersister persister,
@@ -830,7 +1008,10 @@ public sealed class ArticlePlacementTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         await persister.Completed.Task.WaitAsync(cts.Token);
-        if (article.Producer is InboundArticleProducer.TakeThis or InboundArticleProducer.IHave or InboundArticleProducer.Post
+        if (article.Producer is InboundArticleProducer.TakeThis
+                or InboundArticleProducer.IHave
+                or InboundArticleProducer.Post
+                or InboundArticleProducer.BackFiller
             && !client.FailIfCalled)
         {
             await client.Finished.Task.WaitAsync(cts.Token);
@@ -849,7 +1030,7 @@ public sealed class ArticlePlacementTests
         Assert.Equal(expectedArray.Count, actualArray.Count);
     }
 
-    private static EnabledSecondCopy EnableSecondCopy()
+    private static EnabledSecondCopy EnableSecondCopy(int workers = 1)
     {
         var directory = Directory.CreateTempSubdirectory("vnntp-5h3a-").FullName;
         return new EnabledSecondCopy(
@@ -862,8 +1043,8 @@ public sealed class ArticlePlacementTests
                 },
                 ArticleIngestion = new ArticleIngestionOptions
                 {
-                    MinWorkers = 1,
-                    MaxWorkers = 1,
+                    MinWorkers = workers,
+                    MaxWorkers = workers,
                     ScaleIntervalSeconds = 3600,
                     OverviewDbMinPublisherWorkers = 1,
                     OverviewDbMaxPublisherWorkers = 1,
@@ -889,6 +1070,14 @@ public sealed class ArticlePlacementTests
     {
         var registry = TwoTargets();
         registry.ApplyAdvertisement(Advertisement("cache03.example", 3, 10, 565), Now);
+        return registry;
+    }
+
+    private static StorageServerRegistry DivergentTargets()
+    {
+        var registry = new StorageServerRegistry();
+        registry.ApplyAdvertisement(Advertisement("lowid.example", 2, 10, 564), Now);
+        registry.ApplyAdvertisement(Advertisement("highspace.example", 9, 5000, 563), Now);
         return registry;
     }
 
@@ -930,6 +1119,57 @@ public sealed class ArticlePlacementTests
         FirstCallReturnsCancelled,
         AfterFirstAccepted,
         SecondCallReturnsCancelled,
+    }
+
+    private sealed class ConcurrentPlacement : IArticlePlacementClient
+    {
+        private readonly Barrier _barrier = new(2);
+        private readonly List<StorageServerFleetEntry> _targets = [];
+        private readonly List<ArticleRecord> _records = [];
+        private readonly object _gate = new();
+
+        public int Calls { get; private set; }
+
+        public IReadOnlyList<StorageServerFleetEntry> Targets
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _targets];
+                }
+            }
+        }
+
+        public IReadOnlyList<ArticleRecord> Records
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _records];
+                }
+            }
+        }
+
+        public TaskCompletionSource BothStored { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask<ArticlePlacementResult> PlaceAsync(
+            ArticleRecord record,
+            StorageServerFleetEntry target,
+            CancellationToken cancellationToken)
+        {
+            lock (_gate)
+            {
+                Calls++;
+                _targets.Add(target);
+                _records.Add(record);
+            }
+
+            _barrier.SignalAndWait(cancellationToken);
+            BothStored.TrySetResult();
+            return ValueTask.FromResult(new ArticlePlacementResult(ArticlePlacementKind.Accepted));
+        }
     }
 
     private sealed class RecordingPlacement : IArticlePlacementClient
