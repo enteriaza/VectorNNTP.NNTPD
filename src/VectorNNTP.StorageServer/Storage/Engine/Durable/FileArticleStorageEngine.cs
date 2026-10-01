@@ -5,6 +5,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Cache;
+using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
@@ -90,6 +91,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly CapacityVolume? _segmentCapacity;
     private readonly CapacityVolume? _controlCapacity;
     private readonly bool _capacityAdmissionEnabled;
+
+    private PendingAcceptAdmission? _pendingAcceptAdmission;
+
+    private readonly record struct PendingAcceptAdmission(
+        ArticleId ArtId,
+        ulong ArtHash,
+        int ArtSize,
+        long SegmentBytes,
+        long JournalBytes,
+        long IndexBytes);
     private readonly double _capacityMaximumUtilization;
     private readonly double _capacityCompactionHeadroom;
     private readonly object _gate = new();
@@ -290,6 +301,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     private bool TryReserveAcceptPair(ArticleRecord record, long segmentBytes, long journalBytes, long indexBytes)
     {
+        if (_pendingAcceptAdmission is { } pending
+            && pending.ArtId == record.ArtId
+            && pending.ArtHash == record.ArtHash
+            && pending.ArtSize == record.ArtSize
+            && pending.SegmentBytes == segmentBytes
+            && pending.JournalBytes == journalBytes
+            && pending.IndexBytes == indexBytes)
+        {
+            return true;
+        }
+
         var segment = RequireSegmentVolume();
         var control = RequireControlVolume();
         var segmentDecision = Admit(
@@ -602,9 +624,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             return new CompactionJournalAppend(outcome, CapacityDenied: false);
         }
-        catch
+        catch (Exception ex)
         {
-            if (admit == CompactionJournalAdmit.NewlyReserved
+            var createdPending = ex is UnreconciledDurableTailException { CreatedByThisCall: true };
+            if (!createdPending
+                && admit == CompactionJournalAdmit.NewlyReserved
                 && !CompactionJournalFrameIsDurable(compactionId, kind, relocationId))
             {
                 ReleaseCompactionJournalFrame(compactionId, kind, relocationId);
@@ -1080,9 +1104,44 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     });
                     reservedIndex = false;
                 }
+
+                _pendingAcceptAdmission = null;
             }
-            catch
+            catch (Exception ex)
             {
+                var samePending = _pendingAcceptAdmission is { } owned
+                    && owned.ArtId == record.ArtId
+                    && owned.ArtHash == record.ArtHash
+                    && owned.ArtSize == record.ArtSize;
+                if (ex is UnreconciledDurableTailException unreconciled)
+                {
+                    if (unreconciled.CreatedByThisCall)
+                    {
+                        if (_capacityAdmissionEnabled && _pendingAcceptAdmission is null)
+                        {
+                            _pendingAcceptAdmission = new PendingAcceptAdmission(
+                                record.ArtId,
+                                record.ArtHash,
+                                record.ArtSize,
+                                segmentBytes,
+                                journalBytes,
+                                indexBytes);
+                        }
+                    }
+                    else if (_capacityAdmissionEnabled && !samePending)
+                    {
+                        RollbackUnboundAccept(
+                            reservedSegment,
+                            reservedJournal,
+                            reservedIndex,
+                            segmentBytes,
+                            journalBytes,
+                            indexBytes);
+                    }
+
+                    throw;
+                }
+
                 RollbackUnboundAccept(
                     reservedSegment,
                     reservedJournal,
@@ -1090,6 +1149,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     segmentBytes,
                     journalBytes,
                     indexBytes);
+                if (samePending)
+                {
+                    _pendingAcceptAdmission = null;
+                }
+
                 throw;
             }
 
@@ -2145,9 +2209,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 appended = true;
                 NoteSegmentCopyWritten(accept.Sequence);
             }
-            catch
+            catch (Exception ex)
             {
-                if (addedReservation && !appended)
+                var createdPending = ex is UnreconciledDurableTailException { CreatedByThisCall: true };
+                if (addedReservation && !appended && !createdPending)
                 {
                     ReleaseUnwrittenSegmentCopy(accept.Sequence);
                 }

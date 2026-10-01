@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
@@ -37,6 +38,23 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private ulong _nextSegmentId = 1;
     private ulong? _activeSegmentId;
     private bool _disposed;
+
+    /// <summary>
+    /// Invoked after the segment record is written and before <see cref="FileStream.Flush(bool)"/>.
+    /// Tests only. The production path is null.
+    /// </summary>
+    internal Action<FileStream, long, int>? TestAfterWriteBeforeFlush { get; set; }
+
+    /// <summary>
+    /// Invoked immediately before each durability <see cref="FileStream.Flush(bool)"/>.
+    /// Tests only. A throw leaves the record undurable.
+    /// </summary>
+    internal Action? TestBeforeDurableFlush { get; set; }
+
+    /// <summary>
+    /// When set, torn-tail truncation throws instead of shrinking the file. Tests only.
+    /// </summary>
+    internal bool TestFailTailTruncate { get; set; }
 
     /// <summary>
     /// Bytes read while proving the active append offset. Closed and retired discovery
@@ -391,11 +409,27 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            return ValueTask.FromResult(AppendToActiveUnlocked(artData).Location);
+        }
+    }
+
+    /// <summary>
+    /// Appends one record and reports whether a failed durability flush was reconciled
+    /// because the complete record was already physically present.
+    /// </summary>
+    internal ValueTask<ActiveSegmentAppend> AppendToActiveReportingAsync(
+        ReadOnlyMemory<byte> artData,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             return ValueTask.FromResult(AppendToActiveUnlocked(artData));
         }
     }
 
-    private StoredArticleLocation AppendToActiveUnlocked(ReadOnlyMemory<byte> artData)
+    private ActiveSegmentAppend AppendToActiveUnlocked(ReadOnlyMemory<byte> artData)
     {
         if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
         {
@@ -418,6 +452,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         EnsureActiveUnlocked();
         var activeId = _activeSegmentId!.Value;
         var runtime = _segments[activeId];
+        if (runtime.PendingRecord is not null)
+        {
+            return FinishPendingSegmentRecord(runtime, record, artId, artHash, artData.Length);
+        }
+
+        ReconcileBlockedSegmentTail(runtime);
 
         // Rotate when current + next would exceed target, unless the segment is empty
         // (a single oversized article may exceed the nominal target).
@@ -433,12 +473,227 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         var offset = runtime.SizeBytes;
-        runtime.Stream.Seek(0, SeekOrigin.End);
-        runtime.Stream.Write(record, 0, record.Length);
-        runtime.Stream.Flush(flushToDisk: true);
+        var lengthBefore = runtime.Stream.Length;
+        if (lengthBefore != offset)
+        {
+            runtime.TailUnreconciled = true;
+            runtime.TailValidEnd = offset;
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} length {lengthBefore} does not match logical size {offset}.",
+                new IOException("Active segment cursor and file length diverged."));
+        }
+
+        try
+        {
+            runtime.Stream.Position = offset;
+            runtime.Stream.Write(record, 0, record.Length);
+            TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, record.Length);
+            DurableSegmentFlush(runtime.Stream);
+            return CommitActiveAppend(runtime, offset, record, ambiguousComplete: false);
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            var outcome = InspectSegmentAppend(runtime, offset, record);
+            if (outcome == AmbiguousAppend.Growth.CompleteExpected)
+            {
+                if (runtime.Stream.Length > offset + record.Length)
+                {
+                    try
+                    {
+                        TruncateSegmentOrBlock(runtime, offset + record.Length, createdByThisCall: true);
+                    }
+                    catch (UnreconciledDurableTailException)
+                    {
+                        runtime.PendingRecord = new PendingSegmentRecord(offset, record, artId, artHash, artData.Length);
+                        throw;
+                    }
+                }
+
+                try
+                {
+                    DurableSegmentFlush(runtime.Stream);
+                }
+                catch (Exception flushEx) when (flushEx is not UnreconciledDurableTailException)
+                {
+                    runtime.PendingRecord = new PendingSegmentRecord(offset, record, artId, artHash, artData.Length);
+                    throw new UnreconciledDurableTailException(
+                        $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
+                        flushEx,
+                        createdByThisCall: true);
+                }
+
+                return CommitActiveAppend(runtime, offset, record, ambiguousComplete: false);
+            }
+
+            if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
+            {
+                TruncateSegmentOrBlock(runtime, offset, createdByThisCall: true);
+            }
+
+            throw;
+        }
+    }
+
+    private ActiveSegmentAppend FinishPendingSegmentRecord(
+        SegmentRuntime runtime,
+        byte[] record,
+        ArticleId artId,
+        ulong artHash,
+        int artSize)
+    {
+        var pending = runtime.PendingRecord
+            ?? throw new InvalidOperationException("No pending segment record.");
+        if (pending.ArtId != artId
+            || pending.ArtHash != artHash
+            || pending.ArtSize != artSize
+            || record.Length != pending.Length
+            || XxHash3.HashToUInt64(record) != pending.PayloadHash)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} pending record does not match the retry payload.",
+                new IOException("Pending durable segment payload identity mismatch."));
+        }
+
+        if (runtime.Stream.Length < pending.Offset + pending.Length)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} pending record is no longer present.",
+                new IOException("Pending durable segment payload no longer matches the file."));
+        }
+
+        var observed = ReadExact(runtime.Stream, pending.Offset, pending.Length);
+        if (observed.Length != pending.Length || XxHash3.HashToUInt64(observed) != pending.PayloadHash)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} pending record bytes changed before the durable flush.",
+                new IOException("Pending durable segment payload no longer matches the file."));
+        }
+
+        try
+        {
+            DurableSegmentFlush(runtime.Stream);
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
+                ex);
+        }
+
+        runtime.PendingRecord = null;
+        return CommitActiveAppend(runtime, pending.Offset, record, ambiguousComplete: false);
+    }
+
+    private void DurableSegmentFlush(FileStream stream)
+    {
+        TestBeforeDurableFlush?.Invoke();
+        stream.Flush(flushToDisk: true);
+    }
+
+    private ActiveSegmentAppend CommitActiveAppend(
+        SegmentRuntime runtime,
+        long offset,
+        byte[] record,
+        bool ambiguousComplete)
+    {
         runtime.SizeBytes = offset + record.Length;
         _catalogue.RecordAppend(runtime.SegmentId, record.Length, runtime.SizeBytes);
-        return new StoredArticleLocation(runtime.SegmentId, offset, record.Length);
+        return new ActiveSegmentAppend(
+            new StoredArticleLocation(runtime.SegmentId, offset, record.Length),
+            ambiguousComplete);
+    }
+
+    private AmbiguousAppend.Growth InspectSegmentAppend(SegmentRuntime runtime, long start, byte[] record)
+    {
+        try
+        {
+            runtime.Stream.Flush(flushToDisk: false);
+            var length = runtime.Stream.Length;
+            var observed = length >= start + record.Length
+                ? ReadExact(runtime.Stream, start, record.Length)
+                : [];
+            return AmbiguousAppend.Classify(start, length, record, observed);
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            runtime.TailUnreconciled = true;
+            runtime.TailValidEnd = start;
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} length could not be inspected after an ambiguous append.",
+                ex,
+                createdByThisCall: true);
+        }
+    }
+
+    private static byte[] ReadExact(FileStream stream, long offset, int length)
+    {
+        var buffer = new byte[length];
+        stream.Position = offset;
+        var filled = 0;
+        while (filled < length)
+        {
+            var read = stream.Read(buffer, filled, length - filled);
+            if (read == 0)
+            {
+                stream.Seek(0, SeekOrigin.End);
+                return [];
+            }
+
+            filled += read;
+        }
+
+        stream.Seek(0, SeekOrigin.End);
+        return buffer;
+    }
+
+    private void ReconcileBlockedSegmentTail(SegmentRuntime runtime)
+    {
+        if (!runtime.TailUnreconciled)
+        {
+            return;
+        }
+
+        TruncateSegmentOrBlock(runtime, runtime.TailValidEnd, createdByThisCall: false);
+    }
+
+    private void TruncateSegmentOrBlock(SegmentRuntime runtime, long validEnd, bool createdByThisCall)
+    {
+        if (TestFailTailTruncate)
+        {
+            runtime.TailUnreconciled = true;
+            runtime.TailValidEnd = validEnd;
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} tail could not be reconciled after an ambiguous append.",
+                new IOException("truncate-failed"),
+                createdByThisCall);
+        }
+
+        try
+        {
+            if (runtime.Stream.Length != validEnd)
+            {
+                FileSegmentStoreLogMessages.TruncatingTornTail(
+                    _logger,
+                    runtime.SegmentId.Value,
+                    validEnd,
+                    runtime.Stream.Length,
+                    "ambiguous-append");
+                runtime.Stream.SetLength(validEnd);
+                runtime.Stream.Flush(flushToDisk: true);
+            }
+
+            runtime.SizeBytes = validEnd;
+            runtime.TailUnreconciled = false;
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            runtime.TailUnreconciled = true;
+            runtime.TailValidEnd = validEnd;
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} tail could not be reconciled after an ambiguous append.",
+                ex,
+                createdByThisCall);
+        }
     }
 
     private void EnsureActiveUnlocked()
@@ -490,6 +745,13 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         {
             _activeSegmentId = null;
             return;
+        }
+
+        if (runtime.PendingRecord is not null || runtime.TailUnreconciled)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} cannot close while a physical append is pending.",
+                new IOException("pending-segment-record"));
         }
 
         runtime.Stream.Flush(flushToDisk: true);
@@ -1033,6 +1295,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
         public long SizeBytes { get; set; } = sizeBytes;
 
+        public bool TailUnreconciled { get; set; }
+
+        public long TailValidEnd { get; set; }
+
+        public PendingSegmentRecord? PendingRecord { get; set; }
+
         private FileStream? _stream = stream;
 
         public void EnsureReadable()
@@ -1069,6 +1337,39 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 }
+
+/// <summary>
+/// Process-local complete segment record whose durability flush has not returned.
+/// The article identity is the logical owner. Not restored after restart.
+/// </summary>
+internal sealed class PendingSegmentRecord
+{
+    internal PendingSegmentRecord(long offset, byte[] payload, ArticleId artId, ulong artHash, int artSize)
+    {
+        Offset = offset;
+        Length = payload.Length;
+        PayloadHash = XxHash3.HashToUInt64(payload);
+        ArtId = artId;
+        ArtHash = artHash;
+        ArtSize = artSize;
+    }
+
+    internal long Offset { get; }
+
+    internal int Length { get; }
+
+    internal ulong PayloadHash { get; }
+
+    internal ArticleId ArtId { get; }
+
+    internal ulong ArtHash { get; }
+
+    internal int ArtSize { get; }
+}
+
+internal readonly record struct ActiveSegmentAppend(
+    StoredArticleLocation Location,
+    bool AmbiguousComplete);
 
 /// <summary>One proven segment record. Payload is not retained.</summary>
 internal readonly record struct ProvenSegmentExtent(

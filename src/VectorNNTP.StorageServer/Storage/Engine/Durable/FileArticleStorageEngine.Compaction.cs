@@ -331,6 +331,15 @@ public sealed partial class FileArticleStorageEngine
             return true;
         }
 
+        if (_journal.TryGetPendingCompactionBegin(out var pendingBegin)
+            && pendingBegin.SourceSegmentId.Value == sourceSegmentId.Value)
+        {
+            compactionId = pendingBegin.CompactionId;
+            sourceGeneration = pendingBegin.SourceGeneration;
+            alreadyCommitted = false;
+            return true;
+        }
+
         compactionId = _journal.AllocateCompactionId();
         sourceGeneration = catalogueGeneration;
         alreadyCommitted = false;

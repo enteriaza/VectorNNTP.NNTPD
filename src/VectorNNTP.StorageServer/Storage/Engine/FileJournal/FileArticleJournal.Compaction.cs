@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 
@@ -25,6 +26,53 @@ public sealed partial class FileArticleJournal
             ObjectDisposedException.ThrowIf(_disposed, this);
             return _nextCompactionId++;
         }
+    }
+
+    /// <summary>
+    /// Returns a CompactionBegin that is physically present but not yet durable.
+    /// Process-local only; restart does not restore it.
+    /// </summary>
+    internal bool TryGetPendingCompactionBegin(out JournalCompactionBeginRecord record)
+    {
+        lock (_gate)
+        {
+            if (_pending is PendingJournalFrame.CompactionOperation { Begin: { } begin } pending
+                && pending.FrameType == ArticleJournalFrameType.CompactionBegin)
+            {
+                record = begin;
+                return true;
+            }
+        }
+
+        record = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Returns a RelocationWritten destination that is physically present but not yet durable.
+    /// </summary>
+    internal bool TryGetPendingRelocationWritten(
+        ulong compactionId,
+        ulong relocationId,
+        out StoredArticleLocation destination)
+    {
+        lock (_gate)
+        {
+            if (_pending is PendingJournalFrame.CompactionOperation
+                {
+                    FrameType: ArticleJournalFrameType.RelocationWritten,
+                    WrittenDestination: { } pendingDestination,
+                } pending
+                && pending.CompactionId == compactionId
+                && pending.RelocationId == relocationId)
+            {
+                destination = pendingDestination;
+                return true;
+            }
+        }
+
+        destination = default;
+        return false;
     }
 
     /// <summary>Looks up in-memory compaction state by id.</summary>
@@ -98,7 +146,17 @@ public sealed partial class FileArticleJournal
                 return ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeCompactionBegin(record));
+            var encodedBegin = ArticleJournalFrameCodec.EncodeCompactionBegin(record);
+            AppendFrameUnlocked(
+                encodedBegin,
+                offset => new PendingJournalFrame.CompactionOperation(
+                    offset,
+                    ArticleJournalFrameType.CompactionBegin,
+                    record.CompactionId,
+                    relocationId: 0,
+                    encodedBegin,
+                    record));
+
             _compactions[record.CompactionId] = new CompactionState(record);
             if (record.CompactionId >= _nextCompactionId)
             {
@@ -136,7 +194,15 @@ public sealed partial class FileArticleJournal
                     : ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeRelocationIntent(record));
+            var encodedIntent = ArticleJournalFrameCodec.EncodeRelocationIntent(record);
+            AppendFrameUnlocked(
+                encodedIntent,
+                offset => new PendingJournalFrame.CompactionOperation(
+                    offset,
+                    ArticleJournalFrameType.RelocationIntent,
+                    record.CompactionId,
+                    record.RelocationId,
+                    encodedIntent));
             compaction.Relocations[record.RelocationId] = new RelocationState(record);
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }
@@ -170,7 +236,16 @@ public sealed partial class FileArticleJournal
                     : ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeRelocationWritten(record));
+            var encodedWritten = ArticleJournalFrameCodec.EncodeRelocationWritten(record);
+            AppendFrameUnlocked(
+                encodedWritten,
+                offset => new PendingJournalFrame.CompactionOperation(
+                    offset,
+                    ArticleJournalFrameType.RelocationWritten,
+                    record.CompactionId,
+                    record.RelocationId,
+                    encodedWritten,
+                    writtenDestination: record.DestinationLocation));
             relocation.Written = record;
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }
@@ -201,7 +276,15 @@ public sealed partial class FileArticleJournal
                 return ValueTask.FromResult(JournalAppendOutcome.IdempotentNoOp);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeCompactionCommitted(record));
+            var encodedCommitted = ArticleJournalFrameCodec.EncodeCompactionCommitted(record);
+            AppendFrameUnlocked(
+                encodedCommitted,
+                offset => new PendingJournalFrame.CompactionOperation(
+                    offset,
+                    ArticleJournalFrameType.CompactionCommitted,
+                    record.CompactionId,
+                    relocationId: 0,
+                    encodedCommitted));
             compaction.Committed = true;
             compaction.CommittedRecord = record;
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
@@ -251,7 +334,15 @@ public sealed partial class FileArticleJournal
                 return ValueTask.FromResult(JournalAppendOutcome.Conflict);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeCompactionRetired(record));
+            var encodedRetired = ArticleJournalFrameCodec.EncodeCompactionRetired(record);
+            AppendFrameUnlocked(
+                encodedRetired,
+                offset => new PendingJournalFrame.CompactionOperation(
+                    offset,
+                    ArticleJournalFrameType.CompactionRetired,
+                    record.CompactionId,
+                    relocationId: 0,
+                    encodedRetired));
             compaction.Retired = record;
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }

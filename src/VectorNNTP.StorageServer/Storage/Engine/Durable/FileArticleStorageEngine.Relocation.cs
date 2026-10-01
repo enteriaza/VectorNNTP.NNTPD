@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
@@ -298,6 +299,12 @@ public sealed partial class FileArticleStorageEngine
         ReadOnlyMemory<byte> artData,
         CancellationToken cancellationToken)
     {
+        if (_journal.TryGetPendingRelocationWritten(intent.CompactionId, intent.RelocationId, out var pendingDestination))
+        {
+            return await AppendPendingRelocationWrittenAsync(intent, pendingDestination, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var reservedCompaction = false;
         var reservedIndex = false;
         if (_capacityAdmissionEnabled)
@@ -311,7 +318,7 @@ public sealed partial class FileArticleStorageEngine
                     volume,
                     requiredBytes,
                     ceiling,
-                    static _ => false,
+                    ledger => ledger.HoldsCompactionDestination(intent.CompactionId, intent.RelocationId),
                     ledger => ledger.ReserveCompaction(
                         intent.CompactionId,
                         intent.RelocationId,
@@ -373,15 +380,19 @@ public sealed partial class FileArticleStorageEngine
                     "Active destination segment must not be the Closed compaction source.");
             }
 
-            var destination = await appender.AppendAsync(artData, cancellationToken).ConfigureAwait(false);
+            var reported = await _segments
+                .AppendToActiveReportingAsync(artData, cancellationToken)
+                .ConfigureAwait(false);
+            var destination = reported.Location;
             _ = Interlocked.Increment(ref _physicalAppendCount);
 
-            // Destination Flush(true) completed; process-local compaction reservation may release.
+            // Append returns only after Flush(true). The destination bytes are then only in UsedBytes.
             if (reservedCompaction)
             {
                 ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
-                reservedCompaction = false;
             }
+
+            reservedCompaction = false;
 
             ThrowIfRelocationFault(RelocationFaultPoint.AfterAppendBeforeWritten);
 
@@ -429,9 +440,9 @@ public sealed partial class FileArticleStorageEngine
 
             return FinishIndexRelocate(intent, destination, ref reservedIndex);
         }
-        catch
+        catch (Exception ex)
         {
-            if (reservedCompaction)
+            if (reservedCompaction && ex is not UnreconciledDurableTailException)
             {
                 ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
             }
@@ -443,6 +454,48 @@ public sealed partial class FileArticleStorageEngine
 
             throw;
         }
+    }
+
+    private async Task<ArticleRelocationResult> AppendPendingRelocationWrittenAsync(
+        JournalRelocationIntentRecord intent,
+        StoredArticleLocation destination,
+        CancellationToken cancellationToken)
+    {
+        var reservedIndex = false;
+        var written = new JournalRelocationWrittenRecord(
+            1,
+            intent.CompactionId,
+            intent.RelocationId,
+            destination);
+        var writtenAppend = await AppendReservedCompactionJournalFrameAsync(
+                intent.CompactionId,
+                CompactionJournalFrameKind.Written,
+                intent.RelocationId,
+                ArticleJournalFrameCodec.RelocationWrittenFrameLength,
+                ct => _journal.AppendRelocationWrittenAsync(written, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (writtenAppend.CapacityDenied)
+        {
+            return new ArticleRelocationResult(
+                ArticleRelocationOutcome.RejectedCapacity,
+                intent.ArtId,
+                Reason: "compaction-journal-written-capacity");
+        }
+
+        if (writtenAppend.Outcome == JournalAppendOutcome.Conflict)
+        {
+            throw new InvalidOperationException(
+                $"RelocationWritten conflict for compaction {intent.CompactionId} relocation {intent.RelocationId}.");
+        }
+
+        if (writtenAppend.Outcome == JournalAppendOutcome.Rejected)
+        {
+            throw new InvalidOperationException(
+                $"RelocationWritten rejected for compaction {intent.CompactionId} relocation {intent.RelocationId}.");
+        }
+
+        return FinishIndexRelocate(intent, destination, ref reservedIndex);
     }
 
     private void ReleaseCompactionReservation(ulong compactionId, ulong relocationId)

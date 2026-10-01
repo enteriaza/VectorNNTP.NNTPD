@@ -1,7 +1,9 @@
+using System.IO.Hashing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 
@@ -181,6 +183,33 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
+            if (_pending is PendingJournalFrame.AcceptOperation pendingAccept)
+            {
+                if (pendingAccept.ArtId != artId
+                    || pendingAccept.ArtHash != artHash
+                    || pendingAccept.ArtSize != artSize)
+                {
+                    throw PendingOwnedByOther();
+                }
+
+                var pendingRecord = pendingAccept.Record;
+                var encodedPendingAccept = ArticleJournalFrameCodec.EncodeAccept(pendingRecord);
+                AppendFrameUnlocked(
+                    encodedPendingAccept,
+                    offset => new PendingJournalFrame.AcceptOperation(offset, pendingRecord, encodedPendingAccept));
+                record = pendingRecord;
+                ApplyAcceptUnlocked(record);
+                _nextSequence = record.Sequence + 1;
+                LogPressureIfChangedUnlocked();
+                rejectOutcome = default;
+                return true;
+            }
+
+            if (_pending is not null)
+            {
+                throw PendingOwnedByOther();
+            }
+
             if (_outstandingArtIdToSequence.TryGetValue(artId, out var existingSeq)
                 && _bySequence.TryGetValue(existingSeq, out var existing)
                 && !existing.IndexCommitted)
@@ -200,7 +229,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             }
 
             var sequence = _nextSequence;
-            record = new JournalAcceptRecord(
+            var accept = new JournalAcceptRecord(
                 version: ArticleJournalFrameCodec.SchemaVersion,
                 sequence,
                 artId,
@@ -208,9 +237,14 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 artSize,
                 utcNow,
                 artData);
+            record = accept;
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeAccept(record));
-            ApplyAcceptUnlocked(record);
+            var encodedAccept = ArticleJournalFrameCodec.EncodeAccept(accept);
+            AppendFrameUnlocked(
+                encodedAccept,
+                offset => new PendingJournalFrame.AcceptOperation(offset, accept, encodedAccept));
+
+            ApplyAcceptUnlocked(accept);
             _nextSequence = sequence + 1;
             LogPressureIfChangedUnlocked();
             rejectOutcome = default;
@@ -237,7 +271,10 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 throw new InvalidOperationException($"Journal sequence {record.Sequence} already exists.");
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeAccept(record));
+            var encodedAccept = ArticleJournalFrameCodec.EncodeAccept(record);
+            AppendFrameUnlocked(
+                encodedAccept,
+                offset => new PendingJournalFrame.AcceptOperation(offset, record, encodedAccept));
             ApplyAcceptUnlocked(record);
             if (record.Sequence >= _nextSequence)
             {
@@ -279,7 +316,14 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 return ValueTask.FromResult(JournalAppendOutcome.Rejected);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodePhysicalWritten(record));
+            var encodedPhysicalWritten = ArticleJournalFrameCodec.EncodePhysicalWritten(record);
+            AppendFrameUnlocked(
+                encodedPhysicalWritten,
+                offset => new PendingJournalFrame.PhysicalWrittenOperation(
+                    offset,
+                    record.Sequence,
+                    record.Location,
+                    encodedPhysicalWritten));
             state.PhysicalWritten = record;
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }
@@ -309,7 +353,13 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 return ValueTask.FromResult(JournalAppendOutcome.Rejected);
             }
 
-            AppendFrameUnlocked(ArticleJournalFrameCodec.EncodeIndexCommitted(record));
+            var encodedIndexCommitted = ArticleJournalFrameCodec.EncodeIndexCommitted(record);
+            AppendFrameUnlocked(
+                encodedIndexCommitted,
+                offset => new PendingJournalFrame.IndexCommittedOperation(
+                    offset,
+                    record.Sequence,
+                    encodedIndexCommitted));
             state.IndexCommitted = true;
             state.IndexCommittedRecord = record;
             _ = _outstandingArtIdToSequence.Remove(state.Accept.ArtId);
@@ -438,6 +488,29 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     internal Action? TestBeforeFrameAppend { get; set; }
 
     /// <summary>
+    /// Invoked after <see cref="FileStream.Write(byte[], int, int)"/> and before
+    /// <see cref="FileStream.Flush(bool)"/>. Tests only. The production path is null.
+    /// </summary>
+    internal Action<FileStream, long, int>? TestAfterWriteBeforeFlush { get; set; }
+
+    private bool _tailUnreconciled;
+
+    private long _tailValidEnd;
+
+    private PendingJournalFrame? _pending;
+
+    /// <summary>
+    /// Invoked immediately before each durability <see cref="FileStream.Flush(bool)"/>.
+    /// Tests only. A throw leaves the payload undurable.
+    /// </summary>
+    internal Action? TestBeforeDurableFlush { get; set; }
+
+    /// <summary>
+    /// When set, torn-tail truncation throws instead of shrinking the file. Tests only.
+    /// </summary>
+    internal bool TestFailTailTruncate { get; set; }
+
+    /// <summary>
     /// When set, the encoded checkpoint image is reserved before the temporary journal is created.
     /// Null leaves checkpoint IO unchanged and does not consult capacity.
     /// </summary>
@@ -491,6 +564,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            ThrowIfPendingJournalAppendUnlocked();
             if (!TryCollectCheckpointPlanUnlocked(out var incomplete, out var committedKeys))
             {
                 return 0;
@@ -523,6 +597,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 lock (_gate)
                 {
                     ObjectDisposedException.ThrowIf(_disposed, this);
+                    ThrowIfPendingJournalAppendUnlocked();
                     if (!TryCollectCheckpointPlanUnlocked(out var incomplete, out var committedKeys))
                     {
                         return 0;
@@ -920,15 +995,226 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.Accept.ArtSize);
     }
 
-    private void AppendFrameUnlocked(byte[] frame)
+    private void AppendFrameUnlocked(byte[] frame, Func<long, PendingJournalFrame> ownerAt)
     {
+        if (_pending is not null)
+        {
+            FinishPendingFrameUnlocked(frame, ownerAt);
+            return;
+        }
+
+        ReconcileBlockedTailUnlocked();
         TestBeforeFrameAppend?.Invoke();
         _stream.Seek(0, SeekOrigin.End);
-        _stream.Write(frame, 0, frame.Length);
+        var start = _stream.Position;
+        try
+        {
+            _stream.Write(frame, 0, frame.Length);
+            TestAfterWriteBeforeFlush?.Invoke(_stream, start, frame.Length);
+            // Durability boundary: flush OS buffers to stable storage.
+            // FileStream.Flush(flushToDisk: true) maps to FlushFileBuffers (Windows) / fsync (Unix).
+            DurableFlushUnlocked();
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            var outcome = InspectAppendUnlocked(start, frame);
+            if (outcome == AmbiguousAppend.Growth.CompleteExpected)
+            {
+                if (_stream.Length > start + frame.Length)
+                {
+                    try
+                    {
+                        TruncateOrBlockUnlocked(start + frame.Length, createdByThisCall: true);
+                    }
+                    catch (UnreconciledDurableTailException)
+                    {
+                        _pending = ownerAt(start);
+                        throw;
+                    }
+                }
 
-        // Durability boundary: flush OS buffers to stable storage.
-        // FileStream.Flush(flushToDisk: true) maps to FlushFileBuffers (Windows) / fsync (Unix).
+                try
+                {
+                    DurableFlushUnlocked();
+                }
+                catch (Exception flushEx) when (flushEx is not UnreconciledDurableTailException)
+                {
+                    _pending = ownerAt(start);
+                    throw new UnreconciledDurableTailException(
+                        "Article journal frame is present but not durable.",
+                        flushEx,
+                        createdByThisCall: true);
+                }
+
+                _stream.Seek(0, SeekOrigin.End);
+                return;
+            }
+
+            if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
+            {
+                TruncateOrBlockUnlocked(start, createdByThisCall: true);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Flushes a complete frame that is already at the pending offset. Does not write.
+    /// A different logical owner leaves the pending frame unchanged.
+    /// </summary>
+    private void FinishPendingFrameUnlocked(byte[] frame, Func<long, PendingJournalFrame> ownerAt)
+    {
+        var pending = _pending
+            ?? throw new InvalidOperationException("No pending journal frame.");
+        var offered = ownerAt(pending.Offset);
+        if (!pending.SameOwner(offered)
+            || frame.Length != pending.Length
+            || XxHash3.HashToUInt64(frame) != pending.PayloadHash)
+        {
+            throw PendingOwnedByOther();
+        }
+
+        if (!PendingBytesMatchUnlocked(pending))
+        {
+            throw new UnreconciledDurableTailException(
+                "Pending journal frame bytes changed before the durable flush.",
+                new IOException("Pending durable payload no longer matches the file."));
+        }
+
+        try
+        {
+            DurableFlushUnlocked();
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            throw new UnreconciledDurableTailException(
+                "Article journal frame is present but not durable.",
+                ex);
+        }
+
+        _pending = null;
+        _stream.Seek(0, SeekOrigin.End);
+    }
+
+    private static UnreconciledDurableTailException PendingOwnedByOther() =>
+        new(
+            "A different journal operation is waiting for a durable flush.",
+            new IOException("Pending durable payload identity mismatch."));
+
+    private void ThrowIfPendingJournalAppendUnlocked()
+    {
+        if (_pending is null && !_tailUnreconciled)
+        {
+            return;
+        }
+
+        throw new UnreconciledDurableTailException(
+            "Article journal checkpoint cannot replace the file while a physical append is pending.",
+            new IOException("pending-journal-frame"));
+    }
+
+    private void DurableFlushUnlocked()
+    {
+        TestBeforeDurableFlush?.Invoke();
         _stream.Flush(flushToDisk: true);
+    }
+
+    private bool PendingBytesMatchUnlocked(PendingJournalFrame pending)
+    {
+        if (_stream.Length < pending.Offset + pending.Length)
+        {
+            return false;
+        }
+
+        var observed = ReadExactUnlocked(pending.Offset, pending.Length);
+        return observed.Length == pending.Length
+            && XxHash3.HashToUInt64(observed) == pending.PayloadHash;
+    }
+
+    /// <summary>
+    /// Pushes any buffered write so length and a read-back see the same bytes, then classifies them.
+    /// Inspection failure keeps the tail blocked so a later append cannot add a second copy.
+    /// </summary>
+    private AmbiguousAppend.Growth InspectAppendUnlocked(long start, byte[] frame)
+    {
+        try
+        {
+            _stream.Flush(flushToDisk: false);
+            var length = _stream.Length;
+            var observed = length >= start + frame.Length
+                ? ReadExactUnlocked(start, frame.Length)
+                : [];
+            return AmbiguousAppend.Classify(start, length, frame, observed);
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            _tailUnreconciled = true;
+            _tailValidEnd = start;
+            throw new UnreconciledDurableTailException(
+                "Article journal length could not be inspected after an ambiguous append.",
+                ex,
+                createdByThisCall: true);
+        }
+    }
+
+    private byte[] ReadExactUnlocked(long offset, int length)
+    {
+        var buffer = new byte[length];
+        _stream.Position = offset;
+        var filled = 0;
+        while (filled < length)
+        {
+            var read = _stream.Read(buffer, filled, length - filled);
+            if (read == 0)
+            {
+                _stream.Seek(0, SeekOrigin.End);
+                return [];
+            }
+
+            filled += read;
+        }
+
+        _stream.Seek(0, SeekOrigin.End);
+        return buffer;
+    }
+
+    private void ReconcileBlockedTailUnlocked()
+    {
+        if (!_tailUnreconciled)
+        {
+            return;
+        }
+
+        TruncateOrBlockUnlocked(_tailValidEnd, createdByThisCall: false);
+    }
+
+    private void TruncateOrBlockUnlocked(long validEnd, bool createdByThisCall)
+    {
+        if (TestFailTailTruncate)
+        {
+            _tailUnreconciled = true;
+            _tailValidEnd = validEnd;
+            throw new UnreconciledDurableTailException(
+                "Article journal tail could not be reconciled after an ambiguous append.",
+                new IOException("truncate-failed"),
+                createdByThisCall);
+        }
+
+        try
+        {
+            TruncateTornTailUnlocked(validEnd, _stream.Length, "ambiguous-append");
+            _tailUnreconciled = false;
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            _tailUnreconciled = true;
+            _tailValidEnd = validEnd;
+            throw new UnreconciledDurableTailException(
+                "Article journal tail could not be reconciled after an ambiguous append.",
+                ex,
+                createdByThisCall);
+        }
     }
 
     /// <summary>
@@ -1120,5 +1406,126 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         public bool IndexCommitted { get; set; }
 
         public JournalIndexCommittedRecord? IndexCommittedRecord { get; set; }
+    }
+
+    /// <summary>
+    /// One process-local complete journal frame whose durability flush has not returned.
+    /// The subclass is the logical owner. Not written to disk and not restored after restart.
+    /// </summary>
+    private abstract class PendingJournalFrame
+    {
+        private PendingJournalFrame(long offset, byte[] payload)
+        {
+            Offset = offset;
+            Length = payload.Length;
+            PayloadHash = XxHash3.HashToUInt64(payload);
+        }
+
+        public long Offset { get; }
+
+        public int Length { get; }
+
+        public ulong PayloadHash { get; }
+
+        public abstract bool SameOwner(PendingJournalFrame other);
+
+        public sealed class AcceptOperation : PendingJournalFrame
+        {
+            public AcceptOperation(long offset, JournalAcceptRecord record, byte[] payload)
+                : base(offset, payload)
+            {
+                Record = record;
+            }
+
+            public JournalAcceptRecord Record { get; }
+
+            public ArticleId ArtId => Record.ArtId;
+
+            public ulong ArtHash => Record.ArtHash;
+
+            public int ArtSize => Record.ArtSize;
+
+            public ulong Sequence => Record.Sequence;
+
+            public override bool SameOwner(PendingJournalFrame other) =>
+                other is AcceptOperation accept
+                && accept.Sequence == Sequence
+                && accept.ArtId == ArtId
+                && accept.ArtHash == ArtHash
+                && accept.ArtSize == ArtSize;
+        }
+
+        public sealed class PhysicalWrittenOperation : PendingJournalFrame
+        {
+            public PhysicalWrittenOperation(
+                long offset,
+                ulong sequence,
+                StoredArticleLocation location,
+                byte[] payload)
+                : base(offset, payload)
+            {
+                Sequence = sequence;
+                Location = location;
+            }
+
+            public ulong Sequence { get; }
+
+            public StoredArticleLocation Location { get; }
+
+            public override bool SameOwner(PendingJournalFrame other) =>
+                other is PhysicalWrittenOperation written
+                && written.Sequence == Sequence
+                && written.Location == Location;
+        }
+
+        public sealed class IndexCommittedOperation : PendingJournalFrame
+        {
+            public IndexCommittedOperation(long offset, ulong sequence, byte[] payload)
+                : base(offset, payload)
+            {
+                Sequence = sequence;
+            }
+
+            public ulong Sequence { get; }
+
+            public override bool SameOwner(PendingJournalFrame other) =>
+                other is IndexCommittedOperation committed && committed.Sequence == Sequence;
+        }
+
+        public sealed class CompactionOperation : PendingJournalFrame
+        {
+            public CompactionOperation(
+                long offset,
+                ArticleJournalFrameType frameType,
+                ulong compactionId,
+                ulong relocationId,
+                byte[] payload,
+                JournalCompactionBeginRecord? begin = null,
+                StoredArticleLocation? writtenDestination = null)
+                : base(offset, payload)
+            {
+                FrameType = frameType;
+                CompactionId = compactionId;
+                RelocationId = relocationId;
+                Begin = begin;
+                WrittenDestination = writtenDestination;
+            }
+
+            public ArticleJournalFrameType FrameType { get; }
+
+            public ulong CompactionId { get; }
+
+            public ulong RelocationId { get; }
+
+            public JournalCompactionBeginRecord? Begin { get; }
+
+            public StoredArticleLocation? WrittenDestination { get; }
+
+            public override bool SameOwner(PendingJournalFrame other) =>
+                other is CompactionOperation compaction
+                && compaction.FrameType == FrameType
+                && compaction.CompactionId == CompactionId
+                && compaction.RelocationId == RelocationId;
+        }
     }
 }

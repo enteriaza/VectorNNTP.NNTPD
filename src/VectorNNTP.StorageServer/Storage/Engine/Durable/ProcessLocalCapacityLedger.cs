@@ -824,6 +824,12 @@ internal sealed class ProcessLocalCapacityLedger
     /// <paramref name="relocationId"/> and increments <see cref="CompactionReservedBytes"/>.
     /// Caller must have already verified <see cref="WouldFit(long, long, long, double)"/>.
     /// </summary>
+    /// <summary>
+    /// True when this compaction destination already holds its reservation.
+    /// </summary>
+    public bool HoldsCompactionDestination(ulong compactionId, ulong relocationId) =>
+        _compactionByKey.ContainsKey((compactionId, relocationId));
+
     public void ReserveCompaction(ulong compactionId, ulong relocationId, long requiredBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(requiredBytes);
