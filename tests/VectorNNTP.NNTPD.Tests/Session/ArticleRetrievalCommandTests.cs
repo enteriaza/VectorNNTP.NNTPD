@@ -1,11 +1,13 @@
 using System.IO.Pipelines;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -37,7 +39,7 @@ public sealed class ArticleRetrievalCommandTests
     {
         await using var duplex = await ArticleDuplex.CreateAsync();
         var rpc = new RecordingArticleWorkRpcClient();
-        var session = duplex.CreateSession(articleWorkRpc: rpc);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, storageLookup: SilenceLookup());
         await DispatchLineAsync(duplex, session, "ARTICLE <12345@example.invalid>");
         Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
         var messageId = Assert.Single(rpc.Lookups);
@@ -50,7 +52,7 @@ public sealed class ArticleRetrievalCommandTests
     {
         await using var duplex = await ArticleDuplex.CreateAsync();
         var rpc = new RecordingArticleWorkRpcClient();
-        var session = duplex.CreateSession(articleWorkRpc: rpc);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, storageLookup: SilenceLookup());
         await DispatchLineAsync(duplex, session, $"{verb} <12345@example.invalid>");
         Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
         Assert.Single(rpc.Lookups);
@@ -317,6 +319,17 @@ public sealed class ArticleRetrievalCommandTests
         Assert.StartsWith("111 ", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
     }
 
+    private static SilenceStorageLookup SilenceLookup() => new();
+
+    private sealed class SilenceStorageLookup : IStorageArticleLookupClient
+    {
+        public Task<StorageArticleLookupResult> LookupAsync(ArticleId articleId, CancellationToken cancellationToken) =>
+            Task.FromResult(StorageArticleLookupResult.NotFound(
+                Guid.NewGuid(),
+                articleId,
+                "Storage article lookup timed out with no positive response."));
+    }
+
     private sealed class RecordingArticleWorkRpcClient : IArticleWorkRpcClient
     {
         public List<ReadOnlyMemory<byte>> Lookups { get; } = [];
@@ -351,7 +364,8 @@ public sealed class ArticleRetrievalCommandTests
         public NntpSession CreateSession(
             NewsgroupSnapshot? snapshot = null,
             bool authorize = true,
-            IArticleWorkRpcClient? articleWorkRpc = null)
+            IArticleWorkRpcClient? articleWorkRpc = null,
+            IStorageArticleLookupClient? storageLookup = null)
         {
             var connection = new PipeNntpConnection(
                 _clientToServer.Reader,
@@ -361,7 +375,8 @@ public sealed class ArticleRetrievalCommandTests
                 connection,
                 NullLogger<NntpSession>.Instance,
                 newsgroupCatalogue: snapshot is null ? null : new StaticNewsgroupCatalogue(snapshot),
-                articleWorkRpc: articleWorkRpc);
+                articleWorkRpc: articleWorkRpc,
+                storageArticleLookup: storageLookup);
             if (authorize)
             {
                 session.SetAuthorization(Reader);

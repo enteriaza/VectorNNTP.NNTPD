@@ -15,12 +15,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Message-id form resolves through ArticleWork RPC then VATP
-/// (<see cref="IVatpArticleClient"/>). A definitive ArticleWork
-/// <see cref="ArticleWorkOutcome.ArticleNotFound"/> or
-/// <see cref="ArticleWorkOutcome.InvalidArticle"/> asks
-/// <see cref="IStorageArticleLookupClient"/> once and, on a positive URI for the same
-/// ArticleId, uses that same VATP client. A validated CanonicalV1
+/// Message-id form asks <see cref="IStorageArticleLookupClient"/> first. A positive
+/// StorageServer response is fetched with the existing VATP client
+/// (<see cref="IVatpArticleClient"/>). Only a completed lookup with no positive
+/// response calls ArticleWork. Transport, malformed, and invalid StorageServer
+/// results stay on that path. A validated CanonicalV1
 /// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
 /// reply. Local ingest admission is independent of serving the requesting client.
 /// </para>
@@ -181,13 +180,64 @@ internal static class Article
         NntpCommandContext context,
         CancellationToken cancellationToken)
     {
+        var messageId = context.ArgumentMemory;
+        var storage = context.Session.StorageArticleLookup;
+        if (storage is null)
+        {
+            return ResolveResult.NotFound();
+        }
+
+        var articleId = ArticleId.FromMessageId(messageId.Span);
+        StorageArticleLookupResult fleet;
+        try
+        {
+            fleet = await storage.LookupAsync(articleId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                Logger,
+                "unavailable",
+                articleId.ToLowerHexString(),
+                Guid.Empty);
+            return ResolveResult.Temporary();
+        }
+
+        if (fleet.Outcome == StorageArticleLookupOutcome.Found)
+        {
+            return await FetchPositiveStorageAsync(context, messageId, articleId, fleet, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var silence = string.Equals(fleet.Error, StorageLookupSilence, StringComparison.Ordinal);
+        ArticleRetrievalLogMessages.StorageLookupCompleted(
+            Logger,
+            silence ? "miss" : "unavailable",
+            articleId.ToLowerHexString(),
+            fleet.RequestId);
+        if (!silence)
+        {
+            return ResolveResult.Temporary();
+        }
+
+        return await ResolveFromArticleWorkAsync(context, messageId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<ResolveResult> ResolveFromArticleWorkAsync(
+        NntpCommandContext context,
+        ReadOnlyMemory<byte> messageId,
+        CancellationToken cancellationToken)
+    {
         var rpc = context.Session.ArticleWorkRpc;
         if (rpc is null)
         {
             return ResolveResult.NotFound();
         }
 
-        var messageId = context.ArgumentMemory;
         ArticleWorkRpcResult lookup;
         try
         {
@@ -208,7 +258,7 @@ internal static class Article
 
         if (lookup.Outcome is ArticleWorkOutcome.ArticleNotFound or ArticleWorkOutcome.InvalidArticle)
         {
-            return await ResolveFromStorageAsync(context, messageId, cancellationToken).ConfigureAwait(false);
+            return ResolveResult.NotFound();
         }
 
         if (lookup.Outcome != ArticleWorkOutcome.Success
@@ -257,48 +307,13 @@ internal static class Article
     /// </summary>
     private const string StorageLookupSilence = "Storage article lookup timed out with no positive response.";
 
-    private static async ValueTask<ResolveResult> ResolveFromStorageAsync(
+    private static async ValueTask<ResolveResult> FetchPositiveStorageAsync(
         NntpCommandContext context,
         ReadOnlyMemory<byte> messageId,
+        ArticleId articleId,
+        StorageArticleLookupResult fleet,
         CancellationToken cancellationToken)
     {
-        var storage = context.Session.StorageArticleLookup;
-        if (storage is null)
-        {
-            return ResolveResult.NotFound();
-        }
-
-        var articleId = ArticleId.FromMessageId(messageId.Span);
-        StorageArticleLookupResult fleet;
-        try
-        {
-            fleet = await storage.LookupAsync(articleId, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            ArticleRetrievalLogMessages.StorageLookupCompleted(
-                Logger,
-                "unavailable",
-                articleId.ToLowerHexString(),
-                Guid.Empty);
-            return ResolveResult.Temporary();
-        }
-
-        if (fleet.Outcome != StorageArticleLookupOutcome.Found)
-        {
-            var miss = string.Equals(fleet.Error, StorageLookupSilence, StringComparison.Ordinal);
-            ArticleRetrievalLogMessages.StorageLookupCompleted(
-                Logger,
-                miss ? "miss" : "unavailable",
-                articleId.ToLowerHexString(),
-                fleet.RequestId);
-            return miss ? ResolveResult.NotFound() : ResolveResult.Temporary();
-        }
-
         if (fleet.ArticleId != articleId || !TryBindStorageUri(fleet.Uri, articleId, out var cacheUri))
         {
             ArticleRetrievalLogMessages.StorageLookupCompleted(
