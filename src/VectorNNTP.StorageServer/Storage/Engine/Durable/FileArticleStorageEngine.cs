@@ -1534,6 +1534,29 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
+    /// Checkpoints <c>article.index</c> through <see cref="FileArticleIndex.Checkpoint"/>.
+    /// </summary>
+    /// <remarks>
+    /// Returns the frame-history bytes covered by the installed snapshot. A capacity denial
+    /// returns <c>0</c> and leaves the index and its frame reservations unchanged. Any other
+    /// failure propagates after the index has kept its previous authoritative file unless the
+    /// existing checkpoint implementation has already installed a replacement.
+    /// </remarks>
+    /// <returns>Frame payload retired into the snapshot, or <c>0</c> when nothing was retired.</returns>
+    public long CheckpointIndex()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        try
+        {
+            return _index.Checkpoint().RetiredPhysicalBytes;
+        }
+        catch (CheckpointCapacityDeniedException)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Truncates committed journal prefix via <see cref="FileArticleJournal.CheckpointTruncateCommitted"/>.
     /// Incomplete transactions are retained.
     /// </summary>

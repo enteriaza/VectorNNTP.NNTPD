@@ -152,4 +152,48 @@ internal static partial class StorageMaintenanceLogMessages
         ILogger logger,
         ulong MaintenanceRunId,
         Exception exception);
+
+    [LoggerMessage(
+        EventId = 3025,
+        Level = LogLevel.Information,
+        Message = "Index checkpoint attempted (MaintenanceRunId={MaintenanceRunId}, IndexPhysicalBytes={IndexPhysicalBytes}, ThresholdBytes={ThresholdBytes})")]
+    public static partial void IndexCheckpointAttempted(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long IndexPhysicalBytes,
+        long ThresholdBytes);
+
+    [LoggerMessage(
+        EventId = 3026,
+        Level = LogLevel.Information,
+        Message = "Index checkpoint retired physical index history (MaintenanceRunId={MaintenanceRunId}, IndexPhysicalBytes={IndexPhysicalBytes}, ThresholdBytes={ThresholdBytes}, RetiredBytes={RetiredBytes}, DurationMs={DurationMs})")]
+    public static partial void IndexCheckpointRetired(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long IndexPhysicalBytes,
+        long ThresholdBytes,
+        long RetiredBytes,
+        double DurationMs);
+
+    [LoggerMessage(
+        EventId = 3027,
+        Level = LogLevel.Debug,
+        Message = "Index checkpoint had nothing to retire (MaintenanceRunId={MaintenanceRunId}, IndexPhysicalBytes={IndexPhysicalBytes}, ThresholdBytes={ThresholdBytes}, DurationMs={DurationMs})")]
+    public static partial void IndexCheckpointNothingToRetire(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long IndexPhysicalBytes,
+        long ThresholdBytes,
+        double DurationMs);
+
+    [LoggerMessage(
+        EventId = 3028,
+        Level = LogLevel.Warning,
+        Message = "Index checkpoint failed (MaintenanceRunId={MaintenanceRunId}, IndexPhysicalBytes={IndexPhysicalBytes}, ThresholdBytes={ThresholdBytes})")]
+    public static partial void IndexCheckpointFailed(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long IndexPhysicalBytes,
+        long ThresholdBytes,
+        Exception exception);
 }

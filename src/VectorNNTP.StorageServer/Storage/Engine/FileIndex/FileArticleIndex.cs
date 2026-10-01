@@ -78,6 +78,26 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <summary>Gets the absolute index file path.</summary>
     public string IndexPath => _indexPath;
 
+    /// <summary>
+    /// Gets the durable frame payload eligible for prefix retirement, in bytes.
+    /// </summary>
+    /// <remarks>
+    /// This is <c>article.index</c> length minus a <c>VNID</c> header when that header is present.
+    /// A legacy log counts its entire length. The value is not the in-memory row count and not
+    /// the snapshot file length.
+    /// </remarks>
+    public long IndexPhysicalBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                return _stream.Length - FrameBaseUnlocked();
+            }
+        }
+    }
+
     /// <summary>Number of durable mutations appended (tests).</summary>
     public long DurableWriteCount
     {
@@ -176,6 +196,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// </summary>
     internal bool TestFailCheckpointTempDelete { get; set; }
 
+    private long _snapshotFrameBase;
     private ulong? _installedSnapshotReservationId;
     private ulong? _retainedSnapshotTempReservationId;
     private long _retainedSnapshotTempReservationBytes;
@@ -623,13 +644,14 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         {
             EnsureAlignedForCheckpoint();
             var snapshot = WriteSnapshotBody();
+            var retiredPhysicalBytes = Math.Max(0L, snapshot.CoveredIndexLength - _snapshotFrameBase);
             var deltaBytes = RetireCoveredPrefix(snapshot);
             OnIndexPrefixRetired?.Invoke(new IndexPrefixRetirement(
                 snapshot.CoveredIndexLength,
                 ArticleIndexDeltaFile.HeaderLength,
                 snapshot.Generation,
                 _snapshotArticleIds));
-            return new ArticleIndexCheckpointResult(snapshot, deltaBytes);
+            return new ArticleIndexCheckpointResult(snapshot, deltaBytes, retiredPhysicalBytes);
         }
         finally
         {
@@ -675,6 +697,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                     _entries.Values.CopyTo(copy, 0);
                 }
 
+                _snapshotFrameBase = FrameBaseUnlocked();
                 coveredIndexLength = _stream.Length;
                 generation = _installedSnapshotGeneration + 1;
                 var articleIds = new ArticleId[copy.Length];
@@ -1512,9 +1535,14 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
 /// <summary>Result of one explicit index checkpoint.</summary>
 /// <param name="Snapshot">Snapshot installed before the historical prefix was retired.</param>
 /// <param name="DeltaBytes">Index bytes copied from the covered length through the install boundary.</param>
+/// <param name="RetiredPhysicalBytes">
+/// Frame payload covered by the snapshot. Excludes a <c>VNID</c> header and excludes the tail
+/// copied into the replacement.
+/// </param>
 internal readonly record struct ArticleIndexCheckpointResult(
     ArticleIndexSnapshotHeader Snapshot,
-    long DeltaBytes);
+    long DeltaBytes,
+    long RetiredPhysicalBytes);
 
 /// <summary>Whether <see cref="FileArticleIndex.TryCommitPresent"/> appended a physical frame.</summary>
 internal enum DurableIndexAppend

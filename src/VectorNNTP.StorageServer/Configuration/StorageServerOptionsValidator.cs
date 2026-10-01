@@ -195,6 +195,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
                 "StorageServer:Storage:JournalCheckpointThresholdBytes must be greater than or equal to 0.");
         }
 
+        if (options.Storage.IndexCheckpointThresholdBytes < 0)
+        {
+            failures.Add(
+                "StorageServer:Storage:IndexCheckpointThresholdBytes must be greater than or equal to 0.");
+        }
+
         var articleCache = options.Storage.ArticleCache ?? new ArticleMemoryCacheOptions();
         if (articleCache.MaxBytes < 0)
         {

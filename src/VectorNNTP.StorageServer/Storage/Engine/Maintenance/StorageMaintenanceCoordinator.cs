@@ -21,7 +21,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
 /// </para>
 /// <para>
-/// Ordering: optional physical-journal checkpoint, then existing Retired physical reclaim; then finish CompactionCommitted
+/// Ordering: optional physical-journal checkpoint, optional physical-index checkpoint, then existing Retired physical reclaim; then finish CompactionCommitted
 /// pending retirement; then continue an open uncommitted compaction; then select a new
 /// Closed victim via policy. Under article admission pressure (Phase 5F.2), Closed-victim
 /// selection prefers physical recovery potential and compaction-headroom feasibility;
@@ -45,9 +45,13 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <para>
 /// When the physical journal threshold is positive and <c>JournalPhysicalBytes</c> has reached
 /// it, the cycle first calls <see cref="FileArticleStorageEngine.CheckpointTruncateCommitted"/>.
-/// That attempt does not reorder reclaim, retirement, or compaction. A pending ambiguous journal
-/// append is logged and the rest of the cycle continues. Any other checkpoint exception leaves
-/// this method.
+/// When the physical index threshold is positive and <c>IndexPhysicalBytes</c> has reached it,
+/// the cycle then calls <see cref="FileArticleStorageEngine.CheckpointIndex"/>. The two
+/// checkpoints run one after the other on this cycle. They do not reorder reclaim, retirement,
+/// or compaction. A pending ambiguous journal append is logged and the rest of the cycle
+/// continues. Any other journal checkpoint exception leaves this method. An index checkpoint
+/// exception is logged and leaves this method the same way. A capacity denial is not an
+/// exception: the index call returns no retired bytes and the cycle continues.
 /// </para>
 /// </remarks>
 public sealed class StorageMaintenanceCoordinator
@@ -55,6 +59,7 @@ public sealed class StorageMaintenanceCoordinator
     private readonly FileArticleStorageEngine _engine;
     private readonly ArticleSegmentPolicy _policy;
     private readonly long _journalCheckpointThresholdBytes;
+    private readonly long _indexCheckpointThresholdBytes;
     private readonly ILogger _logger;
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
@@ -64,18 +69,24 @@ public sealed class StorageMaintenanceCoordinator
     /// Physical journal length at which this cycle checkpoints. <c>0</c> does not checkpoint.
     /// </param>
     /// <param name="logger">Maintenance checkpoint logger. Null uses a no-op logger.</param>
+    /// <param name="indexCheckpointThresholdBytes">
+    /// Physical index frame history at which this cycle checkpoints. <c>0</c> does not checkpoint.
+    /// </param>
     public StorageMaintenanceCoordinator(
         FileArticleStorageEngine engine,
         ArticleSegmentPolicy policy,
         long journalCheckpointThresholdBytes = 0,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        long indexCheckpointThresholdBytes = 0)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentOutOfRangeException.ThrowIfNegative(journalCheckpointThresholdBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(indexCheckpointThresholdBytes);
         _engine = engine;
         _policy = policy;
         _journalCheckpointThresholdBytes = journalCheckpointThresholdBytes;
+        _indexCheckpointThresholdBytes = indexCheckpointThresholdBytes;
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -117,6 +128,7 @@ public sealed class StorageMaintenanceCoordinator
     {
         cancellationToken.ThrowIfCancellationRequested();
         TryCheckpointJournal(maintenanceRunId);
+        TryCheckpointIndex(maintenanceRunId);
 
         // Startup leaves unreferenced-extent accounting incomplete. Victim selection must
         // not treat that under-count as a finished dead-byte inventory.
@@ -477,6 +489,66 @@ public sealed class StorageMaintenanceCoordinator
         catch (UnreconciledDurableTailException ex)
         {
             StorageMaintenanceLogMessages.JournalCheckpointDeferred(_logger, maintenanceRunId, ex);
+        }
+    }
+
+    /// <summary>
+    /// Checkpoints when durable index frame history has reached the configured threshold.
+    /// Does not take the engine gate. A failure is logged and propagated. A denial or an
+    /// empty retirement does not fail the cycle.
+    /// </summary>
+    private void TryCheckpointIndex(ulong maintenanceRunId)
+    {
+        if (_indexCheckpointThresholdBytes <= 0)
+        {
+            return;
+        }
+
+        var physicalBytes = _engine.Index.IndexPhysicalBytes;
+        if (physicalBytes < _indexCheckpointThresholdBytes)
+        {
+            return;
+        }
+
+        StorageMaintenanceLogMessages.IndexCheckpointAttempted(
+            _logger,
+            maintenanceRunId,
+            physicalBytes,
+            _indexCheckpointThresholdBytes);
+        try
+        {
+            var started = Stopwatch.GetTimestamp();
+            var retired = _engine.CheckpointIndex();
+            var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (retired > 0)
+            {
+                StorageMaintenanceLogMessages.IndexCheckpointRetired(
+                    _logger,
+                    maintenanceRunId,
+                    physicalBytes,
+                    _indexCheckpointThresholdBytes,
+                    retired,
+                    durationMs);
+            }
+            else
+            {
+                StorageMaintenanceLogMessages.IndexCheckpointNothingToRetire(
+                    _logger,
+                    maintenanceRunId,
+                    physicalBytes,
+                    _indexCheckpointThresholdBytes,
+                    durationMs);
+            }
+        }
+        catch (Exception ex)
+        {
+            StorageMaintenanceLogMessages.IndexCheckpointFailed(
+                _logger,
+                maintenanceRunId,
+                physicalBytes,
+                _indexCheckpointThresholdBytes,
+                ex);
+            throw;
         }
     }
 

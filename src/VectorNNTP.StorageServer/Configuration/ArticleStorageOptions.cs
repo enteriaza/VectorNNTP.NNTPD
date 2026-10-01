@@ -28,6 +28,11 @@ public sealed class ArticleStorageOptions
     /// </summary>
     public const long DefaultJournalCheckpointThresholdBytes = 0;
 
+    /// <summary>
+    /// Default physical index checkpoint threshold. <c>0</c> does not checkpoint.
+    /// </summary>
+    public const long DefaultIndexCheckpointThresholdBytes = 0;
+
     /// <summary>Default target size for a closed segment in bytes (256 MiB).</summary>
     public const long DefaultSegmentTargetSizeBytes = 256L * 1024 * 1024;
 
@@ -73,6 +78,25 @@ public sealed class ArticleStorageOptions
     /// </remarks>
     [Range(0, long.MaxValue)]
     public long JournalCheckpointThresholdBytes { get; set; } = DefaultJournalCheckpointThresholdBytes;
+
+    /// <summary>
+    /// Gets or sets the physical <c>article.index</c> frame-history length, in bytes, at which
+    /// maintenance checkpoints the index.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>0</c> disables checkpointing, including when the maintenance worker is enabled.
+    /// A positive value checkpoints when <c>IndexPhysicalBytes</c> is greater than or equal
+    /// to this threshold.
+    /// </para>
+    /// <para>
+    /// <c>IndexPhysicalBytes</c> is the durable frame payload eligible for prefix retirement.
+    /// It excludes a <c>VNID</c> header. It is not the in-memory row count and not the snapshot
+    /// file length.
+    /// </para>
+    /// </remarks>
+    [Range(0, long.MaxValue)]
+    public long IndexCheckpointThresholdBytes { get; set; } = DefaultIndexCheckpointThresholdBytes;
 
     /// <summary>
     /// Gets or sets the target closed-segment size in bytes (future rollover hint).
