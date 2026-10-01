@@ -2,6 +2,7 @@ using System.Text;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
@@ -211,6 +212,173 @@ public sealed class StaleReadInvalidationTests
         Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var after));
         Assert.Equal(before.LiveBytes - sourceLoc.Length, after.LiveBytes);
         Assert.Equal(before.DeadBytes + sourceLoc.Length, after.DeadBytes);
+    }
+
+    [Fact]
+    public async Task R1_PresentMatchingIdentity_ReadSucceeds()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r1@seg.test>");
+        var cache = new ArticleMemoryCache(1_048_576);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        _ = await AcceptCloseAndLocateAsync(engine, record);
+
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(record.ArtHash, meta.ArtHash);
+        Assert.Equal(record.ArtSize, meta.ArtSize);
+        Assert.Equal(meta.Location, read.Metadata.Location);
+        Assert.True(cache.TryGet(record.ArtId, out var cached));
+        Assert.True(cached.ArtData.Span.SequenceEqual(record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task R2_EvictedAfterProvedRead_IsRejected()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r2@seg.test>");
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var (_, _, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            Assert.Equal(sourceLoc, location);
+            Assert.True(engine.TryEvict(record.ArtId));
+        };
+
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Evicted, meta.State);
+        Assert.Equal(sourceLoc, meta.Location);
+    }
+
+    [Fact]
+    public async Task R3_InvalidAfterProvedRead_IsRejected()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r3@seg.test>");
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var (_, _, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            Assert.Equal(sourceLoc, location);
+            Assert.True(engine.TryInvalidate(record.ArtId));
+        };
+
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Invalid, meta.State);
+        Assert.Equal(sourceLoc, meta.Location);
+    }
+
+    [Fact]
+    public async Task R4_DifferentIdentityAfterProvedRead_IsRejectedWithoutInvalidation()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r4@seg.test>");
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var (_, _, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+        StoredArticleMetadata forged = default;
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            Assert.Equal(sourceLoc, location);
+            Assert.True(engine.Index.TryGet(record.ArtId, out var current));
+            Assert.True(engine.TryEvict(record.ArtId));
+            forged = current with
+            {
+                ArtHash = current.ArtHash ^ 1UL,
+                ArtSize = current.ArtSize + 1,
+                State = ArticleStorageState.Present,
+            };
+            Assert.True(engine.Index.TryCommitPresent(in forged));
+        };
+
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(forged.ArtHash, meta.ArtHash);
+        Assert.Equal(forged.ArtSize, meta.ArtSize);
+        Assert.Equal(sourceLoc, meta.Location);
+    }
+
+    [Fact]
+    public async Task R5_NewerPresentSameIdentity_IsNotInvalidated()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r5@seg.test>");
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var (sourceId, generation, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            Assert.Equal(sourceLoc, location);
+            var destination = RelocateSync(engine, sourceId, generation, record.ArtId);
+            Assert.NotEqual(sourceLoc, destination);
+        };
+
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.Equal(record.ArtHash, meta.ArtHash);
+        Assert.Equal(record.ArtSize, meta.ArtSize);
+        Assert.NotEqual(sourceLoc, meta.Location);
+        Assert.Equal(meta.Location, read.Metadata.Location);
+        Assert.True(engine.Segments.TryGetSegmentInfo(meta.Location.SegmentId, out var destination));
+        Assert.Equal(0, destination.DeadBytes);
+    }
+
+    [Fact]
+    public async Task R6_RejectedStaleRead_DoesNotPopulateCache()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r6@seg.test>");
+        var cache = new ArticleMemoryCache(1_048_576);
+        await using var engine = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
+        var (_, _, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+        _ = cache.Remove(record.ArtId);
+        Assert.Equal(0, cache.Count);
+        var hookRan = false;
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            hookRan = true;
+            Assert.Equal(sourceLoc, location);
+            Assert.True(engine.TryEvict(record.ArtId));
+        };
+
+        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(hookRan);
+        Assert.False(cache.TryGet(record.ArtId, out _));
+        Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public async Task R7_FailedPhysicalRead_StillRetriesRelocation()
+    {
+        using var dir = TempStorageDir.Create();
+        var record = CreateRecord("<present-r7@seg.test>");
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var (sourceId, generation, sourceLoc) = await AcceptCloseAndLocateAsync(engine, record);
+
+        engine.TestHookAfterIndexSnapshotBeforeSegmentRead = (_, location) =>
+        {
+            Assert.Equal(sourceLoc, location);
+            var destination = RelocateSync(engine, sourceId, generation, record.ArtId);
+            Assert.NotEqual(sourceLoc, destination);
+            CorruptRecordPayload(dir.Options.SegmentDir, sourceLoc);
+        };
+
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Present, meta.State);
+        Assert.NotEqual(sourceLoc, meta.Location);
+        Assert.Equal(meta.Location, read.Metadata.Location);
     }
 
     [Fact]

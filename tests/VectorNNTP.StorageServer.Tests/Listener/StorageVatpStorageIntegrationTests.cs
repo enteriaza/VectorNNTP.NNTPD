@@ -196,7 +196,7 @@ public sealed partial class StorageVatpArticleServingTests
     }
 
     [Fact]
-    public async Task EvictDuringIndexedRead_ServesTheSnapshotThenRejects()
+    public async Task EvictDuringIndexedRead_RejectsWithoutServing()
     {
         await using var hosted = await CreateHosted().StartAsync();
         var built = BuildArticle("<evict-race@seg.test>", "race\r\n");
@@ -212,8 +212,9 @@ public sealed partial class StorageVatpArticleServingTests
         var boundary = new StorageArticleOpenBoundary(hosted.Service);
         await using var session = await EngineSession.StartAsync(boundary, maxFramePayload: (uint)built.Record.ArtSize + 16);
         await session.SendOpenAsync(built.Record.ArtId, 1);
-        var frames = await session.ReadUntilAsync(static frames => frames.Any(frame => frame.Header.Type == VatpFrameType.End && frame.Header.StreamId == 1));
-        AssertTransfer(frames, 1, built);
+        var frames = await session.ReadUntilAsync(static frames => frames.Any(frame => frame.Header.StreamId == 1 && frame.Header.Type == VatpFrameType.Fail));
+        Assert.Equal(VatpErrorCode.OpenRejected, FailCode(frames, 1));
+        Assert.DoesNotContain(frames, frame => frame.Header.Type == VatpFrameType.Data && frame.Header.StreamId == 1);
         Assert.True(hosted.Service.Engine.Index.TryGet(built.Record.ArtId, out var meta));
         Assert.Equal(ArticleStorageState.Evicted, meta.State);
 

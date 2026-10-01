@@ -1660,6 +1660,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Reads <paramref name="snapshot"/> without holding the index lock across segment IO.
     /// A failed read invalidates only when the index still names that same location and identity.
     /// A newer location is attempted at most once and is not invalidated by the stale failure.
+    /// A proved read is returned only when the index is still Present for the same identity.
     /// </summary>
     private bool TryReadIndexedLocation(
         in StoredArticleMetadata snapshot,
@@ -1716,7 +1717,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             throw new InvalidOperationException("TouchHint must not perform durable index writes.");
         }
 
-        _ = _index.TryGet(snapshot.ArtId, out var published);
+        if (!_index.TryGet(snapshot.ArtId, out var published)
+            || published.State != ArticleStorageState.Present
+            || published.ArtId != snapshot.ArtId
+            || published.ArtHash != snapshot.ArtHash
+            || published.ArtSize != snapshot.ArtSize)
+        {
+            return false;
+        }
+
         result = new ArticleReadResult(published, artData);
 
         // Best-effort populate; Put rejection must not fail the durable read.
