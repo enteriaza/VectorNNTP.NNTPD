@@ -17,7 +17,8 @@ namespace VectorNNTP.StorageServer.Storage;
 /// <para>
 /// Must be registered after <see cref="StorageEngineApplicationService"/> so Open+Recover
 /// completes before the first coordinator resolve. Interval is a delay after each run completes
-/// (no overlapping runs, no backlog). First run is immediate when enabled.
+/// (no overlapping runs, no backlog). The worker always starts. The first run is immediate.
+/// Compaction is always part of each cycle.
 /// </para>
 /// </remarks>
 public sealed class StorageMaintenanceService : IApplicationService
@@ -106,17 +107,11 @@ public sealed class StorageMaintenanceService : IApplicationService
         }
 
         var compaction = _options.Value.Storage?.Compaction ?? new ArticleCompactionPolicyOptions();
-        if (!compaction.MaintenanceEnabled)
-        {
-            StorageMaintenanceLogMessages.Disabled(_logger);
-            return Task.CompletedTask;
-        }
-
         if (compaction.Interval <= TimeSpan.Zero)
         {
             Interlocked.Exchange(ref _started, 0);
             throw new InvalidOperationException(
-                "StorageServer:Storage:Compaction:Interval must be greater than zero when MaintenanceEnabled is true.");
+                "StorageServer:Storage:Compaction:Interval must be greater than zero.");
         }
 
         try

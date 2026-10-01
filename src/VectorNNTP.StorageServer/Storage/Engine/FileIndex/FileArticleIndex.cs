@@ -61,6 +61,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private FileStream _stream;
     private long _durableWriteCount;
     private long _touchHintCount;
+    private readonly Dictionary<ArticleId, long> _useCounts = new();
     private ulong _installedSnapshotGeneration;
     private ArticleId[] _snapshotArticleIds = [];
     private CheckpointCapacityReservation? _checkpointCapacity;
@@ -561,6 +562,19 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             }
 
             _entries[artId] = existing with { LastAccessUtc = utcNow };
+            _useCounts[artId] = _useCounts.GetValueOrDefault(artId) + 1;
+        }
+    }
+
+    /// <summary>
+    /// Process-local successful-read count used as the LFU key. Zero when the article has not
+    /// been read in this process. Not durable; restart does not restore it. Not an LRU timestamp.
+    /// </summary>
+    public long UseCount(ArticleId artId)
+    {
+        lock (_gate)
+        {
+            return _useCounts.GetValueOrDefault(artId);
         }
     }
 

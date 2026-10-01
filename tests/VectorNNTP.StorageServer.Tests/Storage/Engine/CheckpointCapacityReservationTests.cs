@@ -18,23 +18,23 @@ public sealed class CheckpointCapacityReservationTests
     public void Ledger_IncludesCheckpoint_AtExactBoundary_AndOneByteOver()
     {
         var ledger = new ProcessLocalCapacityLedger();
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 80);
         Assert.Equal(800, ceiling);
-        Assert.True(ProcessLocalCapacityLedger.WouldFit(780, 0, 0, 1_000, 20, 0.80));
-        Assert.False(ProcessLocalCapacityLedger.WouldFit(781, 0, 0, 1_000, 20, 0.80));
+        Assert.True(ProcessLocalCapacityLedger.WouldFit(780, 0, 0, 1_000, 20, 80));
+        Assert.False(ProcessLocalCapacityLedger.WouldFit(781, 0, 0, 1_000, 20, 80));
 
         var id = ledger.ReserveCheckpoint(20);
         ledger.TentativeAddArticle(5);
         ledger.ReserveCompaction(3, 1, 10);
         Assert.Equal(35, ledger.ReservedBytes);
-        Assert.False(ledger.WouldFit(780, 1_000, 0, 0.80));
-        Assert.True(ledger.WouldFit(765, 1_000, 0, 0.80));
-        Assert.True(ledger.WouldFit(780, 1_000, 85, 0.90));
-        Assert.False(ledger.WouldFit(780, 1_000, 86, 0.90));
+        Assert.False(ledger.WouldFit(780, 1_000, 0, 80));
+        Assert.True(ledger.WouldFit(765, 1_000, 0, 80));
+        Assert.True(ledger.WouldFit(780, 1_000, 85, 90));
+        Assert.False(ledger.WouldFit(780, 1_000, 86, 90));
         Assert.Equal(
             16,
             ProcessLocalCapacityLedger.ComputeAdmissionRecoveryTargetBytes(
-                780, 5, 10, 1_000, 0.80, 1, checkpointReservedBytes: 20));
+                780, 5, 10, 1_000, 80, 1, checkpointReservedBytes: 20));
 
         Assert.True(ledger.TryIncreaseCheckpoint(id, 1));
         Assert.Equal(36, ledger.ReservedBytes);
@@ -126,7 +126,7 @@ public sealed class CheckpointCapacityReservationTests
         var accept = await AppendAcceptAsync(journal, "<ckpt-bound@example.test>", [1, 2, 3]);
         await CommitAcceptAsync(journal, accept);
         var image = ArticleJournalFrameCodec.EncodeSequenceFence(accept.Sequence + 1).Length;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 80);
         var before = journal.JournalPhysicalBytes;
 
         var denied = new LedgerCapacity { Used = ceiling - image + 1, Total = 1_000 };
@@ -215,7 +215,7 @@ public sealed class CheckpointCapacityReservationTests
         var firstRequired = SegmentRecordCodec.RecordLengthForArtSize(first.ArtSize);
         var journalHeld = ArticleJournalFrameCodec.SequenceReservationBytes(first.ArtSize);
         var indexHeldBytes = (long)ArticleIndexRecordCodec.RecordLength;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(10_000, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(10_000, 80);
         reader.TotalBytes = 10_000;
         reader.UsedBytes = ceiling - fence - snapshotBytes - firstRequired - journalHeld - indexHeldBytes;
         Assert.True(reader.UsedBytes >= 0);
@@ -247,7 +247,7 @@ public sealed class CheckpointCapacityReservationTests
         using var dir = TempStorageDir.Create();
         var reader = new MutableCapacityReader(total: 1_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: reader);
         var record = CreateRecord("<ckpt-cmp-0@seg.test>");
         Assert.Equal(
@@ -275,10 +275,10 @@ public sealed class CheckpointCapacityReservationTests
         for (var candidate = required; candidate < required * 40; candidate++)
         {
             var snapshotFits = ProcessLocalCapacityLedger.WouldFit(
-                0, articleHeld, 0, candidate, snapshotBytes, 0.80, journalReservedBytes: journalHeld, indexReservedBytes: indexHeld);
+                0, articleHeld, 0, candidate, snapshotBytes, 80, journalReservedBytes: journalHeld, indexReservedBytes: indexHeld);
             var intentHeld = journalHeld + ArticleJournalFrameCodec.RelocationIntentFrameLength;
             var duringRejects = !ProcessLocalCapacityLedger.WouldFit(
-                0, articleHeld, 0, candidate, required, 0.90, snapshotBytes, intentHeld, indexHeld);
+                0, articleHeld, 0, candidate, required, 90, snapshotBytes, intentHeld, indexHeld);
             if (snapshotFits && duringRejects)
             {
                 total = candidate;
@@ -337,7 +337,7 @@ public sealed class CheckpointCapacityReservationTests
         var before = engine.Journal.JournalPhysicalBytes;
         var image = ArticleJournalFrameCodec.EncodeSequenceFence(2).Length
             + ArticleJournalFrameCodec.SegmentIdFenceFrameLength;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(reader.TotalBytes, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(reader.TotalBytes, 80);
         reader.UsedBytes = ceiling - image + 1;
 
         Assert.Equal(0, engine.CheckpointTruncateCommitted());
@@ -353,22 +353,22 @@ public sealed class CheckpointCapacityReservationTests
     }
 
     [Fact]
-    public async Task Engine_CapacityDisabled_CheckpointDoesNotReadCapacity()
+    public async Task Engine_CapacityAlwaysOn_CheckpointReadsCapacity()
     {
         using var dir = TempStorageDir.Create();
-        var reader = new MutableCapacityReader(total: 1, used: 1) { ThrowOnRead = true };
+        var reader = new MutableCapacityReader(total: 1_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: reader);
         Assert.Equal(
             ArticleAcceptOutcome.Accepted,
-            (await engine.AcceptAsync(CreateRecord("<ckpt-off@seg.test>"), CancellationToken.None)).Outcome);
+            (await engine.AcceptAsync(CreateRecord("<ckpt-on@seg.test>"), CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.CheckpointTruncateCommitted() > 0);
         var snapshot = engine.Index.WriteSnapshot();
         Assert.Equal(1UL, snapshot.RecordCount);
-        Assert.Equal(0, reader.Reads);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.True(reader.Reads > 0);
+        Assert.NotNull(engine.SegmentCapacity);
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public sealed class CheckpointCapacityReservationTests
         using var index = FileArticleIndex.Open(dir.Options);
         Assert.True(index.TryCommitPresent(Present("<snap-keep@example.test>", 1)));
         var encoded = ArticleIndexSnapshotCodec.EncodedLength(1);
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(1_000, 80);
         var capacity = new LedgerCapacity { Used = ceiling - encoded, Total = 1_000 };
         index.AttachCheckpointCapacity(capacity.Create());
         var installed = index.WriteSnapshot();
@@ -626,11 +626,10 @@ public sealed class CheckpointCapacityReservationTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-        double compactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
+        int maximumUtilization = 80,
+        int compactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
         };
@@ -655,7 +654,7 @@ public sealed class CheckpointCapacityReservationTests
                 TryReserve = bytes =>
                 {
                     ReserveCalls.Add(bytes);
-                    if (!Ledger.WouldFit(Used, Total, bytes, 0.80))
+                    if (!Ledger.WouldFit(Used, Total, bytes, 80))
                     {
                         return null;
                     }
@@ -665,7 +664,7 @@ public sealed class CheckpointCapacityReservationTests
                 TryIncrease = (id, extra) =>
                 {
                     OnIncrease?.Invoke(extra);
-                    if (DenyIncrease || !Ledger.WouldFit(Used, Total, extra, 0.80))
+                    if (DenyIncrease || !Ledger.WouldFit(Used, Total, extra, 80))
                     {
                         return false;
                     }

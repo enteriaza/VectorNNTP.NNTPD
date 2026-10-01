@@ -36,13 +36,19 @@ public sealed record StorageServerRuntimeOptions(
 /// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
 /// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
-/// <param name="CapacityAdmissionEnabled">Process-local capacity admission (Phase 5E.1 / 5E.2).</param>
 /// <param name="CapacityMaximumUtilization">
-/// Article Accept ceiling: max <c>(Used + ArtRes + CompRes + CheckpointRes + Required) / Total</c>.
+/// Hard article-admission ceiling as an integer percent of volume <c>TotalBytes</c>.
 /// </param>
 /// <param name="CapacityCompactionHeadroom">
-/// Utilisation delta added to <paramref name="CapacityMaximumUtilization"/> for compaction
-/// destination appends only (Phase 5E.2).
+/// Utilisation delta, in percentage points, added to <paramref name="CapacityMaximumUtilization"/>
+/// for compaction destination appends only.
+/// </param>
+/// <param name="CapacityMaximumUsageCapacity">
+/// Physical usage percent at which pressure recovery becomes active.
+/// </param>
+/// <param name="CapacityFreeCapacity">
+/// Percentage points of physical usage pressure recovery must reclaim below
+/// <paramref name="CapacityMaximumUsageCapacity"/>.
 /// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
@@ -50,9 +56,10 @@ public sealed record ArticleStorageRuntimeOptions(
     long JournalSoftLimitBytes,
     long JournalHardLimitBytes,
     long SegmentTargetSizeBytes,
-    bool CapacityAdmissionEnabled = false,
-    double CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-    double CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom);
+    int CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+    int CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
+    int CapacityMaximumUsageCapacity = ArticleCapacityOptions.DefaultMaximumUsageCapacity,
+    int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

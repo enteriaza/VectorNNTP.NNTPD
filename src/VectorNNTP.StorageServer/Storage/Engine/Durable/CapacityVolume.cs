@@ -71,34 +71,29 @@ internal sealed class CapacityVolumes
 
     /// <summary>
     /// Resolves <paramref name="segmentDir"/> and <paramref name="controlDir"/>.
+    /// Capacity admission is always on.
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Capacity is enabled and either directory's volume cannot be resolved.
+    /// Either directory's volume cannot be resolved.
     /// </exception>
     public static CapacityVolumes Resolve(
         string segmentDir,
         string controlDir,
-        bool capacityEnabled,
         IStorageCapacityReader? segmentReader,
         IStorageCapacityReader? controlReader,
         IStorageVolumeProbe? volumeProbe)
     {
-        if (!capacityEnabled)
-        {
-            return Disabled;
-        }
-
         var probe = volumeProbe ?? OsStorageVolumeProbe.Shared;
         if (!probe.TryResolve(segmentDir, out var segmentIdentity))
         {
             throw new InvalidOperationException(
-                $"Capacity admission is enabled but the volume for segment directory '{segmentDir}' cannot be resolved.");
+                $"Capacity admission cannot resolve the volume for segment directory '{segmentDir}'.");
         }
 
         if (!probe.TryResolve(controlDir, out var controlIdentity))
         {
             throw new InvalidOperationException(
-                $"Capacity admission is enabled but the volume for control directory '{controlDir}' cannot be resolved.");
+                $"Capacity admission cannot resolve the volume for control directory '{controlDir}'.");
         }
 
         if (segmentIdentity == controlIdentity)

@@ -125,7 +125,9 @@ public sealed class IncompleteAcceptPersistRetryTests
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
         Assert.Equal(1, engineB.PhysicalAppendCount);
         Assert.True(engineB.TryRead(record.ArtId, out _));
-        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engineB.ProcessLocalArticleReservedBytes);
     }
 
     [Fact]
@@ -259,12 +261,11 @@ public sealed class IncompleteAcceptPersistRetryTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maxUtil = 0.80) =>
+        int maxUtil = 80) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maxUtil,
-            CapacityCompactionHeadroom = 0.10,
+            CapacityCompactionHeadroom = 10,
         };
 
     private static ArticleRecord CreateRecord(string messageId, string body = "line1\r\nline2\r\n")

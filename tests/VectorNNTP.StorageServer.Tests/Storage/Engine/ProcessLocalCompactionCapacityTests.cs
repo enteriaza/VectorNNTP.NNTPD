@@ -21,13 +21,13 @@ public sealed class ProcessLocalCompactionCapacityTests
     public void Ledger_A_F_Article_and_compaction_counters_independent()
     {
         var ledger = new ProcessLocalCapacityLedger();
-        Assert.True(ledger.WouldFit(0, 1000, 100, 0.80));
+        Assert.True(ledger.WouldFit(0, 1000, 100, 80));
         ledger.TentativeAddArticle(100);
         ledger.BindArticleSequence(1, 100);
         Assert.Equal(100, ledger.ArticleReservedBytes);
         Assert.Equal(0, ledger.CompactionReservedBytes);
 
-        Assert.True(ledger.WouldFit(0, 1000, 50, 0.90));
+        Assert.True(ledger.WouldFit(0, 1000, 50, 90));
         ledger.ReserveCompaction(7, 1, 50);
         Assert.Equal(100, ledger.ArticleReservedBytes);
         Assert.Equal(50, ledger.CompactionReservedBytes);
@@ -50,31 +50,29 @@ public sealed class ProcessLocalCompactionCapacityTests
         ledger.TentativeAddArticle(700);
         ledger.BindArticleSequence(1, 700);
         // Used 0 + art 700 + req 101 against 0.80 of 1000 = 800 → reject
-        Assert.False(ledger.WouldFit(0, 1000, 101, 0.80));
+        Assert.False(ledger.WouldFit(0, 1000, 101, 80));
         // Against compaction ceiling 0.90 → admit
-        Assert.True(ledger.WouldFit(0, 1000, 100, 0.90));
+        Assert.True(ledger.WouldFit(0, 1000, 100, 90));
 
         ledger.ReserveCompaction(1, 1, 150);
         // Used 0 + 700 + 150 + 50 = 900 against 0.90 → exact admit
-        Assert.True(ledger.WouldFit(0, 1000, 50, 0.90));
-        Assert.False(ledger.WouldFit(0, 1000, 51, 0.90));
+        Assert.True(ledger.WouldFit(0, 1000, 50, 90));
+        Assert.False(ledger.WouldFit(0, 1000, 51, 90));
     }
 
     [Fact]
-    public async Task Relocation_A_Capacity_disabled_unchanged()
+    public async Task Relocation_A_Full_volume_rejects_before_relocation()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 100, used: 100);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: capacity);
         var record = CreateRecord("<cc-off@seg.test>");
-        var (sourceId, generation) = await AcceptCloseAsync(engine, record);
-        var compactionId = await BeginAsync(engine, sourceId, generation);
-        var result = await engine.RelocateArticleAsync(
-            compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None);
-        Assert.Equal(ArticleRelocationOutcome.Relocated, result.Outcome);
+        var accepted = await engine.AcceptAsync(record, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, accepted.Outcome);
         Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.NotNull(engine.SegmentCapacity);
     }
 
     [Fact]
@@ -90,7 +88,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         // Admit Accept under MaxUtil=0.20 with Used=0; then raise Used for relocate.
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.20, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 20, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var (sourceId, generation) = await AcceptCloseAsync(engine, record);
@@ -98,7 +96,7 @@ public sealed class ProcessLocalCompactionCapacityTests
 
         // Compaction ceiling includes the retained segment, journal, and index reservations,
         // plus the destination copy and the new Present frame.
-        var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.30);
+        var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 30);
         var newFrame = (long)ArticleIndexRecordCodec.RecordLength;
         var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
         capacity.UsedBytes = compactionCeiling - pins - required - newFrame - intent + 1;
@@ -126,7 +124,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         var total = requiredLive * 20L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.20),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 20),
             capacityReader: capacity);
 
         var (sourceId, generation) = await AcceptCloseAsync(engine, live);
@@ -297,7 +295,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         var total = required * 100L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         foreach (var r in records)
@@ -323,7 +321,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
         var frame = ArticleIndexRecordCodec.RecordLength;
         var written = ArticleJournalFrameCodec.RelocationWrittenFrameLength;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.55);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 55);
         capacity.UsedBytes = ceiling - pins - (intent * articles) - (3L * (required + frame + written));
         Assert.True(capacity.UsedBytes >= 0);
 
@@ -379,7 +377,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         var total = required * 100L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         foreach (var r in records)
@@ -398,7 +396,7 @@ public sealed class ProcessLocalCompactionCapacityTests
 
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
         var skipped = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.Equal(StorageMaintenanceOutcome.Skipped, skipped.Outcome);
         Assert.Contains("capacity", skipped.SkipReason, StringComparison.Ordinal);
@@ -435,11 +433,10 @@ public sealed class ProcessLocalCompactionCapacityTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-        double compactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+        int compactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
         };

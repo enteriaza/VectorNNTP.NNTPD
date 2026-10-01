@@ -103,8 +103,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         long SegmentBytes,
         long JournalBytes,
         long IndexBytes);
-    private readonly double _capacityMaximumUtilization;
-    private readonly double _capacityCompactionHeadroom;
+    private readonly int _capacityMaximumUtilization;
+    private readonly int _capacityCompactionHeadroom;
+    private readonly int _capacityMaximumUsageCapacity;
+    private readonly int _capacityFreeCapacity;
+    private int _usagePressureLatched;
     private readonly object _gate = new();
     private readonly Queue<ulong> _pendingSequences = new();
     private readonly HashSet<ulong> _pendingSet = new();
@@ -137,8 +140,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         TimeProvider timeProvider,
         CapacityVolumes capacity,
         bool capacityAdmissionEnabled,
-        double capacityMaximumUtilization,
-        double capacityCompactionHeadroom)
+        int capacityMaximumUtilization,
+        int capacityCompactionHeadroom,
+        int capacityMaximumUsageCapacity,
+        int capacityFreeCapacity)
     {
         ArgumentNullException.ThrowIfNull(capacity);
         _journal = journal;
@@ -152,6 +157,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityAdmissionEnabled = capacityAdmissionEnabled;
         _capacityMaximumUtilization = capacityMaximumUtilization;
         _capacityCompactionHeadroom = capacityCompactionHeadroom;
+        _capacityMaximumUsageCapacity = capacityMaximumUsageCapacity;
+        _capacityFreeCapacity = capacityFreeCapacity;
         segments.AdoptSegmentIdFloor(journal.NextSegmentId);
         segments.ReserveSegmentId = journal.ReserveSegmentId;
         journal.RetainRetiredCompaction = segmentId =>
@@ -302,16 +309,106 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             ledger.IndexReservedBytes,
             ledger.CompactionJournalReservedBytes));
 
-        return CapacityAdmissionPressureSnapshot.FromCapacityState(
+        var observed = CapacityAdmissionPressureSnapshot.FromCapacityState(
             in snap,
             counters.ArticleReservedBytes,
             counters.CompactionReservedBytes,
             _capacityMaximumUtilization,
             _capacityCompactionHeadroom,
+            _capacityMaximumUsageCapacity,
+            _capacityFreeCapacity,
             checkpointReservedBytes: counters.CheckpointReservedBytes,
             journalReservedBytes: counters.JournalReservedBytes,
             indexReservedBytes: counters.IndexReservedBytes,
             compactionJournalReservedBytes: counters.CompactionJournalReservedBytes);
+        return ApplyUsagePressureLatch(observed);
+    }
+
+    /// <summary>
+    /// Runs usage-pressure recovery before admission when the physical trigger is latched
+    /// or the article would exceed <see cref="ArticleCapacityOptions.MaximumUtilization"/>.
+    /// Null when no coordinator is attached (tests that only exercise the ceiling).
+    /// </summary>
+    internal Func<CancellationToken, Task>? UsagePressureRecovery { get; set; }
+
+    /// <summary>
+    /// Logically evicts least-frequently-used Present articles until their physical record
+    /// lengths cover <paramref name="physicalBytesToFree"/>. Does not compact or reclaim,
+    /// so filesystem <c>UsedBytes</c> is unchanged.
+    /// </summary>
+    /// <returns>The number of articles transitioned to Evicted.</returns>
+    internal int EvictLeastFrequentlyUsed(long physicalBytesToFree)
+    {
+        if (physicalBytesToFree <= 0)
+        {
+            return 0;
+        }
+
+        var present = new List<(ArticleId ArtId, long UseCount, int Length)>();
+        foreach (var row in _index.Snapshot())
+        {
+            if (row.State != ArticleStorageState.Present || row.Location.Length <= 0)
+            {
+                continue;
+            }
+
+            present.Add((row.ArtId, _index.UseCount(row.ArtId), row.Location.Length));
+        }
+
+        present.Sort(static (left, right) =>
+        {
+            var byUse = left.UseCount.CompareTo(right.UseCount);
+            if (byUse != 0)
+            {
+                return byUse;
+            }
+
+            return string.CompareOrdinal(left.ArtId.ToLowerHexString(), right.ArtId.ToLowerHexString());
+        });
+
+        long covered = 0;
+        var evicted = 0;
+        foreach (var row in present)
+        {
+            if (covered >= physicalBytesToFree)
+            {
+                break;
+            }
+
+            if (!TryEvict(row.ArtId))
+            {
+                continue;
+            }
+
+            covered += row.Length;
+            evicted++;
+        }
+
+        return evicted;
+    }
+
+    private CapacityAdmissionPressureSnapshot ApplyUsagePressureLatch(
+        CapacityAdmissionPressureSnapshot observed)
+    {
+        if (observed.TotalBytes <= 0)
+        {
+            return observed;
+        }
+
+        if (ProcessLocalCapacityLedger.IsUsageAtOrAbove(
+                observed.UsedBytes,
+                observed.TotalBytes,
+                _capacityMaximumUsageCapacity))
+        {
+            _usagePressureLatched = 1;
+        }
+
+        if (observed.UsedBytes <= observed.UsageRecoveryTargetBytes)
+        {
+            _usagePressureLatched = 0;
+        }
+
+        return observed with { IsUnderUsagePressure = _usagePressureLatched != 0 };
     }
 
     private T ReadControlLedger<T>(Func<ProcessLocalCapacityLedger, T> read)
@@ -986,7 +1083,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             var capacity = CapacityVolumes.Resolve(
                 options.SegmentDir,
                 options.ControlDir,
-                options.CapacityAdmissionEnabled,
                 capacityReader,
                 controlCapacityReader,
                 volumeProbe);
@@ -999,9 +1095,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 log,
                 timeProvider ?? TimeProvider.System,
                 capacity,
-                options.CapacityAdmissionEnabled,
+                capacityAdmissionEnabled: true,
                 options.CapacityMaximumUtilization,
-                options.CapacityCompactionHeadroom);
+                options.CapacityCompactionHeadroom,
+                options.CapacityMaximumUsageCapacity,
+                options.CapacityFreeCapacity);
             journal = null;
             segments = null;
             index = null;
@@ -1023,6 +1121,51 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <inheritdoc />
     public Task<ArticleAcceptResult> AcceptAsync(ArticleRecord record, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (UsagePressureRecovery is not null && ShouldRecoverBeforeAccept(record))
+        {
+            return AcceptAfterUsagePressureAsync(record, cancellationToken);
+        }
+
+        return AcceptWithoutPressureRecovery(record, cancellationToken);
+    }
+
+    private async Task<ArticleAcceptResult> AcceptAfterUsagePressureAsync(
+        ArticleRecord record,
+        CancellationToken cancellationToken)
+    {
+        var recover = UsagePressureRecovery;
+        if (recover is not null)
+        {
+            await recover(cancellationToken).ConfigureAwait(false);
+        }
+
+        return await AcceptWithoutPressureRecovery(record, cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool ShouldRecoverBeforeAccept(ArticleRecord record)
+    {
+        if (!_capacityAdmissionEnabled || _segmentCapacity is null || record.ArtSize <= 0)
+        {
+            return false;
+        }
+
+        var pressure = ObserveCapacityAdmissionPressure();
+        if (pressure.IsUnderUsagePressure)
+        {
+            return true;
+        }
+
+        var segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        return !_segmentCapacity.WithLedger(ledger =>
+            ledger.WouldFit(pressure.UsedBytes, pressure.TotalBytes, segmentBytes, _capacityMaximumUtilization));
+    }
+
+    private Task<ArticleAcceptResult> AcceptWithoutPressureRecovery(
+        ArticleRecord record,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
@@ -2104,7 +2247,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         return decision.AlreadySatisfied || added;
     }
 
-    private bool TryReserveDirectIndexFrame(ArticleId artId, long frameBytes, double ceilingUtilization)
+    private bool TryReserveDirectIndexFrame(ArticleId artId, long frameBytes, int ceilingUtilization)
     {
         var control = RequireControlVolume();
         var decision = Admit(

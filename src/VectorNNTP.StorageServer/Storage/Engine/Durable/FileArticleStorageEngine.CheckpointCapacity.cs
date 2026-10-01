@@ -45,14 +45,14 @@ public sealed partial class FileArticleStorageEngine
         long ReservedBytes);
 
     /// <summary>
-    /// Samples <c>UsedBytes</c>, evaluates <see cref="ProcessLocalCapacityLedger.WouldFit(long, long, long, double)"/>,
+    /// Samples <c>UsedBytes</c>, evaluates <see cref="ProcessLocalCapacityLedger.WouldFit(long, long, long, int)"/>,
     /// and runs <paramref name="reserve"/> while holding <paramref name="volume"/>'s ledger lock.
     /// The lock does not cover filesystem I/O. A test hook, if set, runs before that critical section.
     /// </summary>
     private CapacityAdmitResult Admit(
         CapacityVolume volume,
         long requiredBytes,
-        double ceilingUtilization,
+        int ceilingUtilization,
         Func<ProcessLocalCapacityLedger, bool> alreadySatisfied,
         Action<ProcessLocalCapacityLedger> reserve)
     {

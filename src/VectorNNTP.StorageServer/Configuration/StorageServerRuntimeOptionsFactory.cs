@@ -101,11 +101,14 @@ public static class StorageServerRuntimeOptionsFactory
                 JournalSoftLimitBytes: storage.JournalSoftLimitBytes,
                 JournalHardLimitBytes: storage.JournalHardLimitBytes,
                 SegmentTargetSizeBytes: storage.SegmentTargetSizeBytes,
-                CapacityAdmissionEnabled: storage.Capacity?.Enabled ?? false,
                 CapacityMaximumUtilization: storage.Capacity?.MaximumUtilization
                     ?? ArticleCapacityOptions.DefaultMaximumUtilization,
                 CapacityCompactionHeadroom: storage.Capacity?.CompactionHeadroom
-                    ?? ArticleCapacityOptions.DefaultCompactionHeadroom),
+                    ?? ArticleCapacityOptions.DefaultCompactionHeadroom,
+                CapacityMaximumUsageCapacity: storage.Capacity?.MaximumUsageCapacity
+                    ?? ArticleCapacityOptions.DefaultMaximumUsageCapacity,
+                CapacityFreeCapacity: storage.Capacity?.FreeCapacity
+                    ?? ArticleCapacityOptions.DefaultFreeCapacity),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             GracefulShutdownTimeout: options.GracefulShutdownTimeout,
             StartupTimeout: options.StartupTimeout,

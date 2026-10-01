@@ -24,9 +24,10 @@ public sealed class CapacityAdmissionSampleRaceTests
         var record = CreateRecord("<race-fit@seg.test>");
         var admit = AdmitBytes(record);
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var reader = new MutableCapacityReader(total, used: ceiling - admit);
         await using var engine = Open(dir, reader);
+        engine.SuspendBackgroundPersist = true;
         var journalBefore = engine.Journal.JournalPhysicalBytes;
 
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
@@ -50,7 +51,7 @@ public sealed class CapacityAdmissionSampleRaceTests
         var segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         const long total = 100_000;
         const long releasedBytes = 1_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var stale = ceiling - segmentBytes;
         var reader = new MutableCapacityReader(total, used: stale);
         await using var engine = Open(dir, reader);
@@ -73,8 +74,8 @@ public sealed class CapacityAdmissionSampleRaceTests
             release: () => engine.ControlCapacity.WithLedger(ledger => ledger.ReleaseCheckpoint(reservationId)));
 
         Assert.Equal(stale, result.ObservedUsedBytes);
-        Assert.True(ProcessLocalCapacityLedger.WouldFit(stale, 0, 0, total, segmentBytes, 0.80));
-        Assert.False(ProcessLocalCapacityLedger.WouldFit(stale + releasedBytes, 0, 0, total, segmentBytes, 0.80));
+        Assert.True(ProcessLocalCapacityLedger.WouldFit(stale, 0, 0, total, segmentBytes, 80));
+        Assert.False(ProcessLocalCapacityLedger.WouldFit(stale + releasedBytes, 0, 0, total, segmentBytes, 80));
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, result.Accept.Outcome);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
@@ -91,7 +92,7 @@ public sealed class CapacityAdmissionSampleRaceTests
         var segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         const long total = 100_000;
         const long releasedBytes = 1_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var stale = ceiling - segmentBytes;
         var reader = new MutableCapacityReader(total, used: stale);
         await using var engine = Open(dir, reader);
@@ -112,8 +113,8 @@ public sealed class CapacityAdmissionSampleRaceTests
             release: () => engine.SegmentCapacity.WithLedger(ledger => ledger.ReleaseCompaction(4, 1)));
 
         Assert.Equal(stale, result.ObservedUsedBytes);
-        Assert.True(ProcessLocalCapacityLedger.WouldFit(stale, 0, 0, total, segmentBytes, 0.80));
-        Assert.False(ProcessLocalCapacityLedger.WouldFit(stale + releasedBytes, 0, 0, total, segmentBytes, 0.80));
+        Assert.True(ProcessLocalCapacityLedger.WouldFit(stale, 0, 0, total, segmentBytes, 80));
+        Assert.False(ProcessLocalCapacityLedger.WouldFit(stale + releasedBytes, 0, 0, total, segmentBytes, 80));
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, result.Accept.Outcome);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
@@ -138,7 +139,7 @@ public sealed class CapacityAdmissionSampleRaceTests
         var reserved = engine.ProcessLocalReservedBytes;
         var fence = ArticleJournalFrameCodec.EncodeSequenceFence(accepted.Sequence + 1).Length
             + ArticleJournalFrameCodec.SegmentIdFenceFrameLength;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var stale = ceiling - reserved - fence;
         Assert.True(stale >= releasedBytes);
         reader.UsedBytes = stale;
@@ -171,7 +172,7 @@ public sealed class CapacityAdmissionSampleRaceTests
                 0,
                 total,
                 fence,
-                0.80,
+                80,
                 journalReservedBytes: engine.ProcessLocalJournalReservedBytes,
                 indexReservedBytes: engine.ProcessLocalIndexReservedBytes));
             Assert.False(ProcessLocalCapacityLedger.WouldFit(
@@ -180,7 +181,7 @@ public sealed class CapacityAdmissionSampleRaceTests
                 0,
                 total,
                 fence,
-                0.80,
+                80,
                 journalReservedBytes: engine.ProcessLocalJournalReservedBytes,
                 indexReservedBytes: engine.ProcessLocalIndexReservedBytes));
         }
@@ -206,7 +207,7 @@ public sealed class CapacityAdmissionSampleRaceTests
         var admit = AdmitBytes(first);
         Assert.Equal(admit, AdmitBytes(second));
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var reader = new MutableCapacityReader(total, used: ceiling - admit);
         await using var engine = Open(dir, reader);
         engine.SuspendBackgroundPersist = true;
@@ -284,9 +285,8 @@ public sealed class CapacityAdmissionSampleRaceTests
         FileArticleStorageEngine.Open(
             dir.Options with
             {
-                CapacityAdmissionEnabled = true,
-                CapacityMaximumUtilization = 0.80,
-                CapacityCompactionHeadroom = 0.10,
+                CapacityMaximumUtilization = 80,
+                CapacityCompactionHeadroom = 10,
             },
             volumeProbe: ScriptedVolumeProbe.Same(dir),
             capacityReader: reader);

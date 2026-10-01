@@ -279,7 +279,6 @@ public sealed class CapacityReservationLifetimeTests
     private static ArticleStorageRuntimeOptions WithCapacity(ArticleStorageRuntimeOptions options) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
             CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
         };

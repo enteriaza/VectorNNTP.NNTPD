@@ -268,7 +268,6 @@ public sealed class ImmutableSegmentStartupTests
         Assert.False(SegmentLifecycle.IsReclaimable(in info));
 
         var policy = new ArticleSegmentPolicy(
-            enabled: true,
             ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
             ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio);
         Assert.False(policy.EvaluateCompaction(in info).IsEligible);

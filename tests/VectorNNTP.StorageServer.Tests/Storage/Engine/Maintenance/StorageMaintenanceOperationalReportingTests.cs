@@ -313,13 +313,12 @@ public sealed class StorageMaintenanceOperationalReportingTests
     private static StorageMaintenanceCoordinator CreateCoordinator(
         FileArticleStorageEngine engine,
         long minimumDeadBytes = ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
-        double minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
-        new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes, minimumDeadRatio));
+        int minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
+        new(engine, new ArticleSegmentPolicy(minimumDeadBytes, minimumDeadRatio));
 
     private static StorageServerOptions CreateMaintenanceOptions()
     {
         var options = new StorageServerOptions { ServerId = 1, DnsSuffix = "usenet.ninja" };
-        options.Storage.Compaction.MaintenanceEnabled = true;
         options.Storage.Compaction.Interval = TimeSpan.FromMinutes(1);
         return options;
     }

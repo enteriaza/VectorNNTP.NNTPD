@@ -19,7 +19,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     public void Ledger_ceiling_and_recovery_target_match_WouldFit()
     {
         const long total = 1_000;
-        const double maxUtil = 0.80;
+        const int maxUtil = 80;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, maxUtil);
         Assert.Equal(800, ceiling);
 
@@ -65,7 +65,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
                 compactionReservedBytes: 0,
                 totalBytes: total,
                 requiredBytes: 1,
-                ceilingUtilization: 0.90));
+                ceilingPercent: 90));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var closedArticle = CreateRecord("<p5f2-a-cls@seg.test>");
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var retiredId = await AcceptCloseCompactRetireAsync(engine, retiredArticle);
@@ -115,7 +115,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var drop = CreateRecord("<p5f2-b-drop@seg.test>");
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
@@ -148,7 +148,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var drop = CreateRecord("<p5f2-c-drop@seg.test>");
         var capacity = new MutableCapacityReader(total: 1_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
@@ -161,7 +161,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var before));
 
         // Used at Total → MaxUtil and MaxUtil+Headroom both reject a full-LiveBytes relocate.
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
         Assert.True(engine.ObserveCapacityAdmissionPressure().IsUnderAdmissionPressure);
         Assert.False(
             ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(
@@ -196,7 +196,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var total = required * 100L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         foreach (var r in records)
@@ -226,7 +226,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         Assert.Contains(engine.Journal.EnumerateOpenCompactions(), static c => !c.Committed);
 
         engine.TestHookAfterCompactionCapacityReserved = null;
-        capacity.UsedBytes = total;
+        capacity.UsedBytes = total - 1;
         var articleResBefore = engine.ProcessLocalArticleReservedBytes;
         var skipped = await coordinator.RunOnceAsync(CancellationToken.None);
 
@@ -242,7 +242,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     [Fact]
     public void E_Normal_pressure_free_ordering_unchanged()
     {
-        var policy = new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0);
+        var policy = new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0);
         var lowRatioLarge = Seg(1, size: 10_000, live: 9_000, dead: 1_000);
         var highRatioSmall = Seg(2, size: 1_000, live: 100, dead: 900);
         Assert.True(policy.TrySelectCompactionVictim([lowRatioLarge, highRatioSmall], out var victim));
@@ -252,15 +252,15 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     [Fact]
     public void F_Pressure_aware_victim_prefers_physical_SizeBytes()
     {
-        var policy = new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0);
+        var policy = new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0);
         var lowRatioLarge = Seg(1, size: 10_000, live: 100, dead: 1_000);
         var highRatioSmall = Seg(2, size: 1_000, live: 100, dead: 900);
         var pressure = CapacityAdmissionPressureSnapshot.FromCapacityState(
             new StorageCapacitySnapshot(TotalBytes: 100_000, UsedBytes: 90_000, AvailableBytes: 10_000),
             articleReservedBytes: 0,
             compactionReservedBytes: 0,
-            maximumUtilization: 0.80,
-            compactionHeadroom: 0.15);
+            maximumUtilization: 80,
+            compactionHeadroom: 15);
 
         Assert.True(pressure.IsUnderAdmissionPressure);
         Assert.True(
@@ -285,7 +285,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var retiredBytes = SegmentRecordCodec.RecordLengthForArtSize(retired.ArtSize);
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var retiredId = await AcceptCloseCompactRetireAsync(engine, retired);
@@ -312,8 +312,8 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     public void H_CompactionReservedBytes_included_in_pressure_and_feasibility()
     {
         const long total = 1_000;
-        const double maxUtil = 0.80;
-        const double headroom = 0.10;
+        const int maxUtil = 80;
+        const int headroom = 10;
 
         var baseTarget = ProcessLocalCapacityLedger.ComputeAdmissionRecoveryTargetBytes(
             usedBytes: 780,
@@ -360,7 +360,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var drop = CreateRecord("<p5f2-i-drop@seg.test>");
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
@@ -391,7 +391,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var record = CreateRecord("<p5f2-j@seg.test>");
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 500_000);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var sourceId = await AcceptCloseCompactRetireAsync(engine, record);
@@ -416,7 +416,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var drop = CreateRecord("<p5f2-k-drop@seg.test>");
         var capacity = new MutableCapacityReader(total: 1_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.01),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 1),
             capacityReader: capacity);
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
@@ -425,7 +425,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
         Assert.True(engine.TryEvict(drop.ArtId));
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
         var result = await CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0)
             .RunOnceAsync(CancellationToken.None);
 
@@ -445,7 +445,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var phantom = CreateRecord("<p5f2-l-phantom@seg.test>");
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var sourceId = await AcceptCloseCompactRetireAsync(engine, record);
@@ -472,7 +472,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var drop = CreateRecord("<p5f2-l-drop@seg.test>");
         var capacity2 = new MutableCapacityReader(total: 1_000_000, used: 0);
         await using var engine2 = FileArticleStorageEngine.Open(
-            WithCapacity(dir2.Options, maximumUtilization: 0.50, compactionHeadroom: 0.01),
+            WithCapacity(dir2.Options, maximumUtilization: 50, compactionHeadroom: 1),
             capacityReader: capacity2);
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine2.AcceptAsync(keep, CancellationToken.None)).Outcome);
@@ -480,7 +480,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         await engine2.DrainPendingAsync(CancellationToken.None);
         await engine2.Segments.CloseActiveAsync(CancellationToken.None);
         Assert.True(engine2.TryEvict(drop.ArtId));
-        capacity2.UsedBytes = capacity2.TotalBytes;
+        capacity2.UsedBytes = capacity2.TotalBytes - 1;
 
         var capacitySkip = await CreateCoordinator(engine2, minimumDeadBytes: 0, minimumDeadRatio: 0)
             .RunOnceAsync(CancellationToken.None);
@@ -507,8 +507,8 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     private static StorageMaintenanceCoordinator CreateCoordinator(
         FileArticleStorageEngine engine,
         long minimumDeadBytes = ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
-        double minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
-        new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes, minimumDeadRatio));
+        int minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
+        new(engine, new ArticleSegmentPolicy(minimumDeadBytes, minimumDeadRatio));
 
     private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
     {
@@ -520,13 +520,14 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization,
-        double compactionHeadroom) =>
+        int maximumUtilization,
+        int compactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
+            CapacityMaximumUsageCapacity = 100,
+            CapacityFreeCapacity = 1,
         };
 
     private static async Task<SegmentId> AcceptCloseCompactRetireAsync(

@@ -21,7 +21,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "a-c1");
@@ -55,7 +55,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "b-c1");
@@ -89,7 +89,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "c-c1");
@@ -122,14 +122,14 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         var (_, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "d-c1");
         var (_, c2Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "d-c2");
         Assert.True(c1Id < c2Id);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
         var openAttempts = new List<ulong>();
         var coordinator = CreateCoordinator(engine);
         coordinator.TestHookAfterOpenUncommittedAttempted = (_, id, _) => openAttempts.Add(id);
@@ -152,7 +152,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var (c1Source, c1Id) = await CreateOpenAllDeadBeginAsync(engine, capacity, "e-c1");
@@ -182,7 +182,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var record = CreateRecord("<p5f4-f@seg.test>");
@@ -228,7 +228,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var record = CreateRecord("<p5f4-g@seg.test>");
@@ -276,7 +276,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         // Orphan Begin whose source was reclaimed → RejectedSourceMissing Skip (not capacity yield).
@@ -301,7 +301,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var (_, c2Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "h-c2");
         Assert.True(staleId < c2Id);
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
         var openAttempts = new List<ulong>();
         var coordinator = CreateCoordinator(engine);
         coordinator.TestHookAfterOpenUncommittedAttempted = (_, id, _) => openAttempts.Add(id);
@@ -323,7 +323,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.80, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 80, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var record = CreateRecord("<p5f4-i@seg.test>");
@@ -348,7 +348,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
                 CancellationToken.None));
 
         var closedId = await CreateClosedAllDeadSegmentAsync(engine, capacity, "i-closed");
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
 
         SegmentId? closedSelected = null;
         var openAttempts = new List<ulong>();
@@ -370,7 +370,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var (c1Source, c1Id) = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "j-c1");
@@ -394,14 +394,14 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var retiredId = await AcceptCloseCompactRetireAsync(engine, CreateRecord("<p5f4-k-ret@seg.test>"));
         _ = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "k-c1");
         _ = await CreateOpenCapacityBlockedCompactionAsync(engine, capacity, "k-c2");
 
-        capacity.UsedBytes = capacity.TotalBytes;
+        capacity.UsedBytes = capacity.TotalBytes - 1;
         SegmentId? reclaimHook = null;
         var openAttempts = 0;
         var coordinator = CreateCoordinator(engine);
@@ -417,7 +417,7 @@ public sealed class OpenCompactionMultiOpenFairnessTests
     }
 
     private static StorageMaintenanceCoordinator CreateCoordinator(FileArticleStorageEngine engine) =>
-        new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+        new(engine, new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
 
     private static long LeaveRoomForJournalOnlyCompaction(FileArticleStorageEngine engine)
     {
@@ -438,13 +438,14 @@ public sealed class OpenCompactionMultiOpenFairnessTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization,
-        double compactionHeadroom) =>
+        int maximumUtilization,
+        int compactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
+            CapacityMaximumUsageCapacity = 100,
+            CapacityFreeCapacity = 1,
         };
 
     private static async Task<(SegmentId SourceId, ulong CompactionId)> CreateOpenCapacityBlockedCompactionAsync(

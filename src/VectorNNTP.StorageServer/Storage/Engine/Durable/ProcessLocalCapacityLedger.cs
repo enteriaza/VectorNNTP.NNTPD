@@ -144,23 +144,26 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>Scaled integer factor shared by ceiling / WouldFit arithmetic (no floating multiply).</summary>
     internal const long UtilizationScale = 1_000_000L;
 
+    /// <summary>Integer percent that maps onto <see cref="UtilizationScale"/> (100 percent).</summary>
+    internal const int PercentScale = 100;
+
     /// <summary>
     /// Returns whether <paramref name="requiredBytes"/> fits under
-    /// <c>(used + articleReserved + compactionReserved + checkpointReserved + required) ≤ ceilingUtilization × total</c>
+    /// <c>(used + articleReserved + compactionReserved + checkpointReserved + required) ≤ ceilingPercent percent of total</c>
     /// using this ledger's current reservation counters.
     /// </summary>
     public bool WouldFit(
         long usedBytes,
         long totalBytes,
         long requiredBytes,
-        double ceilingUtilization) =>
+        int ceilingPercent) =>
         WouldFit(
             usedBytes,
             _articleReservedBytes,
             _compactionReservedBytes,
             totalBytes,
             requiredBytes,
-            ceilingUtilization,
+            ceilingPercent,
             _checkpointReservedBytes,
             _journalReservedBytes,
             _indexReservedBytes,
@@ -168,7 +171,7 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Returns whether <paramref name="requiredBytes"/> fits under
-    /// <c>(used + articleReserved + journalReserved + indexReserved + compactionReserved + compactionJournalReserved + checkpointReserved + required) ≤ ceilingUtilization × total</c>.
+    /// <c>(used + articleReserved + journalReserved + indexReserved + compactionReserved + compactionJournalReserved + checkpointReserved + required) ≤ ceilingPercent percent of total</c>.
     /// </summary>
     public static bool WouldFit(
         long usedBytes,
@@ -176,7 +179,7 @@ internal sealed class ProcessLocalCapacityLedger
         long compactionReservedBytes,
         long totalBytes,
         long requiredBytes,
-        double ceilingUtilization,
+        int ceilingPercent,
         long checkpointReservedBytes = 0,
         long journalReservedBytes = 0,
         long indexReservedBytes = 0,
@@ -217,8 +220,8 @@ internal sealed class ProcessLocalCapacityLedger
             return false;
         }
 
-        var utilScaled = ScaleUtilization(ceilingUtilization);
-        if (utilScaled <= 0 || utilScaled >= UtilizationScale)
+        var utilScaled = ScalePercent(ceilingPercent);
+        if (utilScaled <= 0)
         {
             return false;
         }
@@ -229,24 +232,24 @@ internal sealed class ProcessLocalCapacityLedger
         }
         catch (OverflowException)
         {
-            return (decimal)projected <= (decimal)totalBytes * (decimal)ceilingUtilization;
+            return (decimal)projected * PercentScale <= (decimal)totalBytes * ceilingPercent;
         }
     }
 
     /// <summary>
-    /// Floor ceiling bytes for <paramref name="ceilingUtilization"/> × <paramref name="totalBytes"/>
+    /// Floor ceiling bytes for <paramref name="ceilingPercent"/> percent of <paramref name="totalBytes"/>
     /// using the same scaled-integer rounding as
-    /// <see cref="WouldFit(long, long, long, long, long, double, long, long, long, long)"/>.
+    /// <see cref="WouldFit(long, long, long, long, long, int, long, long, long, long)"/>.
     /// </summary>
-    public static long ComputeCeilingBytes(long totalBytes, double ceilingUtilization)
+    public static long ComputeCeilingBytes(long totalBytes, int ceilingPercent)
     {
         if (totalBytes <= 0)
         {
             return 0;
         }
 
-        var utilScaled = ScaleUtilization(ceilingUtilization);
-        if (utilScaled <= 0 || utilScaled >= UtilizationScale)
+        var utilScaled = ScalePercent(ceilingPercent);
+        if (utilScaled <= 0)
         {
             return 0;
         }
@@ -257,8 +260,27 @@ internal sealed class ProcessLocalCapacityLedger
         }
         catch (OverflowException)
         {
-            return (long)decimal.Floor((decimal)totalBytes * (decimal)ceilingUtilization);
+            return (long)decimal.Floor((decimal)totalBytes * ceilingPercent / PercentScale);
         }
+    }
+
+    /// <summary>
+    /// True when <paramref name="usedBytes"/> is at or above <paramref name="percent"/> of
+    /// <paramref name="totalBytes"/>. Uses filesystem used/total, not live or dead bytes.
+    /// </summary>
+    public static bool IsUsageAtOrAbove(long usedBytes, long totalBytes, int percent)
+    {
+        if (totalBytes <= 0 || usedBytes < 0 || percent <= 0)
+        {
+            return false;
+        }
+
+        if (percent > PercentScale)
+        {
+            return false;
+        }
+
+        return (decimal)usedBytes * PercentScale >= (decimal)totalBytes * percent;
     }
 
     /// <summary>
@@ -271,7 +293,7 @@ internal sealed class ProcessLocalCapacityLedger
         long articleReservedBytes,
         long compactionReservedBytes,
         long totalBytes,
-        double maximumUtilization,
+        int maximumUtilization,
         long minimumRequiredBytes,
         long checkpointReservedBytes = 0,
         long journalReservedBytes = 0,
@@ -329,10 +351,15 @@ internal sealed class ProcessLocalCapacityLedger
         return deficit > 0 ? deficit : 0;
     }
 
-    private static long ScaleUtilization(double ceilingUtilization) =>
-        (long)decimal.Round(
-            (decimal)ceilingUtilization * UtilizationScale,
-            MidpointRounding.AwayFromZero);
+    private static long ScalePercent(int ceilingPercent)
+    {
+        if (ceilingPercent is < 1 or > PercentScale)
+        {
+            return 0;
+        }
+
+        return ceilingPercent * (UtilizationScale / PercentScale);
+    }
 
     /// <summary>
     /// Tentatively includes <paramref name="requiredBytes"/> in <see cref="ArticleReservedBytes"/>
@@ -385,7 +412,7 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Reserves another physical segment copy for a sequence that already holds one.
-    /// Caller must have already verified <see cref="WouldFit(long, long, long, double)"/>.
+    /// Caller must have already verified <see cref="WouldFit(long, long, long, int)"/>.
     /// </summary>
     public void AddSegmentCopy(ulong sequence, long bytesPerCopy)
     {
@@ -738,7 +765,7 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Reserves one compaction-journal frame. Returns false when that identity is already reserved.
-    /// Caller must have already verified <see cref="WouldFit(long, long, long, double)"/>.
+    /// Caller must have already verified <see cref="WouldFit(long, long, long, int)"/>.
     /// </summary>
     public bool TryAddCompactionJournalFrame(
         ulong compactionId,
@@ -988,7 +1015,7 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>
     /// Binds a compaction destination reservation to <paramref name="compactionId"/> /
     /// <paramref name="relocationId"/> and increments <see cref="CompactionReservedBytes"/>.
-    /// Caller must have already verified <see cref="WouldFit(long, long, long, double)"/>.
+    /// Caller must have already verified <see cref="WouldFit(long, long, long, int)"/>.
     /// </summary>
     /// <summary>
     /// True when this compaction destination already holds its reservation.
@@ -1099,7 +1126,7 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Reserves <paramref name="bytes"/> for one checkpoint temporary file.
-    /// Caller must have already verified <see cref="WouldFit(long, long, long, double)"/>.
+    /// Caller must have already verified <see cref="WouldFit(long, long, long, int)"/>.
     /// </summary>
     public ulong ReserveCheckpoint(long bytes)
     {

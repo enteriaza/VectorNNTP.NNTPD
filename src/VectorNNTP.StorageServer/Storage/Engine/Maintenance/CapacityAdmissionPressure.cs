@@ -16,11 +16,21 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <param name="AvailableBytes">DriveInfo available bytes from the capacity snapshot.</param>
 /// <param name="ArticleReservedBytes">Process-local segment-copy reservations on this volume's ledger.</param>
 /// <param name="CompactionReservedBytes">Process-local compaction destination reservations.</param>
-/// <param name="MaximumUtilization">Article admission utilization ceiling fraction.</param>
-/// <param name="CompactionHeadroom">Additional utilization allowed for compaction destinations.</param>
-/// <param name="ArticleCeilingBytes">Floor(MaximumUtilization × TotalBytes) via ledger scaling.</param>
+/// <param name="MaximumUtilization">Article admission ceiling as an integer percent of TotalBytes.</param>
+/// <param name="CompactionHeadroom">Additional percentage points allowed for compaction destinations.</param>
+/// <param name="MaximumUsageCapacity">Physical usage percent that latches pressure recovery.</param>
+/// <param name="FreeCapacity">Percentage points reclaimed below the usage trigger.</param>
+/// <param name="IsUnderUsagePressure">
+/// True after physical usage has reached <paramref name="MaximumUsageCapacity"/> until
+/// <c>UsedBytes</c> is at or below the physical recovery target. Logical eviction does not clear it.
+/// </param>
+/// <param name="UsageRecoveryTargetBytes">
+/// Floor((MaximumUsageCapacity - FreeCapacity) percent of TotalBytes). Pressure stays active
+/// until filesystem UsedBytes is at or below this value.
+/// </param>
+/// <param name="ArticleCeilingBytes">Floor(MaximumUtilization percent of TotalBytes) via ledger scaling.</param>
 /// <param name="CompactionCeilingBytes">
-/// Floor((MaximumUtilization + CompactionHeadroom) × TotalBytes) via ledger scaling.
+/// Floor((MaximumUtilization + CompactionHeadroom) percent of TotalBytes) via ledger scaling.
 /// </param>
 /// <param name="AdmissionRecoveryTargetBytes">
 /// Physical UsedBytes that must disappear before minimum-size article admission can succeed.
@@ -52,8 +62,12 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
     long AvailableBytes,
     long ArticleReservedBytes,
     long CompactionReservedBytes,
-    double MaximumUtilization,
-    double CompactionHeadroom,
+    int MaximumUtilization,
+    int CompactionHeadroom,
+    int MaximumUsageCapacity,
+    int FreeCapacity,
+    bool IsUnderUsagePressure,
+    long UsageRecoveryTargetBytes,
     long ArticleCeilingBytes,
     long CompactionCeilingBytes,
     long AdmissionRecoveryTargetBytes,
@@ -74,6 +88,10 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
         CompactionReservedBytes: 0,
         MaximumUtilization: 0,
         CompactionHeadroom: 0,
+        MaximumUsageCapacity: 0,
+        FreeCapacity: 0,
+        IsUnderUsagePressure: false,
+        UsageRecoveryTargetBytes: 0,
         ArticleCeilingBytes: 0,
         CompactionCeilingBytes: 0,
         AdmissionRecoveryTargetBytes: 0,
@@ -90,8 +108,10 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
         in StorageCapacitySnapshot capacity,
         long articleReservedBytes,
         long compactionReservedBytes,
-        double maximumUtilization,
-        double compactionHeadroom,
+        int maximumUtilization,
+        int compactionHeadroom,
+        int maximumUsageCapacity = 80,
+        int freeCapacity = 5,
         long minimumAdmissionRequiredBytes = SegmentRecordCodec.MinimumRecordLength,
         long checkpointReservedBytes = 0,
         long journalReservedBytes = 0,
@@ -106,6 +126,14 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
         var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(
             capacity.TotalBytes,
             maximumUtilization + compactionHeadroom);
+        var recoveryPercent = Math.Max(0, maximumUsageCapacity - freeCapacity);
+        var usageRecoveryTarget = ProcessLocalCapacityLedger.ComputeCeilingBytes(
+            capacity.TotalBytes,
+            recoveryPercent);
+        var underUsage = ProcessLocalCapacityLedger.IsUsageAtOrAbove(
+            capacity.UsedBytes,
+            capacity.TotalBytes,
+            maximumUsageCapacity);
         var recoveryTarget = ProcessLocalCapacityLedger.ComputeAdmissionRecoveryTargetBytes(
             capacity.UsedBytes,
             articleReservedBytes,
@@ -128,6 +156,10 @@ public readonly record struct CapacityAdmissionPressureSnapshot(
             CompactionReservedBytes: compactionReservedBytes,
             MaximumUtilization: maximumUtilization,
             CompactionHeadroom: compactionHeadroom,
+            MaximumUsageCapacity: maximumUsageCapacity,
+            FreeCapacity: freeCapacity,
+            IsUnderUsagePressure: underUsage,
+            UsageRecoveryTargetBytes: usageRecoveryTarget,
             ArticleCeilingBytes: articleCeiling,
             CompactionCeilingBytes: compactionCeiling,
             AdmissionRecoveryTargetBytes: recoveryTarget,
@@ -147,6 +179,12 @@ public static class StorageMaintenanceSkipReasons
 
     /// <summary>Admission pressure exists but no Closed victim can make useful compaction progress.</summary>
     public const string CapacityPressureNoFeasibleCandidate = "capacity-pressure-no-feasible-candidate";
+
+    /// <summary>
+    /// Usage pressure is latched and logical eviction plus compaction could not reduce
+    /// filesystem UsedBytes to the physical recovery target.
+    /// </summary>
+    public const string CapacityPressureUnrecoverable = "capacity-pressure-unrecoverable";
 
     /// <summary>Open compaction continued but relocated zero articles due to capacity denial.</summary>
     public const string CapacityOpenCompactionZeroProgress = "capacity-open-compaction-zero-progress";

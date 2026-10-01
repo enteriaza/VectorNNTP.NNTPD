@@ -312,7 +312,7 @@ public sealed class IndexCheckpointMaintenanceTests
         var indexPhysical = engine.Index.IndexPhysicalBytes;
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             journalCheckpointThresholdBytes: 1,
             indexCheckpointThresholdBytes: 0);
 
@@ -345,7 +345,7 @@ public sealed class IndexCheckpointMaintenanceTests
         ILogger? logger = null) =>
         new(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             journalCheckpointThresholdBytes: 0,
             logger,
             indexThreshold);
@@ -371,7 +371,7 @@ public sealed class IndexCheckpointMaintenanceTests
 
     private static FileArticleStorageEngine OpenWithCapacity(TempStorageDir dir, MutableCapacityReader reader) =>
         FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = true },
+            dir.Options,
             volumeProbe: ScriptedVolumeProbe.Same(dir),
             capacityReader: reader);
 

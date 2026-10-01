@@ -216,24 +216,70 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         List<string> failures)
     {
         capacity ??= new ArticleCapacityOptions();
-        var util = capacity.MaximumUtilization;
-        if (double.IsNaN(util) || double.IsInfinity(util) || util is <= 0 or >= 1)
+        ValidatePercent(
+            capacity.MaximumUtilization,
+            "StorageServer:Storage:Capacity:MaximumUtilization",
+            failures);
+        ValidatePercent(
+            capacity.CompactionHeadroom,
+            "StorageServer:Storage:Capacity:CompactionHeadroom",
+            failures);
+        ValidatePercent(
+            capacity.MaximumUsageCapacity,
+            "StorageServer:Storage:Capacity:MaximumUsageCapacity",
+            failures);
+        ValidatePercent(
+            capacity.FreeCapacity,
+            "StorageServer:Storage:Capacity:FreeCapacity",
+            failures);
+
+        if (capacity.MaximumUtilization is < 1 or > 100)
         {
             failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUtilization must be a finite value in the open interval (0, 1).");
+                "StorageServer:Storage:Capacity:MaximumUtilization must be an integer from 1 to 100.");
         }
 
-        var headroom = capacity.CompactionHeadroom;
-        if (double.IsNaN(headroom) || double.IsInfinity(headroom) || headroom <= 0)
+        if (capacity.CompactionHeadroom < 1)
         {
             failures.Add(
-                "StorageServer:Storage:Capacity:CompactionHeadroom must be a finite value greater than 0.");
+                "StorageServer:Storage:Capacity:CompactionHeadroom must be an integer from 1 to 100.");
         }
-        else if (!(double.IsNaN(util) || double.IsInfinity(util) || util is <= 0 or >= 1)
-                 && util + headroom >= 1)
+        else if (capacity.MaximumUtilization is >= 1 and <= 100
+                 && capacity.MaximumUtilization + capacity.CompactionHeadroom > 100)
         {
             failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUtilization + CompactionHeadroom must be strictly less than 1.");
+                "StorageServer:Storage:Capacity:MaximumUtilization + CompactionHeadroom must be less than or equal to 100.");
+        }
+
+        if (capacity.MaximumUsageCapacity < 1)
+        {
+            failures.Add(
+                "StorageServer:Storage:Capacity:MaximumUsageCapacity must be an integer from 1 to 100.");
+        }
+        else if (capacity.MaximumUtilization is >= 1 and <= 100
+                 && capacity.MaximumUsageCapacity >= capacity.MaximumUtilization)
+        {
+            failures.Add(
+                "StorageServer:Storage:Capacity:MaximumUsageCapacity must be less than MaximumUtilization.");
+        }
+
+        if (capacity.FreeCapacity < 1)
+        {
+            failures.Add(
+                "StorageServer:Storage:Capacity:FreeCapacity must be an integer from 1 to 100.");
+        }
+        else if (capacity.FreeCapacity > capacity.MaximumUsageCapacity)
+        {
+            failures.Add(
+                "StorageServer:Storage:Capacity:FreeCapacity must be less than or equal to MaximumUsageCapacity.");
+        }
+    }
+
+    private static void ValidatePercent(int percent, string key, List<string> failures)
+    {
+        if (percent is < 0 or > 100)
+        {
+            failures.Add($"{key} must be an integer from 0 to 100.");
         }
     }
 
@@ -249,11 +295,10 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
                 "StorageServer:Storage:Compaction:MinimumDeadBytes must be greater than or equal to 0.");
         }
 
-        var ratio = compaction.MinimumDeadRatio;
-        if (double.IsNaN(ratio) || double.IsInfinity(ratio) || ratio is < 0 or > 1)
+        if (compaction.MinimumDeadRatio is < 0 or > 100)
         {
             failures.Add(
-                "StorageServer:Storage:Compaction:MinimumDeadRatio must be a finite value in the closed interval [0, 1].");
+                "StorageServer:Storage:Compaction:MinimumDeadRatio must be an integer from 0 to 100.");
         }
 
         var interval = compaction.Interval;

@@ -131,8 +131,7 @@ public sealed class ArticleStorageOptions
     /// <c>StorageServer:Storage:Compaction</c>.
     /// </summary>
     /// <remarks>
-    /// Policy only; does not schedule or execute compaction. Default
-    /// <see cref="ArticleCompactionPolicyOptions.Enabled"/> is <see langword="false"/>.
+    /// Ordinary Closed-segment eligibility thresholds. Compaction is always part of maintenance.
     /// </remarks>
     public ArticleCompactionPolicyOptions Compaction { get; set; } = new();
 
@@ -141,8 +140,8 @@ public sealed class ArticleStorageOptions
     /// <c>StorageServer:Storage:Capacity</c>.
     /// </summary>
     /// <remarks>
-    /// Default <see cref="ArticleCapacityOptions.Enabled"/> is <see langword="false"/>.
-    /// Reservations are process-local only (Phase 5E.1).
+    /// Capacity admission is always on. Percentages are integers from 0 to 100.
+    /// Reservations are process-local only.
     /// </remarks>
     public ArticleCapacityOptions Capacity { get; set; } = new();
 }

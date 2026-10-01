@@ -609,7 +609,7 @@ public sealed class IndexSequenceProvenanceTests
 
     private static FileArticleStorageEngine OpenCapacity(TempStorageDir dir, IArticleMemoryCache cache) =>
         FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = true },
+            dir.Options,
             articleCache: cache,
             capacityReader: new FixedCapacityReader());
 

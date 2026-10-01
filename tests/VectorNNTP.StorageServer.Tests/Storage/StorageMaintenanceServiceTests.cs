@@ -35,23 +35,29 @@ namespace VectorNNTP.StorageServer.Tests.Storage;
 public sealed class StorageMaintenanceServiceTests
 {
     [Fact]
-    public async Task A_P_Disabled_Worker_Does_Not_Invoke_Coordinator()
+    public async Task Maintenance_starts_without_an_enable_switch()
     {
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
-        var service = CreateService(
-            maintenanceEnabled: false,
-            runOnce: _ =>
+        var options = StorageServerTestOptions.CreateValid();
+        var service = new StorageMaintenanceService(
+            _ =>
             {
                 Interlocked.Increment(ref calls);
+                first.TrySetResult();
                 return Task.FromResult(NoWork());
-            });
+            },
+            Options.Create(options),
+            NullLogger<StorageMaintenanceService>.Instance,
+            delayAsync: (_, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct));
 
         await service.StartAsync(CancellationToken.None);
-        Assert.Null(service.Execution);
-        await Task.Delay(50);
-        Assert.Equal(0, calls);
+        await first.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.NotNull(service.Execution);
+        Assert.Equal(1, calls);
         await service.StopAsync(CancellationToken.None);
-        Assert.Equal(0, calls);
+        Assert.True(service.Execution is null);
     }
 
     [Fact]
@@ -63,7 +69,6 @@ public sealed class StorageMaintenanceServiceTests
         var runCalls = 0;
 
         var service = CreateService(
-            maintenanceEnabled: true,
             interval: TimeSpan.FromMinutes(1),
             runOnce: async ct =>
             {
@@ -125,7 +130,7 @@ public sealed class StorageMaintenanceServiceTests
                 runGate.TrySetResult();
                 return NoWork();
             },
-            Options.Create(CreateOptions(maintenanceEnabled: true, interval: TimeSpan.FromMilliseconds(1))),
+            Options.Create(CreateOptions(interval: TimeSpan.FromMilliseconds(1))),
             logger,
             delayAsync: async (_, ct) =>
             {
@@ -151,7 +156,6 @@ public sealed class StorageMaintenanceServiceTests
         await cts.CancelAsync();
         var calls = 0;
         var service = CreateService(
-            maintenanceEnabled: true,
             runOnce: _ =>
             {
                 Interlocked.Increment(ref calls);
@@ -168,7 +172,6 @@ public sealed class StorageMaintenanceServiceTests
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = CreateService(
-            maintenanceEnabled: true,
             runOnce: async ct =>
             {
                 entered.TrySetResult();
@@ -191,7 +194,6 @@ public sealed class StorageMaintenanceServiceTests
     {
         var delayEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = CreateService(
-            maintenanceEnabled: true,
             runOnce: _ => Task.FromResult(NoWork()),
             delayAsync: async (_, ct) =>
             {
@@ -217,7 +219,6 @@ public sealed class StorageMaintenanceServiceTests
         var delayCompletions = new ConcurrentQueue<TaskCompletionSource>();
 
         var service = CreateService(
-            maintenanceEnabled: true,
             interval: TimeSpan.FromMilliseconds(1),
             runOnce: async ct =>
             {
@@ -282,7 +283,7 @@ public sealed class StorageMaintenanceServiceTests
     {
         var calls = 0;
         var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var options = CreateOptions(maintenanceEnabled: true, enabled: false, interval: TimeSpan.FromMinutes(1));
+        var options = CreateOptions(interval: TimeSpan.FromMinutes(1));
         var service = new StorageMaintenanceService(
             _ =>
             {
@@ -304,7 +305,6 @@ public sealed class StorageMaintenanceServiceTests
     public async Task R_Shutdown_Stops_Cleanly()
     {
         var service = CreateService(
-            maintenanceEnabled: true,
             runOnce: _ => Task.FromResult(NoWork()),
             delayAsync: (_, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct));
 
@@ -368,7 +368,7 @@ public sealed class StorageMaintenanceServiceTests
 
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
         var firstOutcome = new TaskCompletionSource<StorageMaintenanceOutcome>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -379,7 +379,7 @@ public sealed class StorageMaintenanceServiceTests
                 firstOutcome.TrySetResult(result.Outcome);
                 return result;
             },
-            Options.Create(CreateOptions(maintenanceEnabled: true, enabled: false, interval: TimeSpan.FromMinutes(1))),
+            Options.Create(CreateOptions(interval: TimeSpan.FromMinutes(1))),
             NullLogger<StorageMaintenanceService>.Instance,
             delayAsync: (_, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct));
 
@@ -400,7 +400,7 @@ public sealed class StorageMaintenanceServiceTests
 
         var service = new StorageMaintenanceService(
             _ => Task.FromResult(Result(StorageMaintenanceOutcome.CompactedAndReclaimed)),
-            Options.Create(CreateOptions(maintenanceEnabled: true, interval: TimeSpan.FromMilliseconds(5))),
+            Options.Create(CreateOptions(interval: TimeSpan.FromMilliseconds(5))),
             logger,
             delayAsync: (_, ct) => Task.Delay(Timeout.InfiniteTimeSpan, ct));
 
@@ -454,7 +454,6 @@ public sealed class StorageMaintenanceServiceTests
         var interval = TimeSpan.FromSeconds(42);
 
         var service = CreateService(
-            maintenanceEnabled: true,
             interval: interval,
             runOnce: async ct =>
             {
@@ -487,24 +486,18 @@ public sealed class StorageMaintenanceServiceTests
     }
 
     private static StorageMaintenanceService CreateService(
-        bool maintenanceEnabled,
         TimeSpan? interval = null,
         Func<CancellationToken, Task<StorageMaintenanceResult>>? runOnce = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
         new(
             runOnce ?? (_ => Task.FromResult(NoWork())),
-            Options.Create(CreateOptions(maintenanceEnabled, enabled: false, interval ?? TimeSpan.FromMinutes(1))),
+            Options.Create(CreateOptions(interval ?? TimeSpan.FromMinutes(1))),
             NullLogger<StorageMaintenanceService>.Instance,
             delayAsync);
 
-    private static StorageServerOptions CreateOptions(
-        bool maintenanceEnabled,
-        bool enabled = false,
-        TimeSpan? interval = null)
+    private static StorageServerOptions CreateOptions(TimeSpan? interval = null)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.Compaction.Enabled = enabled;
-        options.Storage.Compaction.MaintenanceEnabled = maintenanceEnabled;
         options.Storage.Compaction.Interval = interval ?? ArticleCompactionPolicyOptions.DefaultInterval;
         return options;
     }

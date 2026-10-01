@@ -31,8 +31,8 @@ internal static partial class FileArticleStorageEngineLogMessages
         long CheckpointReservedBytes,
         long TotalBytes,
         long AvailableBytes,
-        double MaximumUtilization,
-        double CompactionHeadroom);
+        int MaximumUtilization,
+        int CompactionHeadroom);
 
     [LoggerMessage(
         EventId = 3416,
@@ -51,8 +51,8 @@ internal static partial class FileArticleStorageEngineLogMessages
         long CheckpointReservedBytes,
         long TotalBytes,
         long AvailableBytes,
-        double MaximumUtilization,
-        double CompactionHeadroom);
+        int MaximumUtilization,
+        int CompactionHeadroom);
 
     [LoggerMessage(
         EventId = 3425,
@@ -82,7 +82,7 @@ internal static partial class FileArticleStorageEngineLogMessages
         long CheckpointReservedBytes,
         long TotalBytes,
         long AvailableBytes,
-        double MaximumUtilization);
+        int MaximumUtilization);
 
     [LoggerMessage(
         EventId = 3402,

@@ -1,5 +1,6 @@
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Storage.Engine.Memory;
 using VectorNNTP.StorageServer.Storage.Engine.Policy;
 
@@ -60,7 +61,7 @@ public sealed class ArticleSegmentPolicyTests
     [Fact]
     public void E_ClosedBelowMinimumDeadRatio_Rejected()
     {
-        var policy = EnabledPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0.50);
+        var policy = EnabledPolicy(minimumDeadBytes: 0, minimumDeadRatio: 50);
         var segment = Seg(4, SegmentState.Closed, size: 10_000, live: 8_000, dead: 2_000);
         var eligibility = policy.EvaluateCompaction(segment);
         Assert.False(eligibility.IsEligible);
@@ -71,7 +72,7 @@ public sealed class ArticleSegmentPolicyTests
     [Fact]
     public void F_ClosedMeetingBothThresholds_Selected()
     {
-        var policy = EnabledPolicy(minimumDeadBytes: 1_000, minimumDeadRatio: 0.10);
+        var policy = EnabledPolicy(minimumDeadBytes: 1_000, minimumDeadRatio: 10);
         var segment = Seg(5, SegmentState.Closed, size: 10_000, live: 5_000, dead: 5_000);
         Assert.True(policy.TrySelectCompactionVictim([segment], out var victim));
         Assert.Equal(5UL, victim.SegmentId.Value);
@@ -115,7 +116,7 @@ public sealed class ArticleSegmentPolicyTests
     [Fact]
     public void K_CompletelyDeadClosed_SelectedViaNormalLifecycle()
     {
-        var policy = EnabledPolicy(minimumDeadBytes: 1, minimumDeadRatio: 0.01);
+        var policy = EnabledPolicy(minimumDeadBytes: 1, minimumDeadRatio: 1);
         var segment = Seg(7, SegmentState.Closed, size: 1000, live: 0, dead: 1000);
         Assert.True(policy.TrySelectCompactionVictim([segment], out var victim));
         Assert.Equal(7UL, victim.SegmentId.Value);
@@ -163,23 +164,32 @@ public sealed class ArticleSegmentPolicyTests
     [Fact]
     public void O_MinimumDeadRatio_BoundaryInclusive()
     {
-        var policy = EnabledPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0.10);
+        var policy = EnabledPolicy(minimumDeadBytes: 0, minimumDeadRatio: 10);
         var below = Seg(1, SegmentState.Closed, size: 1000, live: 901, dead: 99);
         var exact = Seg(2, SegmentState.Closed, size: 1000, live: 900, dead: 100);
         Assert.False(policy.EvaluateCompaction(below).IsEligible);
         Assert.Equal(CompactionEligibilityReason.InsufficientDeadRatio, policy.EvaluateCompaction(below).Reason);
         Assert.True(policy.EvaluateCompaction(exact).IsEligible);
-        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(100, 1000, 0.10));
-        Assert.False(ArticleSegmentPolicy.MeetsDeadRatio(99, 1000, 0.10));
+        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(100, 1000, 10));
+        Assert.False(ArticleSegmentPolicy.MeetsDeadRatio(99, 1000, 10));
     }
 
     [Fact]
-    public void P_DisabledPolicy_NoVictim_EvenWhenEligibleAccounting()
+    public void Percent_boundaries_are_exact()
     {
-        var policy = new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0);
-        var segment = Seg(1, SegmentState.Closed, size: 1000, live: 0, dead: 1000);
-        Assert.Equal(CompactionEligibilityReason.PolicyDisabled, policy.EvaluateCompaction(segment).Reason);
-        Assert.False(policy.TrySelectCompactionVictim([segment], out _));
+        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(10, 100, 10));
+        Assert.False(ArticleSegmentPolicy.MeetsDeadRatio(9, 100, 10));
+        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(0, 100, 0));
+        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(100, 100, 100));
+        Assert.False(ArticleSegmentPolicy.MeetsDeadRatio(99, 100, 100));
+        Assert.True(ArticleSegmentPolicy.MeetsDeadRatio(long.MaxValue, long.MaxValue, 100));
+        Assert.False(ArticleSegmentPolicy.MeetsDeadRatio(long.MaxValue - 1, long.MaxValue, 100));
+
+        var ten = new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 10);
+        var exact = Seg(1, SegmentState.Closed, size: 1_000, live: 900, dead: 100);
+        var below = Seg(2, SegmentState.Closed, size: 1_000, live: 901, dead: 99);
+        Assert.True(ten.EvaluateCompaction(exact).IsEligible);
+        Assert.Equal(CompactionEligibilityReason.InsufficientDeadRatio, ten.EvaluateCompaction(below).Reason);
     }
 
     [Fact]
@@ -257,7 +267,7 @@ public sealed class ArticleSegmentPolicyTests
     [Fact]
     public void V_W_SnapshotConsistency_RepeatedSelectionIdentical()
     {
-        var policy = EnabledPolicy(minimumDeadBytes: 100, minimumDeadRatio: 0.05);
+        var policy = EnabledPolicy(minimumDeadBytes: 100, minimumDeadRatio: 5);
         var snapshot = new[]
         {
             Seg(1, SegmentState.Active, size: 1000, live: 500, dead: 500),
@@ -295,36 +305,42 @@ public sealed class ArticleSegmentPolicyTests
     public void Y_ConstructorRejectsInvalidThresholds()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ArticleSegmentPolicy(true, minimumDeadBytes: -1, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: -1, minimumDeadRatio: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ArticleSegmentPolicy(true, minimumDeadBytes: 0, minimumDeadRatio: -0.01));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: -1));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ArticleSegmentPolicy(true, minimumDeadBytes: 0, minimumDeadRatio: 1.01));
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ArticleSegmentPolicy(true, minimumDeadBytes: 0, minimumDeadRatio: double.NaN));
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new ArticleSegmentPolicy(true, minimumDeadBytes: 0, minimumDeadRatio: double.PositiveInfinity));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 101));
     }
 
     [Fact]
     public void OptionsCtor_UsesBindableValues()
     {
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
         var options = new ArticleCompactionPolicyOptions
         {
-            Enabled = true,
             MinimumDeadBytes = 42,
-            MinimumDeadRatio = 0.25,
+            MinimumDeadRatio = 25,
         };
         var policy = new ArticleSegmentPolicy(options);
-        Assert.True(policy.Enabled);
         Assert.Equal(42, policy.MinimumDeadBytes);
-        Assert.Equal(0.25, policy.MinimumDeadRatio);
+        Assert.Equal(25, policy.MinimumDeadRatio);
+    }
+
+    [Fact]
+    public void Usage_pressure_selects_when_ordinary_ratio_blocks()
+    {
+        var policy = new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue / 4, minimumDeadRatio: 100);
+        var segment = Seg(1, SegmentState.Closed, size: 1_000, live: 990, dead: 10);
+        Assert.False(policy.TrySelectCompactionVictim([segment], out _));
+        var pressure = CapacityAdmissionPressureSnapshot.Disabled;
+        Assert.True(policy.TrySelectUsagePressureCompactionVictim([segment], in pressure, out var victim));
+        Assert.Equal(1UL, victim.SegmentId.Value);
     }
 
     private static ArticleSegmentPolicy EnabledPolicy(
         long minimumDeadBytes = ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
-        double minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
-        new(enabled: true, minimumDeadBytes, minimumDeadRatio);
+        int minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
+        new(minimumDeadBytes, minimumDeadRatio);
 
     private static SegmentInfo Seg(
         ulong id,

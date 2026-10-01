@@ -401,7 +401,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         Assert.Equal(goodInfo.SizeBytes, goodInfo.LiveBytes + goodInfo.DeadBytes);
         Assert.False(engine.IsUnreferencedExtentAccountingComplete);
 
-        var policy = new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0);
+        var policy = new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0);
         Assert.Equal(CompactionEligibilityReason.AccountingIncomplete, policy.EvaluateCompaction(badInfo).Reason);
         Assert.True(policy.EvaluateCompaction(goodInfo).IsEligible);
         Assert.True(policy.TrySelectCompactionVictim([badInfo, goodInfo], out var victim));
@@ -419,7 +419,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         Assert.True(engine.Segments.TryGetSegmentInfo(location.SegmentId, out var unaccounted));
         Assert.True(unaccounted.DeadBytes > 0);
 
-        var permissive = new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0);
+        var permissive = new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0);
         Assert.Equal(
             CompactionEligibilityReason.AccountingIncomplete,
             permissive.EvaluateCompaction(unaccounted).Reason);
@@ -430,7 +430,6 @@ public sealed class ClosedSegmentExtentAccountingTests
         Assert.True(permissive.EvaluateCompaction(accounted).IsEligible);
 
         var strict = new ArticleSegmentPolicy(
-            enabled: true,
             ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
             ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio);
         Assert.Equal(

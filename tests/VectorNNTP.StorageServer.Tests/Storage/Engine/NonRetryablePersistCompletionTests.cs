@@ -133,7 +133,9 @@ public sealed class NonRetryablePersistCompletionTests
         await engineB.RecoverAsync(CancellationToken.None);
 
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
-        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engineB.ProcessLocalArticleReservedBytes);
         Assert.True(engineB.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.Equal(ArticleStorageState.Present, read.Metadata.State);
@@ -156,7 +158,6 @@ public sealed class NonRetryablePersistCompletionTests
     private static ArticleStorageRuntimeOptions WithCapacity(ArticleStorageRuntimeOptions options) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
         };
 

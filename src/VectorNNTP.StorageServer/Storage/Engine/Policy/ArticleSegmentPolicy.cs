@@ -10,9 +10,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Compaction eligibility (when enabled):
-/// <c>State == Closed</c> AND <c>SizeBytes &gt; 0</c> AND
-/// <c>DeadBytes &gt;= MinimumDeadBytes</c> AND dead-ratio ≥ <c>MinimumDeadRatio</c>.
+/// Ordinary compaction eligibility:
+/// <c>State == Closed</c> AND <c>SizeBytes &gt; 0</c> AND extent accounting is complete AND
+/// <c>DeadBytes &gt;= MinimumDeadBytes</c> AND
+/// <c>DeadBytes * 100 &gt;= SizeBytes * MinimumDeadRatio</c>.
+/// <c>MinimumDeadRatio</c> is an integer percent from 0 to 100.
 /// </para>
 /// <para>
 /// Normal compaction victim ordering among eligible segments:
@@ -33,39 +35,38 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// </remarks>
 public sealed class ArticleSegmentPolicy
 {
-    private readonly bool _enabled;
     private readonly long _minimumDeadBytes;
-    private readonly double _minimumDeadRatio;
+    private readonly int _minimumDeadRatio;
 
     /// <summary>Creates a policy from bindable compaction options.</summary>
     /// <param name="options">Compaction thresholds; must not be null.</param>
     public ArticleSegmentPolicy(ArticleCompactionPolicyOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _enabled = options.Enabled;
+        if (options.MinimumDeadBytes < 0 || options.MinimumDeadRatio is < 0 or > 100)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options));
+        }
+
         _minimumDeadBytes = options.MinimumDeadBytes;
         _minimumDeadRatio = options.MinimumDeadRatio;
     }
 
     /// <summary>Creates a policy from explicit thresholds.</summary>
-    /// <param name="enabled">Whether compaction selection is enabled.</param>
     /// <param name="minimumDeadBytes">Minimum absolute dead bytes (≥ 0).</param>
-    /// <param name="minimumDeadRatio">Minimum dead ratio in <c>[0, 1]</c>.</param>
-    public ArticleSegmentPolicy(bool enabled, long minimumDeadBytes, double minimumDeadRatio)
+    /// <param name="minimumDeadRatio">Minimum dead percentage in <c>0..100</c>.</param>
+    public ArticleSegmentPolicy(long minimumDeadBytes, int minimumDeadRatio)
     {
         if (minimumDeadBytes < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(minimumDeadBytes));
         }
 
-        if (double.IsNaN(minimumDeadRatio)
-            || double.IsInfinity(minimumDeadRatio)
-            || minimumDeadRatio is < 0 or > 1)
+        if (minimumDeadRatio is < 0 or > 100)
         {
             throw new ArgumentOutOfRangeException(nameof(minimumDeadRatio));
         }
 
-        _enabled = enabled;
         _minimumDeadBytes = minimumDeadBytes;
         _minimumDeadRatio = minimumDeadRatio;
     }
@@ -73,11 +74,8 @@ public sealed class ArticleSegmentPolicy
     /// <summary>Configured minimum absolute dead bytes.</summary>
     public long MinimumDeadBytes => _minimumDeadBytes;
 
-    /// <summary>Configured minimum dead ratio.</summary>
-    public double MinimumDeadRatio => _minimumDeadRatio;
-
-    /// <summary>Whether compaction victim selection is enabled.</summary>
-    public bool Enabled => _enabled;
+    /// <summary>Configured minimum dead percentage, from 0 to 100.</summary>
+    public int MinimumDeadRatio => _minimumDeadRatio;
 
     /// <summary>
     /// Evaluates compaction eligibility for one segment without selecting among peers.
@@ -85,21 +83,6 @@ public sealed class ArticleSegmentPolicy
     public CompactionEligibility EvaluateCompaction(in SegmentInfo segment)
     {
         var deadRatio = ComputeDeadRatio(segment.SizeBytes, segment.DeadBytes);
-
-        if (!_enabled)
-        {
-            return new CompactionEligibility(
-                false,
-                CompactionEligibilityReason.PolicyDisabled,
-                segment.SegmentId,
-                segment.State,
-                segment.SizeBytes,
-                segment.LiveBytes,
-                segment.DeadBytes,
-                deadRatio,
-                _minimumDeadBytes,
-                _minimumDeadRatio);
-        }
 
         if (segment.State != SegmentState.Closed)
         {
@@ -313,6 +296,48 @@ public sealed class ArticleSegmentPolicy
     }
 
     /// <summary>
+    /// Selects a Closed segment whose dead bytes can be physically reclaimed under usage pressure.
+    /// Ignores ordinary <c>MinimumDeadBytes</c> and <c>MinimumDeadRatio</c> eligibility. Still requires
+    /// the segment's live bytes to fit under MaximumUtilization + CompactionHeadroom.
+    /// </summary>
+    public bool TrySelectUsagePressureCompactionVictim(
+        IReadOnlyList<SegmentInfo> snapshot,
+        in CapacityAdmissionPressureSnapshot pressure,
+        out SegmentInfo victim)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        SegmentInfo? best = null;
+        foreach (var entry in snapshot)
+        {
+            if (entry.State != SegmentState.Closed || entry.SizeBytes <= 0)
+            {
+                continue;
+            }
+
+            if (entry.DeadBytes <= 0 && entry.LiveBytes > 0)
+            {
+                continue;
+            }
+
+            if (!IsCompactionFeasibleUnderHeadroom(in entry, in pressure))
+            {
+                continue;
+            }
+
+            if (best is null
+                || entry.DeadBytes > best.Value.DeadBytes
+                || (entry.DeadBytes == best.Value.DeadBytes
+                    && entry.SegmentId.Value < best.Value.SegmentId.Value))
+            {
+                best = entry;
+            }
+        }
+
+        victim = best ?? default;
+        return best is not null;
+    }
+
+    /// <summary>
     /// Catalogue-only preflight: whether this Closed segment's complete
     /// <see cref="SegmentInfo.LiveBytes"/> fits under MaxUtil + CompactionHeadroom
     /// (Phase 5F.2 / 5F.9), including <see cref="CapacityAdmissionPressureSnapshot.CheckpointReservedBytes"/>.
@@ -408,23 +433,36 @@ public sealed class ArticleSegmentPolicy
     }
 
     /// <summary>
-    /// Ratio-safe comparison: <c>deadBytes / sizeBytes &gt;= minimumDeadRatio</c> without
-    /// floating division of the candidate (uses <see cref="decimal"/> cross-product).
+    /// Percent comparison: <c>deadBytes * 100 &gt;= sizeBytes * minimumDeadPercent</c>.
+    /// <paramref name="minimumDeadPercent"/> is an integer from 0 to 100.
+    /// Uses checked <see cref="long"/> multiplication and falls back to <see cref="decimal"/>
+    /// when that product overflows.
     /// </summary>
-    public static bool MeetsDeadRatio(long deadBytes, long sizeBytes, double minimumDeadRatio)
+    public static bool MeetsDeadRatio(long deadBytes, long sizeBytes, int minimumDeadPercent)
     {
         if (sizeBytes <= 0)
         {
             return false;
         }
 
-        if (minimumDeadRatio <= 0d)
+        if (minimumDeadPercent <= 0)
         {
             return true;
         }
 
-        // dead/size >= r  <=>  dead >= r * size
-        return (decimal)deadBytes >= (decimal)minimumDeadRatio * sizeBytes;
+        if (deadBytes < 0 || minimumDeadPercent > 100)
+        {
+            return false;
+        }
+
+        try
+        {
+            return checked(deadBytes * 100) >= checked(sizeBytes * minimumDeadPercent);
+        }
+        catch (OverflowException)
+        {
+            return (decimal)deadBytes * 100 >= (decimal)sizeBytes * minimumDeadPercent;
+        }
     }
 
     /// <summary>

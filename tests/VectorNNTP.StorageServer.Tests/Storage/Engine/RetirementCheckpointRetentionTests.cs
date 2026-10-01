@@ -115,7 +115,7 @@ public sealed class RetirementCheckpointRetentionTests
 
         var coordinator = new StorageMaintenanceCoordinator(
             restarted,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             journalCheckpointThresholdBytes: 1);
         var cycle = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.NotEqual(StorageMaintenanceOutcome.Reclaimed, cycle.Outcome);
@@ -145,7 +145,7 @@ public sealed class RetirementCheckpointRetentionTests
 
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             journalCheckpointThresholdBytes: 1);
         var cycle = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.Equal(StorageMaintenanceOutcome.Reclaimed, cycle.Outcome);
@@ -168,7 +168,7 @@ public sealed class RetirementCheckpointRetentionTests
         Assert.False(engine.Segments.TryReclaimRetired(sourceId, out _));
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             journalCheckpointThresholdBytes: 1);
         var cycle = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.NotEqual(StorageMaintenanceOutcome.Reclaimed, cycle.Outcome);
@@ -203,7 +203,7 @@ public sealed class RetirementCheckpointRetentionTests
 
     private static FileArticleStorageEngine Open(TempStorageDir dir) =>
         FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = true },
+            dir.Options,
             capacityReader: new MutableCapacityReader(total: 10_000_000, used: 0));
 
     private static async Task<SegmentId> AcceptCloseCompactAsync(

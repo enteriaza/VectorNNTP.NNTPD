@@ -22,11 +22,14 @@ namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 public sealed class ProcessLocalCapacityAdmissionTests
 {
     [Fact]
-    public void A_Capacity_defaults_disabled()
+    public void A_Capacity_defaults_are_integer_percents_and_cannot_be_disabled()
     {
         var capacity = new ArticleCapacityOptions();
-        Assert.False(capacity.Enabled);
-        Assert.Equal(ArticleCapacityOptions.DefaultMaximumUtilization, capacity.MaximumUtilization);
+        Assert.Null(typeof(ArticleCapacityOptions).GetProperty("Enabled"));
+        Assert.Equal(90, capacity.MaximumUtilization);
+        Assert.Equal(10, capacity.CompactionHeadroom);
+        Assert.Equal(80, capacity.MaximumUsageCapacity);
+        Assert.Equal(5, capacity.FreeCapacity);
     }
 
     [Fact]
@@ -35,9 +38,10 @@ public sealed class ProcessLocalCapacityAdmissionTests
         var options = StorageServerTestOptionsCreateValid();
         options.Storage.Capacity.MaximumUtilization = 0;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.MaximumUtilization = 1;
+        options.Storage.Capacity.MaximumUtilization = 101;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.MaximumUtilization = 0.80;
+        options.Storage.Capacity.MaximumUtilization = 80;
+        options.Storage.Capacity.MaximumUsageCapacity = 70;
         Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
     }
 
@@ -47,10 +51,10 @@ public sealed class ProcessLocalCapacityAdmissionTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 1_000_000, used: 999_000);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: capacity);
         var result = await engine.AcceptAsync(CreateRecord("<cap-off@seg.test>"), CancellationToken.None);
-        Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome);
+        Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, result.Outcome);
         Assert.Equal(0, engine.ProcessLocalReservedBytes);
     }
 
@@ -62,8 +66,8 @@ public sealed class ProcessLocalCapacityAdmissionTests
         var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var occupied = required + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize) + ArticleIndexRecordCodec.RecordLength;
         var total = 10_000L;
-        var maxUtil = 0.80;
-        var maxAllowed = (long)(total * maxUtil);
+        var maxUtil = 80;
+        var maxAllowed = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, maxUtil);
 
         var capacity = new MutableCapacityReader(total, used: maxAllowed - occupied);
         await using var engine = FileArticleStorageEngine.Open(
@@ -93,7 +97,7 @@ public sealed class ProcessLocalCapacityAdmissionTests
         var total = 1_000L;
         var capacity = new MutableCapacityReader(total, used: total - record.ArtSize - 1);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.99),
+            WithCapacity(dir.Options, maximumUtilization: 99),
             capacityReader: capacity);
         var result = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, result.Outcome);
@@ -296,12 +300,12 @@ public sealed class ProcessLocalCapacityAdmissionTests
         var pair = SegmentRecordCodec.RecordLengthForArtSize(sample.ArtSize)
             + ArticleJournalFrameCodec.SequenceReservationBytes(sample.ArtSize)
             + ArticleIndexRecordCodec.RecordLength;
-        // With MaximumUtilization=0.30 and Total=10*pair, at most 3 articles fit.
+        // With MaximumUtilization=30 and Total=10*pair, at most 3 articles fit.
         // Suspend persist so PhysicalWritten cannot release reservations mid-admission race.
         var total = pair * 10L;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.30),
+            WithCapacity(dir.Options, maximumUtilization: 30),
             capacityReader: capacity);
         engine.SuspendBackgroundPersist = true;
 
@@ -468,10 +472,9 @@ public sealed class ProcessLocalCapacityAdmissionTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
         };
 

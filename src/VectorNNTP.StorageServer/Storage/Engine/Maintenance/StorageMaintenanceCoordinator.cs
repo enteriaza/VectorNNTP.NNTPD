@@ -61,6 +61,7 @@ public sealed class StorageMaintenanceCoordinator
     private readonly long _journalCheckpointThresholdBytes;
     private readonly long _indexCheckpointThresholdBytes;
     private readonly ILogger _logger;
+    private readonly SemaphoreSlim _usagePressureGate = new(1, 1);
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
     /// <param name="engine">Durable article storage engine.</param>
@@ -88,6 +89,8 @@ public sealed class StorageMaintenanceCoordinator
         _journalCheckpointThresholdBytes = journalCheckpointThresholdBytes;
         _indexCheckpointThresholdBytes = indexCheckpointThresholdBytes;
         _logger = logger ?? NullLogger.Instance;
+        _engine.UsagePressureRecovery = cancellationToken =>
+            RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId: 0);
     }
 
     /// <summary>Policy used by this coordinator (read-only).</summary>
@@ -135,6 +138,11 @@ public sealed class StorageMaintenanceCoordinator
         _engine.CompleteUnreferencedExtentAccounting();
 
         var pressure = _engine.ObserveCapacityAdmissionPressure();
+        if (pressure.IsUnderUsagePressure && pressure.UsedBytes > pressure.UsageRecoveryTargetBytes)
+        {
+            return await RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId)
+                .ConfigureAwait(false);
+        }
 
         // 1) Physical reclaim of existing Retired garbage (no new compaction).
         if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retiredVictim))
@@ -1120,6 +1128,126 @@ public sealed class StorageMaintenanceCoordinator
         StorageMaintenanceResult result,
         in CapacityAdmissionPressureSnapshot pressure) =>
         result.WithCapacityPressure(in pressure);
+
+    /// <summary>
+    /// Evicts least-frequently-used articles and compacts/reclaims until filesystem usage is at
+    /// or below the physical recovery target, or until a pass makes no physical progress.
+    /// Logical eviction alone does not finish the pass.
+    /// </summary>
+    internal async Task<StorageMaintenanceResult> RunUsagePressureRecoveryAsync(
+        CancellationToken cancellationToken,
+        ulong maintenanceRunId = 0)
+    {
+        _ = maintenanceRunId;
+        await _usagePressureGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await RunUsagePressureRecoveryCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _usagePressureGate.Release();
+        }
+    }
+
+    private async Task<StorageMaintenanceResult> RunUsagePressureRecoveryCoreAsync(
+        CancellationToken cancellationToken)
+    {
+        StorageMaintenanceResult last = NoWork();
+        for (var step = 0; step < 64; step++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pressure = _engine.ObserveCapacityAdmissionPressure();
+            if (!pressure.IsUnderUsagePressure || pressure.UsedBytes <= pressure.UsageRecoveryTargetBytes)
+            {
+                return AttachPressure(last, pressure);
+            }
+
+            if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retiredVictim))
+            {
+                TestHookAfterReclamationVictimSelected?.Invoke(retiredVictim.SegmentId);
+                var reclaimed = await TryReclaimRetiredAsync(retiredVictim, cancellationToken)
+                    .ConfigureAwait(false);
+                var afterReclaim = _engine.ObserveCapacityAdmissionPressure();
+                last = AttachPressure(reclaimed, afterReclaim);
+                if (afterReclaim.UsedBytes < pressure.UsedBytes)
+                {
+                    continue;
+                }
+
+                if (reclaimed.Reclaimed)
+                {
+                    return last;
+                }
+            }
+
+            await _engine.Segments.CloseActiveAsync(cancellationToken).ConfigureAwait(false);
+            _engine.CompleteUnreferencedExtentAccounting();
+            pressure = _engine.ObserveCapacityAdmissionPressure();
+            var closed = CatalogueSnapshotExcludingOpenUncommittedSources();
+            if (!_policy.TrySelectUsagePressureCompactionVictim(closed, in pressure, out var victim))
+            {
+                var deficit = pressure.UsedBytes - pressure.UsageRecoveryTargetBytes;
+                var evicted = _engine.EvictLeastFrequentlyUsed(deficit);
+                if (evicted == 0)
+                {
+                    evicted = _engine.EvictLeastFrequentlyUsed(long.MaxValue);
+                }
+
+                if (evicted == 0)
+                {
+                    return AttachPressure(
+                        Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable),
+                        pressure);
+                }
+
+                await _engine.Segments.CloseActiveAsync(cancellationToken).ConfigureAwait(false);
+                _engine.CompleteUnreferencedExtentAccounting();
+                pressure = _engine.ObserveCapacityAdmissionPressure();
+                closed = CatalogueSnapshotExcludingOpenUncommittedSources();
+                if (!_policy.TrySelectUsagePressureCompactionVictim(closed, in pressure, out victim))
+                {
+                    return AttachPressure(
+                        Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom),
+                        pressure);
+                }
+            }
+
+            TestHookAfterCompactionVictimSelected?.Invoke(victim.SegmentId);
+            last = await CompactThenFinishAsync(
+                    victim.SegmentId,
+                    requirePolicyEligibility: false,
+                    sourceAccountingHint: victim,
+                    continuingOpenCompaction: false,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var afterCompact = _engine.ObserveCapacityAdmissionPressure();
+            if (afterCompact.UsedBytes < pressure.UsedBytes)
+            {
+                continue;
+            }
+
+            if (last.Reclaimed || last.CompactionCommitted || last.Retired)
+            {
+                return AttachPressure(last, afterCompact);
+            }
+
+            if (!last.Reclaimed)
+            {
+                var reason = last.SkipReason
+                    ?? StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable;
+                return AttachPressure(
+                    last.Outcome == StorageMaintenanceOutcome.Skipped
+                        ? last
+                        : Skipped(victim.SegmentId, last.CompactionId, reason),
+                    afterCompact);
+            }
+        }
+
+        return AttachPressure(
+            Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable),
+            _engine.ObserveCapacityAdmissionPressure());
+    }
 
     private static StorageMaintenanceResult NoWork() =>
         new(

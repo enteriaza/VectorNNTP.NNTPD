@@ -220,7 +220,9 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         engineB.SuspendBackgroundPersist = true;
         await engineB.RecoverAsync(CancellationToken.None);
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
-        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engineB.ProcessLocalArticleReservedBytes);
         Assert.True(engineB.TryRead(record.ArtId, out _));
     }
 
@@ -307,7 +309,6 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
     private static ArticleStorageRuntimeOptions WithCapacity(ArticleStorageRuntimeOptions options) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
         };
 

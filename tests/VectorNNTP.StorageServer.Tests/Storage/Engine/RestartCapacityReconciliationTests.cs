@@ -135,7 +135,7 @@ public sealed class RestartCapacityReconciliationTests
         Assert.Equal(ArticleAcceptOutcome.Accepted, admitted.Outcome);
     }
 
-    private const double Utilization = ArticleCapacityOptions.DefaultMaximumUtilization;
+    private const int Utilization = 80;
 
     private static bool Fits(long usedBytes, long totalBytes, long requiredBytes) =>
         ProcessLocalCapacityLedger.WouldFit(
@@ -167,7 +167,7 @@ public sealed class RestartCapacityReconciliationTests
         if (ceiling >= exclusiveMaximum)
         {
             throw new InvalidOperationException(
-                $"Cannot place a {Utilization:R} ceiling in [{minimumInclusive}, {exclusiveMaximum}).");
+                $"Cannot place a {Utilization} ceiling in [{minimumInclusive}, {exclusiveMaximum}).");
         }
 
         return ceiling;
@@ -186,7 +186,6 @@ public sealed class RestartCapacityReconciliationTests
     private static ArticleStorageRuntimeOptions WithCapacity(ArticleStorageRuntimeOptions options) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = Utilization,
             CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
         };

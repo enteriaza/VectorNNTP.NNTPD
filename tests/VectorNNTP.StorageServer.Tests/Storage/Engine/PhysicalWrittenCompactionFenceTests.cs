@@ -288,7 +288,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
         var compactionId = await ForceCommittedAsync(engine, meta.Location.SegmentId);
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
 
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
@@ -311,7 +311,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
         var compactionId = await ForceCommittedAsync(engine, sourceId);
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
 
         var blocked = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.Equal(StorageMaintenanceOutcome.Skipped, blocked.Outcome);
@@ -351,7 +351,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
 
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
-            new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+            new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
@@ -497,7 +497,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, 0.80, 0.10),
+            WithCapacity(dir.Options, 80, 10),
             capacityReader: capacity);
         var record = CreateRecord("<pw-r@seg.test>");
         Assert.Equal(
@@ -528,7 +528,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, 0.80, 0.10),
+            WithCapacity(dir.Options, 80, 10),
             capacityReader: capacity);
         var record = CreateRecord("<pw-s@seg.test>");
         Assert.Equal(
@@ -610,11 +610,10 @@ public sealed class PhysicalWrittenCompactionFenceTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization,
-        double compactionHeadroom) =>
+        int maximumUtilization,
+        int compactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
         };

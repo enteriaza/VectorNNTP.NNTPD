@@ -205,9 +205,6 @@ public sealed class JournalCheckpointMaintenanceTests
         using var logs = CreateLoggerFactory(sink);
         var coordinator = CreateCoordinator(engine, thresholdBytes: 1, logs.CreateLogger<StorageMaintenanceCoordinator>());
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.Compaction.MaintenanceEnabled = true;
-        options.Storage.Compaction.Enabled = false;
-        options.Storage.Capacity.Enabled = false;
         var service = new StorageMaintenanceService(
             ct => coordinator.RunOnceAsync(ct, maintenanceRunId: 1),
             Options.Create(options),
@@ -296,7 +293,7 @@ public sealed class JournalCheckpointMaintenanceTests
         ILogger? logger = null) =>
         new(
             engine,
-            new ArticleSegmentPolicy(enabled: false, minimumDeadBytes: 0, minimumDeadRatio: 0),
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue, minimumDeadRatio: 100),
             thresholdBytes,
             logger);
 
@@ -316,7 +313,7 @@ public sealed class JournalCheckpointMaintenanceTests
     {
         var reader = new MutableCapacityReader(total: 10_000_000, used: 0);
         return FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = true },
+            dir.Options,
             volumeProbe: ScriptedVolumeProbe.Same(dir),
             capacityReader: reader);
     }

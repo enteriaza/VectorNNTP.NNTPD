@@ -245,18 +245,15 @@ public sealed class CapacityVolumeResolutionTests
     }
 
     [Fact]
-    public void CapacityDisabled_DoesNotResolveVolumes()
+    public void Capacity_always_resolves_volumes()
     {
         using var dir = TempStorageDir.Create();
         var probe = ScriptedVolumeProbe.SameVolume(dir);
-        probe.ThrowOnResolve = true;
         using var engine = FileArticleStorageEngine.Open(dir.Options, volumeProbe: probe);
 
-        Assert.Equal(0, probe.Calls);
-        Assert.Null(engine.SegmentCapacity);
-        Assert.Null(engine.ControlCapacity);
-        Assert.Equal(0, engine.ProcessLocalReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.True(probe.Calls >= 1);
+        Assert.NotNull(engine.SegmentCapacity);
+        Assert.NotNull(engine.ControlCapacity);
     }
 
     [Fact]
@@ -270,7 +267,7 @@ public sealed class CapacityVolumeResolutionTests
                 WithCapacity(dir.Options),
                 capacityReader: new MutableCapacityReader(total: 1_000, used: 0),
                 volumeProbe: probe));
-        Assert.Contains("cannot be resolved", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("cannot resolve the volume", ex.Message, StringComparison.Ordinal);
         Assert.True(probe.Calls >= 1);
     }
 
@@ -297,7 +294,7 @@ public sealed class CapacityVolumeResolutionTests
     }
 
     private static ArticleStorageRuntimeOptions WithCapacity(ArticleStorageRuntimeOptions options) =>
-        options with { CapacityAdmissionEnabled = true };
+        options;
 
     private static ArticleRecord CreateRecord(string messageId)
     {

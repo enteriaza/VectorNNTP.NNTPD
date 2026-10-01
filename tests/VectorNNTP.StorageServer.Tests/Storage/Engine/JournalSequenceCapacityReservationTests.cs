@@ -443,9 +443,9 @@ public sealed class JournalSequenceCapacityReservationTests
         var segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var journalBytes = JournalBytes(record);
         const long total = 10_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var capacity = new MutableCapacityReader(total, used: ceiling - segmentBytes);
-        await using var engine = Open(dir, capacity, 0.80);
+        await using var engine = Open(dir, capacity, 80);
 
         var rejected = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, rejected.Outcome);
@@ -456,21 +456,20 @@ public sealed class JournalSequenceCapacityReservationTests
     }
 
     [Fact]
-    public async Task Capacity_disabled_reserves_nothing()
+    public async Task Capacity_always_on_full_volume_rejects_without_reserving()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 100, used: 100);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: capacity);
         var record = CreateRecord("<jr-off@seg.test>");
-        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
-        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         Assert.Equal(0, engine.ProcessLocalJournalReservedBytes);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
-        Assert.Null(engine.SegmentCapacity);
-        Assert.Null(engine.ControlCapacity);
-        Assert.True(engine.TryRead(record.ArtId, out _));
+        Assert.NotNull(engine.SegmentCapacity);
+        Assert.NotNull(engine.ControlCapacity);
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
     }
 
     private static long JournalBytes(ArticleRecord record) =>
@@ -479,17 +478,16 @@ public sealed class JournalSequenceCapacityReservationTests
     private static FileArticleStorageEngine Open(
         TempStorageDir dir,
         MutableCapacityReader? capacity = null,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
         FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization),
             capacityReader: capacity ?? new MutableCapacityReader(total: 10_000_000, used: 0));
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
         };
 

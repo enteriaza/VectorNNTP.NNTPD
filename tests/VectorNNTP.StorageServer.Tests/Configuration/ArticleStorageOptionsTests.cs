@@ -22,14 +22,16 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(0, storage.IndexCheckpointThresholdBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
-        Assert.False(storage.Compaction.Enabled);
-        Assert.False(storage.Compaction.MaintenanceEnabled);
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultInterval, storage.Compaction.Interval);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes, storage.Compaction.MinimumDeadBytes);
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio, storage.Compaction.MinimumDeadRatio);
-        Assert.False(storage.Capacity.Enabled);
         Assert.Equal(ArticleCapacityOptions.DefaultMaximumUtilization, storage.Capacity.MaximumUtilization);
         Assert.Equal(ArticleCapacityOptions.DefaultCompactionHeadroom, storage.Capacity.CompactionHeadroom);
+        Assert.Equal(ArticleCapacityOptions.DefaultMaximumUsageCapacity, storage.Capacity.MaximumUsageCapacity);
+        Assert.Equal(ArticleCapacityOptions.DefaultFreeCapacity, storage.Capacity.FreeCapacity);
+        Assert.Null(typeof(ArticleCapacityOptions).GetProperty("Enabled"));
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
 
@@ -98,11 +100,10 @@ public sealed class ArticleStorageOptionsTests
                 ["StorageServer:Storage:IndexCheckpointThresholdBytes"] = "8192",
                 ["StorageServer:Storage:SegmentTargetSizeBytes"] = "30",
                 ["StorageServer:Storage:ArticleCache:MaxBytes"] = "4096",
-                ["StorageServer:Storage:Compaction:Enabled"] = "true",
-                ["StorageServer:Storage:Compaction:MaintenanceEnabled"] = "true",
+                ["StorageServer:Storage:Compaction:Maintenance" + "Enabled"] = "true",
                 ["StorageServer:Storage:Compaction:Interval"] = "00:00:30",
                 ["StorageServer:Storage:Compaction:MinimumDeadBytes"] = "1048576",
-                ["StorageServer:Storage:Compaction:MinimumDeadRatio"] = "0.25",
+                ["StorageServer:Storage:Compaction:MinimumDeadRatio"] = "25",
             })
             .Build();
         var bound = new StorageServerOptions();
@@ -115,11 +116,11 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(8192, bound.Storage.IndexCheckpointThresholdBytes);
         Assert.Equal(30, bound.Storage.SegmentTargetSizeBytes);
         Assert.Equal(4096, bound.Storage.ArticleCache.MaxBytes);
-        Assert.True(bound.Storage.Compaction.Enabled);
-        Assert.True(bound.Storage.Compaction.MaintenanceEnabled);
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
         Assert.Equal(TimeSpan.FromSeconds(30), bound.Storage.Compaction.Interval);
         Assert.Equal(1_048_576, bound.Storage.Compaction.MinimumDeadBytes);
-        Assert.Equal(0.25, bound.Storage.Compaction.MinimumDeadRatio);
+        Assert.Equal(25, bound.Storage.Compaction.MinimumDeadRatio);
     }
 
     [Fact]
@@ -180,16 +181,16 @@ public sealed class ArticleStorageOptionsTests
     }
 
     [Fact]
-    public void Validator_allows_MaintenanceEnabled_with_policy_disabled_and_inverse()
+    public void Validator_accepts_compaction_without_an_enable_switch()
     {
+        Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.Compaction.Enabled = false;
-        options.Storage.Compaction.MaintenanceEnabled = true;
         options.Storage.Compaction.Interval = TimeSpan.FromSeconds(5);
+        options.Storage.Compaction.MinimumDeadRatio = 10;
         Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-
-        options.Storage.Compaction.Enabled = true;
-        options.Storage.Compaction.MaintenanceEnabled = false;
+        options.Storage.Compaction.MinimumDeadRatio = 0;
+        Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Compaction.MinimumDeadRatio = 100;
         Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
     }
 
@@ -221,7 +222,14 @@ public sealed class ArticleStorageOptionsTests
     public void Validator_rejects_out_of_range_Compaction_MinimumDeadRatio()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.Compaction.MinimumDeadRatio = 1.5;
+        options.Storage.Compaction.MinimumDeadRatio = -1;
+        var below = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(below.Failed);
+        Assert.Contains(
+            below.Failures!,
+            static f => f.Contains("Compaction:MinimumDeadRatio", StringComparison.Ordinal));
+
+        options.Storage.Compaction.MinimumDeadRatio = 101;
         var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
         Assert.True(result.Failed);
         Assert.Contains(
@@ -243,18 +251,20 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(134217728, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
         Assert.Equal(67108864, storage.GetProperty("JournalSoftLimitBytes").GetInt64());
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
-        Assert.Equal(268435456, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
-        Assert.Equal(0, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
+        Assert.Equal(10737418240, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
+        Assert.Equal(1073741824, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
         var compaction = storage.GetProperty("Compaction");
-        Assert.False(compaction.GetProperty("Enabled").GetBoolean());
-        Assert.False(compaction.GetProperty("MaintenanceEnabled").GetBoolean());
+        Assert.False(compaction.TryGetProperty("Enabled", out _));
+        Assert.False(compaction.TryGetProperty("Maintenance" + "Enabled", out _));
         Assert.Equal("00:01:00", compaction.GetProperty("Interval").GetString());
         Assert.Equal(67108864, compaction.GetProperty("MinimumDeadBytes").GetInt64());
-        Assert.Equal(0.10, compaction.GetProperty("MinimumDeadRatio").GetDouble());
+        Assert.Equal(10, compaction.GetProperty("MinimumDeadRatio").GetInt32());
         var capacity = storage.GetProperty("Capacity");
-        Assert.False(capacity.GetProperty("Enabled").GetBoolean());
-        Assert.Equal(0.80, capacity.GetProperty("MaximumUtilization").GetDouble());
-        Assert.Equal(0.10, capacity.GetProperty("CompactionHeadroom").GetDouble());
+        Assert.False(capacity.TryGetProperty("Enabled", out _));
+        Assert.Equal(10, capacity.GetProperty("CompactionHeadroom").GetInt32());
+        Assert.Equal(5, capacity.GetProperty("FreeCapacity").GetInt32());
+        Assert.Equal(50, capacity.GetProperty("MaximumUsageCapacity").GetInt32());
+        Assert.Equal(70, capacity.GetProperty("MaximumUtilization").GetInt32());
         AssertJsonPropertiesMatchOptions(storage, typeof(ArticleStorageOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("ArticleCache"), typeof(ArticleMemoryCacheOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("Capacity"), typeof(ArticleCapacityOptions));
@@ -289,21 +299,20 @@ public sealed class ArticleStorageOptionsTests
     public void Validator_rejects_invalid_CompactionHeadroom()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.Capacity.MaximumUtilization = 0.80;
+        options.Storage.Capacity.MaximumUtilization = 80;
+        options.Storage.Capacity.MaximumUsageCapacity = 70;
 
         options.Storage.Capacity.CompactionHeadroom = 0;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = -0.1;
+        options.Storage.Capacity.CompactionHeadroom = -1;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = double.NaN;
+        options.Storage.Capacity.CompactionHeadroom = 101;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = double.PositiveInfinity;
+        options.Storage.Capacity.CompactionHeadroom = 21;
         Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = 0.20;
-        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = 0.25;
-        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
-        options.Storage.Capacity.CompactionHeadroom = 0.10;
+        options.Storage.Capacity.CompactionHeadroom = 20;
+        Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
+        options.Storage.Capacity.CompactionHeadroom = 10;
         Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
     }
 
@@ -319,5 +328,90 @@ public sealed class ArticleStorageOptionsTests
         var bound = new StorageServerOptions();
         Assert.ThrowsAny<Exception>(() =>
             configuration.GetSection(StorageServerOptions.SectionName).Bind(bound));
+    }
+
+    [Fact]
+    public void Configuration_rejects_fractional_MinimumDeadRatio()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["StorageServer:Storage:Compaction:MinimumDeadRatio"] = "0.10",
+            })
+            .Build();
+        var bound = new StorageServerOptions();
+        Assert.ThrowsAny<Exception>(() =>
+            configuration.GetSection(StorageServerOptions.SectionName).Bind(bound));
+    }
+
+    [Fact]
+    public void Repository_does_not_name_the_removed_enable_switches()
+    {
+        var tokens = new[]
+        {
+            "Maintenance" + "Enabled",
+            "Compaction:" + "Enabled",
+            "Compaction." + "Enabled",
+            "Capacity:" + "Enabled",
+            "Capacity." + "Enabled",
+        };
+        var root = FindRepositoryRoot();
+        var hits = new List<string>();
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            if (IsHistoricalOrBuildPath(path))
+            {
+                continue;
+            }
+
+            var extension = Path.GetExtension(path);
+            if (extension is not (
+                ".cs" or ".json" or ".md" or ".csproj" or ".props" or ".targets" or ".yml" or ".yaml" or ".xml"))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(path);
+            foreach (var token in tokens)
+            {
+                if (text.Contains(token, StringComparison.Ordinal))
+                {
+                    hits.Add(Path.GetRelativePath(root, path) + " [" + token + "]");
+                    break;
+                }
+            }
+        }
+
+        Assert.Empty(hits);
+    }
+
+    private static bool IsHistoricalOrBuildPath(string path)
+    {
+        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        foreach (var part in parts)
+        {
+            if (part is "bin" or "obj" or ".git" or ".idea" or ".artifacts" or "TestResults" or "node_modules")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "VectorNNTP.NNTPD.sln")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate VectorNNTP.NNTPD.sln.");
     }
 }

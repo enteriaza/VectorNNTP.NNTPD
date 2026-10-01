@@ -103,9 +103,9 @@ public sealed class CompactionJournalCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 1_000_000, used: 0);
-        await using var engine = Open(dir, capacity, maximumUtilization: 0.80, compactionHeadroom: 0.10);
+        await using var engine = Open(dir, capacity, maximumUtilization: 80, compactionHeadroom: 10);
         var (sourceId, _) = await AcceptCloseAsync(engine, CreateRecord("<cj-begin-deny@seg.test>"));
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         var pins = engine.ProcessLocalReservedBytes;
         capacity.UsedBytes = ceiling - pins - ArticleJournalFrameCodec.CompactionBeginFrameLength + 1;
         var before = engine.Journal.JournalPhysicalBytes;
@@ -156,7 +156,7 @@ public sealed class CompactionJournalCapacityReservationTests
         await using var engine = Open(dir, capacity);
         var record = CreateRecord("<cj-intent-deny@seg.test>");
         var (sourceId, generation) = await AcceptCloseAsync(engine, record);
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         var pins = engine.ProcessLocalReservedBytes;
         var begin = ArticleJournalFrameCodec.CompactionBeginFrameLength;
         var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
@@ -187,7 +187,7 @@ public sealed class CompactionJournalCapacityReservationTests
         var record = CreateRecord("<cj-intent-keep@seg.test>");
         var (sourceId, generation) = await AcceptCloseAsync(engine, record);
         await StopAfterBeginAsync(engine, sourceId);
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         var pins = engine.ProcessLocalReservedBytes;
         var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
         var destination = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
@@ -422,7 +422,7 @@ public sealed class CompactionJournalCapacityReservationTests
                 compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None)).Outcome);
         var beforeFrames = engine.ProcessLocalCompactionJournalReservedBytes;
         var beforeLength = engine.Journal.JournalPhysicalBytes;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         capacity.UsedBytes = ceiling
             - engine.ProcessLocalReservedBytes
             - ArticleJournalFrameCodec.CompactionCommittedFrameLength
@@ -456,7 +456,7 @@ public sealed class CompactionJournalCapacityReservationTests
         engine.CompleteUnreferencedExtentAccounting();
         var beforeFrames = engine.ProcessLocalCompactionJournalReservedBytes;
         var beforeLength = engine.Journal.JournalPhysicalBytes;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         capacity.UsedBytes = ceiling
             - engine.ProcessLocalReservedBytes
             - ArticleJournalFrameCodec.CompactionRetiredFrameLength
@@ -628,17 +628,17 @@ public sealed class CompactionJournalCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 1_000_000, used: 0);
-        await using var engine = Open(dir, capacity, maximumUtilization: 0.80, compactionHeadroom: 0.10);
+        await using var engine = Open(dir, capacity, maximumUtilization: 80, compactionHeadroom: 10);
         var (sourceId, _) = await AcceptCloseAsync(engine, CreateRecord("<cj-headroom@seg.test>"));
         var pins = engine.ProcessLocalReservedBytes;
         var begin = ArticleJournalFrameCodec.CompactionBeginFrameLength;
-        var articleCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.80);
-        var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 0.90);
+        var articleCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 80);
+        var compactionCeiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(capacity.TotalBytes, 90);
         capacity.UsedBytes = articleCeiling - pins - begin + 1;
         Assert.False(ProcessLocalCapacityLedger.WouldFit(
-            capacity.UsedBytes, pins, 0, capacity.TotalBytes, begin, 0.80));
+            capacity.UsedBytes, pins, 0, capacity.TotalBytes, begin, 80));
         Assert.True(ProcessLocalCapacityLedger.WouldFit(
-            capacity.UsedBytes, pins, 0, capacity.TotalBytes, begin, 0.90));
+            capacity.UsedBytes, pins, 0, capacity.TotalBytes, begin, 90));
 
         engine.TestHookBeforeRelocateArticle = _ => throw new IOException("stop-after-begin");
         await Assert.ThrowsAsync<IOException>(() =>
@@ -650,7 +650,7 @@ public sealed class CompactionJournalCapacityReservationTests
             0,
             capacity.TotalBytes,
             SegmentRecordCodec.MinimumRecordLength,
-            0.80));
+            80));
 
         engine.TestHookBeforeRelocateArticle = null;
         capacity.UsedBytes = 0;
@@ -702,36 +702,35 @@ public sealed class CompactionJournalCapacityReservationTests
     }
 
     [Fact]
-    public async Task Capacity_disabled_does_not_reserve_compaction_journal_frames()
+    public async Task Capacity_always_on_full_volume_rejects_before_compaction_journal()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 100, used: 100);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: capacity);
-        var (sourceId, _) = await AcceptCloseAsync(engine, CreateRecord("<cj-off@seg.test>"));
-        var committed = await engine.CompactClosedSegmentAsync(sourceId, CancellationToken.None);
-        Assert.Equal(ArticleCompactionOutcome.Committed, committed.Outcome);
+        var accepted = await engine.AcceptAsync(CreateRecord("<cj-off@seg.test>"), CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, accepted.Outcome);
         Assert.Equal(0, engine.ProcessLocalCompactionJournalReservedBytes);
         Assert.Equal(0, engine.ProcessLocalCompactionJournalFrameCount);
+        Assert.NotNull(engine.SegmentCapacity);
     }
 
     private static FileArticleStorageEngine Open(
         TempStorageDir dir,
         MutableCapacityReader capacity,
-        double maximumUtilization = 0.80,
-        double compactionHeadroom = 0.10) =>
+        int maximumUtilization = 80,
+        int compactionHeadroom = 10) =>
         FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization, compactionHeadroom),
             capacityReader: capacity);
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = 0.80,
-        double compactionHeadroom = 0.10) =>
+        int maximumUtilization = 80,
+        int compactionHeadroom = 10) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
         };

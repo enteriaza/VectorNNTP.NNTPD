@@ -491,8 +491,8 @@ public sealed class StorageMaintenanceCoordinatorTests
     private static StorageMaintenanceCoordinator CreateCoordinator(
         FileArticleStorageEngine engine,
         long minimumDeadBytes = ArticleCompactionPolicyOptions.DefaultMinimumDeadBytes,
-        double minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
-        new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes, minimumDeadRatio));
+        int minimumDeadRatio = ArticleCompactionPolicyOptions.DefaultMinimumDeadRatio) =>
+        new(engine, new ArticleSegmentPolicy(minimumDeadBytes, minimumDeadRatio));
 
     private static async Task<SegmentId> AcceptCloseCompactRetireAsync(
         FileArticleStorageEngine engine,

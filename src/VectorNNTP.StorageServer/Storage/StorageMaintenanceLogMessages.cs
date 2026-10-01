@@ -10,12 +10,6 @@ internal static partial class StorageMaintenanceLogMessages
     public static partial void Started(ILogger logger, TimeSpan Interval);
 
     [LoggerMessage(
-        EventId = 3011,
-        Level = LogLevel.Information,
-        Message = "Storage maintenance automation is disabled (MaintenanceEnabled=false)")]
-    public static partial void Disabled(ILogger logger);
-
-    [LoggerMessage(
         EventId = 3012,
         Level = LogLevel.Debug,
         Message = "Storage maintenance run starting (MaintenanceRunId={MaintenanceRunId})")]

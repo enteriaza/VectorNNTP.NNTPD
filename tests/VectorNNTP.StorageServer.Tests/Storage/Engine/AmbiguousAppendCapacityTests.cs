@@ -68,7 +68,7 @@ public sealed class AmbiguousAppendCapacityTests
         var record = CreateRecord("<amb-j-fit@seg.test>");
         var admit = AdmitBytes(record);
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var reader = new MutableCapacityReader(total, used: ceiling - admit);
         await using var engine = Open(dir, reader);
         engine.SuspendBackgroundPersist = true;
@@ -281,7 +281,7 @@ public sealed class AmbiguousAppendCapacityTests
         var record = CreateRecord("<amb-s-cap@seg.test>");
         var admit = AdmitBytes(record);
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var reader = new MutableCapacityReader(total, used: ceiling - admit);
         await using var engine = Open(dir, reader);
         engine.Segments.TestAfterWriteBeforeFlush = FlushFails;
@@ -329,7 +329,7 @@ public sealed class AmbiguousAppendCapacityTests
         var record = CreateRecord("<amb-pend-acc@seg.test>");
         var admit = AdmitBytes(record);
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var reader = new MutableCapacityReader(total, used: ceiling - admit);
         await using var engine = Open(dir, reader);
         engine.SuspendBackgroundPersist = true;
@@ -403,7 +403,7 @@ public sealed class AmbiguousAppendCapacityTests
         var admit = AdmitBytes(record);
         var copyBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         const long total = 100_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         await using var engine = Open(dir, new MutableCapacityReader(total, used: ceiling - admit));
         engine.TestPersistRetryDelay = TimeSpan.Zero;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1390,9 +1390,8 @@ public sealed class AmbiguousAppendCapacityTests
         FileArticleStorageEngine.Open(
             dir.Options with
             {
-                CapacityAdmissionEnabled = true,
-                CapacityMaximumUtilization = 0.80,
-                CapacityCompactionHeadroom = 0.10,
+                CapacityMaximumUtilization = 80,
+                CapacityCompactionHeadroom = 10,
             },
             volumeProbe: ScriptedVolumeProbe.Same(dir),
             capacityReader: reader);

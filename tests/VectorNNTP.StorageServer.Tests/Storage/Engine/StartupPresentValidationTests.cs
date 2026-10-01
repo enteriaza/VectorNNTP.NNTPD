@@ -269,7 +269,7 @@ public sealed class StartupPresentValidationTests
             File.Delete(SegmentPath(prepared.Dir, prepared.Metadata.Location));
             var reader = new FullVolumeReader(total: 1_000_000);
             await using var engine = FileArticleStorageEngine.Open(
-                prepared.Dir.Options with { CapacityAdmissionEnabled = true },
+                prepared.Dir.Options,
                 capacityReader: reader);
             var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 engine.RecoverAsync(CancellationToken.None));

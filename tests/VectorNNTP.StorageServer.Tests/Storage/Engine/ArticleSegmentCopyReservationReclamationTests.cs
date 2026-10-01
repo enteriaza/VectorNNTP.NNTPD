@@ -450,7 +450,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
 
     private static FileArticleStorageEngine Open(TempStorageDir dir, IStorageCapacityReader reader) =>
         FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = true },
+            dir.Options,
             capacityReader: reader);
 
     private static ArticleRecord CreateRecord(string messageId, string body = "line1\r\nline2\r\n")

@@ -51,7 +51,7 @@ public sealed class SegmentCopyCapacityReservationTests
             + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize)
             + ArticleIndexRecordCodec.RecordLength;
         const long total = 10_000;
-        const double util = 0.80;
+        const int util = 80;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, util);
         var capacity = new MutableCapacityReader(total, used: ceiling - occupied);
         await using var engine = Open(dir, capacity, util);
@@ -236,9 +236,9 @@ public sealed class SegmentCopyCapacityReservationTests
             + ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize)
             + ArticleIndexRecordCodec.RecordLength;
         const long total = 10_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var capacity = new MutableCapacityReader(total, used: ceiling - occupied);
-        await using var engine = Open(dir, capacity, 0.80);
+        await using var engine = Open(dir, capacity, 80);
         engine.SuspendBackgroundPersist = true;
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         SealNextAppends(engine, count: int.MaxValue);
@@ -369,22 +369,21 @@ public sealed class SegmentCopyCapacityReservationTests
     }
 
     [Fact]
-    public async Task Capacity_disabled_does_not_reserve_segment_copies()
+    public async Task Capacity_always_on_full_volume_rejects_segment_copy()
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 100, used: 100);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: capacity);
         var record = CreateRecord("<seg-off@seg.test>");
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
-        Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
-        await engine.DrainPendingAsync(CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, accepted.Outcome);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.ProcessLocalSegmentCopyCount);
-        Assert.Null(engine.SegmentCapacity);
-        Assert.Null(engine.ControlCapacity);
-        Assert.True(engine.TryRead(record.ArtId, out _));
+        Assert.NotNull(engine.SegmentCapacity);
+        Assert.NotNull(engine.ControlCapacity);
+        Assert.False(engine.TryRead(record.ArtId, out _));
     }
 
     private static void SealNextAppends(FileArticleStorageEngine engine, int count)
@@ -407,7 +406,7 @@ public sealed class SegmentCopyCapacityReservationTests
     private static FileArticleStorageEngine Open(
         TempStorageDir dir,
         MutableCapacityReader capacity,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
         ILogger? logger = null) =>
         FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization),
@@ -447,10 +446,9 @@ public sealed class SegmentCopyCapacityReservationTests
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
         };
 

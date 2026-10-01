@@ -22,7 +22,7 @@ public sealed class FinishCostPressureFeasibilityTests
         const long total = 10_000_000;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var records = Enumerable.Range(0, 4)
@@ -41,7 +41,7 @@ public sealed class FinishCostPressureFeasibilityTests
         Assert.True(engine.Segments.TryGetSegmentInfo(sourceId, out var before));
         Assert.True(before.LiveBytes > SegmentRecordCodec.MinimumRecordLength);
 
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.60);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 60);
         var segmentCopies = engine.ProcessLocalArticleReservedBytes;
         capacity.UsedBytes = ceiling - SegmentRecordCodec.MinimumRecordLength - segmentCopies;
         Assert.True(capacity.UsedBytes >= 0);
@@ -79,7 +79,7 @@ public sealed class FinishCostPressureFeasibilityTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.40),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 40),
             capacityReader: capacity);
 
         var keep = CreateRecord("<p5f9-b-keep@seg.test>");
@@ -113,7 +113,7 @@ public sealed class FinishCostPressureFeasibilityTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 5),
             capacityReader: capacity);
 
         var keep = CreateRecord("<p5f9-c-keep@seg.test>");
@@ -136,7 +136,7 @@ public sealed class FinishCostPressureFeasibilityTests
             + ArticleJournalFrameCodec.CompactionRetiredFrameLength;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(
             capacity.TotalBytes,
-            0.50 + 0.05);
+            55);
         capacity.UsedBytes = ceiling - engine.ProcessLocalReservedBytes - journalFrames;
         var pressure = engine.ObserveCapacityAdmissionPressure();
         Assert.True(pressure.IsUnderAdmissionPressure);
@@ -182,7 +182,7 @@ public sealed class FinishCostPressureFeasibilityTests
         const long total = 10_000_000;
         var capacity = new MutableCapacityReader(total, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.10),
+            WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 10),
             capacityReader: capacity);
 
         var payload = string.Concat(Enumerable.Repeat("0123456789abcdef\r\n", 500));
@@ -200,7 +200,7 @@ public sealed class FinishCostPressureFeasibilityTests
 
         var larger = Math.Max(firstMeta.Location.Length, secondMeta.Location.Length);
         Assert.True(before.LiveBytes > larger);
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.60);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 60);
         capacity.UsedBytes = ceiling - larger - 64;
         var pressure = engine.ObserveCapacityAdmissionPressure();
         Assert.True(pressure.IsUnderAdmissionPressure);
@@ -211,7 +211,7 @@ public sealed class FinishCostPressureFeasibilityTests
                 0,
                 total,
                 larger,
-                0.60));
+                60));
         Assert.False(ArticleSegmentPolicy.IsCompactionFeasibleUnderHeadroom(in before, in pressure));
 
         var opensBefore = engine.Journal.EnumerateOpenCompactions().Count();
@@ -235,7 +235,7 @@ public sealed class FinishCostPressureFeasibilityTests
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            WithCapacity(dir.Options, maximumUtilization: 0.90, compactionHeadroom: 0.05),
+            WithCapacity(dir.Options, maximumUtilization: 90, compactionHeadroom: 5),
             capacityReader: capacity);
 
         var lowDead = Enumerable.Range(0, 3)
@@ -279,17 +279,18 @@ public sealed class FinishCostPressureFeasibilityTests
     }
 
     private static StorageMaintenanceCoordinator CreateCoordinator(FileArticleStorageEngine engine) =>
-        new(engine, new ArticleSegmentPolicy(enabled: true, minimumDeadBytes: 0, minimumDeadRatio: 0));
+        new(engine, new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization,
-        double compactionHeadroom) =>
+        int maximumUtilization,
+        int compactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = compactionHeadroom,
+            CapacityMaximumUsageCapacity = 100,
+            CapacityFreeCapacity = 1,
         };
 
     private static ArticleRecord CreateRecord(string messageId, string body = "line1\r\nline2\r\n")

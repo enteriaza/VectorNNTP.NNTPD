@@ -128,7 +128,7 @@ public sealed class IndexEntryCapacityReservationTests
     public async Task Relocation_keeps_both_physical_present_frames()
     {
         using var dir = TempStorageDir.Create();
-        await using var engine = Open(dir, headroom: 0.10);
+        await using var engine = Open(dir, headroom: 10);
         var record = CreateRecord("<idx-reloc@seg.test>");
         var (compactionId, sourceId, generation) = await PrepareRelocationAsync(engine, record);
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
@@ -152,7 +152,7 @@ public sealed class IndexEntryCapacityReservationTests
     public async Task Index_checkpoint_releases_only_retired_present_frames()
     {
         using var dir = TempStorageDir.Create();
-        await using var engine = Open(dir, headroom: 0.10);
+        await using var engine = Open(dir, headroom: 10);
         var kept = CreateRecord("<idx-keep@seg.test>");
         var doubled = CreateRecord("<idx-double@seg.test>");
         _ = await engine.AcceptAsync(kept, CancellationToken.None);
@@ -242,9 +242,9 @@ public sealed class IndexEntryCapacityReservationTests
         var record = CreateRecord("<idx-evict-fit@seg.test>");
         var admit = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize) + JournalBytes(record) + IndexBytes;
         const long total = 10_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var capacity = new MutableCapacityReader(total, used: ceiling - admit);
-        await using var engine = Open(dir, capacity, maximumUtilization: 0.80);
+        await using var engine = Open(dir, capacity, maximumUtilization: 80);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         var length = engine.Index.DurableLength;
@@ -266,9 +266,9 @@ public sealed class IndexEntryCapacityReservationTests
         var record = CreateRecord("<idx-invalid-fit@seg.test>");
         var admit = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize) + JournalBytes(record) + IndexBytes;
         const long total = 10_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var capacity = new MutableCapacityReader(total, used: ceiling - admit);
-        await using var engine = Open(dir, capacity, maximumUtilization: 0.80);
+        await using var engine = Open(dir, capacity, maximumUtilization: 80);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         var length = engine.Index.DurableLength;
@@ -414,17 +414,19 @@ public sealed class IndexEntryCapacityReservationTests
     }
 
     [Fact]
-    public async Task Capacity_disabled_evict_reserves_nothing()
+    public async Task Capacity_always_on_evict_reserves_index_frame()
     {
         using var dir = TempStorageDir.Create();
+        var reader = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false });
+            dir.Options,
+            capacityReader: reader);
         var record = CreateRecord("<idx-evict-off@seg.test>");
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.TryEvict(record.ArtId));
-        Assert.Equal(0, engine.ProcessLocalIndexReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalIndexFrameCount);
+        Assert.True(engine.ProcessLocalIndexReservedBytes > 0);
+        Assert.True(engine.ProcessLocalIndexFrameCount > 0);
     }
 
     [Fact]
@@ -464,7 +466,7 @@ public sealed class IndexEntryCapacityReservationTests
         using var dir = TempStorageDir.Create();
         var kept = CreateRecord("<idx-restart-keep@seg.test>");
         var retired = CreateRecord("<idx-restart-old@seg.test>");
-        await using (var engineA = Open(dir, headroom: 0.10))
+        await using (var engineA = Open(dir, headroom: 10))
         {
             var (compactionId, sourceId, generation) = await PrepareRelocationAsync(engineA, retired);
             _ = await engineA.RelocateArticleAsync(
@@ -539,7 +541,7 @@ public sealed class IndexEntryCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<idx-cycle@seg.test>");
-        await using (var engineA = Open(dir, headroom: 0.10))
+        await using (var engineA = Open(dir, headroom: 10))
         {
             _ = await engineA.AcceptAsync(record, CancellationToken.None);
             await engineA.DrainPendingAsync(CancellationToken.None);
@@ -623,9 +625,9 @@ public sealed class IndexEntryCapacityReservationTests
         var segment = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var journal = JournalBytes(record);
         const long total = 10_000;
-        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.80);
+        var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 80);
         var capacity = new MutableCapacityReader(total, used: ceiling - segment - journal);
-        await using var engine = Open(dir, capacity, 0.80);
+        await using var engine = Open(dir, capacity, 80);
 
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         Assert.Equal(0, engine.ProcessLocalIndexReservedBytes);
@@ -635,21 +637,21 @@ public sealed class IndexEntryCapacityReservationTests
     }
 
     [Fact]
-    public async Task Capacity_disabled_reserves_nothing()
+    public async Task Capacity_always_on_reserves_index_frames()
     {
         using var dir = TempStorageDir.Create();
         var reader = new MutableCapacityReader(total: 10_000_000, used: 0);
         await using var engine = FileArticleStorageEngine.Open(
-            dir.Options with { CapacityAdmissionEnabled = false },
+            dir.Options,
             capacityReader: reader);
         var record = CreateRecord("<idx-off@seg.test>");
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(0, engine.ProcessLocalIndexReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalJournalReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
-        Assert.Null(engine.SegmentCapacity);
-        Assert.Null(engine.ControlCapacity);
+        Assert.True(engine.ProcessLocalIndexReservedBytes > 0);
+        Assert.True(engine.ProcessLocalJournalReservedBytes > 0);
+        Assert.True(engine.ProcessLocalArticleReservedBytes > 0);
+        Assert.NotNull(engine.SegmentCapacity);
+        Assert.NotNull(engine.ControlCapacity);
     }
 
     private static async Task<(ulong CompactionId, SegmentId SourceId, ulong Generation)> PrepareRelocationAsync(
@@ -684,19 +686,18 @@ public sealed class IndexEntryCapacityReservationTests
     private static FileArticleStorageEngine Open(
         TempStorageDir dir,
         MutableCapacityReader? capacity = null,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-        double headroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+        int headroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
         FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization, headroom),
             capacityReader: capacity ?? new MutableCapacityReader(total: 10_000_000, used: 0));
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-        double headroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
+        int maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+        int headroom = ArticleCapacityOptions.DefaultCompactionHeadroom) =>
         options with
         {
-            CapacityAdmissionEnabled = true,
             CapacityMaximumUtilization = maximumUtilization,
             CapacityCompactionHeadroom = headroom,
         };

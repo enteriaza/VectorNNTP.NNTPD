@@ -6,9 +6,6 @@ public enum CompactionEligibilityReason : byte
     /// <summary>Closed, historically accounted, sized, and meets both dead-byte thresholds.</summary>
     Eligible = 1,
 
-    /// <summary><c>StorageServer:Storage:Compaction:Enabled</c> is false.</summary>
-    PolicyDisabled = 2,
-
     /// <summary>Segment state is not <see cref="SegmentState.Closed"/>.</summary>
     NotClosed = 3,
 
@@ -40,7 +37,7 @@ public enum CompactionEligibilityReason : byte
 /// <c>DeadBytes / SizeBytes</c> when <paramref name="SizeBytes"/> &gt; 0; otherwise <c>0</c>.
 /// </param>
 /// <param name="MinimumDeadBytes">Configured absolute threshold used for this evaluation.</param>
-/// <param name="MinimumDeadRatio">Configured ratio threshold used for this evaluation.</param>
+/// <param name="MinimumDeadRatio">Configured dead percentage (0..100) used for this evaluation.</param>
 public readonly record struct CompactionEligibility(
     bool IsEligible,
     CompactionEligibilityReason Reason,
@@ -51,7 +48,7 @@ public readonly record struct CompactionEligibility(
     long DeadBytes,
     double DeadRatio,
     long MinimumDeadBytes,
-    double MinimumDeadRatio);
+    int MinimumDeadRatio);
 
 /// <summary>Result of selecting at most one compaction victim from a catalogue snapshot.</summary>
 /// <param name="Selected">True when a Closed eligible victim was chosen.</param>
