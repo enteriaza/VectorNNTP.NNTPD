@@ -24,7 +24,8 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// The segment ledger reserves one segment copy of
 /// <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>.
 /// Each later physical append reserves another copy of that size before it writes.
-/// Those reservations stay after durable PhysicalWritten until a later reclamation phase.
+/// Those reservations stay after durable PhysicalWritten, bound to the written segment, until
+/// that segment is physically reclaimed.
 /// The control ledger reserves the journal sequence <c>ArtSize + 132</c>
 /// (Accept + PhysicalWritten + IndexCommitted). That reservation stays through
 /// IndexCommitted and is released only after a successful journal checkpoint installs a

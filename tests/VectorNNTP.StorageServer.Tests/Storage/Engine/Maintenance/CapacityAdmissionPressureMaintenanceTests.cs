@@ -276,11 +276,13 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
     }
 
     [Fact]
-    public async Task G_ArticleReservedBytes_included_and_never_released_by_maintenance()
+    public async Task G_Reclaim_releases_the_retired_segment_hold_and_keeps_the_unwritten_one()
     {
         using var dir = TempStorageDir.Create();
         var held = CreateRecord("<p5f2-g-held@seg.test>");
         var retired = CreateRecord("<p5f2-g-ret@seg.test>");
+        var heldBytes = SegmentRecordCodec.RecordLengthForArtSize(held.ArtSize);
+        var retiredBytes = SegmentRecordCodec.RecordLengthForArtSize(retired.ArtSize);
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 0);
         await using var engine = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization: 0.50, compactionHeadroom: 0.10),
@@ -291,7 +293,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         engine.SuspendBackgroundPersist = true;
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(held, CancellationToken.None)).Outcome);
         var articleRes = engine.ProcessLocalArticleReservedBytes;
-        Assert.True(articleRes > 0);
+        Assert.Equal(retiredBytes + heldBytes, articleRes);
 
         capacity.OtherUsed = 6_000_000;
         var observed = engine.ObserveCapacityAdmissionPressure();
@@ -301,8 +303,9 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
         Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(retiredId, result.SegmentId);
-        Assert.Equal(articleRes, engine.ProcessLocalArticleReservedBytes);
-        Assert.Equal(articleRes, result.CapacityArticleReservedBytes);
+        Assert.Equal(heldBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(heldBytes, result.CapacityArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalWrittenArticleBytesOnSegment(retiredId));
     }
 
     [Fact]

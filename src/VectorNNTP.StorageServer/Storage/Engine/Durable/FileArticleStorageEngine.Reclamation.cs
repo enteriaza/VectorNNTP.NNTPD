@@ -136,8 +136,12 @@ public sealed partial class FileArticleStorageEngine
 
             if (_capacityAdmissionEnabled)
             {
-                _ = RequireSegmentVolume().WithLedger(
-                    ledger => ledger.ReleaseCompactionDestinationsOnSegment(segmentId));
+                _ = RequireSegmentVolume().WithLedger(ledger =>
+                {
+                    _ = ledger.ReleaseCompactionDestinationsOnSegment(segmentId);
+                    _ = ledger.ReleaseWrittenArticleCopiesOnSegment(segmentId);
+                    return true;
+                });
             }
 
             return Task.FromResult(new ArticleSegmentReclamationResult(
@@ -149,7 +153,14 @@ public sealed partial class FileArticleStorageEngine
         }
         catch (IOException) when (afterDeleteHook is not null)
         {
-            // Crash window: file deleted, catalogue still Retired — reopen remediates.
+            // The file is already gone. Drop written article holds for it exactly once.
+            // The catalogue is still Retired; a later call takes the already-reclaimed path.
+            if (_capacityAdmissionEnabled)
+            {
+                _ = RequireSegmentVolume().WithLedger(
+                    ledger => ledger.ReleaseWrittenArticleCopiesOnSegment(segmentId));
+            }
+
             throw;
         }
     }

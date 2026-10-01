@@ -46,8 +46,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// Compaction destination appends use that ceiling plus
 /// <see cref="ArticleCapacityOptions.CompactionHeadroom"/>.
 /// Each physical segment copy reserves <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>
-/// on the segment ledger before the append. That reservation stays after durable PhysicalWritten
-/// until a later reclamation phase. A retirement-seal retry reserves another copy before it appends.
+/// on the segment ledger before the append. After a durable write the reservation stays held and
+/// is bound to that segment. It is released when that segment is physically reclaimed. A
+/// retirement-seal retry reserves another copy before it appends.
 /// Each durable Accept also reserves <c>ArtSize + 132</c> on the control ledger for the journal
 /// sequence. That reservation is released only after a checkpoint replacement omits the sequence.
 /// The same Accept reserves <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes on the control
@@ -212,6 +213,29 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>Process-local article Accept reserved bytes on the segment ledger (tests).</summary>
     internal long ProcessLocalArticleReservedBytes =>
         ReadSegmentLedger(static ledger => ledger.ArticleReservedBytes);
+
+    /// <summary>Written article-copy bytes bound to <paramref name="segmentId"/> (tests).</summary>
+    internal long ProcessLocalWrittenArticleBytesOnSegment(SegmentId segmentId) =>
+        ReadSegmentLedger(ledger => ledger.WrittenArticleBytesOnSegment(segmentId));
+
+    /// <summary>Reserved and written article-copy counts for <paramref name="sequence"/> (tests).</summary>
+    internal (int ReservedCopies, int WrittenCopies) ProcessLocalArticleCopyCounts(ulong sequence) =>
+        ReadSegmentLedger(ledger => ledger.GetArticleCopyCounts(sequence));
+
+    /// <summary>
+    /// Segment of the single written article copy for <paramref name="sequence"/> (tests).
+    /// False when the sequence is missing or has any other written-copy count.
+    /// </summary>
+    internal bool TryGetSoleWrittenArticleSegment(ulong sequence, out SegmentId segmentId)
+    {
+        var found = ReadSegmentLedger(ledger =>
+        {
+            var bound = ledger.TryGetSoleWrittenSegment(sequence, out var id);
+            return (bound, id);
+        });
+        segmentId = found.id;
+        return found.bound;
+    }
 
     /// <summary>Process-local compaction destination reserved bytes on the segment ledger (tests).</summary>
     internal long ProcessLocalCompactionReservedBytes =>
@@ -2152,7 +2176,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
     }
 
-    private void NoteSegmentCopyWritten(ulong sequence)
+    private void NoteSegmentCopyWritten(ulong sequence, SegmentId segmentId)
     {
         if (!_capacityAdmissionEnabled)
         {
@@ -2164,7 +2188,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         {
             _ = volume.WithLedger(ledger =>
             {
-                ledger.NoteSegmentCopyWritten(sequence);
+                ledger.NoteSegmentCopyWritten(sequence, segmentId);
                 return true;
             });
         }
@@ -2309,7 +2333,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
                 // The record is in the segment. A later PhysicalWritten failure must rediscover it.
                 RemoveAcceptWithoutPhysicalBytes(accept.Sequence);
-                NoteSegmentCopyWritten(accept.Sequence);
+                NoteSegmentCopyWritten(accept.Sequence, location.SegmentId);
             }
             catch (Exception ex)
             {

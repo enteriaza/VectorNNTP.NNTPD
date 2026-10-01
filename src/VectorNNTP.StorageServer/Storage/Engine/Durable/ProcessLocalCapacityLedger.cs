@@ -354,7 +354,7 @@ internal sealed class ProcessLocalCapacityLedger
     public void BindArticleSequence(ulong sequence, long requiredBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(requiredBytes);
-        if (!_articleBySequence.TryAdd(sequence, new ArticleSegmentReservation(1, 0, requiredBytes)))
+        if (!_articleBySequence.TryAdd(sequence, new ArticleSegmentReservation(1, 0, requiredBytes, [])))
         {
             throw new InvalidOperationException($"Article capacity reservation already exists for sequence {sequence}.");
         }
@@ -405,12 +405,16 @@ internal sealed class ProcessLocalCapacityLedger
         _articleBySequence[sequence] = new ArticleSegmentReservation(
             current.ReservedCopies + 1,
             current.WrittenCopies,
-            current.BytesPerCopy);
+            current.BytesPerCopy,
+            current.WrittenSegments);
         _articleReservedBytes = checked(_articleReservedBytes + bytesPerCopy);
     }
 
-    /// <summary>Records that one reserved segment copy for <paramref name="sequence"/> was physically written.</summary>
-    public void NoteSegmentCopyWritten(ulong sequence)
+    /// <summary>
+    /// Records that one reserved segment copy for <paramref name="sequence"/> was physically written
+    /// on <paramref name="segmentId"/>. The reservation stays held until that segment is reclaimed.
+    /// </summary>
+    public void NoteSegmentCopyWritten(ulong sequence, SegmentId segmentId)
     {
         if (!_articleBySequence.TryGetValue(sequence, out var current))
         {
@@ -424,10 +428,14 @@ internal sealed class ProcessLocalCapacityLedger
                 $"Segment copy write has no reservation for sequence {sequence}.");
         }
 
+        var written = new SegmentId[current.WrittenSegments.Length + 1];
+        current.WrittenSegments.CopyTo(written, 0);
+        written[^1] = segmentId;
         _articleBySequence[sequence] = new ArticleSegmentReservation(
             current.ReservedCopies,
             current.WrittenCopies + 1,
-            current.BytesPerCopy);
+            current.BytesPerCopy,
+            written);
     }
 
     /// <summary>
@@ -458,7 +466,8 @@ internal sealed class ProcessLocalCapacityLedger
             _articleBySequence[sequence] = new ArticleSegmentReservation(
                 remaining,
                 current.WrittenCopies,
-                current.BytesPerCopy);
+                current.BytesPerCopy,
+                current.WrittenSegments);
         }
 
         return true;
@@ -814,6 +823,137 @@ internal sealed class ProcessLocalCapacityLedger
         return released > 0;
     }
 
+    /// <summary>
+    /// Releases written article-copy reservations bound to <paramref name="segmentId"/>.
+    /// Unwritten copies stay reserved. Idempotent when that segment has no written copies.
+    /// </summary>
+    /// <returns>Bytes removed from <see cref="ArticleReservedBytes"/>.</returns>
+    public long ReleaseWrittenArticleCopiesOnSegment(SegmentId segmentId)
+    {
+        List<(ulong Sequence, ArticleSegmentReservation Reservation)>? updates = null;
+        List<ulong>? remove = null;
+        long released = 0;
+        foreach (var pair in _articleBySequence)
+        {
+            var current = pair.Value;
+            var removed = 0;
+            for (var i = 0; i < current.WrittenSegments.Length; i++)
+            {
+                if (current.WrittenSegments[i] == segmentId)
+                {
+                    removed++;
+                }
+            }
+
+            if (removed == 0)
+            {
+                continue;
+            }
+
+            var bytes = checked((long)removed * current.BytesPerCopy);
+            released = checked(released + bytes);
+            var reservedCopies = current.ReservedCopies - removed;
+            if (reservedCopies <= 0)
+            {
+                remove ??= [];
+                remove.Add(pair.Key);
+                continue;
+            }
+
+            var kept = new SegmentId[current.WrittenSegments.Length - removed];
+            var write = 0;
+            for (var i = 0; i < current.WrittenSegments.Length; i++)
+            {
+                if (current.WrittenSegments[i] != segmentId)
+                {
+                    kept[write++] = current.WrittenSegments[i];
+                }
+            }
+
+            updates ??= [];
+            updates.Add((
+                pair.Key,
+                new ArticleSegmentReservation(
+                    reservedCopies,
+                    current.WrittenCopies - removed,
+                    current.BytesPerCopy,
+                    kept)));
+        }
+
+        if (remove is not null)
+        {
+            foreach (var sequence in remove)
+            {
+                _ = _articleBySequence.Remove(sequence);
+            }
+        }
+
+        if (updates is not null)
+        {
+            foreach (var update in updates)
+            {
+                _articleBySequence[update.Sequence] = update.Reservation;
+            }
+        }
+
+        _articleReservedBytes -= released;
+        if (_articleReservedBytes < 0)
+        {
+            _articleReservedBytes = 0;
+        }
+
+        return released;
+    }
+
+    /// <summary>Written article-copy bytes currently bound to <paramref name="segmentId"/>.</summary>
+    public long WrittenArticleBytesOnSegment(SegmentId segmentId)
+    {
+        long total = 0;
+        foreach (var reservation in _articleBySequence.Values)
+        {
+            var copies = 0;
+            foreach (var written in reservation.WrittenSegments)
+            {
+                if (written == segmentId)
+                {
+                    copies++;
+                }
+            }
+
+            total = checked(total + ((long)copies * reservation.BytesPerCopy));
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Returns the segment of the single written copy for <paramref name="sequence"/>.
+    /// False when the sequence is missing or does not have exactly one written copy.
+    /// </summary>
+    public bool TryGetSoleWrittenSegment(ulong sequence, out SegmentId segmentId)
+    {
+        if (_articleBySequence.TryGetValue(sequence, out var reservation)
+            && reservation.WrittenSegments.Length == 1)
+        {
+            segmentId = reservation.WrittenSegments[0];
+            return true;
+        }
+
+        segmentId = default;
+        return false;
+    }
+
+    /// <summary>Reserved and written copy counts for <paramref name="sequence"/>.</summary>
+    public (int ReservedCopies, int WrittenCopies) GetArticleCopyCounts(ulong sequence)
+    {
+        if (!_articleBySequence.TryGetValue(sequence, out var reservation))
+        {
+            return (0, 0);
+        }
+
+        return (reservation.ReservedCopies, reservation.WrittenCopies);
+    }
+
     /// <summary>Alias for <see cref="ReleaseArticle"/>.</summary>
     public bool Release(ulong sequence) => ReleaseArticle(sequence);
 
@@ -987,11 +1127,23 @@ internal sealed class ProcessLocalCapacityLedger
 
     private readonly struct ArticleSegmentReservation
     {
-        public ArticleSegmentReservation(int reservedCopies, int writtenCopies, long bytesPerCopy)
+        public ArticleSegmentReservation(
+            int reservedCopies,
+            int writtenCopies,
+            long bytesPerCopy,
+            SegmentId[] writtenSegments)
         {
+            if (writtenSegments.Length != writtenCopies)
+            {
+                throw new ArgumentException(
+                    "Written segment bindings must match the written copy count.",
+                    nameof(writtenSegments));
+            }
+
             ReservedCopies = reservedCopies;
             WrittenCopies = writtenCopies;
             BytesPerCopy = bytesPerCopy;
+            WrittenSegments = writtenSegments;
         }
 
         public int ReservedCopies { get; }
@@ -999,6 +1151,9 @@ internal sealed class ProcessLocalCapacityLedger
         public int WrittenCopies { get; }
 
         public long BytesPerCopy { get; }
+
+        /// <summary>One segment per written copy, in write order. Unwritten copies are absent.</summary>
+        public SegmentId[] WrittenSegments { get; }
 
         public long TotalBytes => (long)ReservedCopies * BytesPerCopy;
     }
