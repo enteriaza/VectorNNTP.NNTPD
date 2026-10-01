@@ -39,6 +39,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     private readonly ILogger _logger;
     private readonly object _gate = new();
     private readonly object _checkpointSerial = new();
+    private bool _retainCheckpointTempReservation;
     private readonly Dictionary<ulong, SequenceState> _bySequence = new();
     private readonly Dictionary<ArticleId, ulong> _outstandingArtIdToSequence = new();
     private readonly Dictionary<ulong, CompactionState> _compactions = new();
@@ -506,6 +507,11 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     internal Action? TestBeforeDurableFlush { get; set; }
 
     /// <summary>
+    /// When set, checkpoint temp deletion leaves the file in place. Tests only.
+    /// </summary>
+    internal bool TestFailCheckpointTempDelete { get; set; }
+
+    /// <summary>
     /// When set, torn-tail truncation throws instead of shrinking the file. Tests only.
     /// </summary>
     internal bool TestFailTailTruncate { get; set; }
@@ -637,10 +643,12 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         }
         finally
         {
-            if (reservationId is ulong id)
+            if (!_retainCheckpointTempReservation && reservationId is ulong id)
             {
                 capacity.Release(id);
             }
+
+            _retainCheckpointTempReservation = false;
         }
     }
 
@@ -1281,9 +1289,9 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         }
         catch (Exception)
         {
-            if (!string.IsNullOrEmpty(tempPath))
+            if (!string.IsNullOrEmpty(tempPath) && !TryDeleteCheckpointTemp(tempPath))
             {
-                TryDelete(tempPath);
+                _retainCheckpointTempReservation = true;
             }
 
             newStream?.Dispose();
@@ -1378,8 +1386,13 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         && left.Offset == right.Offset
         && left.Length == right.Length;
 
-    private static void TryDelete(string path)
+    private bool TryDeleteCheckpointTemp(string path)
     {
+        if (TestFailCheckpointTempDelete && File.Exists(path))
+        {
+            return false;
+        }
+
         try
         {
             if (File.Exists(path))
@@ -1395,6 +1408,8 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         {
             // Best-effort.
         }
+
+        return !File.Exists(path);
     }
 
     private sealed class SequenceState(JournalAcceptRecord accept)

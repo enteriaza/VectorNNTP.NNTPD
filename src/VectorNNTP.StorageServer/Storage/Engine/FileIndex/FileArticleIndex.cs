@@ -172,6 +172,19 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     internal Action? TestBeforeReplacementInstall { get; set; }
 
     /// <summary>
+    /// When set, snapshot and replacement temp deletion leaves the file in place. Tests only.
+    /// </summary>
+    internal bool TestFailCheckpointTempDelete { get; set; }
+
+    private ulong? _installedSnapshotReservationId;
+    private ulong? _retainedSnapshotTempReservationId;
+    private long _retainedSnapshotTempReservationBytes;
+    private ulong? _retainedReplacementReservationId;
+    private long _retainedReplacementReservationBytes;
+    private bool _retainSnapshotTempReservation;
+    private bool _retainReplacementReservation;
+
+    /// <summary>
     /// Invoked under the index gate before a durable frame is written (tests).
     /// Throwing leaves the index file unchanged when it runs before the write.
     /// </summary>
@@ -646,6 +659,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         var tempPath = SnapshotTempPath();
         var installed = false;
         ulong? reservationId = null;
+        var snapshotReservedBytes = 0L;
         try
         {
             StoredArticleMetadata[] copy;
@@ -674,11 +688,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             if (_checkpointCapacity is not null)
             {
                 var encodedLength = ArticleIndexSnapshotCodec.EncodedLength(copy.Length);
-                reservationId = _checkpointCapacity.TryReserve(encodedLength);
-                if (reservationId is null)
-                {
-                    throw new CheckpointCapacityDeniedException(encodedLength);
-                }
+                reservationId = TakeSnapshotTempReservation(encodedLength, out snapshotReservedBytes);
             }
 
             TestDuringSnapshotWrite?.Invoke();
@@ -707,6 +717,17 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                 _installedSnapshotGeneration = generation;
             }
 
+            if (reservationId is ulong installedId)
+            {
+                if (_installedSnapshotReservationId is ulong previous)
+                {
+                    _checkpointCapacity!.Release(previous);
+                }
+
+                _installedSnapshotReservationId = installedId;
+                reservationId = null;
+            }
+
             FileArticleIndexLogMessages.SnapshotInstalled(
                 _logger,
                 snapshotPath,
@@ -728,18 +749,65 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
 
             if (!installed)
             {
-                TryDelete(tempPath);
+                if (TryDelete(tempPath))
+                {
+                    if (reservationId is null
+                        && _retainedSnapshotTempReservationId is ulong orphan
+                        && _checkpointCapacity is not null)
+                    {
+                        _checkpointCapacity.Release(orphan);
+                        _retainedSnapshotTempReservationId = null;
+                        _retainedSnapshotTempReservationBytes = 0;
+                    }
+                }
+                else if (reservationId is ulong retained)
+                {
+                    _retainSnapshotTempReservation = true;
+                    _retainedSnapshotTempReservationId = retained;
+                    _retainedSnapshotTempReservationBytes = snapshotReservedBytes;
+                }
             }
 
             throw;
         }
         finally
         {
-            if (reservationId is ulong id)
+            if (!_retainSnapshotTempReservation && reservationId is ulong id)
             {
                 _checkpointCapacity!.Release(id);
             }
+
+            _retainSnapshotTempReservation = false;
         }
+    }
+
+    private ulong TakeSnapshotTempReservation(long encodedLength, out long reservedBytes)
+    {
+        if (_retainedSnapshotTempReservationId is ulong retained)
+        {
+            var known = _retainedSnapshotTempReservationBytes;
+            if (encodedLength > known
+                && !_checkpointCapacity!.TryIncrease(retained, encodedLength - known))
+            {
+                reservedBytes = known;
+                throw new CheckpointCapacityDeniedException(encodedLength - known);
+            }
+
+            _retainedSnapshotTempReservationId = null;
+            _retainedSnapshotTempReservationBytes = 0;
+            reservedBytes = Math.Max(known, encodedLength);
+            return retained;
+        }
+
+        var created = _checkpointCapacity!.TryReserve(encodedLength);
+        if (created is null)
+        {
+            reservedBytes = 0;
+            throw new CheckpointCapacityDeniedException(encodedLength);
+        }
+
+        reservedBytes = encodedLength;
+        return created.Value;
     }
 
     private void EnsureAlignedForCheckpoint()
@@ -763,6 +831,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         var replPath = ReplacementTempPath();
         var moved = false;
         ulong? reservationId = null;
+        var replacementReservedBytes = 0L;
         try
         {
             var copyEnd = MeasureReplacementCopyEnd(snapshot);
@@ -770,11 +839,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             if (_checkpointCapacity is not null)
             {
                 var bytes = checked(ArticleIndexDeltaFile.HeaderLength + stable);
-                reservationId = _checkpointCapacity.TryReserve(bytes);
-                if (reservationId is null)
-                {
-                    throw new CheckpointCapacityDeniedException(bytes);
-                }
+                reservationId = TakeReplacementReservation(bytes, out replacementReservedBytes);
             }
 
             WriteReplacementPrefixAt(snapshot, replPath, copyEnd);
@@ -798,7 +863,23 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         {
             if (!moved)
             {
-                TryDelete(replPath);
+                if (TryDelete(replPath))
+                {
+                    if (reservationId is null
+                        && _retainedReplacementReservationId is ulong orphan
+                        && _checkpointCapacity is not null)
+                    {
+                        _checkpointCapacity.Release(orphan);
+                        _retainedReplacementReservationId = null;
+                        _retainedReplacementReservationBytes = 0;
+                    }
+                }
+                else if (reservationId is ulong retained)
+                {
+                    _retainReplacementReservation = true;
+                    _retainedReplacementReservationId = retained;
+                    _retainedReplacementReservationBytes = replacementReservedBytes;
+                }
             }
 
             if (ex is not CheckpointCapacityDeniedException)
@@ -810,11 +891,41 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
         finally
         {
-            if (reservationId is ulong id)
+            if (!_retainReplacementReservation && reservationId is ulong id)
             {
                 _checkpointCapacity!.Release(id);
             }
+
+            _retainReplacementReservation = false;
         }
+    }
+
+    private ulong TakeReplacementReservation(long bytes, out long reservedBytes)
+    {
+        if (_retainedReplacementReservationId is ulong retained)
+        {
+            var known = _retainedReplacementReservationBytes;
+            if (bytes > known && !_checkpointCapacity!.TryIncrease(retained, bytes - known))
+            {
+                reservedBytes = known;
+                throw new CheckpointCapacityDeniedException(bytes - known);
+            }
+
+            _retainedReplacementReservationId = null;
+            _retainedReplacementReservationBytes = 0;
+            reservedBytes = Math.Max(known, bytes);
+            return retained;
+        }
+
+        var created = _checkpointCapacity!.TryReserve(bytes);
+        if (created is null)
+        {
+            reservedBytes = 0;
+            throw new CheckpointCapacityDeniedException(bytes);
+        }
+
+        reservedBytes = bytes;
+        return created.Value;
     }
 
     private long MeasureReplacementCopyEnd(ArticleIndexSnapshotHeader snapshot)
@@ -1098,8 +1209,13 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private string ReplacementTempPath() =>
         Path.Combine(Path.GetDirectoryName(_indexPath) ?? string.Empty, ReplacementTempFileName);
 
-    private static void TryDelete(string path)
+    private bool TryDelete(string path)
     {
+        if (TestFailCheckpointTempDelete && File.Exists(path))
+        {
+            return false;
+        }
+
         try
         {
             File.Delete(path);
@@ -1110,6 +1226,8 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         catch (UnauthorizedAccessException)
         {
         }
+
+        return !File.Exists(path);
     }
 
     /// <summary>Current index file length. Tests and capacity binding use it to see whether a frame landed.</summary>

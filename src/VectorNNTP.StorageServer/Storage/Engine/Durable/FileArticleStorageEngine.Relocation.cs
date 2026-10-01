@@ -346,14 +346,22 @@ public sealed partial class FileArticleStorageEngine
                         Reason: "storage-capacity");
                 }
 
-                reservedCompaction = true;
+                if (!decision.AlreadySatisfied)
+                {
+                    reservedCompaction = true;
+                }
+
                 if (!TryReserveDirectIndexFrame(
                         intent.ArtId,
                         ArticleIndexRecordCodec.RecordLength,
                         _capacityMaximumUtilization + _capacityCompactionHeadroom))
                 {
-                    ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
-                    reservedCompaction = false;
+                    if (reservedCompaction)
+                    {
+                        ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+                        reservedCompaction = false;
+                    }
+
                     return new ArticleRelocationResult(
                         ArticleRelocationOutcome.RejectedCapacity,
                         intent.ArtId,
@@ -372,27 +380,30 @@ public sealed partial class FileArticleStorageEngine
             // After capacity reservation: intentional pre-append fault still rolls back reservation.
             ThrowIfRelocationFault(RelocationFaultPoint.AfterIntentBeforeAppend);
 
-            var appender = await _segments.GetActiveAppenderAsync(cancellationToken).ConfigureAwait(false);
-            if (appender.SegmentId.Value == intent.ExpectedSourceLocation.SegmentId.Value)
+            StoredArticleLocation destination;
+            if (TryGetBoundCompactionDestination(intent.CompactionId, intent.RelocationId, out var boundDestination))
             {
-                // Source is Closed, so active must never be the source; fail closed if invariants break.
-                throw new InvalidOperationException(
-                    "Active destination segment must not be the Closed compaction source.");
+                destination = boundDestination;
             }
-
-            var reported = await _segments
-                .AppendToActiveReportingAsync(artData, cancellationToken)
-                .ConfigureAwait(false);
-            var destination = reported.Location;
-            _ = Interlocked.Increment(ref _physicalAppendCount);
-
-            // Append returns only after Flush(true). The destination bytes are then only in UsedBytes.
-            if (reservedCompaction)
+            else
             {
-                ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
-            }
+                var appender = await _segments.GetActiveAppenderAsync(cancellationToken).ConfigureAwait(false);
+                if (appender.SegmentId.Value == intent.ExpectedSourceLocation.SegmentId.Value)
+                {
+                    // Source is Closed, so active must never be the source; fail closed if invariants break.
+                    throw new InvalidOperationException(
+                        "Active destination segment must not be the Closed compaction source.");
+                }
 
-            reservedCompaction = false;
+                var reported = await _segments
+                    .AppendToActiveReportingAsync(artData, cancellationToken)
+                    .ConfigureAwait(false);
+                destination = reported.Location;
+                _ = Interlocked.Increment(ref _physicalAppendCount);
+                BindCompactionDestination(intent.CompactionId, intent.RelocationId, destination);
+                // Flush(true) has returned. The reservation stays until this segment is reclaimed.
+                reservedCompaction = false;
+            }
 
             ThrowIfRelocationFault(RelocationFaultPoint.AfterAppendBeforeWritten);
 
@@ -496,6 +507,42 @@ public sealed partial class FileArticleStorageEngine
         }
 
         return FinishIndexRelocate(intent, destination, ref reservedIndex);
+    }
+
+    private bool TryGetBoundCompactionDestination(
+        ulong compactionId,
+        ulong relocationId,
+        out StoredArticleLocation location)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            location = default;
+            return false;
+        }
+
+        var found = RequireSegmentVolume().WithLedger(ledger =>
+            ledger.TryGetCompactionDestination(compactionId, relocationId, out var bound)
+                ? (true, bound)
+                : (false, default(StoredArticleLocation)));
+        location = found.Item2;
+        return found.Item1;
+    }
+
+    private void BindCompactionDestination(
+        ulong compactionId,
+        ulong relocationId,
+        StoredArticleLocation location)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        RequireSegmentVolume().WithLedger(ledger =>
+        {
+            ledger.BindCompactionDestination(compactionId, relocationId, location);
+            return 0;
+        });
     }
 
     private void ReleaseCompactionReservation(ulong compactionId, ulong relocationId)

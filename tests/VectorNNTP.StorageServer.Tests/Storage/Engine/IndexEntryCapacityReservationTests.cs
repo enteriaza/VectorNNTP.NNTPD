@@ -386,7 +386,7 @@ public sealed class IndexEntryCapacityReservationTests
         _ = Assert.Throws<IOException>(() => engine.Index.Checkpoint());
         Assert.Equal(IndexBytes * 2, engine.ProcessLocalIndexReservedBytes);
         Assert.Equal(2, engine.ProcessLocalIndexFrameCount);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(1), engine.ProcessLocalCheckpointReservedBytes);
     }
 
     [Fact]
@@ -454,7 +454,7 @@ public sealed class IndexEntryCapacityReservationTests
         _ = Assert.Throws<IOException>(() => engine.Index.Checkpoint());
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
         Assert.Equal(1, engine.ProcessLocalIndexFrameCount);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(1), engine.ProcessLocalCheckpointReservedBytes);
     }
 
     [Fact]

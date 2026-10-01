@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 
@@ -55,7 +56,7 @@ internal sealed class ProcessLocalCapacityLedger
     private readonly Dictionary<ulong, long> _journalBySequence = new();
     private readonly Dictionary<ulong, long> _indexUnboundBySequence = new();
     private readonly List<IndexPresentReservation> _indexFrames = new();
-    private readonly Dictionary<(ulong CompactionId, ulong RelocationId), long> _compactionByKey = new();
+    private readonly Dictionary<(ulong CompactionId, ulong RelocationId), CompactionDestinationHold> _compactionByKey = new();
     private readonly Dictionary<CompactionJournalFrameKey, long> _compactionJournalFrames = new();
     private readonly Dictionary<ulong, long> _checkpointById = new();
 
@@ -834,7 +835,7 @@ internal sealed class ProcessLocalCapacityLedger
     {
         ArgumentOutOfRangeException.ThrowIfNegative(requiredBytes);
         var key = (compactionId, relocationId);
-        if (!_compactionByKey.TryAdd(key, requiredBytes))
+        if (!_compactionByKey.TryAdd(key, new CompactionDestinationHold(requiredBytes, Location: null)))
         {
             throw new InvalidOperationException(
                 $"Compaction capacity reservation already exists for compaction {compactionId} relocation {relocationId}.");
@@ -844,16 +845,85 @@ internal sealed class ProcessLocalCapacityLedger
     }
 
     /// <summary>
+    /// Records the segment that holds a destination whose <c>Flush(true)</c> has returned.
+    /// The reservation stays until that segment is reclaimed.
+    /// </summary>
+    public void BindCompactionDestination(
+        ulong compactionId,
+        ulong relocationId,
+        StoredArticleLocation location)
+    {
+        var key = (compactionId, relocationId);
+        if (!_compactionByKey.TryGetValue(key, out var hold))
+        {
+            throw new InvalidOperationException(
+                $"Compaction capacity reservation does not exist for compaction {compactionId} relocation {relocationId}.");
+        }
+
+        _compactionByKey[key] = hold with { Location = location };
+    }
+
+    /// <summary>Returns the durable destination already bound to this reservation.</summary>
+    public bool TryGetCompactionDestination(
+        ulong compactionId,
+        ulong relocationId,
+        out StoredArticleLocation location)
+    {
+        if (_compactionByKey.TryGetValue((compactionId, relocationId), out var hold)
+            && hold.Location is { } bound)
+        {
+            location = bound;
+            return true;
+        }
+
+        location = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Releases destination reservations whose bound location is on <paramref name="segmentId"/>.
+    /// Unbound reservations and other segments are left in place.
+    /// </summary>
+    public int ReleaseCompactionDestinationsOnSegment(SegmentId segmentId)
+    {
+        List<(ulong CompactionId, ulong RelocationId)>? keys = null;
+        foreach (var pair in _compactionByKey)
+        {
+            if (pair.Value.Location is { } location && location.SegmentId == segmentId)
+            {
+                keys ??= [];
+                keys.Add(pair.Key);
+            }
+        }
+
+        if (keys is null)
+        {
+            return 0;
+        }
+
+        var released = 0;
+        foreach (var key in keys)
+        {
+            if (ReleaseCompaction(key.CompactionId, key.RelocationId))
+            {
+                released++;
+            }
+        }
+
+        return released;
+    }
+
+    /// <summary>
     /// Releases a compaction destination reservation. Idempotent when the key was never reserved.
     /// </summary>
     public bool ReleaseCompaction(ulong compactionId, ulong relocationId)
     {
-        if (!_compactionByKey.Remove((compactionId, relocationId), out var bytes))
+        if (!_compactionByKey.Remove((compactionId, relocationId), out var hold))
         {
             return false;
         }
 
-        _compactionReservedBytes -= bytes;
+        _compactionReservedBytes -= hold.Bytes;
         if (_compactionReservedBytes < 0)
         {
             _compactionReservedBytes = 0;
@@ -932,6 +1002,8 @@ internal sealed class ProcessLocalCapacityLedger
 
         public long TotalBytes => (long)ReservedCopies * BytesPerCopy;
     }
+
+    private readonly record struct CompactionDestinationHold(long Bytes, StoredArticleLocation? Location);
 
     private readonly record struct IndexPresentReservation(
         ArticleId ArtId,

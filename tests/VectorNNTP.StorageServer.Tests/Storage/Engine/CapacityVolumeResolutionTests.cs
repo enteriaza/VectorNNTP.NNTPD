@@ -238,7 +238,9 @@ public sealed class CapacityVolumeResolutionTests
         Assert.Equal(
             articleDuring + journalDuring + indexDuring + compactionDuring + compactionJournalDuring + checkpointDuring,
             totalDuring);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
     }
 

@@ -342,9 +342,9 @@ public sealed class OpenCompactionZeroProgressFairnessTests
     private static long LeaveRoomForWrittenFrame(FileArticleStorageEngine engine)
     {
         var ceiling = engine.ObserveCapacityAdmissionPressure().CompactionCeilingBytes;
-        return Math.Max(
-            0,
-            ceiling - engine.ProcessLocalReservedBytes - ArticleJournalFrameCodec.RelocationWrittenFrameLength);
+        var extra = ArticleJournalFrameCodec.RelocationWrittenFrameLength
+            + ArticleJournalFrameCodec.RelocationIntentFrameLength;
+        return Math.Max(0, ceiling - engine.ProcessLocalReservedBytes - extra);
     }
 
     private static ArticleStorageRuntimeOptions WithCapacity(

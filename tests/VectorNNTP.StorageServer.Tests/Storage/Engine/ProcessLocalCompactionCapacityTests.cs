@@ -107,11 +107,12 @@ public sealed class ProcessLocalCompactionCapacityTests
         Assert.Equal(ArticleRelocationOutcome.RejectedCapacity, rejected.Outcome);
         Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
 
-        capacity.UsedBytes = compactionCeiling - pins - required - newFrame - intent;
+        var written = ArticleJournalFrameCodec.RelocationWrittenFrameLength;
+        capacity.UsedBytes = compactionCeiling - pins - required - newFrame - intent - written;
         var accepted = await engine.RelocateArticleAsync(
             compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, accepted.Outcome);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(required, engine.ProcessLocalCompactionReservedBytes);
     }
 
     [Fact]
@@ -178,7 +179,9 @@ public sealed class ProcessLocalCompactionCapacityTests
         var ok = await engine.RelocateArticleAsync(
             compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, ok.Outcome);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engine.ProcessLocalCompactionReservedBytes);
     }
 
     [Fact]
@@ -198,8 +201,10 @@ public sealed class ProcessLocalCompactionCapacityTests
         _ = await Assert.ThrowsAsync<IOException>(() =>
             engine.RelocateArticleAsync(
                 compactionId, 1, sourceId, generation, record.ArtId, CancellationToken.None));
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservationCount);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
     }
 
     [Fact]
@@ -237,12 +242,13 @@ public sealed class ProcessLocalCompactionCapacityTests
         var relocated = await engineB.RelocateArticleAsync(
             compactionId, 1, sourceId, beginGen, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, relocated.Outcome);
-        Assert.Equal(0, engineB.ProcessLocalCompactionReservedBytes);
+        var copyBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        Assert.Equal(copyBytes, engineB.ProcessLocalCompactionReservedBytes);
 
         var again = await engineB.RelocateArticleAsync(
             compactionId, 1, sourceId, beginGen, record.ArtId, CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.IdempotentNoOp, again.Outcome);
-        Assert.Equal(0, engineB.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(copyBytes, engineB.ProcessLocalCompactionReservedBytes);
     }
 
     [Fact]
@@ -268,13 +274,14 @@ public sealed class ProcessLocalCompactionCapacityTests
             ArticleRelocationOutcome.Relocated,
             (await engine.RelocateArticleAsync(
                 compactionId, 1, sourceId, info.Generation, a.ArtId, CancellationToken.None)).Outcome);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        var aBytes = SegmentRecordCodec.RecordLengthForArtSize(a.ArtSize);
+        Assert.Equal(aBytes, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(
             ArticleRelocationOutcome.Relocated,
             (await engine.RelocateArticleAsync(
                 compactionId, 2, sourceId, info.Generation, b.ArtId, CancellationToken.None)).Outcome);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservationCount);
+        Assert.Equal(aBytes + SegmentRecordCodec.RecordLengthForArtSize(b.ArtSize), engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(2, engine.ProcessLocalCompactionReservationCount);
     }
 
     [Fact]
@@ -315,8 +322,9 @@ public sealed class ProcessLocalCompactionCapacityTests
         // when the other intents have not been reserved yet.
         var intent = ArticleJournalFrameCodec.RelocationIntentFrameLength;
         var frame = ArticleIndexRecordCodec.RecordLength;
+        var written = ArticleJournalFrameCodec.RelocationWrittenFrameLength;
         var ceiling = ProcessLocalCapacityLedger.ComputeCeilingBytes(total, 0.55);
-        capacity.UsedBytes = ceiling - pins - (intent * articles) - (3L * (required + frame));
+        capacity.UsedBytes = ceiling - pins - (intent * articles) - (3L * (required + frame + written));
         Assert.True(capacity.UsedBytes >= 0);
 
         var hold = new ManualResetEventSlim(false);
@@ -357,7 +365,7 @@ public sealed class ProcessLocalCompactionCapacityTests
         var rejected = outcomes.Count(static o => o == ArticleRelocationOutcome.RejectedCapacity);
         Assert.Equal(3, relocated);
         Assert.Equal(articles - 3, rejected);
-        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(3L * required, engine.ProcessLocalCompactionReservedBytes);
     }
 
     [Fact]

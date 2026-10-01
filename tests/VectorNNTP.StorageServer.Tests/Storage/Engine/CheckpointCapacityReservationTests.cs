@@ -235,7 +235,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.Equal(1UL, snapshot.RecordCount);
         releaseJournal.TrySetResult();
         Assert.True(await journalTask > 0);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.Equal(snapshotBytes, engine.ProcessLocalCheckpointReservedBytes);
         Assert.Empty(TempJournals(dir));
         Assert.False(File.Exists(SnapTempPath(dir)));
     }
@@ -278,19 +278,7 @@ public sealed class CheckpointCapacityReservationTests
             var intentHeld = journalHeld + ArticleJournalFrameCodec.RelocationIntentFrameLength;
             var duringRejects = !ProcessLocalCapacityLedger.WouldFit(
                 0, articleHeld, 0, candidate, required, 0.90, snapshotBytes, intentHeld, indexHeld);
-            var afterDestFits = ProcessLocalCapacityLedger.WouldFit(
-                0, articleHeld, 0, candidate, required, 0.90, journalReservedBytes: intentHeld, indexReservedBytes: indexHeld);
-            var afterIndexFits = ProcessLocalCapacityLedger.WouldFit(
-                0,
-                articleHeld,
-                required,
-                candidate,
-                ArticleIndexRecordCodec.RecordLength,
-                0.90,
-                journalReservedBytes: intentHeld,
-                indexReservedBytes: indexHeld);
-            var afterFits = afterDestFits && afterIndexFits;
-            if (snapshotFits && duringRejects && afterFits)
+            if (snapshotFits && duringRejects)
             {
                 total = candidate;
                 break;
@@ -320,7 +308,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.NotNull(during);
         Assert.Equal(ArticleRelocationOutcome.RejectedCapacity, during.Value.Outcome);
         Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.Equal(snapshotBytes, engine.ProcessLocalCheckpointReservedBytes);
 
         var after = await engine.RelocateArticleAsync(
             compactionId,
@@ -329,7 +317,8 @@ public sealed class CheckpointCapacityReservationTests
             info.Generation,
             record.ArtId,
             CancellationToken.None);
-        Assert.Equal(ArticleRelocationOutcome.Relocated, after.Outcome);
+        Assert.Equal(ArticleRelocationOutcome.RejectedCapacity, after.Outcome);
+        Assert.Equal(snapshotBytes, engine.ProcessLocalCheckpointReservedBytes);
     }
 
     [Fact]
@@ -421,7 +410,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.Equal(encoded, reservedDuringWrite);
         Assert.Equal(encoded, capacity.ReserveCalls[0]);
         Assert.Equal((ulong)count, header.RecordCount);
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(encoded, capacity.Ledger.CheckpointReservedBytes);
         Assert.False(File.Exists(SnapTempPath(dir)));
         Assert.True(File.Exists(SnapPath(dir)));
     }
@@ -438,20 +427,20 @@ public sealed class CheckpointCapacityReservationTests
         index.AttachCheckpointCapacity(capacity.Create());
         var installed = index.WriteSnapshot();
         Assert.Equal(encoded, capacity.ReserveCalls[0]);
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(encoded, capacity.Ledger.CheckpointReservedBytes);
 
         capacity.Used = ceiling - encoded + 1;
         capacity.ReserveCalls.Clear();
         var denied = Assert.Throws<CheckpointCapacityDeniedException>(() => index.WriteSnapshot());
         Assert.Equal(encoded, denied.RequiredBytes);
         Assert.False(File.Exists(SnapTempPath(dir)));
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(encoded, capacity.Ledger.CheckpointReservedBytes);
         Assert.Equal(installed.Generation, ArticleIndexSnapshotCodec.Read(SnapPath(dir)).Generation);
 
         capacity.Used = 0;
         index.TestBeforeSnapshotFlush = () => throw new IOException("snapshot-fault");
         Assert.Throws<IOException>(() => index.WriteSnapshot());
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(encoded, capacity.Ledger.CheckpointReservedBytes);
         Assert.False(File.Exists(SnapTempPath(dir)));
         Assert.Equal(installed.Generation, ArticleIndexSnapshotCodec.Read(SnapPath(dir)).Generation);
     }
@@ -483,7 +472,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.Equal(ArticleIndexRecordCodec.RecordLength, increaseBytes);
         Assert.Equal(ArticleIndexDeltaFile.HeaderLength, replLengthAtIncrease);
         Assert.Equal(ArticleIndexRecordCodec.RecordLength, result.DeltaBytes);
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(1), capacity.Ledger.CheckpointReservedBytes);
         Assert.False(File.Exists(ReplPath(dir)));
         Assert.NotEqual(before, index.CopyIndexBytes());
     }
@@ -508,7 +497,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.Equal(ArticleIndexDeltaFile.HeaderLength, replLengthAtIncrease);
         Assert.Equal(before.Length + ArticleIndexRecordCodec.RecordLength, index.CopyIndexBytes().Length);
         Assert.False(File.Exists(ReplPath(dir)));
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(1), capacity.Ledger.CheckpointReservedBytes);
 
         var afterDenial = index.CopyIndexBytes();
         capacity.DenyIncrease = false;
@@ -517,7 +506,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.Throws<IOException>(() => index.Checkpoint());
         Assert.Equal(afterDenial, index.CopyIndexBytes());
         Assert.False(File.Exists(ReplPath(dir)));
-        Assert.Equal(0, capacity.Ledger.CheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(2), capacity.Ledger.CheckpointReservedBytes);
     }
 
     [Fact]
@@ -552,7 +541,7 @@ public sealed class CheckpointCapacityReservationTests
         Assert.DoesNotContain(100L, reserved);
         Assert.DoesNotContain(50L, reserved);
         Assert.DoesNotContain(80L, reserved);
-        Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
+        Assert.Equal(ArticleIndexSnapshotCodec.EncodedLength(1), engine.ProcessLocalCheckpointReservedBytes);
     }
 
     private static async Task CommitAcceptAsync(FileArticleJournal journal, JournalAcceptRecord accept)

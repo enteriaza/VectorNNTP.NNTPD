@@ -517,7 +517,9 @@ public sealed class PhysicalWrittenCompactionFenceTests
 
         Assert.True(sawReservation);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
-        Assert.Equal(0, engine.ObserveCapacityAdmissionPressure().CompactionReservedBytes);
+        Assert.Equal(
+            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
+            engine.ObserveCapacityAdmissionPressure().CompactionReservedBytes);
     }
 
     [Fact]

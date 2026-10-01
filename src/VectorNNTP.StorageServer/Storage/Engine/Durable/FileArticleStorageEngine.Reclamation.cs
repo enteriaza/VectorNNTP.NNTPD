@@ -134,6 +134,12 @@ public sealed partial class FileArticleStorageEngine
                     Reason: "already-reclaimed"));
             }
 
+            if (_capacityAdmissionEnabled)
+            {
+                _ = RequireSegmentVolume().WithLedger(
+                    ledger => ledger.ReleaseCompactionDestinationsOnSegment(segmentId));
+            }
+
             return Task.FromResult(new ArticleSegmentReclamationResult(
                 ArticleSegmentReclamationOutcome.Reclaimed,
                 segmentId,
