@@ -224,6 +224,72 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         Assert.True(engineB.TryRead(record.ArtId, out _));
     }
 
+    [Fact]
+    public async Task JournalFailClosed_ObjectDisposed_DoesNotScheduleFilesystemRetry()
+    {
+        using var dir = TempStorageDir.Create();
+        var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
+        await using var engine = FileArticleStorageEngine.Open(
+            WithCapacity(dir.Options),
+            capacityReader: capacity);
+        engine.TestPersistRetryDelay = TimeSpan.FromHours(1);
+
+        _ = await engine.AcceptAsync(CreateRecord("<5f1c-closed-done@seg.test>"), CancellationToken.None);
+        await engine.DrainPendingAsync(CancellationToken.None);
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.TestHookAfterSataBeforePhysicalWritten = (_, _) =>
+        {
+            entered.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        };
+
+        var incomplete = CreateRecord("<5f1c-closed-open@seg.test>", "open\r\n");
+        var accepted = await engine.AcceptAsync(incomplete, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        engine.Journal.CheckpointTestFault = point =>
+        {
+            if (point == FileArticleJournal.CheckpointFaultPoint.AfterMoveBeforeReopen)
+            {
+                throw new IOException("reopen-fault");
+            }
+        };
+
+        try
+        {
+            var fault = Assert.Throws<IOException>(() => engine.CheckpointTruncateCommitted());
+            Assert.Contains("reopen-fault", fault.Message, StringComparison.Ordinal);
+            Assert.Throws<ObjectDisposedException>(() => engine.Journal.JournalPhysicalBytes);
+            var reserved = engine.ProcessLocalJournalReservedBytes;
+            Assert.True(reserved > 0);
+            Assert.Equal(0, engine.PersistRetryScheduledCount);
+
+            release.TrySetResult();
+            await WaitUntilAsync(
+                () => engine.PersistBlockedRetryScheduledCount >= 1,
+                TimeSpan.FromSeconds(5));
+
+            Assert.Equal(0, engine.PersistRetryScheduledCount);
+            Assert.Equal(1, engine.PersistBlockedRetryScheduledCount);
+            Assert.Equal(reserved, engine.ProcessLocalJournalReservedBytes);
+            Assert.False(engine.TryRead(incomplete.ArtId, out _));
+            Assert.False(engine.Index.TryGet(incomplete.ArtId, out _));
+            Assert.False(engine.ArticleCache.TryGet(incomplete.ArtId, out _));
+
+            using var journal = FileArticleJournal.Open(dir.Options);
+            var row = Assert.Single(journal.EnumerateIncomplete());
+            Assert.Equal(accepted.Sequence, row.Accept.Sequence);
+            Assert.Null(row.PhysicalWritten);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
         var start = DateTime.UtcNow;
