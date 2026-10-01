@@ -222,6 +222,45 @@ public sealed class FileSegmentStoreTests
     }
 
     [Fact]
+    public async Task ActiveDiscovery_SeekFailure_DisposesUnpublishedStream()
+    {
+        using var dir = TempSegmentDir.Create();
+        var article = CreateArtData("<seek-fail@example.test>", "keep\r\n");
+        StoredArticleLocation location;
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            location = await (await storeA.GetActiveAppenderAsync(CancellationToken.None))
+                .AppendAsync(article, CancellationToken.None);
+        }
+
+        FileSegmentStore? failed = null;
+        FileStream? opened = null;
+        var ex = Assert.Throws<IOException>(() =>
+            FileSegmentStore.Open(dir.Options, store =>
+            {
+                failed = store;
+                store.TestBeforeActiveDiscoverySeek = stream =>
+                {
+                    opened = stream;
+                    throw new IOException("active-discovery-seek");
+                };
+            }));
+
+        Assert.Equal("active-discovery-seek", ex.Message);
+        Assert.NotNull(opened);
+        Assert.Throws<ObjectDisposedException>(() => opened.ReadByte());
+        Assert.NotNull(failed);
+        Assert.Equal(0, failed.TestSegmentRuntimeCount);
+        failed.Dispose();
+        Assert.Equal(0, failed.TestSegmentRuntimeCount);
+
+        using var storeB = FileSegmentStore.Open(dir.Options);
+        Assert.True(storeB.TryRead(location, out var read));
+        Assert.True(read.Span.SequenceEqual(article));
+        Assert.Equal(1, storeB.TestSegmentRuntimeCount);
+    }
+
+    [Fact]
     public async Task N_TornFinalRecord_OnActive_TruncatedAndResumed()
     {
         using var dir = TempSegmentDir.Create();

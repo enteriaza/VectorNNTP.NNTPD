@@ -74,6 +74,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     internal Func<string, byte[]>? TestDiscoveryPayloadReader { get; set; }
 
+    /// <summary>
+    /// Invoked after the active discovery stream is opened and before <see cref="Stream.Seek"/>.
+    /// Tests only. A throw must leave that stream unpublished.
+    /// </summary>
+    internal Action<FileStream>? TestBeforeActiveDiscoverySeek { get; set; }
+
+    /// <summary>Published segment runtimes. Tests only. Readable after dispose.</summary>
+    internal int TestSegmentRuntimeCount => _segments.Count;
+
     private FileSegmentStore(
         string root,
         long targetSegmentBytes,
@@ -119,12 +128,21 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal static FileSegmentStore Open(
         ArticleStorageRuntimeOptions options,
         Func<string, byte[]> discoveryPayloadReader)
-        => OpenCore(options, logger: null, discoveryPayloadReader);
+        => OpenCore(options, logger: null, discoveryPayloadReader, configureBeforeDiscovery: null);
+
+    /// <summary>
+    /// Test entry that configures the store after construction and before discovery.
+    /// </summary>
+    internal static FileSegmentStore Open(
+        ArticleStorageRuntimeOptions options,
+        Action<FileSegmentStore> configureBeforeDiscovery)
+        => OpenCore(options, logger: null, discoveryPayloadReader: null, configureBeforeDiscovery);
 
     private static FileSegmentStore OpenCore(
         ArticleStorageRuntimeOptions options,
         ILogger? logger,
-        Func<string, byte[]>? discoveryPayloadReader)
+        Func<string, byte[]>? discoveryPayloadReader,
+        Action<FileSegmentStore>? configureBeforeDiscovery = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.SegmentDir);
@@ -133,6 +151,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         Directory.CreateDirectory(options.SegmentDir);
         var store = new FileSegmentStore(options.SegmentDir, options.SegmentTargetSizeBytes, log);
         store.TestDiscoveryPayloadReader = discoveryPayloadReader;
+        configureBeforeDiscovery?.Invoke(store);
         try
         {
             store.DiscoverAndRecoverUnlocked();
@@ -903,36 +922,54 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 CreatedUtc: DateTimeOffset.UtcNow,
                 ClosedUtc: state == SegmentState.Active ? null : DateTimeOffset.UtcNow));
 
-            FileStream? stream = null;
             if (state == SegmentState.Active)
             {
-                stream = new FileStream(
+                var opened = new FileStream(
                     item.Path,
                     FileMode.Open,
                     FileAccess.ReadWrite,
                     FileShare.Read,
                     bufferSize: 64 * 1024,
                     FileOptions.None);
-                stream.Seek(0, SeekOrigin.End);
-                _activeSegmentId = item.Id.Value;
+                try
+                {
+                    TestBeforeActiveDiscoverySeek?.Invoke(opened);
+                    opened.Seek(0, SeekOrigin.End);
+                    _activeSegmentId = item.Id.Value;
+                    _segments[item.Id.Value] = new SegmentRuntime(
+                        item.Id,
+                        state,
+                        item.Path,
+                        opened,
+                        validLength);
+                    opened = null;
+                }
+                finally
+                {
+                    opened?.Dispose();
+                }
             }
-            else if (state == SegmentState.Closed)
+            else
             {
-                stream = new FileStream(
-                    item.Path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite,
-                    bufferSize: 64 * 1024,
-                    FileOptions.None);
-            }
+                FileStream? stream = null;
+                if (state == SegmentState.Closed)
+                {
+                    stream = new FileStream(
+                        item.Path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite,
+                        bufferSize: 64 * 1024,
+                        FileOptions.None);
+                }
 
-            _segments[item.Id.Value] = new SegmentRuntime(
-                item.Id,
-                state,
-                item.Path,
-                stream,
-                validLength);
+                _segments[item.Id.Value] = new SegmentRuntime(
+                    item.Id,
+                    state,
+                    item.Path,
+                    stream,
+                    validLength);
+            }
         }
 
         _catalogue.ReplaceAll(catalogueEntries);
