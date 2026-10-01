@@ -56,6 +56,9 @@ internal sealed class RecordingStorageServerRabbitMqConnection : IRabbitMqConnec
 
     public List<RecordingPublishChannel> PublishChannels { get; } = [];
 
+    /// <summary>Invoked before a confirmed publish is recorded. May throw or wait.</summary>
+    public Func<RabbitMqConfirmedPublication, CancellationToken, Task>? BeforePublish { get; set; }
+
     public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost
     {
         add { }
@@ -84,7 +87,7 @@ internal sealed class RecordingStorageServerRabbitMqConnection : IRabbitMqConnec
     public Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(long generation, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var channel = new RecordingPublishChannel(generation);
+        var channel = new RecordingPublishChannel(generation, this);
         PublishChannels.Add(channel);
         return Task.FromResult<IRabbitMqPublishChannel>(channel);
     }
@@ -157,7 +160,13 @@ internal sealed class RecordingTopologyChannel : IRabbitMqTopologyChannel
 
 internal sealed class RecordingPublishChannel : IRabbitMqPublishChannel
 {
-    public RecordingPublishChannel(long generation) => Generation = generation;
+    private readonly RecordingStorageServerRabbitMqConnection? _connection;
+
+    public RecordingPublishChannel(long generation, RecordingStorageServerRabbitMqConnection? connection = null)
+    {
+        Generation = generation;
+        _connection = connection;
+    }
 
     public long Generation { get; }
 
@@ -190,14 +199,19 @@ internal sealed class RecordingPublishChannel : IRabbitMqPublishChannel
                 body),
             cancellationToken);
 
-    public Task PublishConfirmedAsync(
+    public async Task PublishConfirmedAsync(
         RabbitMqConfirmedPublication publication,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(publication);
         cancellationToken.ThrowIfCancellationRequested();
+        if (_connection?.BeforePublish is not null)
+        {
+            await _connection.BeforePublish(publication, cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
         Publications.Add(publication with { Body = publication.Body.ToArray() });
-        return Task.CompletedTask;
     }
 
     public ValueTask DisposeAsync()

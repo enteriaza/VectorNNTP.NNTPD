@@ -204,6 +204,35 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
                 return;
             }
 
+            var receivedAt = _timeProvider.GetUtcNow();
+            if (StorageServerLifecycleWireProtocol.TryParseV1(
+                    delivery.Body.Span,
+                    out var announcement,
+                    out var lifecycleReason,
+                    out var lifecycleRecognized))
+            {
+                if (announcement is null)
+                {
+                    StorageServerFleetLogMessages.PayloadRejected(_logger, lifecycleReason);
+                }
+                else
+                {
+                    _registry.ApplyLifecycle(announcement, receivedAt);
+                }
+
+                await session.Channel.BasicAckAsync(delivery.DeliveryTag, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (lifecycleRecognized)
+            {
+                StorageServerFleetLogMessages.PayloadRejected(_logger, lifecycleReason);
+                await session.Channel.BasicAckAsync(delivery.DeliveryTag, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (!StorageServerAdvertisementWireProtocol.TryParseV1(
                     delivery.Body.Span,
                     out var advertisement,
@@ -216,7 +245,7 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
                 return;
             }
 
-            _registry.ApplyAdvertisement(advertisement, _timeProvider.GetUtcNow());
+            _registry.ApplyAdvertisement(advertisement, receivedAt);
             if (_roster is not null && advertisement.VatpPort is >= 1 and <= 65535)
             {
                 _roster.Observe(advertisement.ServerId, advertisement.Fqdn, advertisement.VatpPort.Value);

@@ -80,4 +80,48 @@ public sealed class StorageServerAdvertisementWireProtocolTests
         Assert.Equal(TimeSpan.FromSeconds(1), CacheFleetTopology.AdvertisementInterval);
         Assert.Equal(TimeSpan.FromSeconds(3), CacheFleetTopology.LivenessWindow);
     }
+
+    [Fact]
+    public void LifecycleAnnouncement_RoundTrips_AndIsNotAnAdvertisement()
+    {
+        var original = new StorageServerLifecycleAnnouncement(
+            1,
+            4,
+            "cache04.usenet.ninja",
+            StorageServerLifecycleState.Draining,
+            DateTimeOffset.Parse("2026-09-29T12:00:00Z"),
+            1191);
+        var bytes = StorageServerLifecycleWireProtocol.SerializeV1(original);
+        Assert.True(StorageServerLifecycleWireProtocol.TryParseV1(bytes, out var parsed, out var reason, out var recognized));
+        Assert.True(recognized);
+        Assert.Equal(string.Empty, reason);
+        Assert.Equal(original, parsed);
+        Assert.False(StorageServerAdvertisementWireProtocol.TryParseV1(bytes, out _, out _));
+
+        var advertisement = StorageServerAdvertisementWireProtocol.SerializeV1(
+            new StorageServerAdvertisement(1, 4, "cache04.usenet.ninja", 1, 0, 1, original.Timestamp, 1191));
+        Assert.False(StorageServerLifecycleWireProtocol.TryParseV1(
+            advertisement,
+            out _,
+            out var notLifecycle,
+            out var advertisementRecognized));
+        Assert.False(advertisementRecognized);
+        Assert.Equal(StorageServerLifecycleWireProtocol.NotLifecycleReason, notLifecycle);
+    }
+
+    [Fact]
+    public void ReadyState_IsRejected_AndIsNotAnAdvertisement()
+    {
+        var ready = """{"version":1,"serverId":4,"fqdn":"cache04.usenet.ninja","state":"Ready","timestamp":"2026-09-29T12:00:00.0000000Z","vatpPort":1191}"""u8;
+        Assert.False(StorageServerLifecycleWireProtocol.TryParseV1(
+            ready,
+            out var announcement,
+            out var reason,
+            out var recognized));
+        Assert.True(recognized);
+        Assert.Null(announcement);
+        Assert.Equal("Lifecycle announcement state must be Draining.", reason);
+        Assert.False(StorageServerAdvertisementWireProtocol.TryParseV1(ready, out _, out _));
+        Assert.Equal(1, StorageServerLifecycleWireProtocol.CurrentVersion);
+    }
 }

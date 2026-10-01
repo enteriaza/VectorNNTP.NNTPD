@@ -12,9 +12,18 @@ namespace VectorNNTP.StorageServer.Storage;
 /// Declares the durable fanout exchange so StorageServer can start before NNTPD.
 /// Uses the shared <see cref="RabbitMqService"/> connection; does not own TCP lifecycle.
 /// Heartbeat publication must not block clean shutdown.
+/// The periodic advertisement is the readiness signal. It starts only after this service starts,
+/// which is after the VATP listener is accepting. Stop publishes one transient Draining
+/// announcement after the loop has stopped and before the channel is disposed. A failed Draining
+/// publication is logged and does not block shutdown past <see cref="LifecycleAnnouncementTimeout"/>.
 /// </remarks>
 public sealed class StorageServerAdvertisementPublisherService : IApplicationService
 {
+    /// <summary>
+    /// Bound for one lifecycle publication. Shutdown continues when this elapses.
+    /// </summary>
+    private static readonly TimeSpan LifecycleAnnouncementTimeout = TimeSpan.FromSeconds(2);
+
     private readonly IRabbitMqService _rabbitMq;
     private readonly StorageServerRuntimeOptions _runtime;
     private readonly IStorageCapacityReader _capacityReader;
@@ -25,6 +34,10 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
     private Task? _loop;
     private IRabbitMqPublishChannel? _channel;
     private int _started;
+    private int _stopAdvertisements;
+    private int _lifecycleArmed;
+    private int _drainingPublished;
+    private long _lastTimestampTicks;
 
     /// <summary>Initializes a new advertisement publisher.</summary>
     public StorageServerAdvertisementPublisherService(
@@ -64,11 +77,15 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             return;
         }
 
+        Volatile.Write(ref _stopAdvertisements, 0);
+        Interlocked.Exchange(ref _drainingPublished, 0);
+
         try
         {
             _shutdownCts = new CancellationTokenSource();
             await EnsureExchangeAsync(cancellationToken).ConfigureAwait(false);
             await EnsurePublishChannelAsync(cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _lifecycleArmed, 1);
             _loop = RunPublishLoopAsync(_shutdownCts.Token);
             StorageServerAdvertisementLogMessages.Started(_logger, CacheFleetTopology.BroadcastExchangeName);
         }
@@ -124,6 +141,11 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
 
     private async Task PublishAdvertisementAsync(CancellationToken cancellationToken)
     {
+        if (Volatile.Read(ref _stopAdvertisements) == 1)
+        {
+            return;
+        }
+
         var capacity = _capacityReader.Read();
         var advertisement = new StorageServerAdvertisement(
             StorageServerAdvertisementWireProtocol.CurrentVersion,
@@ -132,7 +154,7 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             capacity.TotalBytes,
             capacity.UsedBytes,
             capacity.AvailableBytes,
-            _timeProvider.GetUtcNow(),
+            NextTimestamp(),
             _runtime.BindPortTls);
 
         var body = StorageServerAdvertisementWireProtocol.SerializeV1(advertisement);
@@ -210,8 +232,85 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
         return channel;
     }
 
+    private async Task PublishDrainingAsync()
+    {
+        if (Volatile.Read(ref _lifecycleArmed) == 0
+            || Interlocked.Exchange(ref _drainingPublished, 1) == 1)
+        {
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(LifecycleAnnouncementTimeout);
+        try
+        {
+            await PublishDrainingAnnouncementAsync(timeout.Token).ConfigureAwait(false);
+            StorageServerAdvertisementLogMessages.LifecycleDrainingPublished(
+                _logger,
+                _runtime.Fqdn,
+                _runtime.ServerId);
+        }
+        catch (Exception ex)
+        {
+            StorageServerAdvertisementLogMessages.LifecycleAnnouncementFailed(
+                _logger,
+                ex,
+                nameof(StorageServerLifecycleState.Draining));
+        }
+    }
+
+    private async Task PublishDrainingAnnouncementAsync(CancellationToken cancellationToken)
+    {
+        var announcement = new StorageServerLifecycleAnnouncement(
+            StorageServerLifecycleWireProtocol.CurrentVersion,
+            _runtime.ServerId,
+            _runtime.Fqdn,
+            StorageServerLifecycleState.Draining,
+            NextTimestamp(),
+            _runtime.BindPortTls);
+        var body = StorageServerLifecycleWireProtocol.SerializeV1(announcement);
+        await _publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var channel = await EnsurePublishChannelAsync(cancellationToken).ConfigureAwait(false);
+            await channel.PublishConfirmedAsync(
+                    new RabbitMqConfirmedPublication(
+                        CacheFleetTopology.BroadcastExchangeName,
+                        RoutingKey: CacheFleetTopology.BroadcastExchangeName,
+                        MessageId: Guid.NewGuid().ToString("D"),
+                        AppId: _runtime.Fqdn,
+                        CorrelationId: null,
+                        ContentType: StorageServerAdvertisementWireProtocol.JsonContentType,
+                        RequestIdHeader: null,
+                        ExpirationMilliseconds: CacheFleetTopology.AdvertisementExpirationMilliseconds,
+                        Persistent: false,
+                        Mandatory: false,
+                        Body: body),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _publishGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Returns a UTC timestamp strictly after the previous publication from this process.
+    /// Peers use it to order this process's advertisements and its Draining announcement.
+    /// It is not a process identity.
+    /// </summary>
+    private DateTimeOffset NextTimestamp()
+    {
+        var nowTicks = _timeProvider.GetUtcNow().ToUniversalTime().UtcTicks;
+        var last = Volatile.Read(ref _lastTimestampTicks);
+        var ticks = nowTicks > last ? nowTicks : last + 1;
+        Volatile.Write(ref _lastTimestampTicks, ticks);
+        return new DateTimeOffset(ticks, TimeSpan.Zero);
+    }
+
     private async Task StopCoreAsync()
     {
+        Volatile.Write(ref _stopAdvertisements, 1);
         if (_shutdownCts is not null)
         {
             await _shutdownCts.CancelAsync().ConfigureAwait(false);
@@ -228,6 +327,8 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             {
             }
         }
+
+        await PublishDrainingAsync().ConfigureAwait(false);
 
         var channel = Interlocked.Exchange(ref _channel, null);
         if (channel is not null)

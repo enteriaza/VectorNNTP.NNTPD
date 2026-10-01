@@ -46,8 +46,8 @@ public static class CacheFleetTopology
     public static readonly TimeSpan AdvertisementInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// NNTPD registry liveness window. Matches advertisement message TTL so vanished
-    /// StorageServers become inactive without an explicit offline message.
+    /// NNTPD registry liveness window. Matches advertisement message TTL. A StorageServer that
+    /// disappears without a Draining announcement becomes inactive when this window expires.
     /// </summary>
     public static readonly TimeSpan LivenessWindow = TimeSpan.FromSeconds(3);
 

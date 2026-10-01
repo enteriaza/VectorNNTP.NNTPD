@@ -36,6 +36,9 @@ public sealed class StorageServerFleetLifecycleOrderTests
         Assert.NotEqual(StorageVatpListenerState.Running, session.Listener.State);
         Assert.Equal(0, session.Publisher.PublishedCount);
         Assert.Null(session.Publisher.Execution);
+        Assert.DoesNotContain(
+            session.Connection.PublishChannels.SelectMany(static channel => channel.Publications),
+            static publication => IsDraining(publication));
     }
 
     [Fact]
@@ -54,7 +57,9 @@ public sealed class StorageServerFleetLifecycleOrderTests
         await using var session = await FleetSession.StartAsync();
         Assert.Equal(StorageVatpListenerState.Running, session.Listener.State);
         await WaitForAsync(() => session.Publisher.PublishedCount >= 1, TimeSpan.FromSeconds(5));
-        Assert.True(session.Publisher.PublishedCount >= 1);
+        var publications = session.Connection.PublishChannels.SelectMany(static channel => channel.Publications).ToArray();
+        Assert.Contains(publications, static publication => IsAdvertisement(publication));
+        Assert.DoesNotContain(publications, static publication => IsDraining(publication));
     }
 
     [Fact]
@@ -112,6 +117,7 @@ public sealed class StorageServerFleetLifecycleOrderTests
         Assert.True(publisherEnd >= 0);
         Assert.True(listenerBegin > publisherEnd);
         Assert.Equal(session.PublishedCountWhenListenerStopBegan, session.Publisher.PublishedCount);
+        Assert.Equal(1, session.DrainingCountWhenListenerStopBegan);
     }
 
     [Fact]
@@ -126,6 +132,9 @@ public sealed class StorageServerFleetLifecycleOrderTests
         Assert.Equal(0, session.Publisher.PublishedCount);
         Assert.Null(session.Publisher.Execution);
         Assert.NotEqual(StorageVatpListenerState.Running, session.Listener.State);
+        Assert.DoesNotContain(
+            session.Connection.PublishChannels.SelectMany(static channel => channel.Publications),
+            static publication => IsDraining(publication));
     }
 
     [Fact]
@@ -169,6 +178,14 @@ public sealed class StorageServerFleetLifecycleOrderTests
             await Task.Delay(10);
         }
     }
+
+    private static bool IsAdvertisement(RabbitMqConfirmedPublication publication) =>
+        StorageServerAdvertisementWireProtocol.TryParseV1(publication.Body.Span, out var advertisement, out _)
+        && advertisement is not null;
+
+    private static bool IsDraining(RabbitMqConfirmedPublication publication) =>
+        StorageServerLifecycleWireProtocol.TryParseV1(publication.Body.Span, out var announcement, out _, out _)
+        && announcement!.State == StorageServerLifecycleState.Draining;
 
     private static int GetFreePort()
     {
@@ -220,6 +237,8 @@ public sealed class StorageServerFleetLifecycleOrderTests
         public List<string> StopEvents { get; } = [];
 
         public long PublishedCountWhenListenerStopBegan { get; private set; }
+
+        public int DrainingCountWhenListenerStopBegan { get; private set; }
 
         public TaskCompletionSource ListenerEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -301,7 +320,13 @@ public sealed class StorageServerFleetLifecycleOrderTests
                 StorageVatpListenerService when traceStops => new StopTrace(
                     service,
                     session.StopEvents,
-                    () => session.PublishedCountWhenListenerStopBegan = publisher.PublishedCount),
+                    () =>
+                    {
+                        session.PublishedCountWhenListenerStopBegan = publisher.PublishedCount;
+                        session.DrainingCountWhenListenerStopBegan = session.Connection.PublishChannels
+                            .SelectMany(static channel => channel.Publications)
+                            .Count(static publication => IsDraining(publication));
+                    }),
                 _ when traceStops => new StopTrace(service, session.StopEvents, onStopBegin: null),
                 _ => service,
             }).ToArray();
