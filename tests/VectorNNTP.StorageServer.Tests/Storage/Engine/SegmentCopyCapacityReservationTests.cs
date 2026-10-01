@@ -1,4 +1,8 @@
+using System.Globalization;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Serilog.Events;
+using Serilog.Extensions.Logging;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
@@ -8,6 +12,7 @@ using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
+using VectorNNTP.StorageServer.Tests.Logging;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
@@ -153,17 +158,26 @@ public sealed class SegmentCopyCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
-        await using var engine = Open(dir, capacity);
+        var sink = new CollectingSink();
+        await using var engine = Open(dir, capacity, logger: CreateLogger(sink));
         engine.TestPersistRetryDelay = TimeSpan.FromHours(1);
         engine.TestPersistFaultExceptionKind = FileArticleStorageEngine.PersistFaultExceptionKind.InvalidOperation;
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforeSataAppend;
         var record = CreateRecord("<seg-nr-before@seg.test>");
+        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         _ = await engine.AcceptAsync(record, CancellationToken.None);
 
         await WaitUntilAsync(() => engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.PhysicalAppendCount);
         Assert.False(engine.TryRead(record.ArtId, out _));
+        var failure = AssertNonRetryableReservationEvent(sink);
+        Assert.Equal(required.ToString(CultureInfo.InvariantCulture), Scalar(failure, "ReleasedUnwrittenSegmentBytes"));
+        Assert.Equal("0", Scalar(failure, "RetainedWrittenSegmentBytes"));
+        Assert.Equal(ArticleIndexRecordCodec.RecordLength.ToString(CultureInfo.InvariantCulture), Scalar(failure, "ReleasedUnboundIndexBytes"));
+        Assert.Equal(engine.ProcessLocalJournalReservedBytes.ToString(CultureInfo.InvariantCulture), Scalar(failure, "RetainedJournalBytes"));
+        Assert.True(engine.ProcessLocalJournalReservedBytes > 0);
+        AssertBlockedRetry(sink, Scalar(failure, "Sequence"));
     }
 
     [Fact]
@@ -171,7 +185,8 @@ public sealed class SegmentCopyCapacityReservationTests
     {
         using var dir = TempStorageDir.Create();
         var capacity = new MutableCapacityReader(total: 10_000_000, used: 0);
-        await using var engine = Open(dir, capacity);
+        var sink = new CollectingSink();
+        await using var engine = Open(dir, capacity, logger: CreateLogger(sink));
         engine.TestPersistRetryDelay = TimeSpan.FromHours(1);
         engine.TestPersistFaultExceptionKind = FileArticleStorageEngine.PersistFaultExceptionKind.InvalidOperation;
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.AfterSataAppend;
@@ -184,6 +199,12 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(1, engine.PhysicalAppendCount);
         Assert.False(engine.TryRead(record.ArtId, out _));
+        var failure = AssertNonRetryableReservationEvent(sink);
+        Assert.Equal("0", Scalar(failure, "ReleasedUnwrittenSegmentBytes"));
+        Assert.Equal(required.ToString(CultureInfo.InvariantCulture), Scalar(failure, "RetainedWrittenSegmentBytes"));
+        Assert.Equal(engine.ProcessLocalJournalReservedBytes.ToString(CultureInfo.InvariantCulture), Scalar(failure, "RetainedJournalBytes"));
+        Assert.True(engine.ProcessLocalJournalReservedBytes > 0);
+        AssertBlockedRetry(sink, Scalar(failure, "Sequence"));
     }
 
     [Fact]
@@ -386,10 +407,43 @@ public sealed class SegmentCopyCapacityReservationTests
     private static FileArticleStorageEngine Open(
         TempStorageDir dir,
         MutableCapacityReader capacity,
-        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization) =>
+        double maximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
+        ILogger? logger = null) =>
         FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization),
+            logger,
             capacityReader: capacity);
+
+    private static ILogger CreateLogger(CollectingSink sink) =>
+        new SerilogLoggerFactory(
+            new Serilog.LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger(),
+            dispose: true).CreateLogger<FileArticleStorageEngine>();
+
+    private static LogEvent AssertNonRetryableReservationEvent(CollectingSink sink)
+    {
+        var failure = Assert.Single(sink.Events, static e => IsEvent(e, 3419));
+        var text = failure.RenderMessage(CultureInfo.InvariantCulture);
+        Assert.Contains("unwritten segment-copy", text, StringComparison.Ordinal);
+        Assert.Contains("remain held", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("reservation released", text, StringComparison.Ordinal);
+        return failure;
+    }
+
+    private static void AssertBlockedRetry(CollectingSink sink, string sequence)
+    {
+        var blocked = Assert.Single(sink.Events, static e => IsEvent(e, 3420));
+        Assert.Equal(sequence, Scalar(blocked, "Sequence"));
+    }
+
+    private static bool IsEvent(LogEvent logEvent, int eventId) =>
+        logEvent.Properties.TryGetValue("EventId", out var value)
+        && value.ToString().Contains(eventId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+    private static string Scalar(LogEvent logEvent, string name)
+    {
+        var property = Assert.Contains(name, logEvent.Properties);
+        return property.ToString().Trim('"');
+    }
 
     private static ArticleStorageRuntimeOptions WithCapacity(
         ArticleStorageRuntimeOptions options,

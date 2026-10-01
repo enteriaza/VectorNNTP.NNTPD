@@ -3049,13 +3049,30 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         else
                         {
                             // Keep the incomplete Accept. Release only copies that were not written.
+                            var releasedUnwrittenSegmentBytes = 0L;
+                            var releasedUnboundIndexBytes = 0L;
+                            var retainedWrittenSegmentBytes = 0L;
+                            var retainedJournalBytes = 0L;
+                            if (_capacityAdmissionEnabled)
+                            {
+                                (releasedUnwrittenSegmentBytes, retainedWrittenSegmentBytes) =
+                                    ReadSegmentLedger(ledger => ledger.SegmentCopyReservationBytes(sequence));
+                                (releasedUnboundIndexBytes, retainedJournalBytes) = ReadControlLedger(ledger =>
+                                    (ledger.UnboundIndexReservationBytes(sequence),
+                                        ledger.JournalReservationBytes(sequence)));
+                            }
+
                             ReleaseUnwrittenSegmentCopies(sequence);
                             ReleaseUnboundIndexReservation(sequence);
                             FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
                                 _logger,
                                 sequence,
                                 ex.GetType().Name,
-                                ex.Message);
+                                ex.Message,
+                                releasedUnwrittenSegmentBytes,
+                                releasedUnboundIndexBytes,
+                                retainedWrittenSegmentBytes,
+                                retainedJournalBytes);
                             ScheduleBlockedPersistRetry(sequence);
                         }
                     }

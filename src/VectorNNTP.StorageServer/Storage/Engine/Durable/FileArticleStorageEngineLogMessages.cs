@@ -168,12 +168,16 @@ internal static partial class FileArticleStorageEngineLogMessages
     [LoggerMessage(
         EventId = 3419,
         Level = LogLevel.Error,
-        Message = "Durable persist failure is not retryable (sequence={Sequence}, ExceptionType={ExceptionType}, Detail={Detail}); incomplete Accept retained, reservation released, blocked retry scheduled")]
+        Message = "Durable persist failure is not retryable (sequence={Sequence}, ExceptionType={ExceptionType}, Detail={Detail}); incomplete Accept retained; released unwritten segment-copy bytes={ReleasedUnwrittenSegmentBytes} and unbound index bytes={ReleasedUnboundIndexBytes}; written segment-copy bytes={RetainedWrittenSegmentBytes} and journal bytes={RetainedJournalBytes} remain held; blocked retry scheduled")]
     public static partial void PersistNonRetryableFailure(
         ILogger logger,
         ulong Sequence,
         string ExceptionType,
-        string Detail);
+        string Detail,
+        long ReleasedUnwrittenSegmentBytes,
+        long ReleasedUnboundIndexBytes,
+        long RetainedWrittenSegmentBytes,
+        long RetainedJournalBytes);
 
     [LoggerMessage(
         EventId = 3420,

@@ -943,6 +943,31 @@ internal sealed class ProcessLocalCapacityLedger
         return false;
     }
 
+    /// <summary>
+    /// Unwritten and written segment-copy bytes currently held for <paramref name="sequence"/>.
+    /// Both are zero when the sequence has no segment-copy reservation.
+    /// </summary>
+    public (long UnwrittenBytes, long WrittenBytes) SegmentCopyReservationBytes(ulong sequence)
+    {
+        if (!_articleBySequence.TryGetValue(sequence, out var current))
+        {
+            return (0, 0);
+        }
+
+        var unwrittenCopies = current.ReservedCopies - current.WrittenCopies;
+        return (
+            (long)unwrittenCopies * current.BytesPerCopy,
+            (long)current.WrittenCopies * current.BytesPerCopy);
+    }
+
+    /// <summary>Journal-sequence bytes held for <paramref name="sequence"/>, or zero when none are held.</summary>
+    public long JournalReservationBytes(ulong sequence) =>
+        _journalBySequence.TryGetValue(sequence, out var bytes) ? bytes : 0;
+
+    /// <summary>Unbound index-frame bytes held for <paramref name="sequence"/>, or zero when none are held.</summary>
+    public long UnboundIndexReservationBytes(ulong sequence) =>
+        _indexUnboundBySequence.TryGetValue(sequence, out var bytes) ? bytes : 0;
+
     /// <summary>Reserved and written copy counts for <paramref name="sequence"/>.</summary>
     public (int ReservedCopies, int WrittenCopies) GetArticleCopyCounts(ulong sequence)
     {
