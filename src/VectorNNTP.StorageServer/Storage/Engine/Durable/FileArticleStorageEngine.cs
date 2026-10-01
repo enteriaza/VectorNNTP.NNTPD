@@ -1278,7 +1278,19 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 continue;
             }
 
-            _ = TryInvalidatePresentAt(in row);
+            if (TryInvalidatePresentAt(in row))
+            {
+                FileArticleStorageEngineLogMessages.StartupPresentInvalidated(
+                    _logger,
+                    row.ArtId.ToLowerHexString(),
+                    row.Sequence,
+                    row.Location.SegmentId.Value,
+                    row.Location.Offset,
+                    row.Location.Length,
+                    row.ArtHash,
+                    row.ArtSize);
+            }
+
             if (_index.TryGet(row.ArtId, out var current)
                 && current.State == ArticleStorageState.Present)
             {

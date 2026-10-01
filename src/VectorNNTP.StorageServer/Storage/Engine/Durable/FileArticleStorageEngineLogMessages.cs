@@ -114,6 +114,20 @@ internal static partial class FileArticleStorageEngineLogMessages
         int Length);
 
     [LoggerMessage(
+        EventId = 3412,
+        Level = LogLevel.Warning,
+        Message = "Startup recovery changed a previously Present article to Invalid because its physical location could not be proved (artId={ArtId}, sequence={Sequence}, segmentId={SegmentId}, offset={Offset}, length={Length}, artHash={ArtHash}, artSize={ArtSize}); the index transition is durable and recovery is continuing")]
+    public static partial void StartupPresentInvalidated(
+        ILogger logger,
+        string ArtId,
+        ulong Sequence,
+        ulong SegmentId,
+        long Offset,
+        int Length,
+        ulong ArtHash,
+        int ArtSize);
+
+    [LoggerMessage(
         EventId = 3406,
         Level = LogLevel.Warning,
         Message = "PhysicalWritten location failed integrity proof (sequence={Sequence}, segmentId={SegmentId}, offset={Offset}); journal forbids supersede — leaving outstanding")]

@@ -1,7 +1,12 @@
+using System.Globalization;
 using System.IO.Hashing;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Serilog.Events;
+using Serilog.Extensions.Logging;
+using VectorNNTP.StorageServer.Tests.Logging;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
@@ -335,20 +340,146 @@ public sealed class StartupPresentValidationTests
         Assert.False(service.Engine.TryRead(prepared.Record.ArtId, out _));
     }
 
+    [Fact]
+    public async Task Valid_present_does_not_emit_startup_invalidation()
+    {
+        var prepared = await PrepareAsync("<startup-log-valid@seg.test>");
+        using (prepared.Dir)
+        {
+            var sink = new CollectingSink();
+            await using var service = await StartReadyAsync(prepared.Dir, sink);
+            Assert.True(service.IsReady);
+            Assert.DoesNotContain(sink.Events, static e => IsEvent(e, StartupPresentInvalidatedEventId));
+            Assert.Contains(sink.Events, static e => IsEvent(e, EngineReadyEventId));
+        }
+    }
+
+    [Fact]
+    public async Task Failed_proof_emits_one_invalidation_event_before_engine_ready()
+    {
+        var prepared = await PrepareAsync("<startup-log-missing@seg.test>");
+        using (prepared.Dir)
+        {
+            File.Delete(SegmentPath(prepared.Dir, prepared.Metadata.Location));
+            var sink = new CollectingSink();
+            await using var service = await StartReadyAsync(prepared.Dir, sink);
+            Assert.True(service.IsReady);
+            await AssertInvalidAsync(service, prepared);
+
+            var invalidated = sink.Events.Where(static e => IsEvent(e, StartupPresentInvalidatedEventId)).ToArray();
+            var only = Assert.Single(invalidated);
+            Assert.Equal(LogEventLevel.Warning, only.Level);
+            Assert.Contains("previously Present", only.RenderMessage(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            Assert.Contains("recovery is continuing", only.RenderMessage(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            Assert.Equal(prepared.Metadata.ArtId.ToLowerHexString(), Scalar(only, "ArtId"));
+            Assert.Equal(prepared.Metadata.Sequence.ToString(CultureInfo.InvariantCulture), Scalar(only, "Sequence"));
+            Assert.Equal(prepared.Metadata.Location.SegmentId.Value.ToString(CultureInfo.InvariantCulture), Scalar(only, "SegmentId"));
+            Assert.Equal(prepared.Metadata.Location.Offset.ToString(CultureInfo.InvariantCulture), Scalar(only, "Offset"));
+            Assert.Equal(prepared.Metadata.Location.Length.ToString(CultureInfo.InvariantCulture), Scalar(only, "Length"));
+            Assert.Equal(prepared.Metadata.ArtHash.ToString(CultureInfo.InvariantCulture), Scalar(only, "ArtHash"));
+            Assert.Equal(prepared.Metadata.ArtSize.ToString(CultureInfo.InvariantCulture), Scalar(only, "ArtSize"));
+
+            var readyIndex = Assert.Single(
+                sink.Events.Select((e, i) => (e, i)).Where(static pair => IsEvent(pair.e, EngineReadyEventId)).Select(static pair => pair.i));
+            var invalidatedIndex = Assert.Single(
+                sink.Events.Select((e, i) => (e, i)).Where(static pair => IsEvent(pair.e, StartupPresentInvalidatedEventId)).Select(static pair => pair.i));
+            Assert.True(invalidatedIndex < readyIndex);
+        }
+    }
+
+    [Fact]
+    public async Task Failed_invalidation_does_not_emit_the_success_event()
+    {
+        var prepared = await PrepareAsync("<startup-log-fail@seg.test>");
+        using (prepared.Dir)
+        {
+            File.Delete(SegmentPath(prepared.Dir, prepared.Metadata.Location));
+            var sink = new CollectingSink();
+            var service = CreateService(prepared.Dir, sink);
+            service.TestBeforeRecover = engine =>
+            {
+                engine.TestHookBeforeExpectedInvalidation = (_, _) =>
+                    throw new IOException("startup-invalidation-failed");
+            };
+
+            var thrown = await Assert.ThrowsAsync<IOException>(() => service.StartAsync(CancellationToken.None));
+            Assert.Equal("startup-invalidation-failed", thrown.Message);
+            Assert.False(service.IsReady);
+            Assert.DoesNotContain(sink.Events, static e => IsEvent(e, StartupPresentInvalidatedEventId));
+            Assert.DoesNotContain(sink.Events, static e => IsEvent(e, EngineReadyEventId));
+            await service.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Each_failed_present_row_emits_one_invalidation_event()
+    {
+        var dir = TempStorageDir.Create();
+        using (dir)
+        {
+            var first = CreateRecord("<startup-log-a@seg.test>");
+            var second = CreateRecord("<startup-log-b@seg.test>");
+            StoredArticleMetadata firstMeta = default;
+            StoredArticleMetadata secondMeta = default;
+            await using (var engine = FileArticleStorageEngine.Open(dir.Options))
+            {
+                Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(first, CancellationToken.None)).Outcome);
+                await engine.DrainPendingAsync(CancellationToken.None);
+                Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(second, CancellationToken.None)).Outcome);
+                await engine.DrainPendingAsync(CancellationToken.None);
+                Assert.True(engine.Index.TryGet(first.ArtId, out firstMeta));
+                Assert.True(engine.Index.TryGet(second.ArtId, out secondMeta));
+                await engine.Segments.CloseActiveAsync(CancellationToken.None);
+            }
+
+            foreach (var path in Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*"))
+            {
+                File.Delete(path);
+            }
+
+            var sink = new CollectingSink();
+            await using var service = await StartReadyAsync(dir, sink);
+            Assert.True(service.IsReady);
+            var invalidated = sink.Events.Where(static e => IsEvent(e, StartupPresentInvalidatedEventId)).ToArray();
+            Assert.Equal(2, invalidated.Length);
+            var ids = invalidated.Select(static e => Scalar(e, "ArtId")).ToArray();
+            Assert.Contains(firstMeta.ArtId.ToLowerHexString(), ids);
+            Assert.Contains(secondMeta.ArtId.ToLowerHexString(), ids);
+            Assert.Equal(2, ids.Distinct(StringComparer.Ordinal).Count());
+        }
+    }
+
+    private const int StartupPresentInvalidatedEventId = 3412;
+
+    private const int EngineReadyEventId = 3002;
+
+    private static bool IsEvent(LogEvent logEvent, int eventId) =>
+        logEvent.Properties.TryGetValue("EventId", out var value)
+        && value.ToString().Contains(eventId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+    private static string Scalar(LogEvent logEvent, string name)
+    {
+        var property = Assert.Contains(name, logEvent.Properties);
+        return property.ToString().Trim('"');
+    }
+
     private static async Task<bool> PresenceAsync(StorageEngineApplicationService service, ArticleId articleId)
     {
         var presence = new DurableIndexArticlePresence(service);
         return await presence.HasArticleAsync(articleId, CancellationToken.None);
     }
 
-    private static async Task<StorageEngineApplicationService> StartReadyAsync(TempStorageDir dir)
+    private static async Task<StorageEngineApplicationService> StartReadyAsync(TempStorageDir dir) =>
+        await StartReadyAsync(dir, sink: null);
+
+    private static async Task<StorageEngineApplicationService> StartReadyAsync(TempStorageDir dir, CollectingSink? sink)
     {
-        var service = CreateService(dir);
+        var service = CreateService(dir, sink);
         await service.StartAsync(CancellationToken.None);
         return service;
     }
 
-    private static StorageEngineApplicationService CreateService(TempStorageDir dir)
+    private static StorageEngineApplicationService CreateService(TempStorageDir dir, CollectingSink? sink = null)
     {
         var options = StorageServerTestOptions.CreateValid();
         options.CacheDir = dir.Options.SegmentDir;
@@ -356,10 +487,15 @@ public sealed class StartupPresentValidationTests
         var runtime = StorageServerRuntimeOptionsFactory.Create(
             options,
             StorageServerTestOptions.CreateValidAcme(options));
+        ILogger<StorageEngineApplicationService> logger = sink is null
+            ? NullLogger<StorageEngineApplicationService>.Instance
+            : new SerilogLoggerFactory(
+                new Serilog.LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger(),
+                dispose: true).CreateLogger<StorageEngineApplicationService>();
         return new StorageEngineApplicationService(
             runtime,
             Options.Create(options),
-            NullLogger<StorageEngineApplicationService>.Instance);
+            logger);
     }
 
     private static async Task<Prepared> PrepareAsync(string messageId)
