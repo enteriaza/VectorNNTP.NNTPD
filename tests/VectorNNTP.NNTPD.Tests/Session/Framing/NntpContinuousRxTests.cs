@@ -384,6 +384,164 @@ public sealed class NntpContinuousRxTests
         Assert.True(buffer.IsEmpty);
     }
 
+    [Fact]
+    public void TryConsume_ExactlyMaxCommandLine_ParsesTheWholeLine()
+    {
+        var line = GroupLine(NntpCommandLineReader.MaxCommandLineBytes);
+        var wire = WithCrlf(line);
+        var buffer = new ReadOnlySequence<byte>(wire);
+        var parser = new NntpContinuousRxParser();
+        var unit = Capture(parser, parser.TryConsume(ref buffer, consumeTakeThisArticle: true, maxArticleBytes: 1024));
+
+        Assert.Equal(NntpContinuousRxKind.Command, unit.Kind);
+        Assert.True(unit.Unit.Command.IsValid);
+        Assert.Equal(NntpVerb.Group, unit.Unit.Command.Verb);
+        Assert.Equal(NntpCommandLineReader.MaxCommandLineBytes, parser.CurrentCommandLine.Length);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_OverlongLine_IsSyntaxErrorAndDoesNotParseThePrefix()
+    {
+        var line = GroupLine(NntpCommandLineReader.MaxCommandLineBytes + 1);
+        var buffer = new ReadOnlySequence<byte>(WithCrlf(line));
+        var parser = new NntpContinuousRxParser();
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: true, maxArticleBytes: 1024);
+
+        Assert.Equal(NntpContinuousRxKind.Command, unit.Kind);
+        Assert.False(unit.Command.IsValid);
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, unit.Command.Status);
+        Assert.Equal(NntpVerb.None, unit.Command.Verb);
+        Assert.Equal(0, parser.CurrentCommandLine.Length);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_ValidPrefixPlusExtraPastLimit_IsNotDispatchedAsThePrefix()
+    {
+        var line = new byte[NntpCommandLineReader.MaxCommandLineBytes + 6];
+        "STAT <a@b.c>"u8.CopyTo(line);
+        line.AsSpan("STAT <a@b.c>"u8.Length, NntpCommandLineReader.MaxCommandLineBytes - "STAT <a@b.c>"u8.Length)
+            .Fill((byte)' ');
+        " extra"u8.CopyTo(line.AsSpan(NntpCommandLineReader.MaxCommandLineBytes));
+        var buffer = new ReadOnlySequence<byte>(WithCrlf(line));
+        var parser = new NntpContinuousRxParser();
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: false, maxArticleBytes: 1024);
+
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, unit.Command.Status);
+        Assert.NotEqual(NntpVerb.Stat, unit.Command.Verb);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_OverlongInvalidPrefix_IsTooLongNotAParsedVerb()
+    {
+        var line = new byte[NntpCommandLineReader.MaxCommandLineBytes + 1];
+        line.AsSpan(0, NntpCommandLineReader.MaxCommandLineBytes).Fill((byte)'!');
+        line[^1] = (byte)'x';
+        var buffer = new ReadOnlySequence<byte>(WithCrlf(line));
+        var parser = new NntpContinuousRxParser();
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: false, maxArticleBytes: 1024);
+
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, unit.Command.Status);
+        Assert.NotEqual(NntpParseStatus.UnknownVerb, unit.Command.Status);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_OverlongTakeThisThenQuit_ConsumesTheLineAndParsesTheNextCommand()
+    {
+        var line = new byte[NntpCommandLineReader.MaxCommandLineBytes + 8];
+        "TAKETHIS <a@b.c> "u8.CopyTo(line);
+        line.AsSpan("TAKETHIS <a@b.c> "u8.Length).Fill((byte)'x');
+        var wire = new byte[line.Length + 2 + "QUIT\r\n"u8.Length];
+        WithCrlf(line).CopyTo(wire);
+        "QUIT\r\n"u8.CopyTo(wire.AsSpan(line.Length + 2));
+        var buffer = new ReadOnlySequence<byte>(wire);
+        var parser = new NntpContinuousRxParser();
+
+        var first = parser.TryConsume(ref buffer, consumeTakeThisArticle: true, maxArticleBytes: 1024);
+        var second = Capture(parser, parser.TryConsume(ref buffer, consumeTakeThisArticle: true, maxArticleBytes: 1024));
+
+        Assert.Equal(NntpContinuousRxKind.Command, first.Kind);
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, first.Command.Status);
+        Assert.NotEqual(NntpContinuousRxKind.TakeThis, first.Kind);
+        Assert.Equal(NntpVerb.Quit, second.Unit.Command.Verb);
+        Assert.True(second.Unit.Command.IsValid);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_EmbeddedLfIsNotTheDelimiter()
+    {
+        var line = new byte[NntpCommandLineReader.MaxCommandLineBytes + 1];
+        line.AsSpan().Fill((byte)'a');
+        line[10] = (byte)'\n';
+        line[20] = (byte)'\r';
+        var buffer = new ReadOnlySequence<byte>(WithCrlf(line));
+        var parser = new NntpContinuousRxParser();
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: false, maxArticleBytes: 1024);
+
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, unit.Command.Status);
+        Assert.True(buffer.IsEmpty);
+    }
+
+    [Fact]
+    public void TryConsume_NoCrlf_StaysNeedMore()
+    {
+        var line = new byte[NntpCommandLineReader.MaxCommandLineBytes + 100];
+        line.AsSpan().Fill((byte)'a');
+        var buffer = new ReadOnlySequence<byte>(line);
+        var parser = new NntpContinuousRxParser();
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: false, maxArticleBytes: 1024);
+
+        Assert.Equal(NntpContinuousRxKind.NeedMore, unit.Kind);
+        Assert.Equal(line.Length, buffer.Length);
+    }
+
+    [Fact]
+    public async Task TryConsume_OverlongSplitAcrossReads_RejectsOnceTheCrlfArrives()
+    {
+        var line = GroupLine(NntpCommandLineReader.MaxCommandLineBytes + 1);
+        var wire = WithCrlf(line);
+        var pipe = new Pipe();
+        var parser = new NntpContinuousRxParser();
+        await pipe.Writer.WriteAsync(wire.AsMemory(0, 1000));
+        var first = await ReadAvailableAsync(pipe.Reader, parser);
+        Assert.Equal(NntpContinuousRxKind.NeedMore, first.Kind);
+
+        await pipe.Writer.WriteAsync(wire.AsMemory(1000));
+        var second = await ReadAvailableAsync(pipe.Reader, parser);
+        Assert.Equal(NntpParseStatus.CommandLineTooLong, second.Command.Status);
+        Assert.Equal(NntpVerb.None, second.Command.Verb);
+    }
+
+    private static byte[] GroupLine(int length)
+    {
+        var line = new byte[length];
+        "GROUP "u8.CopyTo(line);
+        line.AsSpan("GROUP "u8.Length).Fill((byte)'a');
+        return line;
+    }
+
+    private static byte[] WithCrlf(byte[] line)
+    {
+        var wire = new byte[line.Length + 2];
+        line.CopyTo(wire);
+        wire[^2] = (byte)'\r';
+        wire[^1] = (byte)'\n';
+        return wire;
+    }
+
+    private static async Task<NntpContinuousRxUnit> ReadAvailableAsync(PipeReader reader, NntpContinuousRxParser parser)
+    {
+        var read = await reader.ReadAsync();
+        var buffer = read.Buffer;
+        var unit = parser.TryConsume(ref buffer, consumeTakeThisArticle: true, maxArticleBytes: 1024);
+        reader.AdvanceTo(buffer.Start, buffer.End);
+        return unit;
+    }
+
     private static CapturedRxUnit Capture(NntpContinuousRxParser parser, NntpContinuousRxUnit unit)
     {
         var line = parser.CurrentCommandLine.Span;

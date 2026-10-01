@@ -23,4 +23,10 @@ public enum NntpParseStatus : byte
 
     /// <summary>The command has more tokens than its grammar allows.</summary>
     ExtraArgument,
+
+    /// <summary>
+    /// The CRLF-terminated line is longer than <see cref="NntpCommandLineReader.MaxCommandLineBytes"/>.
+    /// The prefix is not parsed.
+    /// </summary>
+    CommandLineTooLong,
 }

@@ -44,6 +44,18 @@ public readonly struct NntpCommand
     /// <summary>Gets whether the command may be dispatched to a normal handler.</summary>
     public bool IsValid => Status == NntpParseStatus.Ok;
 
+    /// <summary>
+    /// A command line that exceeded <see cref="NntpCommandLineReader.MaxCommandLineBytes"/>.
+    /// Not a parsed prefix. Handlers must not run.
+    /// </summary>
+    public static NntpCommand OverlongLine { get; } = new(
+        NntpVerb.None,
+        NntpVerb.None,
+        argumentStart: 0,
+        argumentLength: 0,
+        tokenCount: 0,
+        NntpParseStatus.CommandLineTooLong);
+
     /// <summary>Returns the argument bytes from a still-valid command buffer.</summary>
     public ReadOnlySpan<byte> ArgumentSpan(ReadOnlySpan<byte> line)
     {

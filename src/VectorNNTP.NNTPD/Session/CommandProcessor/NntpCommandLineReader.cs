@@ -7,6 +7,15 @@ namespace VectorNNTP.NNTPD.Session.CommandProcessor;
 /// <summary>Reads CRLF-delimited NNTP command lines from a <see cref="PipeReader"/>.</summary>
 public static class NntpCommandLineReader
 {
+    /// <summary>Maximum command-line content before CRLF. Longer lines are rejected, not parsed.</summary>
+    public const int MaxCommandLineBytes = 2048;
+
+    /// <summary>
+    /// <see cref="ReadLineBytesAsync"/> result when the line before CRLF exceeds the destination
+    /// scratch. The line has been consumed. <c>-1</c> remains EOF.
+    /// </summary>
+    public const int OverlongLine = -2;
+
     private static readonly byte[] Crlf = "\r\n"u8.ToArray();
 
     /// <summary>
@@ -89,14 +98,15 @@ public static class NntpCommandLineReader
             return false;
         }
 
-        length = checked((int)lineBytes.Length);
-        if (length > scratch.Length)
+        buffer = buffer.Slice(reader.Position);
+        if (lineBytes.Length > scratch.Length)
         {
-            length = scratch.Length;
+            length = OverlongLine;
+            return true;
         }
 
-        lineBytes.Slice(0, length).CopyTo(scratch);
-        buffer = buffer.Slice(reader.Position);
+        length = checked((int)lineBytes.Length);
+        lineBytes.CopyTo(scratch);
         return true;
     }
 }

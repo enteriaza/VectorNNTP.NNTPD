@@ -230,7 +230,9 @@ public sealed class NntpCommandDispatcher
         }
 
         var started = Stopwatch.GetTimestamp();
-        var display = command.Status is NntpParseStatus.Empty or NntpParseStatus.UnknownVerb
+        var display = command.Status is NntpParseStatus.Empty
+            or NntpParseStatus.UnknownVerb
+            or NntpParseStatus.CommandLineTooLong
             ? "INVALID"
             : DefaultNntpCommandCatalog.DisplayName(command.Verb, command.Qualifier);
         var (wire, detail, statusLine) = Rejection(command);
@@ -276,6 +278,8 @@ public sealed class NntpCommandDispatcher
     {
         return command.Status switch
         {
+            NntpParseStatus.CommandLineTooLong =>
+                (NntpResponses.SyntaxError, "syntax error", NntpResponseStatus.SyntaxError),
             NntpParseStatus.UnknownVerb =>
                 (NntpResponses.UnknownCommand, "unknown command", NntpResponseStatus.UnknownCommand),
             NntpParseStatus.UnknownQualifier =>

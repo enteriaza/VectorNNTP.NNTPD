@@ -266,6 +266,26 @@ public sealed class NntpCommandParserTests
     }
 
     [Fact]
+    public async Task OverlongCommandLine_Is501_AndTheNextCommandStillRuns()
+    {
+        await using var duplex = await ParserDuplex.CreateAsync();
+        var session = duplex.CreateSession();
+        var dispatcher = new NntpCommandDispatcher();
+        var writer = new NntpResponseWriter(duplex.ServerOutput);
+
+        await dispatcher.DispatchAsync(
+            session,
+            NntpCommand.OverlongLine,
+            ReadOnlyMemory<byte>.Empty,
+            writer,
+            CancellationToken.None);
+        Assert.Equal("501 Syntax error", await duplex.ReadClientLineAsync());
+
+        await NntpCommandTestParse.DispatchAsync(dispatcher, session, writer, "QUIT");
+        Assert.Equal("205 Connection closing", await duplex.ReadClientLineAsync());
+    }
+
+    [Fact]
     public async Task InvalidCheck_DoesNotInvokeHandler_EvenWhenTransitAuthorized()
     {
         await using var duplex = await ParserDuplex.CreateAsync();

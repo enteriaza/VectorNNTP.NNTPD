@@ -14,7 +14,7 @@ internal sealed class NntpReaderCommandRx
     private readonly NntpSession _session;
     private readonly NntpCommandDispatcher _dispatcher;
     private readonly ILogger _logger;
-    private readonly byte[] _commandScratch = new byte[2048];
+    private readonly byte[] _commandScratch = new byte[NntpCommandLineReader.MaxCommandLineBytes];
 
     /// <summary>Initializes a new instance of the <see cref="NntpReaderCommandRx"/> class.</summary>
     public NntpReaderCommandRx(NntpSession session, NntpCommandDispatcher dispatcher, ILogger logger)
@@ -37,6 +37,21 @@ internal sealed class NntpReaderCommandRx
         var length = await NntpCommandLineReader
             .ReadLineBytesAsync(_session.Connection.Input, _commandScratch, cancellationToken)
             .ConfigureAwait(false);
+        if (length == NntpCommandLineReader.OverlongLine)
+        {
+            await _session
+                .ProcessParsedCommandAsync(
+                    _dispatcher,
+                    response,
+                    _logger,
+                    NntpCommand.OverlongLine,
+                    ReadOnlyMemory<byte>.Empty,
+                    preReadArticle: null,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return true;
+        }
+
         if (length < 0)
         {
             return false;

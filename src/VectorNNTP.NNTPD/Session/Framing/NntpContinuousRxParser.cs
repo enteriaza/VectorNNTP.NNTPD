@@ -70,7 +70,7 @@ public readonly struct NntpContinuousRxUnit
 public sealed class NntpContinuousRxParser
 {
     private readonly ArrayBufferWriter<byte> _article = new(64 * 1024);
-    private readonly byte[] _commandScratch = new byte[2048];
+    private readonly byte[] _commandScratch = new byte[NntpCommandLineReader.MaxCommandLineBytes];
     private int _commandLength;
     private bool _articleExceeded;
     private int _maxArticleBytes = int.MaxValue;
@@ -123,7 +123,13 @@ public sealed class NntpContinuousRxParser
             return NntpContinuousRxUnit.NeedMore;
         }
 
-        CopyCommandLine(lineBytes);
+        if (!TryCopyCommandLine(lineBytes))
+        {
+            return new NntpContinuousRxUnit(
+                NntpContinuousRxKind.Command,
+                NntpCommand.OverlongLine);
+        }
+
         var command = NntpCommandParser.Parse(CurrentCommandLine.Span);
 
         if (consumeTakeThisArticle && command.Verb == NntpVerb.TakeThis)
@@ -230,15 +236,20 @@ public sealed class NntpContinuousRxParser
         _article.Advance(needed);
     }
 
-    private void CopyCommandLine(ReadOnlySequence<byte> lineBytes)
+    /// <summary>
+    /// Copies a command line that fits. An overlong line is consumed by the caller and is not copied.
+    /// </summary>
+    private bool TryCopyCommandLine(ReadOnlySequence<byte> lineBytes)
     {
-        var length = checked((int)lineBytes.Length);
-        if (length > _commandScratch.Length)
+        if (lineBytes.Length > _commandScratch.Length)
         {
-            length = _commandScratch.Length;
+            _commandLength = 0;
+            return false;
         }
 
-        lineBytes.Slice(0, length).CopyTo(_commandScratch);
+        var length = checked((int)lineBytes.Length);
+        lineBytes.CopyTo(_commandScratch);
         _commandLength = length;
+        return true;
     }
 }
