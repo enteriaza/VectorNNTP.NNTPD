@@ -63,6 +63,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal Action? TestHookDuringClosedExtentScan { get; set; }
 
     /// <summary>
+    /// Invoked during <see cref="FindProvenLocations"/> after the segment write gate has been
+    /// released and a private read stream is open. Tests only. Must not be the runtime stream.
+    /// </summary>
+    internal Action? TestHookDuringProvenLocationScan { get; set; }
+
+    /// <summary>
     /// Bytes read while proving the active append offset. Closed and retired discovery
     /// must leave this at zero. Tests use it as a regression guard.
     /// </summary>
@@ -1064,6 +1070,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// Locations whose decoded payload is exactly <paramref name="artData"/> for the identity.
     /// Ordered by segment id, then offset. Skips retired segments. Stops a segment at the
     /// first undecodable record and does not adopt anything past it.
+    /// The segment write gate is held only to snapshot eligible path and size. Each segment
+    /// is then read on a private stream over <c>[0, SizeBytes)</c>.
     /// </summary>
     internal List<StoredArticleLocation> FindProvenLocations(
         ArticleId artId,
@@ -1071,23 +1079,63 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         int artSize,
         ReadOnlySpan<byte> artData)
     {
-        var matches = new List<StoredArticleLocation>();
+        var expected = artData.ToArray();
+        ProvenLocationScanTarget[] targets;
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            VisitProvenUnlocked(static (extent, payload, state) =>
+            targets = _segments.Values
+                .Where(static runtime => runtime.State != SegmentState.Retired && runtime.SizeBytes > 0)
+                .OrderBy(static runtime => runtime.SegmentId.Value)
+                .Select(static runtime => new ProvenLocationScanTarget(
+                    runtime.SegmentId,
+                    runtime.Path,
+                    runtime.State,
+                    runtime.SizeBytes))
+                .ToArray();
+        }
+
+        var matches = new List<StoredArticleLocation>();
+        foreach (var target in targets)
+        {
+            if (target.State == SegmentState.Retired)
             {
-                var (id, hash, size, expected, found) = state;
-                if (!extent.ArtId.Equals(id)
-                    || extent.ArtHash != hash
-                    || extent.ArtSize != size
-                    || !payload.Span.SequenceEqual(expected))
+                continue;
+            }
+
+            using var stream = new FileStream(
+                target.Path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 64 * 1024,
+                FileOptions.None);
+            TestHookDuringProvenLocationScan?.Invoke();
+            long offset = 0;
+            while (offset < target.SizeBytes)
+            {
+                if (!TryReadProvenAt(
+                        stream,
+                        target.SegmentId,
+                        target.SizeBytes,
+                        offset,
+                        out var extent,
+                        out var payload,
+                        out var consumed))
                 {
-                    return;
+                    break;
                 }
 
-                found.Add(extent.Location);
-            }, (artId, artHash, artSize, artData.ToArray(), matches));
+                if (extent.ArtId.Equals(artId)
+                    && extent.ArtHash == artHash
+                    && extent.ArtSize == artSize
+                    && payload.Span.SequenceEqual(expected))
+                {
+                    matches.Add(extent.Location);
+                }
+
+                offset += consumed;
+            }
         }
 
         matches.Sort(static (left, right) =>
@@ -1097,6 +1145,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         });
         return matches;
     }
+
+    private readonly record struct ProvenLocationScanTarget(
+        SegmentId SegmentId,
+        string Path,
+        SegmentState State,
+        long SizeBytes);
 
     /// <summary>
     /// Proves every physical record in a Closed segment, from offset 0 through the
@@ -1181,48 +1235,6 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         extents = found;
         return true;
     }
-
-    private void VisitProvenUnlocked<TState>(Action<ProvenSegmentExtent, ReadOnlyMemory<byte>, TState> visit, TState state)
-    {
-        foreach (var runtime in _segments.Values.OrderBy(static runtime => runtime.SegmentId.Value))
-        {
-            if (runtime.State == SegmentState.Retired || runtime.SizeBytes <= 0)
-            {
-                continue;
-            }
-
-            runtime.EnsureReadable();
-            var stream = runtime.Stream;
-            var restore = stream.Position;
-            try
-            {
-                long offset = 0;
-                while (offset < runtime.SizeBytes)
-                {
-                    if (!TryReadProvenAtUnlocked(stream, runtime, offset, out var extent, out var payload, out var consumed))
-                    {
-                        break;
-                    }
-
-                    visit(extent, payload, state);
-                    offset += consumed;
-                }
-            }
-            finally
-            {
-                stream.Seek(restore, SeekOrigin.Begin);
-            }
-        }
-    }
-
-    private static bool TryReadProvenAtUnlocked(
-        FileStream stream,
-        SegmentRuntime runtime,
-        long offset,
-        out ProvenSegmentExtent extent,
-        out ReadOnlyMemory<byte> payload,
-        out int consumed) =>
-        TryReadProvenAt(stream, runtime.SegmentId, runtime.SizeBytes, offset, out extent, out payload, out consumed);
 
     private static bool TryReadProvenAt(
         FileStream stream,
