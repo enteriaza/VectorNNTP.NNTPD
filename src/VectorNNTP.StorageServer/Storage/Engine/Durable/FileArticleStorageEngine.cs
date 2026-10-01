@@ -1209,8 +1209,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>
     /// Replaces DeadBytes on each Closed segment from one complete physical proof plus the
     /// durable index. Not part of storage-engine readiness. Skips Active and Retired.
-    /// A segment that cannot be proved is left at its index-derived DeadBytes.
-    /// A second successful scan does not add the same orphan again.
+    /// The proof reads a private stream and does not hold the segment write gate. The
+    /// catalogue commit still requires the segment to be Closed and the current index to
+    /// balance. A segment that cannot be proved, or that changed before commit, is left
+    /// at its index-derived DeadBytes. A second successful scan does not add the same orphan again.
     /// </summary>
     internal void CompleteUnreferencedExtentAccounting()
     {
@@ -1228,6 +1230,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     _logger,
                     info.SegmentId.Value);
                 continue;
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
             }
 
             var proved = extents;

@@ -57,6 +57,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal bool TestFailTailTruncate { get; set; }
 
     /// <summary>
+    /// Invoked during a closed-segment accounting proof after the segment write gate has been
+    /// released and the private read stream is open. Tests only. Must not be the runtime stream.
+    /// </summary>
+    internal Action? TestHookDuringClosedExtentScan { get; set; }
+
+    /// <summary>
     /// Bytes read while proving the active append offset. Closed and retired discovery
     /// must leave this at zero. Tests use it as a regression guard.
     /// </summary>
@@ -1056,13 +1062,16 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
-    /// Proves every physical record in a Closed segment, from offset 0 through
-    /// <see cref="SegmentInfo.SizeBytes"/>. Active and Retired segments are not walked.
-    /// A failed proof returns false and an empty list; partial results are not published.
+    /// Proves every physical record in a Closed segment, from offset 0 through the
+    /// size observed under the segment write gate. Active and Retired segments are not walked.
+    /// The gate is not held during the read. A failed proof returns false and an empty list;
+    /// partial results are not published.
     /// </summary>
     internal bool TryReadClosedProvedExtents(SegmentId segmentId, out List<ProvenSegmentExtent> extents)
     {
         extents = [];
+        string path;
+        long sizeBytes;
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1077,46 +1086,63 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 return true;
             }
 
-            runtime.EnsureReadable();
-            var stream = runtime.Stream;
-            var restore = stream.Position;
-            var found = new List<ProvenSegmentExtent>();
-            try
+            path = runtime.Path;
+            sizeBytes = runtime.SizeBytes;
+        }
+
+        var found = new List<ProvenSegmentExtent>();
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 64 * 1024,
+                FileOptions.None);
+            TestHookDuringClosedExtentScan?.Invoke();
+            long offset = 0;
+            while (offset < sizeBytes)
             {
-                long offset = 0;
-                while (offset < runtime.SizeBytes)
-                {
-                    if (!TryReadProvenAtUnlocked(
-                            stream,
-                            runtime,
-                            offset,
-                            out var extent,
-                            out _,
-                            out var consumed)
-                        || consumed <= 0
-                        || extent.Location.Offset != offset
-                        || extent.Location.Length != consumed)
-                    {
-                        return false;
-                    }
-
-                    found.Add(extent);
-                    offset += consumed;
-                }
-
-                if (offset != runtime.SizeBytes)
+                if (!TryReadProvenAt(
+                        stream,
+                        segmentId,
+                        sizeBytes,
+                        offset,
+                        out var extent,
+                        out _,
+                        out var consumed)
+                    || consumed <= 0
+                    || extent.Location.Offset != offset
+                    || extent.Location.Length != consumed)
                 {
                     return false;
                 }
 
-                extents = found;
-                return true;
+                found.Add(extent);
+                offset += consumed;
             }
-            finally
+
+            if (offset != sizeBytes)
             {
-                stream.Seek(restore, SeekOrigin.Begin);
+                return false;
             }
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        lock (_writeGate)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+        }
+
+        extents = found;
+        return true;
     }
 
     private void VisitProvenUnlocked<TState>(Action<ProvenSegmentExtent, ReadOnlyMemory<byte>, TState> visit, TState state)
@@ -1158,12 +1184,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         long offset,
         out ProvenSegmentExtent extent,
         out ReadOnlyMemory<byte> payload,
+        out int consumed) =>
+        TryReadProvenAt(stream, runtime.SegmentId, runtime.SizeBytes, offset, out extent, out payload, out consumed);
+
+    private static bool TryReadProvenAt(
+        FileStream stream,
+        SegmentId segmentId,
+        long sizeBytes,
+        long offset,
+        out ProvenSegmentExtent extent,
+        out ReadOnlyMemory<byte> payload,
         out int consumed)
     {
         extent = default;
         payload = default;
         consumed = 0;
-        if (offset < 0 || offset + 4 > runtime.SizeBytes)
+        if (offset < 0 || offset + 4 > sizeBytes)
         {
             return false;
         }
@@ -1178,7 +1214,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var total = BinaryPrimitives.ReadUInt32LittleEndian(lengthBytes);
         if (total < SegmentRecordCodec.MinimumRecordLength
             || total > SegmentRecordCodec.MaxRecordLength
-            || offset + total > runtime.SizeBytes)
+            || offset + total > sizeBytes)
         {
             return false;
         }
@@ -1208,7 +1244,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         extent = new ProvenSegmentExtent(
-            new StoredArticleLocation(runtime.SegmentId, offset, recordLength),
+            new StoredArticleLocation(segmentId, offset, recordLength),
             artId,
             artHash,
             artSize);
