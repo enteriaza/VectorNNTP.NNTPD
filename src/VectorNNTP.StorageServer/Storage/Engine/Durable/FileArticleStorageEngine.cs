@@ -1196,10 +1196,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var incomplete = _journal.EnumerateIncomplete();
         FileArticleStorageEngineLogMessages.RecoveryStarted(_logger, incomplete.Count);
+        var acceptOnlyCandidates = CollectAcceptOnlyRecoveryCandidates(incomplete);
         foreach (var item in incomplete)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await PersistSequenceExclusiveAsync(item.Accept.Sequence, cancellationToken)
+            await PersistSequenceExclusiveAsync(
+                    item.Accept.Sequence,
+                    cancellationToken,
+                    acceptOnlyCandidates)
                 .ConfigureAwait(false);
         }
 
@@ -1218,6 +1222,41 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         // Durable recovery finished: re-link any still-incomplete work into the transient queue.
         EnqueueIncompleteFromJournal();
+    }
+
+    /// <summary>
+    /// One physical walk for Accept-only sequences that still need orphan discovery.
+    /// Sequences with <c>PhysicalWritten</c>, and sequences this process can prove have
+    /// never appended, are omitted. Returns null when there is nothing to scan.
+    /// The snapshot is taken inside the walk, before this method returns and before
+    /// any recovery reappend.
+    /// </summary>
+    private Dictionary<ulong, List<StoredArticleLocation>>? CollectAcceptOnlyRecoveryCandidates(
+        IReadOnlyList<JournalIncompleteSequence> incomplete)
+    {
+        var accepts = new List<FileSegmentStore.AcceptOnlyMatchTarget>();
+        foreach (var item in incomplete)
+        {
+            if (item.PhysicalWritten is not null || CanSkipProvenLocationScan(item.Accept))
+            {
+                continue;
+            }
+
+            var accept = item.Accept;
+            accepts.Add(new FileSegmentStore.AcceptOnlyMatchTarget(
+                accept.Sequence,
+                accept.ArtId,
+                accept.ArtHash,
+                accept.ArtSize,
+                accept.ArtData));
+        }
+
+        if (accepts.Count == 0)
+        {
+            return null;
+        }
+
+        return _segments.FindAcceptOnlyCandidates(accepts);
     }
 
     /// <summary>
@@ -1683,7 +1722,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         GC.SuppressFinalize(this);
     }
 
-    private async Task RecoverOneAsync(JournalIncompleteSequence incomplete, CancellationToken cancellationToken)
+    private async Task RecoverOneAsync(
+        JournalIncompleteSequence incomplete,
+        CancellationToken cancellationToken,
+        IReadOnlyList<StoredArticleLocation>? acceptOnlyCandidates = null)
     {
         var accept = incomplete.Accept;
         if (incomplete.PhysicalWritten is { } written)
@@ -1708,13 +1750,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             _logger,
             accept.Sequence,
             accept.ArtId.ToString() ?? string.Empty);
-        var proven = CanSkipProvenLocationScan(accept)
-            ? []
-            : _segments.FindProvenLocations(
-                accept.ArtId,
-                accept.ArtHash,
-                accept.ArtSize,
-                accept.ArtData.Span);
+        // A non-null list is the startup walk's immutable candidates, including an empty
+        // list when that walk proved there is no copy. Null means this call must decide.
+        IReadOnlyList<StoredArticleLocation> proven = acceptOnlyCandidates
+            ?? (CanSkipProvenLocationScan(accept)
+                ? []
+                : _segments.FindProvenLocations(
+                    accept.ArtId,
+                    accept.ArtHash,
+                    accept.ArtSize,
+                    accept.ArtData.Span));
         StoredArticleLocation location;
         if (proven.Count > 0 && TryChooseProvenLocation(accept, proven, out var chosen))
         {

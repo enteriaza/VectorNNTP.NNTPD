@@ -83,7 +83,10 @@ public sealed partial class FileArticleStorageEngine
     /// <summary>
     /// Runs Accept→PhysicalWritten→IndexCommitted for one sequence with single-flight exclusion.
     /// </summary>
-    private async Task PersistSequenceExclusiveAsync(ulong sequence, CancellationToken cancellationToken)
+    private async Task PersistSequenceExclusiveAsync(
+        ulong sequence,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<ulong, List<StoredArticleLocation>>? acceptOnlyCandidates = null)
     {
         while (true)
         {
@@ -124,7 +127,14 @@ public sealed partial class FileArticleStorageEngine
                     return;
                 }
 
-                await RecoverOneAsync(incomplete, cancellationToken).ConfigureAwait(false);
+                IReadOnlyList<StoredArticleLocation>? candidates = null;
+                if (acceptOnlyCandidates is not null
+                    && acceptOnlyCandidates.TryGetValue(sequence, out var found))
+                {
+                    candidates = found;
+                }
+
+                await RecoverOneAsync(incomplete, cancellationToken, candidates).ConfigureAwait(false);
                 ClearPersistRetryAttempts(sequence);
                 if (attemptsBefore > 0)
                 {

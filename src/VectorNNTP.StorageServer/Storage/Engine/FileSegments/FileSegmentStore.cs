@@ -1067,6 +1067,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
+    /// One Accept identity for a single physical walk. <see cref="ArtData"/> aliases the
+    /// caller's bytes; this value does not copy them.
+    /// </summary>
+    /// <param name="Sequence">Journal sequence that owns the identity.</param>
+    /// <param name="ArtId">Article identity.</param>
+    /// <param name="ArtHash">Article hash.</param>
+    /// <param name="ArtSize">Article size.</param>
+    /// <param name="ArtData">Canonical payload used for the byte-for-byte proof.</param>
+    internal readonly record struct AcceptOnlyMatchTarget(
+        ulong Sequence,
+        ArticleId ArtId,
+        ulong ArtHash,
+        int ArtSize,
+        ReadOnlyMemory<byte> ArtData);
+
+    /// <summary>
     /// Locations whose decoded payload is exactly <paramref name="artData"/> for the identity.
     /// Ordered by segment id, then offset. Skips retired segments. Stops a segment at the
     /// first undecodable record and does not adopt anything past it.
@@ -1079,7 +1095,47 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         int artSize,
         ReadOnlySpan<byte> artData)
     {
-        var expected = artData.ToArray();
+        var found = FindAcceptOnlyCandidates(
+            [new AcceptOnlyMatchTarget(0, artId, artHash, artSize, artData.ToArray())]);
+        return found.TryGetValue(0, out var matches) ? matches : [];
+    }
+
+    /// <summary>
+    /// One walk of every non-retired segment with <c>SizeBytes &gt; 0</c>. Each decoded record
+    /// is matched against <paramref name="accepts"/> with the same checksum, identity, and
+    /// payload rule as <see cref="FindProvenLocations"/>. Every sequence is present in the
+    /// result. Lists are ordered by segment id, then offset. The walk does not mutate the
+    /// journal, index, catalogue, or segment state. An undecodable record stops that segment
+    /// only. <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/> propagate.
+    /// </summary>
+    /// <param name="accepts">Accept-only identities. Payloads are not copied or retained.</param>
+    internal Dictionary<ulong, List<StoredArticleLocation>> FindAcceptOnlyCandidates(
+        IReadOnlyList<AcceptOnlyMatchTarget> accepts)
+    {
+        var results = new Dictionary<ulong, List<StoredArticleLocation>>(accepts.Count);
+        if (accepts.Count == 0)
+        {
+            return results;
+        }
+
+        var byArtId = new Dictionary<ArticleId, List<int>>();
+        for (var i = 0; i < accepts.Count; i++)
+        {
+            var accept = accepts[i];
+            if (!results.ContainsKey(accept.Sequence))
+            {
+                results[accept.Sequence] = [];
+            }
+
+            if (!byArtId.TryGetValue(accept.ArtId, out var indexes))
+            {
+                indexes = [];
+                byArtId[accept.ArtId] = indexes;
+            }
+
+            indexes.Add(i);
+        }
+
         ProvenLocationScanTarget[] targets;
         lock (_writeGate)
         {
@@ -1095,7 +1151,6 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 .ToArray();
         }
 
-        var matches = new List<StoredArticleLocation>();
         foreach (var target in targets)
         {
             if (target.State == SegmentState.Retired)
@@ -1126,24 +1181,34 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                     break;
                 }
 
-                if (extent.ArtId.Equals(artId)
-                    && extent.ArtHash == artHash
-                    && extent.ArtSize == artSize
-                    && payload.Span.SequenceEqual(expected))
+                if (byArtId.TryGetValue(extent.ArtId, out var indexes))
                 {
-                    matches.Add(extent.Location);
+                    foreach (var index in indexes)
+                    {
+                        var accept = accepts[index];
+                        if (extent.ArtHash == accept.ArtHash
+                            && extent.ArtSize == accept.ArtSize
+                            && payload.Span.SequenceEqual(accept.ArtData.Span))
+                        {
+                            results[accept.Sequence].Add(extent.Location);
+                        }
+                    }
                 }
 
                 offset += consumed;
             }
         }
 
-        matches.Sort(static (left, right) =>
+        foreach (var matches in results.Values)
         {
-            var segment = left.SegmentId.Value.CompareTo(right.SegmentId.Value);
-            return segment != 0 ? segment : left.Offset.CompareTo(right.Offset);
-        });
-        return matches;
+            matches.Sort(static (left, right) =>
+            {
+                var segment = left.SegmentId.Value.CompareTo(right.SegmentId.Value);
+                return segment != 0 ? segment : left.Offset.CompareTo(right.Offset);
+            });
+        }
+
+        return results;
     }
 
     /// <summary>
