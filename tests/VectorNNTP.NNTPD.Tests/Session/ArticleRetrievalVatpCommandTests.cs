@@ -98,6 +98,7 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.Equal(1, rpc.LookupCount);
         Assert.Equal(1, vatp.FetchCount);
         Assert.Equal(CacheUri, vatp.Uri);
+        Assert.Equal(1, queue.AdmitCalls);
         Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(queue.Admitted).Producer);
         Assert.True(queue.Admitted[0].Payload.Equals(prepared.Record.ArtData));
     }
@@ -209,6 +210,7 @@ public sealed class ArticleRetrievalVatpCommandTests
         var wire = Encoding.ASCII.GetString(await duplex.ReadMultilineAsync());
         Assert.StartsWith($"220 0 {MessageId}\r\n", wire, StringComparison.Ordinal);
         Assert.Empty(queue.Admitted);
+        Assert.Equal(1, queue.AdmitCalls);
         Assert.Equal(ArticleEnqueueResult.Full, queue.LastResult);
     }
 
@@ -279,7 +281,7 @@ public sealed class ArticleRetrievalVatpCommandTests
     [InlineData("HEAD")]
     [InlineData("BODY")]
     [InlineData("STAT")]
-    public async Task StorageHit_ServesAndAdmits_WithoutArticleWork(string verb)
+    public async Task StorageHit_ServesWithoutIngestion(string verb)
     {
         var prepared = PrepareArticle(MessageId, body: "hello\r\n");
         var requestId = Guid.Parse("11111111-2222-3333-4444-555555555555");
@@ -321,7 +323,8 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.Equal(uri, vatp.Uri);
         Assert.Equal(requestId, vatp.RequestId);
         Assert.Equal(prepared.Record.ArtId, vatp.ArticleId);
-        Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(queue.Admitted).Producer);
+        Assert.Equal(0, queue.AdmitCalls);
+        Assert.Empty(queue.Admitted);
     }
 
     [Fact]
@@ -417,17 +420,19 @@ public sealed class ArticleRetrievalVatpCommandTests
         var prepared = PrepareArticle(MessageId);
         var requestId = Guid.NewGuid();
         await using var duplex = await ArticleDuplex.CreateAsync();
+        var queue = new RecordingIngestionQueue();
         var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
         var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
         var vatp = new RecordingVatpArticleClient(
             VatpFetchResult.RemoteFailure("open", VatpErrorCode.OpenRejected, requestId, prepared.Record.ArtId));
-        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, ingestion: queue, storageLookup: lookup);
         await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
         Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
         Assert.Equal(0, rpc.LookupCount);
         Assert.Equal(1, lookup.LookupCount);
         Assert.Equal(1, vatp.FetchCount);
         Assert.Equal(requestId, vatp.RequestId);
+        Assert.Equal(0, queue.AdmitCalls);
     }
 
     [Fact]
@@ -437,16 +442,40 @@ public sealed class ArticleRetrievalVatpCommandTests
         var other = PrepareArticle("<other@example.test>");
         var requestId = Guid.NewGuid();
         await using var duplex = await ArticleDuplex.CreateAsync();
+        var queue = new RecordingIngestionQueue();
         var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound, articleId: null, uri: null);
         var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, requestId));
         var vatp = new RecordingVatpArticleClient(
             VatpFetchResult.FromSuccess(other.Record, requestId, other.Record.ArtId));
-        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, storageLookup: lookup);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, ingestion: queue, storageLookup: lookup);
         await DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}");
         Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
         Assert.Equal(0, rpc.LookupCount);
         Assert.Equal(1, lookup.LookupCount);
         Assert.Equal(1, vatp.FetchCount);
+        Assert.Equal(0, queue.AdmitCalls);
+    }
+
+    [Fact]
+    public async Task StorageHit_ClientDisconnectDuringServe_DoesNotAdmit()
+    {
+        var prepared = PrepareArticle(MessageId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var queue = new RecordingIngestionQueue();
+        using var cts = new CancellationTokenSource();
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.Success, prepared.Record.ArtId, CacheUri);
+        var lookup = new StubStorageLookup(StorageFound(prepared.Record.ArtId, Guid.NewGuid()));
+        var vatp = new CancelOnReturnVatp(
+            VatpFetchResult.FromSuccess(prepared.Record, prepared.RequestId, prepared.Record.ArtId),
+            cts);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, vatp: vatp, ingestion: queue, storageLookup: lookup);
+        var dispatch = DispatchLineAsync(duplex, session, $"ARTICLE {MessageId}", cts.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await dispatch);
+        Assert.Equal(1, lookup.LookupCount);
+        Assert.Equal(1, vatp.FetchCount);
+        Assert.Equal(0, rpc.LookupCount);
+        Assert.Equal(0, queue.AdmitCalls);
+        Assert.Empty(queue.Admitted);
     }
 
     [Fact]
@@ -581,7 +610,8 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.Equal(2, vatp.FetchCount);
         Assert.Equal([firstUri, secondUri], vatp.Uris);
         Assert.All(vatp.RequestIds, id => Assert.Equal(requestId, id));
-        Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(queue.Admitted).Producer);
+        Assert.Equal(0, queue.AdmitCalls);
+        Assert.Empty(queue.Admitted);
     }
 
     [Fact]
@@ -968,8 +998,18 @@ public sealed class ArticleRetrievalVatpCommandTests
             VatpFetchResult.FromSuccess(stored.Record, Guid.NewGuid(), stored.Record.ArtId));
         var filledVatp = new RecordingVatpArticleClient(
             VatpFetchResult.FromSuccess(filled.Record, Guid.NewGuid(), filled.Record.ArtId));
-        var storedSession = storedDuplex.CreateSession(articleWorkRpc: storedRpc, vatp: storedVatp, storageLookup: storedLookup);
-        var filledSession = filledDuplex.CreateSession(articleWorkRpc: filledRpc, vatp: filledVatp, storageLookup: filledLookup);
+        var storedQueue = new RecordingIngestionQueue();
+        var filledQueue = new RecordingIngestionQueue();
+        var storedSession = storedDuplex.CreateSession(
+            articleWorkRpc: storedRpc,
+            vatp: storedVatp,
+            ingestion: storedQueue,
+            storageLookup: storedLookup);
+        var filledSession = filledDuplex.CreateSession(
+            articleWorkRpc: filledRpc,
+            vatp: filledVatp,
+            ingestion: filledQueue,
+            storageLookup: filledLookup);
 
         await Task.WhenAll(
             DispatchLineAsync(storedDuplex, storedSession, $"ARTICLE {MessageId}"),
@@ -993,6 +1033,10 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.Equal(stored.Record.ArtId, storedLookup.LastArticleId);
         Assert.Equal(1, filledLookup.LookupCount);
         Assert.Equal(filled.Record.ArtId, filledLookup.LastArticleId);
+        Assert.Equal(0, storedQueue.AdmitCalls);
+        Assert.Empty(storedQueue.Admitted);
+        Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(filledQueue.Admitted).Producer);
+        Assert.Equal(filled.Record.ArtId, filledQueue.Admitted[0].Record.ArtId);
     }
 
     private static async Task AssertSecondCandidateUsedAsync(VatpFetchResult firstFailure)
@@ -1123,6 +1167,26 @@ public sealed class ArticleRetrievalVatpCommandTests
             CancellationToken cancellationToken)
         {
             FetchCount++;
+            return Task.FromResult(result);
+        }
+    }
+
+    /// <summary>
+    /// Returns a successful fetch and then cancels the command token, so the serve write
+    /// observes the disconnect after the record exists.
+    /// </summary>
+    private sealed class CancelOnReturnVatp(VatpFetchResult result, CancellationTokenSource cancel) : IVatpArticleClient
+    {
+        public int FetchCount { get; private set; }
+
+        public Task<VatpFetchResult> FetchArticleAsync(
+            string cacheUri,
+            Guid requestId,
+            ArticleId articleId,
+            CancellationToken cancellationToken)
+        {
+            FetchCount++;
+            cancel.Cancel();
             return Task.FromResult(result);
         }
     }
@@ -1457,8 +1521,11 @@ public sealed class ArticleRetrievalVatpCommandTests
 
         public bool IsAccepting => true;
 
+        public int AdmitCalls { get; private set; }
+
         public ArticleEnqueueResult TryAdmit(InboundArticle article)
         {
+            AdmitCalls++;
             LastResult = NextResult;
             if (NextResult == ArticleEnqueueResult.Accepted)
             {

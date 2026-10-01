@@ -21,7 +21,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// response calls ArticleWork. Transport, malformed, and invalid StorageServer
 /// results stay on that path. A validated CanonicalV1
 /// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
-/// reply. Local ingest admission is independent of serving the requesting client.
+/// reply. A StorageServer success is served without ingestion. A BackFiller success
+/// still admits the article; an admission failure does not change the reply.
 /// </para>
 /// <para>
 /// Numeric article lookup and omitted current-article forms are unchanged:
@@ -121,7 +122,10 @@ internal static class Article
         }
 
         var record = resolved.Record;
-        TryAdmitBackFiller(context, in record);
+        if (resolved.Source == RetrievalSource.BackFiller)
+        {
+            TryAdmitBackFiller(context, in record);
+        }
 
         var messageIdText = Encoding.ASCII.GetString(record.MessageId);
         switch (kind)
@@ -298,7 +302,7 @@ internal static class Article
             return ResolveResult.Temporary();
         }
 
-        return MapFetch(fetch, messageId.Span, expectedArtId);
+        return WithSource(MapFetch(fetch, messageId.Span, expectedArtId), RetrievalSource.BackFiller);
     }
 
     /// <summary>
@@ -405,7 +409,7 @@ internal static class Article
             }
         }
 
-        return MapFetch(fetch, messageId.Span, articleId);
+        return WithSource(MapFetch(fetch, messageId.Span, articleId), RetrievalSource.StorageServer);
     }
 
     private static async ValueTask<VatpFetchResult> FetchStorageCandidateAsync(
@@ -519,8 +523,16 @@ internal static class Article
             return ResolveResult.NotFound();
         }
 
-        return ResolveResult.Success(record);
+        return ResolveResult.Success(record, RetrievalSource.None);
     }
+
+    /// <summary>
+    /// Keeps a failure result unchanged and stamps <paramref name="source"/> only on success.
+    /// </summary>
+    private static ResolveResult WithSource(ResolveResult result, RetrievalSource source) =>
+        result.Kind == ResolveKind.Success
+            ? ResolveResult.Success(result.Record, source)
+            : result;
 
     private static void TryAdmitBackFiller(NntpCommandContext context, in ArticleRecord record)
     {
@@ -595,6 +607,13 @@ internal static class Article
             cancellationToken);
     }
 
+    private enum RetrievalSource
+    {
+        None = 0,
+        StorageServer = 1,
+        BackFiller = 2,
+    }
+
     private enum ResolveKind
     {
         NotFound,
@@ -604,20 +623,24 @@ internal static class Article
 
     private readonly struct ResolveResult
     {
-        private ResolveResult(ResolveKind kind, ArticleRecord record)
+        private ResolveResult(ResolveKind kind, ArticleRecord record, RetrievalSource source)
         {
             Kind = kind;
             Record = record;
+            Source = source;
         }
 
         public ResolveKind Kind { get; }
 
         public ArticleRecord Record { get; }
 
-        public static ResolveResult NotFound() => new(ResolveKind.NotFound, default);
+        public RetrievalSource Source { get; }
 
-        public static ResolveResult Temporary() => new(ResolveKind.TemporaryFailure, default);
+        public static ResolveResult NotFound() => new(ResolveKind.NotFound, default, RetrievalSource.None);
 
-        public static ResolveResult Success(ArticleRecord record) => new(ResolveKind.Success, record);
+        public static ResolveResult Temporary() => new(ResolveKind.TemporaryFailure, default, RetrievalSource.None);
+
+        public static ResolveResult Success(ArticleRecord record, RetrievalSource source) =>
+            new(ResolveKind.Success, record, source);
     }
 }
