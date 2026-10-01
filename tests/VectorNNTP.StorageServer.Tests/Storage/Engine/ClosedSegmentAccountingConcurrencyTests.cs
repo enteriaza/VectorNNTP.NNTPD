@@ -135,9 +135,14 @@ public sealed class ClosedSegmentAccountingConcurrencyTests
         await engine.RecoverAsync(CancellationToken.None);
         engine.CompleteUnreferencedExtentAccounting();
 
+        // Startup invalidates the corrupt Present row. The closed scan still cannot
+        // finish, so DeadBytes stays at the index-derived length of that Invalid row.
+        Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Invalid, meta.State);
         Assert.True(engine.Segments.TryGetSegmentInfo(location.SegmentId, out var info));
         Assert.False(info.ExtentAccountingComplete);
-        Assert.Equal(0, info.DeadBytes);
+        Assert.Equal(0, info.LiveBytes);
+        Assert.Equal(location.Length, info.DeadBytes);
     }
 
     [Fact]

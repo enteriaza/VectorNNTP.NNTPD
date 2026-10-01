@@ -56,6 +56,12 @@ public sealed class StorageEngineApplicationService : IApplicationService, IAsyn
     public bool IsReady => Volatile.Read(ref _started) == 1 && _engine is not null;
 
     /// <summary>
+    /// Invoked after open and before <see cref="FileArticleStorageEngine.RecoverAsync"/>.
+    /// Tests only. Cleared before invoke. Production startup leaves this null.
+    /// </summary>
+    internal Action<FileArticleStorageEngine>? TestBeforeRecover { get; set; }
+
+    /// <summary>
     /// Gets the open, recovered engine after successful <see cref="StartAsync"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">Thrown when the engine is not ready.</exception>
@@ -88,6 +94,10 @@ public sealed class StorageEngineApplicationService : IApplicationService, IAsyn
                 _logger,
                 _timeProvider,
                 cache);
+
+            var beforeRecover = TestBeforeRecover;
+            TestBeforeRecover = null;
+            beforeRecover?.Invoke(engine);
 
             StorageEngineLogMessages.RecoveryStarting(_logger, storage.ControlDir);
             await engine.RecoverAsync(cancellationToken).ConfigureAwait(false);

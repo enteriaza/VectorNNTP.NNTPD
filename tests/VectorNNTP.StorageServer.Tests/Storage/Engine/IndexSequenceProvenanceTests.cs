@@ -257,8 +257,10 @@ public sealed class IndexSequenceProvenanceTests
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.None;
         await engine.RecoverAsync(CancellationToken.None);
 
+        // The newer row names a segment that was never written. Startup invalidates that
+        // location. It must not fall back to the older PhysicalWritten.
         Assert.True(engine.Index.TryGet(record.ArtId, out var after));
-        Assert.Equal(ArticleStorageState.Present, after.State);
+        Assert.Equal(ArticleStorageState.Invalid, after.State);
         Assert.Equal(newerLocation, after.Location);
         Assert.Equal(sequence + 1, after.Sequence);
         Assert.Empty(engine.Journal.EnumerateIncomplete());

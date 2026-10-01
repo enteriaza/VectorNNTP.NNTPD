@@ -174,13 +174,16 @@ public sealed class ClosedSegmentExtentAccountingTests
         await engine.RecoverAsync(CancellationToken.None);
         engine.CompleteUnreferencedExtentAccounting();
 
+        // Startup invalidates the Present row because the bytes are a different article.
+        // Those bytes are then dead once, not live and dead together.
         Assert.True(engine.Index.TryGet(original.ArtId, out var meta));
+        Assert.Equal(ArticleStorageState.Invalid, meta.State);
         Assert.Equal(location, meta.Location);
         Assert.False(engine.Index.TryGet(other.ArtId, out _));
         Assert.True(engine.Segments.TryGetSegmentInfo(location.SegmentId, out var info));
         Assert.True(info.ExtentAccountingComplete);
-        Assert.Equal(location.Length, info.LiveBytes);
-        Assert.Equal(0, info.DeadBytes);
+        Assert.Equal(0, info.LiveBytes);
+        Assert.Equal(location.Length, info.DeadBytes);
         Assert.Equal(info.SizeBytes, info.LiveBytes + info.DeadBytes);
     }
 

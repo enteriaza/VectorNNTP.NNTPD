@@ -1239,6 +1239,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
         var abandonedDestinations = RecoverCompactions();
         ApplyRetiredCompactionsFromJournal();
+        ValidatePresentLocationsAtStartup();
         RebuildSegmentAccountingFromIndex();
         foreach (var dest in abandonedDestinations)
         {
@@ -1251,6 +1252,59 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         // Durable recovery finished: re-link any still-incomplete work into the transient queue.
         EnqueueIncompleteFromJournal();
+    }
+
+    /// <summary>
+    /// Proves every Present index row at its indexed location. A location that does not prove
+    /// is durably invalidated. A row that is still Present afterward fails recovery.
+    /// Evicted and Invalid rows are not read and are not changed. Does not append a journal
+    /// frame or allocate a segment. A successful proof does not write the index.
+    /// </summary>
+    private void ValidatePresentLocationsAtStartup()
+    {
+        var present = new List<StoredArticleMetadata>();
+        foreach (var row in _index.Snapshot())
+        {
+            if (row.State == ArticleStorageState.Present)
+            {
+                present.Add(row);
+            }
+        }
+
+        foreach (var row in present)
+        {
+            if (PresentLocationProves(in row))
+            {
+                continue;
+            }
+
+            _ = TryInvalidatePresentAt(in row);
+            if (_index.TryGet(row.ArtId, out var current)
+                && current.State == ArticleStorageState.Present)
+            {
+                throw new InvalidOperationException(
+                    $"Present article '{row.ArtId}' failed physical proof and could not be invalidated.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="metadata"/> names a segment record that proves that identity.
+    /// Uses the same read proof as an indexed article read. Does not modify index or catalogue state.
+    /// </summary>
+    private bool PresentLocationProves(in StoredArticleMetadata metadata)
+    {
+        return _segments.TryReadProven(
+                metadata.Location,
+                metadata.ArtId,
+                metadata.ArtHash,
+                metadata.ArtSize,
+                out var artData)
+            && ArticleStorageIntegrity.TryProve(
+                artData.Span,
+                metadata.ArtId,
+                metadata.ArtHash,
+                metadata.ArtSize);
     }
 
     /// <summary>

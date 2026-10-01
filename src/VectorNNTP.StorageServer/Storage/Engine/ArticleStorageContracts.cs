@@ -228,7 +228,10 @@ public interface IArticleStorageEngine
 /// Accept only → reconstruct ArtData from journal → new SATA append → PhysicalWritten →
 /// index commit → IndexCommitted. Accept+PhysicalWritten → prove → index commit →
 /// IndexCommitted. IndexCommitted → no-op. Never invents PhysicalWritten from guessed SATA
-/// tails; unrecovered prior appends are dead/unreferenced.
+/// tails; unrecovered prior appends are dead/unreferenced. After those steps, every Present
+/// row is proved at its indexed location; a location that does not prove is durably
+/// invalidated before the engine is published. Failure to commit that Invalid frame fails
+/// recovery.
 /// </remarks>
 public interface IArticleStorageRecovery
 {
