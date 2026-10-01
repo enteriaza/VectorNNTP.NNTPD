@@ -54,10 +54,10 @@ public sealed class StorageServerHostCompositionTests
         Assert.IsType<StorageMaintenanceService>(application[1]);
         Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
         Assert.IsType<RabbitMqService>(application[3]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
-        Assert.IsType<StorageArticleLookupConsumerService>(application[5]);
-        Assert.IsType<AcmeCertificateApplicationService>(application[6]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[7]);
+        Assert.IsType<AcmeCertificateApplicationService>(application[4]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[5]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
+        Assert.IsType<StorageArticleLookupConsumerService>(application[7]);
         Assert.IsType<StorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.NotNull(host.Services.GetRequiredService<IStorageCapacityReader>());
         Assert.NotNull(host.Services.GetRequiredService<IStorageArticlePresence>());
@@ -119,11 +119,11 @@ public sealed class StorageServerHostCompositionTests
             Assert.IsType<StorageMaintenanceService>(application[1]);
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
             Assert.IsType<RabbitMqService>(application[3]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
-            Assert.IsType<StorageArticleLookupConsumerService>(application[5]);
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[6]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[7]);
+            Assert.Same(listener, application[5]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
+            Assert.IsType<StorageArticleLookupConsumerService>(application[7]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
 

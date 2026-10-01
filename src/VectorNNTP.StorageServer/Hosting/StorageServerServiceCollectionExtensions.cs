@@ -31,7 +31,8 @@ public static class StorageServerServiceCollectionExtensions
     /// <remarks>
     /// Application service start order:
     /// StorageEngine → StorageMaintenance → Cloudflare DNS → RabbitMQ (connectivity only) →
-    /// AdvertisementPublisher → LookupConsumer → ACME → VATP listener.
+    /// ACME → VATP listener → AdvertisementPublisher → LookupConsumer.
+    /// Shutdown is that order reversed, so presence and advertisement stop before the listener.
     /// Topology, queues, and consumers are not registered here.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
@@ -140,7 +141,8 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddSingleton<StorageMaintenanceService>();
 
         // Startup order: StorageEngine → StorageMaintenance → Cloudflare → RabbitMQ →
-        // AdvertisementPublisher → LookupConsumer → ACME → Listener.
+        // ACME → Listener → AdvertisementPublisher → LookupConsumer.
+        // ApplicationServiceManager stops in reverse, so presence and advertisement stop first.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageEngineApplicationService>(static sp =>
                 sp.GetRequiredService<StorageEngineApplicationService>()));
@@ -152,12 +154,6 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, RabbitMqService>(static sp =>
                 sp.GetRequiredService<RabbitMqService>()));
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, StorageServerAdvertisementPublisherService>(static sp =>
-                sp.GetRequiredService<StorageServerAdvertisementPublisherService>()));
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, StorageArticleLookupConsumerService>(static sp =>
-                sp.GetRequiredService<StorageArticleLookupConsumerService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
         builder.Services.AddSingleton(static provider =>
@@ -186,6 +182,12 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>
                 provider.GetRequiredService<StorageVatpListenerService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageServerAdvertisementPublisherService>(static sp =>
+                sp.GetRequiredService<StorageServerAdvertisementPublisherService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageArticleLookupConsumerService>(static sp =>
+                sp.GetRequiredService<StorageArticleLookupConsumerService>()));
 
         builder.Services.AddSingleton<IApplicationLifecycleOptions>(static sp =>
             sp.GetRequiredService<IOptions<StorageServerOptions>>().Value);
