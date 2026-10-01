@@ -456,7 +456,8 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
                 phantom.ArtSize,
                 new StoredArticleLocation(sourceId, 0, phantom.ArtSize),
                 ArticleStorageState.Present,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                1UL)));
         };
 
         var stale = await coordinator.RunOnceAsync(CancellationToken.None);

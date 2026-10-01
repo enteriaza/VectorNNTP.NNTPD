@@ -77,14 +77,14 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Bytes reserved for physical index frames and for frames accepted but not yet appended.
-    /// Each Present, Evicted, Invalid, or relocation frame is 88 bytes on the control ledger.
+    /// Each Present, Evicted, Invalid, or relocation frame reserves one index record on the control ledger.
     /// </summary>
     public long IndexReservedBytes => _indexReservedBytes;
 
     /// <summary>Physical index frames currently reserved, excluding not-yet-appended holds.</summary>
     public int IndexFrameCount => _indexFrames.Count;
 
-    /// <summary>Accept sequences that hold an 88-byte reservation before their Present frame is appended.</summary>
+    /// <summary>Accept sequences that hold an index-frame reservation before their Present frame is appended.</summary>
     public int IndexUnboundCount => _indexUnboundBySequence.Count;
 
     /// <summary>Bytes reserved for outstanding compaction destination appends.</summary>

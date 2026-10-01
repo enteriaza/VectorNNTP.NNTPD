@@ -29,7 +29,7 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// (Accept + PhysicalWritten + IndexCommitted). That reservation stays through
 /// IndexCommitted and is released only after a successful journal checkpoint installs a
 /// replacement that omits that sequence.
-/// The control ledger also reserves 88 bytes before every durable index frame is appended.
+/// The control ledger also reserves <c>ArticleIndexRecordCodec.RecordLength</c> bytes (96) before every durable index frame is appended.
 /// That includes Present, Evicted, Invalid, and a relocation's new Present frame. Each
 /// reservation stays through IndexCommitted and logical state changes, and is released only
 /// when an index checkpoint replacement retires that physical frame. Two physical frames for

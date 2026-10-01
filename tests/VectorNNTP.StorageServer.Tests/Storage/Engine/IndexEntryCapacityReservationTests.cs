@@ -14,16 +14,17 @@ namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 /// <summary>Phase 2C durable Present index-frame reservations.</summary>
 public sealed class IndexEntryCapacityReservationTests
 {
-    private const long IndexBytes = 88;
+    private const long IndexBytes = ArticleIndexRecordCodec.RecordLength;
 
     [Fact]
-    public void Present_frame_is_88_bytes()
+    public void Present_frame_is_96_bytes()
     {
+        Assert.Equal(96, ArticleIndexRecordCodec.RecordLength);
         Assert.Equal(IndexBytes, ArticleIndexRecordCodec.RecordLength);
     }
 
     [Fact]
-    public async Task Present_reserves_88_bytes_and_later_stages_keep_it()
+    public async Task Present_reserves_record_length_and_later_stages_keep_it()
     {
         using var dir = TempStorageDir.Create();
         await using var engine = Open(dir);

@@ -434,7 +434,8 @@ public sealed class FileArticleIndexTests
             -1,
             new StoredArticleLocation(new SegmentId(1), 0, 0),
             ArticleStorageState.Present,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            1UL);
         Assert.Throws<ArgumentOutOfRangeException>(() => index.TryCommitPresent(bad));
     }
 
@@ -769,7 +770,8 @@ public sealed class FileArticleIndexTests
             size,
             location,
             ArticleStorageState.Present,
-            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
+            1UL);
 
     private sealed class TempControlDir : IDisposable
     {

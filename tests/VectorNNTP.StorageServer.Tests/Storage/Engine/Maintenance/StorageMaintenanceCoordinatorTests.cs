@@ -147,7 +147,8 @@ public sealed class StorageMaintenanceCoordinatorTests
                 phantom.ArtSize,
                 liveMeta.Location,
                 ArticleStorageState.Present,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                1UL)));
         };
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
@@ -379,7 +380,8 @@ public sealed class StorageMaintenanceCoordinatorTests
                 phantom.ArtSize,
                 new StoredArticleLocation(sourceId, 0, phantom.ArtSize),
                 ArticleStorageState.Present,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                1UL)));
         };
 
         var result = await coordinator.RunOnceAsync(CancellationToken.None);

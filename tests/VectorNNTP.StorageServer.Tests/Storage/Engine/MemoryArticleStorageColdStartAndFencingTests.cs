@@ -230,7 +230,8 @@ public sealed class MemoryArticleStorageColdStartAndFencingTests
             record.ArtSize,
             location,
             ArticleStorageState.Present,
-            DateTimeOffset.UtcNow)));
+            DateTimeOffset.UtcNow,
+            1UL)));
         var appendsBefore = segmentsB.AppendCount;
         await using var engineB = new MemoryArticleStorageEngine(
             journalB,
@@ -259,7 +260,7 @@ public sealed class MemoryArticleStorageColdStartAndFencingTests
         var oldLoc = new StoredArticleLocation(new SegmentId(1), 0, 6);
         var newLoc = new StoredArticleLocation(new SegmentId(2), 0, 6);
         Assert.True(index.TryCommitPresent(new StoredArticleMetadata(
-            artId, 11, 6, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow)));
+            artId, 11, 6, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL)));
 
         Assert.Equal(
             ArticleRelocateOutcome.NotPresent,
@@ -282,7 +283,7 @@ public sealed class MemoryArticleStorageColdStartAndFencingTests
         var index = new MemoryArticleIndex();
         var artId = ArticleId.FromMessageId("<rel-bytes@example.test>"u8);
         Assert.True(index.TryCommitPresent(new StoredArticleMetadata(
-            artId, 99, payload.Length, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow)));
+            artId, 99, payload.Length, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL)));
 
         var newLoc = new StoredArticleLocation(new SegmentId(99), 0, payload.Length);
         Assert.Equal(

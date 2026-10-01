@@ -393,7 +393,9 @@ public sealed class CheckpointCapacityReservationTests
 
         var fileLength = index.CopyIndexBytes().Length;
         var encoded = ArticleIndexSnapshotCodec.EncodedLength(count);
-        Assert.Equal(48 + (88L * count), encoded);
+        Assert.Equal(
+            ArticleIndexSnapshotCodec.HeaderLength + 4 + ((long)ArticleIndexRecordCodec.RecordLength * count),
+            encoded);
         Assert.NotEqual(fileLength, encoded);
         Assert.True(fileLength > encoded);
 
@@ -598,7 +600,8 @@ public sealed class CheckpointCapacityReservationTests
             8,
             new StoredArticleLocation(new SegmentId(1), (long)hash * 8, 8),
             ArticleStorageState.Present,
-            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
+            1UL);
 
     private static ArticleRecord CreateRecord(string messageId)
     {

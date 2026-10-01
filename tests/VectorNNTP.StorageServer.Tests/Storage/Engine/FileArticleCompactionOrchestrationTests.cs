@@ -203,7 +203,8 @@ public sealed class FileArticleCompactionOrchestrationTests
                 phantom.ArtSize,
                 liveMeta.Location,
                 ArticleStorageState.Present,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                1UL)));
         };
 
         var result = await engine.CompactClosedSegmentAsync(sourceId, CancellationToken.None);

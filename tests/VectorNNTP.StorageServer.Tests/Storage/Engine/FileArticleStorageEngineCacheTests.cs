@@ -569,7 +569,8 @@ public sealed class FileArticleStorageEngineCacheTests
                         record.ArtSize,
                         new StoredArticleLocation(new SegmentId(99), 0, location.Length),
                         ArticleStorageState.Present,
-                        DateTimeOffset.UtcNow)));
+                        DateTimeOffset.UtcNow,
+                        0UL)));
         }
 
         cache.ResetCounters();

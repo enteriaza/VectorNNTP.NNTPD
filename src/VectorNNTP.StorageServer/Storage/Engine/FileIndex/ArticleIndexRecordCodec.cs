@@ -21,20 +21,23 @@ internal enum ArticleIndexFrameError
 /// Fixed-layout mutation record (latest write for an <see cref="ArticleId"/> wins on replay):
 /// <c>u32 TotalLength</c>, <c>u8 SchemaVersion</c>, <c>u8 Reserved</c>, <c>u16 Reserved</c>,
 /// ArtId[32], ArtHash u64, ArtSize i32, SegmentId u64, Offset i64, Length i32,
-/// State u8, pad u8, pad u16, LastAccessUtcTicks i64, CRC-32 over preceding bytes.
+/// State u8, pad u8, pad u16, LastAccessUtcTicks i64, Sequence u64, CRC-32 over preceding bytes.
+/// Schema 1 records are 88 bytes and are rejected. Sequence is the journal Accept that established
+/// the row. Relocation and death copy it; they do not allocate a new one.
 /// </remarks>
 internal static class ArticleIndexRecordCodec
 {
-    /// <summary>Current schema version.</summary>
-    public const byte SchemaVersion = 1;
+    /// <summary>Current schema version. Schema 1 (88-byte frames) is not read.</summary>
+    public const byte SchemaVersion = 2;
 
-    /// <summary>Fixed encoded mutation size including CRC.</summary>
+    /// <summary>Fixed encoded mutation size including CRC. Schema 2 is 96 bytes.</summary>
     public const int RecordLength =
         4 + 1 + 1 + 2
         + ArticleId.Length
         + 8 + 4
         + 8 + 8 + 4
         + 1 + 1 + 2
+        + 8
         + 8
         + 4;
 
@@ -72,6 +75,8 @@ internal static class ArticleIndexRecordCodec
         buffer[o++] = 0;
         buffer[o++] = 0;
         BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(o, 8), metadata.LastAccessUtc.UtcTicks);
+        o += 8;
+        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(o, 8), metadata.Sequence);
         o += 8;
         var crc = Crc32.HashToUInt32(buffer.AsSpan(0, o));
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(o, 4), crc);
@@ -165,6 +170,8 @@ internal static class ArticleIndexRecordCodec
         }
 
         var ticks = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(o, 8));
+        o += 8;
+        var sequence = BinaryPrimitives.ReadUInt64LittleEndian(frame.Slice(o, 8));
         DateTimeOffset lastAccess;
         try
         {
@@ -190,7 +197,8 @@ internal static class ArticleIndexRecordCodec
             artSize,
             new StoredArticleLocation(new SegmentId(segment), offset, length),
             (ArticleStorageState)stateByte,
-            lastAccess);
+            lastAccess,
+            sequence);
         return true;
     }
 

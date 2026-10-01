@@ -241,8 +241,12 @@ public sealed partial class FileArticleStorageEngine
 
     /// <summary>
     /// True when a later completion can still create Present at <paramref name="location"/>.
-    /// Same-location Evicted/Invalid and Present-elsewhere are not publishable back onto the source.
     /// </summary>
+    /// <remarks>
+    /// The index row sequence is the logical transaction. An equal or newer row already superseded
+    /// this <c>PhysicalWritten</c>, so it must not publish. A newer Accept than the row may still
+    /// publish over a dead row. <see cref="ArticleStorageState.Present"/> is not overwritten.
+    /// </remarks>
     private bool CanPhysicalWrittenStillPublish(
         JournalAcceptRecord accept,
         in StoredArticleLocation location)
@@ -252,25 +256,11 @@ public sealed partial class FileArticleStorageEngine
             return true;
         }
 
-        var sameIdentity = existing.ArtHash == accept.ArtHash && existing.ArtSize == accept.ArtSize;
-        var sameLocation = LocationsEqual(existing.Location, location);
-        if (!sameIdentity)
-        {
-            // A different Present identity cannot be overwritten. A dead entry can be replaced
-            // by this accept, which publishes at the PhysicalWritten location.
-            return existing.State != ArticleStorageState.Present;
-        }
-
-        if (existing.State == ArticleStorageState.Present)
+        if (existing.Sequence >= accept.Sequence)
         {
             return false;
         }
 
-        if (existing.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
-        {
-            return !sameLocation;
-        }
-
-        return true;
+        return existing.State != ArticleStorageState.Present;
     }
 }

@@ -372,13 +372,18 @@ public readonly record struct StoredArticleLocation(SegmentId SegmentId, long Of
 /// <param name="LastAccessUtc">
 /// Soft access hint. May lag; must not be required for crash recovery or correctness.
 /// </param>
+/// <param name="Sequence">
+/// Journal Accept sequence that established this logical state. Relocation and death copy it.
+/// A newer Accept replaces it. Zero is not a journal sequence; allocation starts at 1.
+/// </param>
 public readonly record struct StoredArticleMetadata(
     ArticleId ArtId,
     ulong ArtHash,
     int ArtSize,
     StoredArticleLocation Location,
     ArticleStorageState State,
-    DateTimeOffset LastAccessUtc);
+    DateTimeOffset LastAccessUtc,
+    ulong Sequence);
 
 /// <summary>
 /// Segment catalogue entry with live/dead accounting and retirement fencing.

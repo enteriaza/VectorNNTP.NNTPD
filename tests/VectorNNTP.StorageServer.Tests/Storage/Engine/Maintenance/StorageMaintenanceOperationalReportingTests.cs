@@ -120,7 +120,8 @@ public sealed class StorageMaintenanceOperationalReportingTests
                 phantom.ArtSize,
                 liveMeta.Location,
                 ArticleStorageState.Present,
-                DateTimeOffset.UtcNow)));
+                DateTimeOffset.UtcNow,
+                1UL)));
         };
 
         var result = await CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0)

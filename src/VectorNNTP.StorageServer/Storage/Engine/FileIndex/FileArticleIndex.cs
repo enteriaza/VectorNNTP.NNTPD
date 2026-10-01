@@ -321,6 +321,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             {
                 if (existing.ArtHash == metadata.ArtHash
                     && existing.ArtSize == metadata.ArtSize
+                    && existing.Sequence == metadata.Sequence
                     && LocationsEqual(existing.Location, metadata.Location))
                 {
                     return DurableIndexAppend.Unchanged;

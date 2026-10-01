@@ -50,9 +50,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// until a later reclamation phase. A retirement-seal retry reserves another copy before it appends.
 /// Each durable Accept also reserves <c>ArtSize + 132</c> on the control ledger for the journal
 /// sequence. That reservation is released only after a checkpoint replacement omits the sequence.
-/// The same Accept reserves 88 bytes on the control ledger before the durable Present index frame.
+/// The same Accept reserves <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes on the control
+/// ledger before the durable Present index frame.
 /// Every later physical index frame, including Evicted, Invalid, and relocation Present, reserves
-/// another 88 bytes before it is appended. A reservation stays through IndexCommitted and logical
+/// another <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes before it is appended. A reservation stays through IndexCommitted and logical
 /// state changes, and is released only when an index checkpoint replacement retires that physical frame.
 /// Each durable compaction-journal frame reserves its exact codec length on the control ledger
 /// under MaximumUtilization + CompactionHeadroom immediately before it is appended:
@@ -1587,7 +1588,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         cached.ArtSize,
                         cachedIndexMeta.Location,
                         ArticleStorageState.Present,
-                        _timeProvider.GetUtcNow()),
+                        _timeProvider.GetUtcNow(),
+                        cachedIndexMeta.Sequence),
                     cached.ArtData);
                 return true;
             }
@@ -1849,7 +1851,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// Appends the Present frame for <paramref name="sequence"/> after its 88-byte reservation is held.
+    /// Appends the Present frame for <paramref name="sequence"/> after its index-frame reservation is held.
     /// Returns <see langword="false"/> when the index rejects the frame and nothing was written.
     /// </summary>
     private bool PublishPresentFrame(ulong sequence, in StoredArticleMetadata metadata)
@@ -2422,7 +2424,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     accept.ArtSize,
                     written.Location,
                     ArticleStorageState.Present,
-                    _timeProvider.GetUtcNow());
+                    _timeProvider.GetUtcNow(),
+                    accept.Sequence);
                 if (!PublishPresentFrame(accept.Sequence, in metadata)
                     && !ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
                 {
@@ -2442,27 +2445,36 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>
     /// True when <c>IndexCommitted</c> must close the sequence without <c>TryCommitPresent</c>.
-    /// Present at any location with the same identity stays where it is. Evicted or Invalid at
-    /// the PhysicalWritten location stays dead.
     /// </summary>
+    /// <remarks>
+    /// <c>IndexCommitted</c> completes the journal obligation. It does not entitle the
+    /// <c>PhysicalWritten</c> location to become the current logical state.
+    /// The index row <see cref="StoredArticleMetadata.Sequence"/> is that logical transaction.
+    /// An equal sequence already established the row, including after relocation or death, so
+    /// recovery must not replace it. A greater index sequence is a newer transaction; this older
+    /// <c>PhysicalWritten</c> must not move the index backwards. A smaller index sequence is an
+    /// older transaction, and this Accept may publish under the existing identity rules.
+    /// </remarks>
     private bool ShouldFinishPhysicalWrittenWithoutPublishing(
         JournalAcceptRecord accept,
         in StoredArticleLocation location)
     {
-        if (!_index.TryGet(accept.ArtId, out var existing)
-            || existing.ArtHash != accept.ArtHash
-            || existing.ArtSize != accept.ArtSize)
+        if (!_index.TryGet(accept.ArtId, out var existing))
         {
             return false;
         }
 
-        if (existing.State == ArticleStorageState.Present)
+        if (existing.Sequence >= accept.Sequence)
         {
             return true;
         }
 
-        return existing.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid
-            && LocationsEqual(existing.Location, location);
+        if (existing.ArtHash != accept.ArtHash || existing.ArtSize != accept.ArtSize)
+        {
+            return false;
+        }
+
+        return existing.State == ArticleStorageState.Present;
     }
 
     private async Task AppendIndexCommittedAsync(
@@ -2509,7 +2521,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             indexed.ArtSize,
             indexed.Location,
             ArticleStorageState.Present,
-            _timeProvider.GetUtcNow());
+            _timeProvider.GetUtcNow(),
+            indexed.Sequence);
         if (!TryCreateCacheRecord(in metadata, accept.ArtData, out var cacheRecord))
         {
             return;

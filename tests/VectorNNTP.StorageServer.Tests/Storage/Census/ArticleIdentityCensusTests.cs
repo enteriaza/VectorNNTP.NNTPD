@@ -157,7 +157,8 @@ public sealed class ArticleIdentityCensusTests
                     4,
                     Location(4),
                     ArticleStorageState.Present,
-                    Now)));
+                    Now,
+                    1UL)));
                 Assert.Equal(
                     JournalAppendOutcome.Applied,
                     Wait(journal.AppendIndexCommittedAsync(
@@ -455,7 +456,8 @@ public sealed class ArticleIdentityCensusTests
             record.ArtSize,
             Location(record.ArtSize),
             ArticleStorageState.Present,
-            Now)));
+            Now,
+            1UL)));
         return record;
     }
 

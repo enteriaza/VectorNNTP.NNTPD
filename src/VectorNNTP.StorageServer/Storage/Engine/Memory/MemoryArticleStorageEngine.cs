@@ -303,10 +303,10 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
         }
 
         if (_index.TryGet(accept.ArtId, out var existing)
-            && existing.State == ArticleStorageState.Present
-            && existing.ArtHash == accept.ArtHash
-            && existing.ArtSize == accept.ArtSize
-            && LocationsEqual(existing.Location, written.Location))
+            && (existing.Sequence >= accept.Sequence
+                || (existing.State == ArticleStorageState.Present
+                    && existing.ArtHash == accept.ArtHash
+                    && existing.ArtSize == accept.ArtSize)))
         {
             _ = await _journal
                 .AppendIndexCommittedAsync(new JournalIndexCommittedRecord(1, accept.Sequence), cancellationToken)
@@ -320,7 +320,8 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
             accept.ArtSize,
             written.Location,
             ArticleStorageState.Present,
-            _timeProvider.GetUtcNow());
+            _timeProvider.GetUtcNow(),
+            accept.Sequence);
 
         if (!_index.TryCommitPresent(in metadata))
         {

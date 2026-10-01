@@ -9,11 +9,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// </summary>
 /// <remarks>
 /// Little-endian header, then <see cref="ArticleIndexRecordCodec.RecordLength"/>-byte frames,
-/// then a trailer CRC. The magic is ASCII <c>VNIS</c>, which is not a little-endian 88,
+/// then a trailer CRC. The magic is ASCII <c>VNIS</c>, which is not a little-endian 96,
 /// so a snapshot cannot be mistaken for a legacy index frame.
 /// <list type="table">
 /// <item><term>0</term><description>4 ASCII magic <c>VNIS</c></description></item>
-/// <item><term>4</term><description>u32 version (1)</description></item>
+/// <item><term>4</term><description>u32 version (2)</description></item>
 /// <item><term>8</term><description>u64 snapshot generation</description></item>
 /// <item><term>16</term><description>u64 covered delta generation (0 while <c>article.index</c> has no generation header)</description></item>
 /// <item><term>24</term><description>u64 covered <c>article.index</c> length at the dictionary copy</description></item>
@@ -28,8 +28,8 @@ internal static class ArticleIndexSnapshotCodec
     /// <summary>ASCII <c>VNIS</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "VNIS"u8;
 
-    /// <summary>Current snapshot version.</summary>
-    public const uint Version = 1;
+    /// <summary>Current snapshot version. Version 1 snapshots use 88-byte records and are rejected.</summary>
+    public const uint Version = 2;
 
     /// <summary>
     /// Covered delta generation written while <c>article.index</c> is still an unheadered frame log.

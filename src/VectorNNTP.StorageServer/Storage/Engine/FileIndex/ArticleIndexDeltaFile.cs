@@ -8,18 +8,18 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Little-endian. The magic is ASCII <c>VNID</c>, which is not a little-endian 88 and is not
-/// the snapshot magic <c>VNIS</c>. A legacy index is a bare sequence of 88-byte frames and
-/// does not carry this header.
+/// Little-endian. The magic is ASCII <c>VNID</c>, which is not a little-endian 96 and is not
+/// the snapshot magic <c>VNIS</c>. An unheadered index is a bare sequence of 96-byte frames and
+/// does not carry this header. Schema 1 files of 88-byte frames are rejected.
 /// </para>
 /// <list type="table">
 /// <item><term>0</term><description>4 ASCII magic <c>VNID</c></description></item>
-/// <item><term>4</term><description>u32 version (1)</description></item>
+/// <item><term>4</term><description>u32 version (2)</description></item>
 /// <item><term>8</term><description>u64 snapshot generation this file belongs to</description></item>
 /// <item><term>16</term><description>u32 CRC-32 of bytes [0, 16)</description></item>
 /// </list>
 /// <para>
-/// The payload is the raw 88-byte frames that were past the snapshot's covered length when
+/// The payload is the raw 96-byte frames that were past the snapshot's covered length when
 /// the replacement was installed. The snapshot generation is index-local. It is not a journal
 /// sequence and it is not <see cref="ArticleIndexSnapshotCodec.LegacyDeltaGeneration"/>.
 /// Startup compares this generation with the installed snapshot generation so a covered byte
@@ -33,8 +33,8 @@ internal static class ArticleIndexDeltaFile
     /// <summary>ASCII <c>VNID</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "VNID"u8;
 
-    /// <summary>Current replacement-header version.</summary>
-    public const uint Version = 1;
+    /// <summary>Current replacement-header version. Version 1 replacements are rejected.</summary>
+    public const uint Version = 2;
 
     /// <summary>Fixed header size, including the header CRC.</summary>
     public const int HeaderLength = 20;

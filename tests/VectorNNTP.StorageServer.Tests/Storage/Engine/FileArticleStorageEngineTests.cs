@@ -161,7 +161,8 @@ public sealed class FileArticleStorageEngineTests
                         record.ArtSize,
                         other,
                         ArticleStorageState.Present,
-                        DateTimeOffset.UtcNow)));
+                        DateTimeOffset.UtcNow,
+                        0UL)));
         }
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);
@@ -321,7 +322,8 @@ public sealed class FileArticleStorageEngineTests
                         record.ArtSize,
                         location,
                         ArticleStorageState.Present,
-                        DateTimeOffset.UtcNow)));
+                        DateTimeOffset.UtcNow,
+                        accept.Sequence)));
         }
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);

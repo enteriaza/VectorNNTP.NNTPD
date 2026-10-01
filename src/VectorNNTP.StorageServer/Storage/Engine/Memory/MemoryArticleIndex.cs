@@ -58,6 +58,7 @@ public sealed class MemoryArticleIndex : IArticleIndex
             {
                 if (existing.ArtHash == metadata.ArtHash
                     && existing.ArtSize == metadata.ArtSize
+                    && existing.Sequence == metadata.Sequence
                     && LocationsEqual(existing.Location, metadata.Location))
                 {
                     return true;

@@ -354,7 +354,8 @@ public sealed class FileArticleIndexSnapshotReplayTests
             size,
             location,
             ArticleStorageState.Present,
-            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
+            1UL);
 
     private sealed class LongOffsetStream : Stream
     {
