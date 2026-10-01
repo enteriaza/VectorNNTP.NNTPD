@@ -37,6 +37,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private readonly string _root;
     private ulong _nextSegmentId = 1;
     private ulong? _activeSegmentId;
+    private ActiveValidatedPrefix? _activeValidatedPrefix;
     private bool _disposed;
 
     /// <summary>
@@ -63,8 +64,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal Action? TestHookDuringClosedExtentScan { get; set; }
 
     /// <summary>
-    /// Invoked during <see cref="FindProvenLocations"/> after the segment write gate has been
-    /// released and a private read stream is open. Tests only. Must not be the runtime stream.
+    /// Invoked once per eligible segment during candidate discovery, after the write gate
+    /// is released and before that segment is read. Tests only. Must not be the runtime stream.
     /// </summary>
     internal Action? TestHookDuringProvenLocationScan { get; set; }
 
@@ -73,6 +74,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// must leave this at zero. Tests use it as a regression guard.
     /// </summary>
     internal long DiscoveryPayloadBytesRead { get; private set; }
+
+    /// <summary>
+    /// Times candidate discovery sequentially decoded an Active segment.
+    /// Stays zero when the repaired Active prefix supplies record boundaries.
+    /// </summary>
+    internal int ActiveCandidateSequentialWalkCount { get; private set; }
+
+    /// <summary>
+    /// Active record bytes re-read to prove payload identity after tail repair.
+    /// Not a second framing walk, and not closed-segment bytes.
+    /// </summary>
+    internal long ActiveCandidatePayloadProofBytesRead { get; private set; }
 
     /// <summary>
     /// Optional replacement for the active-tail payload read. Tests only.
@@ -390,6 +403,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
 
             _disposed = true;
+            _activeValidatedPrefix = null;
             foreach (var runtime in _segments.Values)
             {
                 runtime.DisposeStream();
@@ -993,6 +1007,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     {
         if (fileLength == 0)
         {
+            PublishActiveValidatedPrefix(segmentId, sizeBytes: 0, []);
             return 0;
         }
 
@@ -1004,6 +1019,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         var bytes = ReadDiscoveryPayload(path);
+        var records = new List<ActiveValidatedRecord>();
         var offset = 0;
         while (offset < bytes.Length)
         {
@@ -1011,12 +1027,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             if (SegmentRecordCodec.TryDecode(
                     span,
                     out var recordLength,
-                    out _,
-                    out _,
-                    out _,
+                    out var artId,
+                    out var artHash,
+                    out var artSize,
                     out _,
                     out var error))
             {
+                // Identity and bounds only. The decoded payload is not retained.
+                records.Add(new ActiveValidatedRecord(offset, recordLength, artId, artHash, artSize));
                 offset += recordLength;
                 continue;
             }
@@ -1041,17 +1059,46 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                     FileOptions.None);
                 stream.SetLength(offset);
                 stream.Flush(flushToDisk: true);
+                PublishActiveValidatedPrefix(segmentId, offset, records);
                 return offset;
             }
 
             // CorruptLength / mid-file corruption on active: fail closed (do not guess).
+            // The prefix is not published, so a failed repair cannot become candidates.
             FileSegmentStoreLogMessages.ClosedCorrupt(_logger, path, offset, error.ToString());
             throw new SegmentStoreCorruptException(
                 $"Active segment {segmentId} corrupt at offset {offset} ({error}).",
                 path);
         }
 
+        PublishActiveValidatedPrefix(segmentId, offset, records);
         return offset;
+    }
+
+    /// <summary>
+    /// Drops the repaired Active prefix. Candidate discovery also drops it when the
+    /// snapshot is taken. Call this when startup recovery has no Accept-only targets.
+    /// </summary>
+    internal void DiscardActiveRepairPrefix()
+    {
+        lock (_writeGate)
+        {
+            _activeValidatedPrefix = null;
+        }
+    }
+
+    private void PublishActiveValidatedPrefix(
+        SegmentId segmentId,
+        long sizeBytes,
+        IReadOnlyList<ActiveValidatedRecord> records)
+    {
+        var copy = records.Count == 0 ? [] : new ActiveValidatedRecord[records.Count];
+        for (var i = 0; i < copy.Length; i++)
+        {
+            copy[i] = records[i];
+        }
+
+        _activeValidatedPrefix = new ActiveValidatedPrefix(segmentId.Value, sizeBytes, copy);
     }
 
     /// <summary>
@@ -1107,6 +1154,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// result. Lists are ordered by segment id, then offset. The walk does not mutate the
     /// journal, index, catalogue, or segment state. An undecodable record stops that segment
     /// only. <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/> propagate.
+    /// An Active segment whose snapshotted size is still the repaired prefix is not decoded
+    /// again. Records whose repaired identity cannot match are not re-read. A possible match
+    /// is proved by reading that record, including its checksum and full payload.
     /// </summary>
     /// <param name="accepts">Accept-only identities. Payloads are not copied or retained.</param>
     internal Dictionary<ulong, List<StoredArticleLocation>> FindAcceptOnlyCandidates(
@@ -1115,6 +1165,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var results = new Dictionary<ulong, List<StoredArticleLocation>>(accepts.Count);
         if (accepts.Count == 0)
         {
+            DiscardActiveRepairPrefix();
             return results;
         }
 
@@ -1137,9 +1188,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         ProvenLocationScanTarget[] targets;
+        ActiveValidatedPrefix? repairPrefix;
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            repairPrefix = _activeValidatedPrefix;
+            _activeValidatedPrefix = null;
             targets = _segments.Values
                 .Where(static runtime => runtime.State != SegmentState.Retired && runtime.SizeBytes > 0)
                 .OrderBy(static runtime => runtime.SegmentId.Value)
@@ -1156,6 +1210,20 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             if (target.State == SegmentState.Retired)
             {
                 continue;
+            }
+
+            if (repairPrefix is not null
+                && target.State == SegmentState.Active
+                && target.SegmentId.Value == repairPrefix.SegmentId
+                && target.SizeBytes == repairPrefix.SizeBytes)
+            {
+                MatchActiveRepairPrefix(target, repairPrefix, accepts, byArtId, results);
+                continue;
+            }
+
+            if (target.State == SegmentState.Active)
+            {
+                ActiveCandidateSequentialWalkCount++;
             }
 
             using var stream = new FileStream(
@@ -1212,6 +1280,97 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
+    /// Proves Active candidates from the repaired prefix. Non-matching records are not read.
+    /// A matching record is checksummed and compared byte for byte. A failed read stops the
+    /// remainder of this prefix, which is the same boundary as the sequential walk.
+    /// </summary>
+    private void MatchActiveRepairPrefix(
+        ProvenLocationScanTarget target,
+        ActiveValidatedPrefix repairPrefix,
+        IReadOnlyList<AcceptOnlyMatchTarget> accepts,
+        Dictionary<ArticleId, List<int>> byArtId,
+        Dictionary<ulong, List<StoredArticleLocation>> results)
+    {
+        TestHookDuringProvenLocationScan?.Invoke();
+        FileStream? stream = null;
+        try
+        {
+            foreach (var record in repairPrefix.Records)
+            {
+                if (record.Offset < 0
+                    || record.Length <= 0
+                    || record.Offset + record.Length > target.SizeBytes)
+                {
+                    break;
+                }
+
+                if (!byArtId.TryGetValue(record.ArtId, out var indexes))
+                {
+                    continue;
+                }
+
+                var identityHit = false;
+                foreach (var index in indexes)
+                {
+                    var accept = accepts[index];
+                    if (record.ArtHash == accept.ArtHash && record.ArtSize == accept.ArtSize)
+                    {
+                        identityHit = true;
+                        break;
+                    }
+                }
+
+                if (!identityHit)
+                {
+                    continue;
+                }
+
+                stream ??= new FileStream(
+                    target.Path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 64 * 1024,
+                    FileOptions.None);
+                ActiveCandidatePayloadProofBytesRead += record.Length;
+                if (!TryReadProvenAt(
+                        stream,
+                        target.SegmentId,
+                        target.SizeBytes,
+                        record.Offset,
+                        out var extent,
+                        out var payload,
+                        out var consumed)
+                    || consumed != record.Length
+                    || extent.Location.Offset != record.Offset)
+                {
+                    break;
+                }
+
+                if (!byArtId.TryGetValue(extent.ArtId, out var freshIndexes))
+                {
+                    continue;
+                }
+
+                foreach (var index in freshIndexes)
+                {
+                    var accept = accepts[index];
+                    if (extent.ArtHash == accept.ArtHash
+                        && extent.ArtSize == accept.ArtSize
+                        && payload.Span.SequenceEqual(accept.ArtData.Span))
+                    {
+                        results[accept.Sequence].Add(extent.Location);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            stream?.Dispose();
+        }
+    }
+
+    /// <summary>
     /// True when any segment still has a process-local pending record or an unreconciled tail.
     /// Those bytes are not yet a committed <c>SizeBytes</c> prefix, so an Accept that has not
     /// itself written must not skip orphan discovery while they exist.
@@ -1238,6 +1397,36 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         string Path,
         SegmentState State,
         long SizeBytes);
+
+    /// <summary>
+    /// One checksum-valid Active record observed by tail repair. Payload bytes are not stored.
+    /// </summary>
+    private readonly record struct ActiveValidatedRecord(
+        long Offset,
+        int Length,
+        ArticleId ArtId,
+        ulong ArtHash,
+        int ArtSize);
+
+    /// <summary>
+    /// Repaired Active prefix. Used only while <see cref="SegmentRuntime.SizeBytes"/> is still
+    /// that repaired length. Dropped at the candidate snapshot so later appends are not candidates.
+    /// </summary>
+    private sealed class ActiveValidatedPrefix
+    {
+        internal ActiveValidatedPrefix(ulong segmentId, long sizeBytes, ActiveValidatedRecord[] records)
+        {
+            SegmentId = segmentId;
+            SizeBytes = sizeBytes;
+            Records = records;
+        }
+
+        internal ulong SegmentId { get; }
+
+        internal long SizeBytes { get; }
+
+        internal ActiveValidatedRecord[] Records { get; }
+    }
 
     /// <summary>
     /// Proves every physical record in a Closed segment, from offset 0 through the

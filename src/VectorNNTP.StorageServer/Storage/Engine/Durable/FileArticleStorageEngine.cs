@@ -1253,6 +1253,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         if (accepts.Count == 0)
         {
+            _segments.DiscardActiveRepairPrefix();
             return null;
         }
 
