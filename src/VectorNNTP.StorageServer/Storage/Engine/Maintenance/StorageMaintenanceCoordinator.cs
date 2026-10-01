@@ -1,4 +1,7 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
@@ -17,7 +20,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
 /// </para>
 /// <para>
-/// Ordering: existing Retired physical reclaim first; then finish CompactionCommitted
+/// Ordering: optional physical-journal checkpoint, then existing Retired physical reclaim; then finish CompactionCommitted
 /// pending retirement; then continue an open uncommitted compaction; then select a new
 /// Closed victim via policy. Under article admission pressure (Phase 5F.2), Closed-victim
 /// selection prefers physical recovery potential and compaction-headroom feasibility;
@@ -38,21 +41,41 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// Policy selection is a hint — every destructive step is revalidated against current
 /// catalogue/index state.
 /// </para>
+/// <para>
+/// When the physical journal threshold is positive and <c>JournalPhysicalBytes</c> has reached
+/// it, the cycle first calls <see cref="FileArticleStorageEngine.CheckpointTruncateCommitted"/>.
+/// That attempt does not reorder reclaim, retirement, or compaction. A pending ambiguous journal
+/// append is logged and the rest of the cycle continues. Any other checkpoint exception leaves
+/// this method.
+/// </para>
 /// </remarks>
 public sealed class StorageMaintenanceCoordinator
 {
     private readonly FileArticleStorageEngine _engine;
     private readonly ArticleSegmentPolicy _policy;
+    private readonly long _journalCheckpointThresholdBytes;
+    private readonly ILogger _logger;
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
     /// <param name="engine">Durable article storage engine.</param>
     /// <param name="policy">Compaction/reclamation victim policy.</param>
-    public StorageMaintenanceCoordinator(FileArticleStorageEngine engine, ArticleSegmentPolicy policy)
+    /// <param name="journalCheckpointThresholdBytes">
+    /// Physical journal length at which this cycle checkpoints. <c>0</c> does not checkpoint.
+    /// </param>
+    /// <param name="logger">Maintenance checkpoint logger. Null uses a no-op logger.</param>
+    public StorageMaintenanceCoordinator(
+        FileArticleStorageEngine engine,
+        ArticleSegmentPolicy policy,
+        long journalCheckpointThresholdBytes = 0,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(policy);
+        ArgumentOutOfRangeException.ThrowIfNegative(journalCheckpointThresholdBytes);
         _engine = engine;
         _policy = policy;
+        _journalCheckpointThresholdBytes = journalCheckpointThresholdBytes;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     /// <summary>Policy used by this coordinator (read-only).</summary>
@@ -83,9 +106,16 @@ public sealed class StorageMaintenanceCoordinator
     /// <summary>
     /// Evaluates current durable state and performs at most one maintenance cycle.
     /// </summary>
-    public async Task<StorageMaintenanceResult> RunOnceAsync(CancellationToken cancellationToken)
+    /// <param name="cancellationToken">Cancels the cycle.</param>
+    /// <param name="maintenanceRunId">
+    /// Worker run id when the caller has one. Direct invocations leave this at zero.
+    /// </param>
+    public async Task<StorageMaintenanceResult> RunOnceAsync(
+        CancellationToken cancellationToken,
+        ulong maintenanceRunId = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        TryCheckpointJournal(maintenanceRunId);
 
         // Startup leaves unreferenced-extent accounting incomplete. Victim selection must
         // not treat that under-count as a finished dead-byte inventory.
@@ -401,6 +431,46 @@ public sealed class StorageMaintenanceCoordinator
                 continuingOpenCompaction: true,
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Checkpoints when the physical journal has reached the configured threshold.
+    /// Does not take the engine gate. <see cref="UnreconciledDurableTailException"/> is deferred.
+    /// </summary>
+    private void TryCheckpointJournal(ulong maintenanceRunId)
+    {
+        if (_journalCheckpointThresholdBytes <= 0)
+        {
+            return;
+        }
+
+        var physicalBytes = _engine.Journal.JournalPhysicalBytes;
+        if (physicalBytes < _journalCheckpointThresholdBytes)
+        {
+            return;
+        }
+
+        StorageMaintenanceLogMessages.JournalCheckpointAttempted(
+            _logger,
+            maintenanceRunId,
+            physicalBytes,
+            _journalCheckpointThresholdBytes);
+        try
+        {
+            var released = _engine.CheckpointTruncateCommitted();
+            if (released > 0)
+            {
+                StorageMaintenanceLogMessages.JournalCheckpointOmitted(_logger, maintenanceRunId, released);
+            }
+            else
+            {
+                StorageMaintenanceLogMessages.JournalCheckpointNothingToOmit(_logger, maintenanceRunId);
+            }
+        }
+        catch (UnreconciledDurableTailException ex)
+        {
+            StorageMaintenanceLogMessages.JournalCheckpointDeferred(_logger, maintenanceRunId, ex);
+        }
     }
 
     private async Task<StorageMaintenanceResult> CompactThenFinishAsync(

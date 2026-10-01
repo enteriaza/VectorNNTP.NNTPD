@@ -22,7 +22,7 @@ namespace VectorNNTP.StorageServer.Storage;
 /// </remarks>
 public sealed class StorageMaintenanceService : IApplicationService
 {
-    private readonly Func<CancellationToken, Task<StorageMaintenanceResult>> _runOnce;
+    private readonly Func<ulong, CancellationToken, Task<StorageMaintenanceResult>> _runOnce;
     private readonly IOptions<StorageServerOptions> _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<StorageMaintenanceService> _logger;
@@ -43,7 +43,7 @@ public sealed class StorageMaintenanceService : IApplicationService
         ILogger<StorageMaintenanceService> logger,
         TimeProvider? timeProvider = null)
         : this(
-            ct => coordinator.Value.RunOnceAsync(ct),
+            (runId, ct) => coordinator.Value.RunOnceAsync(ct, runId),
             options,
             logger,
             delayAsync: null,
@@ -59,6 +59,22 @@ public sealed class StorageMaintenanceService : IApplicationService
         ILogger<StorageMaintenanceService> logger,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         TimeProvider? timeProvider = null)
+        : this(
+            (runId, ct) => runOnce(ct),
+            options,
+            logger,
+            delayAsync,
+            timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(runOnce);
+    }
+
+    private StorageMaintenanceService(
+        Func<ulong, CancellationToken, Task<StorageMaintenanceResult>> runOnce,
+        IOptions<StorageServerOptions> options,
+        ILogger<StorageMaintenanceService> logger,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync,
+        TimeProvider? timeProvider)
     {
         ArgumentNullException.ThrowIfNull(runOnce);
         ArgumentNullException.ThrowIfNull(options);
@@ -176,7 +192,7 @@ public sealed class StorageMaintenanceService : IApplicationService
         StorageMaintenanceLogMessages.RunStarting(_logger, maintenanceRunId);
         try
         {
-            var result = await _runOnce(cancellationToken).ConfigureAwait(false);
+            var result = await _runOnce(maintenanceRunId, cancellationToken).ConfigureAwait(false);
             _ = Interlocked.Increment(ref _runAttemptCount);
 
             var durationMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
@@ -127,9 +128,14 @@ public static class StorageServerServiceCollectionExtensions
         });
         // Lazy: first resolve after StorageEngine StartAsync (registration order).
         builder.Services.AddSingleton(static sp => new Lazy<StorageMaintenanceCoordinator>(() =>
-            new StorageMaintenanceCoordinator(
+        {
+            var storage = sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Storage;
+            return new StorageMaintenanceCoordinator(
                 sp.GetRequiredService<StorageEngineApplicationService>().Engine,
-                sp.GetRequiredService<ArticleSegmentPolicy>())));
+                sp.GetRequiredService<ArticleSegmentPolicy>(),
+                storage?.JournalCheckpointThresholdBytes ?? 0,
+                sp.GetRequiredService<ILogger<StorageMaintenanceCoordinator>>());
+        }));
         builder.Services.AddSingleton<StorageMaintenanceService>();
 
         // Startup order: StorageEngine → StorageMaintenance → Cloudflare → RabbitMQ →

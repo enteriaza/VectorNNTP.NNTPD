@@ -189,6 +189,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
         }
 
+        if (options.Storage.JournalCheckpointThresholdBytes < 0)
+        {
+            failures.Add(
+                "StorageServer:Storage:JournalCheckpointThresholdBytes must be greater than or equal to 0.");
+        }
+
         var articleCache = options.Storage.ArticleCache ?? new ArticleMemoryCacheOptions();
         if (articleCache.MaxBytes < 0)
         {

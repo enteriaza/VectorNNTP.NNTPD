@@ -114,4 +114,38 @@ internal static partial class StorageMaintenanceLogMessages
         Level = LogLevel.Information,
         Message = "Storage maintenance worker stopped")]
     public static partial void Stopped(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 3021,
+        Level = LogLevel.Information,
+        Message = "Journal checkpoint attempted (MaintenanceRunId={MaintenanceRunId}, JournalPhysicalBytes={JournalPhysicalBytes}, ThresholdBytes={ThresholdBytes})")]
+    public static partial void JournalCheckpointAttempted(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long JournalPhysicalBytes,
+        long ThresholdBytes);
+
+    [LoggerMessage(
+        EventId = 3022,
+        Level = LogLevel.Information,
+        Message = "Journal checkpoint omitted committed journal bytes (MaintenanceRunId={MaintenanceRunId}, ReleasedBytes={ReleasedBytes})")]
+    public static partial void JournalCheckpointOmitted(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        long ReleasedBytes);
+
+    [LoggerMessage(
+        EventId = 3023,
+        Level = LogLevel.Debug,
+        Message = "Journal checkpoint had nothing to omit (MaintenanceRunId={MaintenanceRunId})")]
+    public static partial void JournalCheckpointNothingToOmit(ILogger logger, ulong MaintenanceRunId);
+
+    [LoggerMessage(
+        EventId = 3024,
+        Level = LogLevel.Warning,
+        Message = "Journal checkpoint deferred; unresolved durable tail (MaintenanceRunId={MaintenanceRunId})")]
+    public static partial void JournalCheckpointDeferred(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        Exception exception);
 }

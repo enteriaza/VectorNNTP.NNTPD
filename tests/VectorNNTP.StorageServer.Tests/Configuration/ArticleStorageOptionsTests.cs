@@ -15,6 +15,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal("control/", storage.ControlDir);
         Assert.Equal(64L * 1024 * 1024, storage.JournalSoftLimitBytes);
         Assert.Equal(128L * 1024 * 1024, storage.JournalHardLimitBytes);
+        Assert.Equal(0, storage.JournalCheckpointThresholdBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
         Assert.False(storage.Compaction.Enabled);
@@ -82,6 +83,7 @@ public sealed class ArticleStorageOptionsTests
                 ["StorageServer:Storage:ControlDir"] = "nvme/control",
                 ["StorageServer:Storage:JournalSoftLimitBytes"] = "10",
                 ["StorageServer:Storage:JournalHardLimitBytes"] = "20",
+                ["StorageServer:Storage:JournalCheckpointThresholdBytes"] = "4096",
                 ["StorageServer:Storage:SegmentTargetSizeBytes"] = "30",
                 ["StorageServer:Storage:ArticleCache:MaxBytes"] = "4096",
                 ["StorageServer:Storage:Compaction:Enabled"] = "true",
@@ -96,6 +98,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal("nvme/control", bound.Storage.ControlDir);
         Assert.Equal(10, bound.Storage.JournalSoftLimitBytes);
         Assert.Equal(20, bound.Storage.JournalHardLimitBytes);
+        Assert.Equal(4096, bound.Storage.JournalCheckpointThresholdBytes);
         Assert.Equal(30, bound.Storage.SegmentTargetSizeBytes);
         Assert.Equal(4096, bound.Storage.ArticleCache.MaxBytes);
         Assert.True(bound.Storage.Compaction.Enabled);
@@ -103,6 +106,18 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(TimeSpan.FromSeconds(30), bound.Storage.Compaction.Interval);
         Assert.Equal(1_048_576, bound.Storage.Compaction.MinimumDeadBytes);
         Assert.Equal(0.25, bound.Storage.Compaction.MinimumDeadRatio);
+    }
+
+    [Fact]
+    public void Validator_rejects_negative_journal_checkpoint_threshold()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.JournalCheckpointThresholdBytes = -1;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static f => f.Contains("JournalCheckpointThresholdBytes", StringComparison.Ordinal));
     }
 
     [Fact]
