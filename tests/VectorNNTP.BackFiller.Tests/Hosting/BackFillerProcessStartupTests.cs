@@ -126,7 +126,7 @@ public sealed class BackFillerProcessStartupTests
         foreach (var directory in EnumerateApplicationDirectories())
         {
             var exe = Path.Combine(directory, "VectorNNTP.BackFiller.exe");
-            var settings = Path.Combine(directory, "appsettings.json");
+            var settings = Path.Combine(directory, "VectorNNTP.BackFiller.json");
             if (File.Exists(exe) && File.Exists(settings))
             {
                 return (exe, []);
@@ -139,7 +139,7 @@ public sealed class BackFillerProcessStartupTests
             }
         }
 
-        Assert.Fail("Could not locate VectorNNTP.BackFiller next to appsettings.json.");
+        Assert.Fail("Could not locate VectorNNTP.BackFiller next to VectorNNTP.BackFiller.json.");
         return ("", []);
     }
 

@@ -1,4 +1,5 @@
 using Serilog;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Logging;
 
@@ -15,6 +16,12 @@ try
         ContentRootPath = AppContext.BaseDirectory,
     });
     builder.Environment.ContentRootPath = AppContext.BaseDirectory;
+    ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
+    ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
 
     builder.ConfigureStorageServerLogging();
     builder.ConfigureStorageServerPlatformHosting();

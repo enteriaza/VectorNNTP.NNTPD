@@ -1,36 +1,49 @@
 {
-  "BackFiller": {
+  "StorageServer": {
     "AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
     "AcmeRenewalThresholdDays": 14,
-    "AcmeStateDir": "certs/",
-      "ArticleRetention": {
-      "MaximumRetainedPayloadGigabytes": 8,
-      "MaxOpenableRequestIdsPerArticle": 16,
-      "RetentionTtlSeconds": 10,
-      "SweepIntervalSeconds": 1
-    },
-    "BackFillerAccountRefreshIntervalSeconds": 60,
+    "AcmeStateDir": "certs",
+    "ApplicationName": "VectorNNTP.StorageServer",
     "BindAddress": [
       "198.18.0.66",
       "2c0f:f030:1442:501:198:18:0:66"
     ],
-    "BindPortTls": 1190,
+    "BindPort": 0,
+    "BindPortTls": 1191,
     "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
     "DnsSuffix": "usenet.ninja",
+    "GracefulShutdownTimeout": "00:00:30",
     "Listener": {
-      "AwaitingReceiptAckTimeoutSeconds": 30,
       "IoProgressTimeoutSeconds": 60,
       "MaxActiveConnections": 1024,
-      "MaxQueuedFoundPayloadBytes": 67108864,
       "ParserAccumulationMaxBytes": 262144,
       "TlsHandshakeTimeoutSeconds": 30
     },
-    "LogDirectory": "logs",
+    "LogDir": "logs",
     "ServerId": 1,
-    "Shutdown": {
-      "DrainQueuedWork": true,
-      "FinishActiveArticles": true,
-      "GracePeriodSeconds": 30
+    "StopHostOnUnexpectedServiceTermination": true,
+    "Storage": {
+      "ArticleCache": {
+        "MaxBytes": 1073741824
+      },
+      "CacheDir": "spool/cache",
+      "Capacity": {
+        "CompactionHeadroom": 10,
+        "FreeCapacity": 5,
+        "MaximumUsageCapacity": 50,
+        "MaximumUtilization": 70
+      },
+      "Compaction": {
+        "Interval": "00:01:00",
+        "MinimumDeadBytes": 67108864,
+        "MinimumDeadRatio": 10
+      },
+      "ControlDir": "spool/",
+      "IndexCheckpointThresholdBytes": 134217728,
+      "JournalCheckpointThresholdBytes": 33554432,
+      "JournalHardLimitBytes": 134217728,
+      "JournalSoftLimitBytes": 67108864,
+      "SegmentTargetSizeBytes": 10737418240
     },
     "Systemd": {
       "EnableWatchdog": true,
@@ -40,33 +53,6 @@
       "WatchdogIntervalFraction": 0.5
     }
   },
-  "RabbitMQ": {
-    "ChannelLeaseTimeoutSeconds": 60,
-    "ChannelPoolSize": 512,
-    "ConnectionBlockedTimeoutSeconds": 30,
-    "ConnectionScaleDownIdleSeconds": 300,
-    "DegradedThreshold": 0.75,
-    "EnableSsl": false,
-    "Hosts": [ "198.18.0.3" ],
-    "MaxConnections": 16,
-    "MaximumShutdownDrainTimeoutSeconds": 30,
-    "MaxPendingLeaseWaiters": 1024,
-    "MinConnections": 4,
-    "MinimumConnectionLifetimeSeconds": 300,
-    "NetworkRecoveryIntervalSeconds": 5,
-    "PoolReconnectBaseDelayMs": 250,
-    "PoolReconnectMaxDelayMs": 30000,
-    "Port": 5672,
-    "PublishConfirmTimeoutSeconds": 10,
-    "RequestedChannelMax": 2047,
-    "RequestedHeartbeatSeconds": 60,
-    "RpcTimeoutSeconds": 30,
-    "ScaleDownCooldownSeconds": 30,
-    "SocketTimeoutSeconds": 30,
-    "UnhealthyThreshold": 5,
-    "VirtualHost": "/",
-    "WorkRequestMaxPayloadBytes": 1024
-  },
   "Serilog": {
     "Enrich": [ "FromLogContext" ],
     "MinimumLevel": {
@@ -75,11 +61,11 @@
         "Microsoft": "Warning",
         "Microsoft.Hosting.Lifetime": "Information",
         "System": "Warning",
-        "VectorNNTP.BackFiller": "Debug"
+        "VectorNNTP.StorageServer": "Debug"
       }
     },
     "Properties": {
-      "Application": "VectorNNTP.BackFiller"
+      "Application": "VectorNNTP.StorageServer"
     },
     "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async", "Serilog.Sinks.File.Archive" ],
     "WriteTo": [
@@ -100,11 +86,11 @@
                 "buffered": true,
                 "flushToDiskInterval": "00:00:01",
                 "fileSizeLimitBytes": null,
-                "hooks": "VectorNNTP.BackFiller.Logging.BackFillerSerilogHooks::DailyGzipFastest, VectorNNTP.BackFiller",
+                "hooks": "VectorNNTP.StorageServer.Logging.StorageServerSerilogHooks::DailyGzipFastest, VectorNNTP.StorageServer",
                 "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
-                "path": "logs/VectorNNTP.BackFiller-.log",
+                "path": "/logs/VectorNNTP.StorageServer-.log",
                 "restrictedToMinimumLevel": "Debug",
-                "retainedFileCountLimit": 1,
+                "retainedFileCountLimit": 14,
                 "rollOnFileSizeLimit": false,
                 "rollingInterval": "Day"
               },

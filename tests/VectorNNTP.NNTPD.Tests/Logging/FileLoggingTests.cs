@@ -377,7 +377,7 @@ public sealed class FileLoggingTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.NNTPD", "appsettings.json");
+            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json");
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -386,7 +386,7 @@ public sealed class FileLoggingTests
             dir = dir.Parent;
         }
 
-        throw new FileNotFoundException("Could not locate src/VectorNNTP.NNTPD/appsettings.json.");
+        throw new FileNotFoundException("Could not locate src/VectorNNTP.NNTPD/VectorNNTP.NNTPD.json.");
     }
 
     private static void TryDelete(string path)

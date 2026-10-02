@@ -62,7 +62,7 @@ internal static class AdminCliParser
         environment or secrets for safer deployment. The password is never
         printed, logged, or included in exception messages.
 
-        Configuration (appsettings.json / environment):
+        Configuration (NNTPCancelMessage.json / environment):
           NntpCancelMessage:Host, NntpCancelMessage:Port, NntpCancelMessage:UseTls, NntpCancelMessage:From
           NntpCancelMessage:Username, NntpCancelMessage:Password
           NntpCancelMessage:Pgp:Enabled, PrivateKeyPath, PrivateKeyPassphrase, KeyId

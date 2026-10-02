@@ -30,7 +30,7 @@ public sealed class StorageServerBindAddressPropagationTests
     [Fact]
     public void Production_appsettings_declares_explicit_bind_addresses()
     {
-        using var doc = JsonDocument.Parse(File.ReadAllText(FindAppsettings("appsettings.json")));
+        using var doc = JsonDocument.Parse(File.ReadAllText(FindAppsettings("VectorNNTP.StorageServer.json")));
         var bind = doc.RootElement.GetProperty("StorageServer").GetProperty("BindAddress");
         Assert.Equal(2, bind.GetArrayLength());
         Assert.Equal(ExplicitIpv4, bind[0].GetString());
@@ -42,19 +42,19 @@ public sealed class StorageServerBindAddressPropagationTests
     [Fact]
     public void Development_appsettings_does_not_override_BindAddress()
     {
-        using var doc = JsonDocument.Parse(File.ReadAllText(FindAppsettings("appsettings.Development.json")));
+        using var doc = JsonDocument.Parse(File.ReadAllText(FindAppsettings("VectorNNTP.StorageServer.Development.json")));
         Assert.False(
             doc.RootElement.TryGetProperty("StorageServer", out var storage)
             && storage.TryGetProperty("BindAddress", out _),
-            "appsettings.Development.json must not set StorageServer:BindAddress; JSON config merges arrays by index and a Development '*' at [0] leaves production [1] in place, producing wildcard listener/Cloudflare expansion.");
+            "VectorNNTP.StorageServer.Development.json must not set StorageServer:BindAddress; JSON config merges arrays by index and a Development '*' at [0] leaves production [1] in place, producing wildcard listener/Cloudflare expansion.");
     }
 
     [Fact]
     public void Layered_appsettings_preserve_explicit_BindAddress_under_Development()
     {
         var configuration = new ConfigurationBuilder()
-            .AddJsonFile(FindAppsettings("appsettings.json"), optional: false, reloadOnChange: false)
-            .AddJsonFile(FindAppsettings("appsettings.Development.json"), optional: false, reloadOnChange: false)
+            .AddJsonFile(FindAppsettings("VectorNNTP.StorageServer.json"), optional: false, reloadOnChange: false)
+            .AddJsonFile(FindAppsettings("VectorNNTP.StorageServer.Development.json"), optional: false, reloadOnChange: false)
             .Build();
 
         var bound = new StorageServerOptions();
@@ -72,7 +72,7 @@ public sealed class StorageServerBindAddressPropagationTests
     {
         // Documents the historical failure mode: Development BindAddress:["*"] only replaces index 0.
         var configuration = new ConfigurationBuilder()
-            .AddJsonFile(FindAppsettings("appsettings.json"), optional: false, reloadOnChange: false)
+            .AddJsonFile(FindAppsettings("VectorNNTP.StorageServer.json"), optional: false, reloadOnChange: false)
             .AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {

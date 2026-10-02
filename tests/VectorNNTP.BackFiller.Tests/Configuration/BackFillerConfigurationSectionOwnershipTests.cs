@@ -352,7 +352,7 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "appsettings.json");
+            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "VectorNNTP.BackFiller.json");
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -361,6 +361,6 @@ public sealed class BackFillerConfigurationSectionOwnershipTests
             directory = directory.Parent;
         }
 
-        throw new FileNotFoundException("Could not locate src/VectorNNTP.BackFiller/appsettings.json.");
+        throw new FileNotFoundException("Could not locate src/VectorNNTP.BackFiller/VectorNNTP.BackFiller.json.");
     }
 }

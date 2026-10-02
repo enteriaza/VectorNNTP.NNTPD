@@ -1,5 +1,6 @@
 using Serilog;
 using VectorNNTP.BackFiller.Hosting;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.BackFiller.Logging;
 
 BackFillerLoggingExtensions.UseAutoFlushConsoleOutput();
@@ -15,6 +16,12 @@ try
         ContentRootPath = AppContext.BaseDirectory,
     });
     builder.Environment.ContentRootPath = AppContext.BaseDirectory;
+    ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
+    ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
 
     builder.ConfigureBackFillerLogging();
     builder.ConfigureBackFillerPlatformHosting();

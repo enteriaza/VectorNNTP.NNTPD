@@ -600,7 +600,7 @@ Startup order places `RedisService` after Cloudflare DNS reconciliation and befo
 RabbitMQ **connectivity** (options, connection factory, `RabbitMqService`, channel adapters, reconnect/generation lifecycle) lives in `VectorNNTP.Common.Messaging.RabbitMq`. Applications bind the top-level `RabbitMQ` section, call `AddRabbitMqInfrastructure()`, supply `IRabbitMqConnectionNameProvider`, and register `RabbitMqService` as an `IApplicationService` when the broker is a startup dependency. Common does not declare exchanges, queues, or bindings, and it does not own Management HTTP clients, ArticleWork, or OverviewDB publishing.
 
 ```text
-  appsettings RabbitMQ ──► RabbitMqOptions (+ optional Management nest)
+  RabbitMq.json ──► RabbitMqOptions (+ optional Management nest)
                               │
                               ▼
                     AddRabbitMqInfrastructure()

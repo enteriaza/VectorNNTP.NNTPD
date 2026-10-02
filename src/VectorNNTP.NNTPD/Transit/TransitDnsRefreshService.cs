@@ -7,7 +7,7 @@ namespace VectorNNTP.NNTPD.Transit;
 /// Refreshes Transit AllowFrom DNS names according to each hostname's TTL (minimum 60 seconds).
 /// </summary>
 /// <remarks>
-/// Does not poll <c>appsettings.json</c>. Configuration reloads arrive through
+/// Does not poll <c>VectorNNTP.NNTPD.json</c>. Configuration reloads arrive through
 /// <see cref="TransitConfigurationStore"/> (IOptionsMonitor). The wait interval is the
 /// next hostname due time, not a fixed poll.
 /// </remarks>

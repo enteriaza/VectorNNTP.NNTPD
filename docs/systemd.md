@@ -84,7 +84,7 @@ systemctl show vectornntpd -p StatusText -p WatchdogTimestamp -p WatchdogUSec
 
 ## Configuration (application)
 
-Section `Nntpd:Systemd` in `appsettings.json`:
+Section `Nntpd:Systemd` in `VectorNNTP.NNTPD.json`:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
@@ -241,7 +241,7 @@ systemctl show vectornntp-backfiller -p StatusText -p WatchdogTimestamp -p Watch
 
 ## Configuration (application)
 
-Section `BackFiller:Systemd` in `appsettings.json`:
+Section `BackFiller:Systemd` in `VectorNNTP.BackFiller.json`:
 
 | Option | Default | Meaning |
 |--------|---------|---------|

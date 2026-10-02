@@ -122,7 +122,7 @@ Created → Starting → Running → Stopping → Stopped
 
 ## Configuration options
 
-Section: `Nntpd` (`appsettings.json` / environment variables / command line). See **[docs/configuration.md](docs/configuration.md)** for bind addresses, Cloudflare secrets, and FQDN generation.
+Section: `Nntpd` (`VectorNNTP.NNTPD.json` / environment variables / command line). See **[docs/configuration.md](docs/configuration.md)** for bind addresses, Cloudflare secrets, and FQDN generation.
 
 | Option | Default | Description |
 |--------|---------|-------------|

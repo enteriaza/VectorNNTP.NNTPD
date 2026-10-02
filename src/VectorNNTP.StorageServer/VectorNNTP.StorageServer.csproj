@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="..\VectorNNTP.Common\RabbitMq.json" Link="RabbitMq.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.PersistenceBench" />
   </ItemGroup>

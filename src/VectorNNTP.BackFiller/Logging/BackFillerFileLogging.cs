@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Logging;
 /// Serilog sink graph in code (Native AOT / single-file safe).
 /// </summary>
 /// <remarks>
-/// Operational Console / Async / File settings match production <c>appsettings.json</c>
+/// Operational Console / Async / File settings match production <c>VectorNNTP.BackFiller.json</c>
 /// <c>Serilog</c> section. The File path is never taken from JSON: it is always
 /// <see cref="RollingFilePath"/> under the resolved log directory. Operator-configurable
 /// location remains <see cref="BackFillerOptions.LogDirectory"/>.
@@ -31,7 +31,7 @@ internal static class BackFillerFileLogging
     public const string ApplicationName = "VectorNNTP.BackFiller";
 
     /// <summary>
-    /// Console and File sink output template matching production <c>appsettings.json</c>.
+    /// Console and File sink output template matching production <c>VectorNNTP.BackFiller.json</c>.
     /// </summary>
     public const string SinkOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
@@ -52,7 +52,7 @@ internal static class BackFillerFileLogging
     public const bool FileBuffered = true;
 
     /// <summary>
-    /// Serilog File <c>flushToDiskInterval</c>. Matches production <c>appsettings.json</c>
+    /// Serilog File <c>flushToDiskInterval</c>. Matches production <c>VectorNNTP.BackFiller.json</c>
     /// (<c>00:00:01</c>). The host logger is built here, not by <c>ReadFrom.Configuration</c>.
     /// </summary>
     public static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);

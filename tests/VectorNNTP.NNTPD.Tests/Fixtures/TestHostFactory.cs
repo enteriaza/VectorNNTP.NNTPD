@@ -202,7 +202,7 @@ internal static class TestHostFactory
     }
 
     /// <summary>
-    /// Drops operator <c>Transit</c> peers inherited from <c>appsettings.json</c>.
+    /// Drops operator <c>Transit</c> peers inherited from <c>VectorNNTP.NNTPD.json</c>.
     /// Host tests use deny-by-default Transit so local operator peers do not leak in.
     /// </summary>
     public static void IsolateTransit(IServiceCollection services)

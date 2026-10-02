@@ -240,7 +240,7 @@ public sealed class ArticleStorageOptionsTests
     [Fact]
     public void Production_appsettings_declares_Storage_ControlDir()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var path = Path.Combine(AppContext.BaseDirectory, "VectorNNTP.StorageServer.json");
         Assert.True(File.Exists(path));
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         var storage = doc.RootElement.GetProperty("StorageServer").GetProperty("Storage");

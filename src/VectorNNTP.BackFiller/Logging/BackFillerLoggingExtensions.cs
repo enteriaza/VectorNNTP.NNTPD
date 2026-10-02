@@ -14,7 +14,7 @@ public static partial class BackFillerLoggingExtensions
     /// </summary>
     /// <remarks>
     /// Used by the bootstrap logger. Host Console/File sinks use
-    /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/> (production <c>appsettings.json</c>).
+    /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/> (production <c>VectorNNTP.BackFiller.json</c>).
     /// </remarks>
     public const string ConsoleOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
@@ -110,7 +110,7 @@ public static partial class BackFillerLoggingExtensions
     /// </summary>
     /// <param name="services">The built host service provider.</param>
     /// <param name="environmentName">Host environment name (no secrets).</param>
-    /// <param name="contentRootPath">Resolved content root used for <c>appsettings.json</c>.</param>
+    /// <param name="contentRootPath">Resolved content root used for <c>VectorNNTP.BackFiller.json</c>.</param>
     public static void WriteLoggingInitialized(
         IServiceProvider services,
         string environmentName,

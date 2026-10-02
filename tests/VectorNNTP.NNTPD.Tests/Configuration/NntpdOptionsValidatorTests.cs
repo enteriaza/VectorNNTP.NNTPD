@@ -965,7 +965,7 @@ public sealed class NntpdConfigurationTests
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.NNTPD", "appsettings.json");
+            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json");
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -974,7 +974,7 @@ public sealed class NntpdConfigurationTests
             dir = dir.Parent;
         }
 
-        throw new FileNotFoundException("Could not locate src/VectorNNTP.NNTPD/appsettings.json.");
+        throw new FileNotFoundException("Could not locate src/VectorNNTP.NNTPD/VectorNNTP.NNTPD.json.");
     }
 
     [Fact]

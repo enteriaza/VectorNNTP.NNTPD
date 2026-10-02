@@ -545,7 +545,7 @@ Transit article buffering is **byte-budgeted** rather than fixed at 256 articles
 
 | Setting | Default | This host during the after-run |
 | --- | ---: | ---: |
-| `Nntpd:TransitQueueMemoryLimit` | `1073741824` (1 GiB) | `4294967296` (4 GiB, `appsettings.json`) |
+| `Nntpd:TransitQueueMemoryLimit` | `1073741824` (1 GiB) | `4294967296` (4 GiB, `VectorNNTP.NNTPD.json`) |
 
 The budget is the sum of owned queued article payload lengths
 (`InboundArticle.Payload.Length`). It is not process-wide memory. The historical

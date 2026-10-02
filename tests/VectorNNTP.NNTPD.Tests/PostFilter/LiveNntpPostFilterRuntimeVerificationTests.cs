@@ -172,7 +172,7 @@ public sealed class LiveNntpPostFilterRuntimeVerificationTests
     private static ValidateOptionsResult ValidateProductionAppsettingsHasNoPostFilterSection()
     {
         var path = FindProductionAppsettings();
-        Assert.True(File.Exists(path), "Production appsettings.json was not found: " + path);
+        Assert.True(File.Exists(path), "Production VectorNNTP.NNTPD.json was not found: " + path);
         var configuration = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
         Assert.False(configuration.GetSection("Nntpd:PostFilter").Exists());
         return new PostFilterLeftoverConfigurationValidator(configuration).Validate(null, new NntpdOptions());
@@ -180,7 +180,7 @@ public sealed class LiveNntpPostFilterRuntimeVerificationTests
 
     private static string FindProductionAppsettings()
     {
-        var relative = Path.Combine("src", "VectorNNTP.NNTPD", "appsettings.json");
+        var relative = Path.Combine("src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json");
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {

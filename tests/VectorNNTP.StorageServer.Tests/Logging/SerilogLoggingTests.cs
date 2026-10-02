@@ -194,14 +194,14 @@ public sealed class SerilogLoggingTests
         var start = new DirectoryInfo(AppContext.BaseDirectory);
         for (var dir = start; dir is not null; dir = dir.Parent)
         {
-            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.StorageServer", "appsettings.json");
+            var candidate = Path.Combine(dir.FullName, "src", "VectorNNTP.StorageServer", "VectorNNTP.StorageServer.json");
             if (File.Exists(candidate))
             {
                 return candidate;
             }
         }
 
-        throw new InvalidOperationException("Could not locate StorageServer appsettings.json.");
+        throw new InvalidOperationException("Could not locate StorageServer VectorNNTP.StorageServer.json.");
     }
 
     private static void TryDelete(string path)

@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    SDK otherwise appends +gitsha to InformationalVersion when SourceRevisionId is present.
+    This is not the application version. $(Version) stays the NuGet package version.
+  -->
+  <PropertyGroup>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!--
+    Production executable copyright. GenerateAssemblyInfo emits AssemblyCopyrightAttribute from $(Copyright).
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTP.NNTPD' OR '$(MSBuildProjectName)' == 'VectorNNTP.StorageServer' OR '$(MSBuildProjectName)' == 'VectorNNTP.BackFiller' OR '$(MSBuildProjectName)' == 'VectorNNTP.NNTPCancelMessage'">
+    <Copyright>© 2026 Chris Knipe &lt;cknipe@opticnetworks.net&gt;</Copyright>
+  </PropertyGroup>
+
+  <!--
+    Production executable version: 1.0.<days since 2000-01-01>.<seconds since local midnight / 2>.
+    One DateTime.Now tick count feeds both components. Deterministic compilation stays enabled.
+    Libraries and tools are left on the SDK default version.
+  -->
+  <Target Name="ApplyDateTimeApplicationVersion"
+          BeforeTargets="GetAssemblyVersion"
+          Condition="'$(DesignTimeBuild)' != 'true' AND ('$(MSBuildProjectName)' == 'VectorNNTP.NNTPD' OR '$(MSBuildProjectName)' == 'VectorNNTP.StorageServer' OR '$(MSBuildProjectName)' == 'VectorNNTP.BackFiller' OR '$(MSBuildProjectName)' == 'VectorNNTP.NNTPCancelMessage')">
+    <PropertyGroup>
+      <_ApplicationVersionNow>$([System.DateTime]::Now.Ticks)</_ApplicationVersionNow>
+      <_ApplicationVersionBuild>$([System.DateTime]::new($([System.Int64]::Parse($(_ApplicationVersionNow)))).Subtract($([System.DateTime]::new(2000,1,1))).Days)</_ApplicationVersionBuild>
+      <_ApplicationVersionRevision>$([System.Convert]::ToInt32($([System.Math]::Truncate($([MSBuild]::Divide($([System.DateTime]::new($([System.Int64]::Parse($(_ApplicationVersionNow)))).TimeOfDay.TotalSeconds), 2))))))</_ApplicationVersionRevision>
+      <AssemblyVersion>1.0.$(_ApplicationVersionBuild).$(_ApplicationVersionRevision)</AssemblyVersion>
+      <FileVersion>$(AssemblyVersion)</FileVersion>
+      <InformationalVersion>$(AssemblyVersion)</InformationalVersion>
+      <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+</Project>

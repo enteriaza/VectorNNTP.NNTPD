@@ -192,7 +192,7 @@ internal static class AdminApp
         var basePath = AppContext.BaseDirectory;
         return new ConfigurationBuilder()
             .SetBasePath(basePath)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+            .AddJsonFile(ApplicationJsonConfiguration.PrimaryJsonFileName(), optional: true, reloadOnChange: false)
             .AddEnvironmentVariables()
             .AddVectorEnvironmentVariables()
             .Build();

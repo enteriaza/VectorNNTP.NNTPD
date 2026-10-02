@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `appsettings.json`, environment variables, and command-line arguments via the Generic Host.
+Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `{entry assembly name}.json` (for this host, `VectorNNTP.NNTPD.json`), the optional environment overlay `{entry assembly name}.{environment}.json` (`VectorNNTP.NNTPD.Development.json`), the shared binary-directory file `RabbitMq.json` (the `RabbitMQ` section; not environment-specific), environment variables, and command-line arguments via the Generic Host. `RabbitMq.json` is loaded after the application JSON files. Environment variables and command-line arguments still override it. `appsettings.json` is not loaded.
 
 Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`) overlay from the configuration root. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, ACME directory, DNS-suffix, and ServerId values under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; it does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses root `VECTOR__*` secrets for the Cloudflare API key, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and the shared `ConnectionStrings__NntpDB` Generic Host mapping. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
@@ -24,7 +24,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
 | `ACMEACCOUNT` / `VECTOR__ACMEACCOUNT` | string | _(none)_ | **yes when TLS enabled** | Shared ACME account contact email used by every Common ACME client. Not `Nntpd:AcmeEmail` or `BackFiller:AcmeEmail`. Ignored when `BindPortTls` is `0`. |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state. Relative paths resolve with Common `ResolveAcmeStateDir` (delegates to `ApplicationLocalPath.ResolveApplicationLocalPath`) against `AppContext.BaseDirectory` (the binary directory), not the process working directory, source tree, or IDE content root. |
-| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs, the dedicated Serilog `news` file, and the dedicated Serilog Path-survey (`inpaths`) file. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Application File `path`, `Serilog:News:path`, and `Serilog:Inpaths:path` in `appsettings.json` are placeholders; startup overwrites them from this setting. The INN news line format and the Path-survey `Path: ` line format are not configurable. |
+| `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs, the dedicated Serilog `news` file, and the dedicated Serilog Path-survey (`inpaths`) file. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Application File `path`, `Serilog:News:path`, and `Serilog:Inpaths:path` in `{entry assembly name}.json` are placeholders; startup overwrites them from this setting. The INN news line format and the Path-survey `Path: ` line format are not configurable. |
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
 | `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
 | `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
@@ -90,7 +90,7 @@ The count is the destuffed client article: header block, the blank header/body s
 
 This setting is distinct from `ArticleIngestion:MaxArticleBytes`, which bounds IHAVE/TAKETHIS receive destuff before `ArticleRecord` creation (default 4 MiB). A valid 5 MiB POST is not re-checked against `MaxArticleBytes`. The post-queue worker does not destuff or re-parse queued records.
 
-Operator runbook (NntpDB schema, 60s snapshot refresh, Redis reservation lifecycle, SPAMD, failure matrix): [postfilter.md](postfilter.md). Do not put PostFilter policy in `appsettings.json`.
+Operator runbook (NntpDB schema, 60s snapshot refresh, Redis reservation lifecycle, SPAMD, failure matrix): [postfilter.md](postfilter.md). Do not put PostFilter policy in `{entry assembly name}.json`.
 
 ## PostFilter (NntpDB)
 
@@ -186,7 +186,7 @@ Rotation:
 3. New articles use the current key. Trusted decrypt tries the current key, then the previous key.
 4. After the previous key is removed, tokens produced only with that retired key cannot be decrypted.
 
-Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `appsettings.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs. The newsmaster utility `NNTPCancelMessage` decrypts `X-Trace` with the same keys and prints the payload to the terminal only.
+Never commit `XTraceKey` or `XTracePreviousKey`. Do not put them in `{entry assembly name}.json`, samples, logs, exception messages, or options dumps. Validation failure messages name the setting; they never include the secret value. Decrypted `X-Trace` payloads are not written to application logs. The newsmaster utility `NNTPCancelMessage` decrypts `X-Trace` with the same keys and prints the payload to the terminal only.
 
 ## Newsmaster AUTHINFO (`NewsmasterUser`)
 
@@ -238,7 +238,7 @@ Allocation is cluster-wide: five sessions on two nodes still split `10,000,000` 
 
 The limiter sits under TLS/DEFLATE, so it throttles octets written toward the socket. Byte accounting remains at uncompressed `PipeWriter.Advance`. The two policies apply together and do not disable each other.
 
-Never commit `NewsmasterPassword`. Do not put it in `appsettings.json`, samples, logs, or exception messages.
+Never commit `NewsmasterPassword`. Do not put it in `{entry assembly name}.json`, samples, logs, or exception messages.
 
 ```text
 NNTPD__NEWSMASTERUSER=newsmaster
@@ -256,7 +256,7 @@ NNTPCancelMessage --host nntpd01.usenet.ninja --port 563 --tls \
   --username newsmaster --password 'secret' --cancel <message-id>
 ```
 
-Command-line `--host`, `--port`, `--username`, `--password`, `--tls` / `--plaintext`, and `--cancel` / `-cancel` override `appsettings.json`. Without `--cancel` the utility never POSTs. Credentials are mandatory for `--cancel`. If credentials are supplied for inspect, AUTHINFO runs before HEAD. Failed AUTHINFO stops the utility.
+Command-line `--host`, `--port`, `--username`, `--password`, `--tls` / `--plaintext`, and `--cancel` / `-cancel` override `{entry assembly name}.json`. Without `--cancel` the utility never POSTs. Credentials are mandatory for `--cancel`. If credentials are supplied for inspect, AUTHINFO runs before HEAD. Failed AUTHINFO stops the utility.
 
 `--password` can appear in OS process listings and shell history. Prefer `NntpCancelMessage:Password` / `Nntpd:NewsmasterPassword` via environment or secrets. The password is never printed, logged, or included in exception messages.
 
@@ -292,7 +292,7 @@ Client settings bind from `NntpCancelMessage` (`Host`, `Port`, `UseTls`, `From`,
 | `PrivateKeyPassphrase` | `NntpCancelMessage__Pgp__PrivateKeyPassphrase` | Unlocks the secret key. Never commit this. Prefer environment or secrets. Never logged. |
 | `KeyId` | `NntpCancelMessage__Pgp__KeyId` | Full fingerprint (preferred) or 16-hex Key ID. Required when the file contains more than one signing-capable secret key. The utility never chooses a key from the command line. |
 
-Do not put a real private key or passphrase in `appsettings.json`. `Enabled: true` with empty path/passphrase is the safe committed sample.
+Do not put a real private key or passphrase in `{entry assembly name}.json`. `Enabled: true` with empty path/passphrase is the safe committed sample.
 
 Key generation (operator machine, not in this repository):
 
@@ -473,7 +473,7 @@ Do not commit credentials. Redis options have no password field; the unauthentic
 
 ## RabbitMQ
 
-Top-level `RabbitMQ` section (not nested under `Nntpd`, `BackFiller`, or `StorageServer`). Options types and connection validation live in `VectorNNTP.Common.Messaging.RabbitMq`. Applications bind the section themselves and call `AddRabbitMqInfrastructure()`. Nested `Management` is optional for connectivity-only hosts (for example StorageServer and BackFiller); NNTPD requires `Management:BaseUrl` and broker credentials for ArticleWork availability discovery (`NntpdRabbitMqOptionsValidator`).
+Top-level `RabbitMQ` section (not nested under `Nntpd`, `BackFiller`, or `StorageServer`). Production deployments load it from the shared binary-directory file `RabbitMq.json` (`src/VectorNNTP.Common/RabbitMq.json`), not from `{entry assembly name}.json`. Options types and connection validation live in `VectorNNTP.Common.Messaging.RabbitMq`. Applications bind the section themselves and call `AddRabbitMqInfrastructure()`. Nested `Management` is validated only when `BaseUrl` is set; the shared file includes it. NNTPD requires `Management:BaseUrl` and broker credentials for ArticleWork availability discovery (`NntpdRabbitMqOptionsValidator`).
 
 For NNTPD, RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`. After start, connectivity loss is recovered indefinitely; NNTPD does not expose a consecutive-failure abandon threshold. BackFiller and StorageServer use the same Common connectivity service. BackFiller registers `RabbitMqService` as an early `IHostedService` (before accounts) via a thin hosted adapter and does **not** place it in BackFiller `ApplicationServiceManager` (Cloudflare → ACME → Cache Listener). StorageServer uses start order Cloudflare → RabbitMQ → ACME → listener → StorageServerAdvertisementPublisher → StorageArticleLookupConsumer. It declares/publishes capacity advertisements and a transient Draining lifecycle announcement to `cache.broadcast` but does not own `cache.requests` consumers or Management HTTP. BackFiller connection settings bind only from the top-level `RabbitMQ` section / `VECTOR__RABBITMQ__*`; there is no nested `BackFiller:RabbitMQ` connectivity section.
 
@@ -738,7 +738,7 @@ Each authority stores only public metadata present in the source: `Name`, `Conta
 
 An omitted or empty `Control` section is valid. NNTPD starts normally without this catalogue. Binding the section does not carry or process the listed hierarchies.
 
-The current `appsettings.json` snapshot was taken from the INN source (`Last modified: 2023-08-05`) because `https://downloads.isc.org/pub/usenet/CONFIG/control.ctl` was unavailable.
+The current `{entry assembly name}.json` snapshot was taken from the INN source (`Last modified: 2023-08-05`) because `https://downloads.isc.org/pub/usenet/CONFIG/control.ctl` was unavailable.
 
 ## Bind addresses
 
@@ -974,7 +974,7 @@ The matcher is stored on the peer policy. Article-ingestion routing does not app
 
 ### Hot reload
 
-The entire top-level `Transit` section reloads through `IOptionsMonitor` when `appsettings.json` changes (Generic Host change tokens; no custom file poll). Adding, removing, or modifying a peer replaces the active immutable snapshot atomically. New connections use the new snapshot. Existing connections are not disconnected solely because configuration changed. Invalid reloads are ignored; the last valid snapshot remains.
+The entire top-level `Transit` section reloads through `IOptionsMonitor` when `{entry assembly name}.json` changes (Generic Host change tokens; no custom file poll). Adding, removing, or modifying a peer replaces the active immutable snapshot atomically. New connections use the new snapshot. Existing connections are not disconnected solely because configuration changed. Invalid reloads are ignored; the last valid snapshot remains.
 
 Example:
 
@@ -1061,7 +1061,7 @@ NNTPD-owned ACME directory URL, renewal threshold, and state directory bind from
 | `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
 | `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
 
-Do **not** commit real emails, PFX passwords, production directory URLs tied to live accounts, or machine-specific absolute paths into tracked `appsettings.json`.
+Do **not** commit real emails, PFX passwords, production directory URLs tied to live accounts, or machine-specific absolute paths into tracked `{entry assembly name}.json`.
 
 Example (TLS enabled against staging — values are illustrative; supply secrets via environment / user secrets):
 
@@ -1149,7 +1149,7 @@ Cloudflare DNS integration is **mandatory** for this host. Startup fails when ei
 
 There is **no** silent disable path and **no** skip of DNS integration for missing credentials. Validation runs at host startup (`ValidateOnStart` + `NntpdOptionsValidator`) before the application enters `Running`. Configuration validation does **not** call the Cloudflare API.
 
-**Never commit API keys.** Do not put `CloudFlareApiKey` in `appsettings.json`, samples, docs, tracked files, logs, exception messages, or options dumps. Validation and API failure messages name the operation and HTTP/Cloudflare error details; they never include the secret value. Authenticated request headers are not logged. There is no restrictive API-token format validator.
+**Never commit API keys.** Do not put `CloudFlareApiKey` in `{entry assembly name}.json`, samples, docs, tracked files, logs, exception messages, or options dumps. Validation and API failure messages name the operation and HTTP/Cloudflare error details; they never include the secret value. Authenticated request headers are not logged. There is no restrictive API-token format validator.
 
 ### DNS reconciliation (startup) and FQDN cleanup (shutdown)
 
@@ -1311,4 +1311,4 @@ There is **no** dot between the prefix and the id. Output is invariant lowercase
 | 99 | `nntpd99.usenet.ninja` | `backfiller99.usenet.ninja` | `cache99.usenet.ninja` |
 | 255 | `nntpd255.usenet.ninja` | `backfiller255.usenet.ninja` | `cache255.usenet.ninja` |
 
-The FQDN cannot be set in `appsettings.json` or overridden by an environment variable. After validation, hostname-dependent consumers (ACME, certificate SANs, Cloudflare, journal/live paths) use the generated value and do not reconstruct it independently.
+The FQDN cannot be set in `{entry assembly name}.json` or overridden by an environment variable. After validation, hostname-dependent consumers (ACME, certificate SANs, Cloudflare, journal/live paths) use the generated value and do not reconstruct it independently.

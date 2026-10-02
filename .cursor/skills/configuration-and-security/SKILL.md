@@ -14,7 +14,7 @@ Keep configuration correct, fail-fast on mandatory errors, and never leak secret
 
 ## When to use
 
-- Options / `appsettings.json` / env var changes
+- Options / `{entry assembly name}.json` / env var changes
 - Validation, bind addresses, ServerId/FQDN, Cloudflare settings
 - Secret handling in logs, tests, or docs
 
@@ -45,7 +45,7 @@ nntpd__CloudFlareZoneId
 1. Read existing options registration and validation path.
 2. Distinguish **defaults** vs **required** settings; preserve missing-vs-zero distinctions (e.g. `ServerId` as `int?`).
 3. Ensure invalid mandatory config fails **startup** clearly (`ValidateOnStart` / `IValidateOptions`).
-4. Keep secrets out of `appsettings.json`, tracked samples, logs, exceptions, and test output.
+4. Keep secrets out of `{entry assembly name}.json`, tracked samples, logs, exceptions, and test output.
 5. Validate bind addresses: wildcards vs explicit IPs assigned to local NICs; no `IsGlobal` requirement.
 6. Do not call Cloudflare or mutate DNS during ordinary validation.
 7. Add deterministic validation tests with injected NIC data.

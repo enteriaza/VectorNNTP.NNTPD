@@ -17,7 +17,7 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <para>
 /// Credentials must be supplied via environment variables
 /// (<c>Email__Smtp__Username</c>, <c>Email__Smtp__Password</c>) or a secret store.
-/// Do not place real credentials in <c>appsettings.json</c>.
+/// Do not place real credentials in <c>VectorNNTP.NNTPD.json</c>.
 /// </para>
 /// </remarks>
 public sealed class EmailOptions

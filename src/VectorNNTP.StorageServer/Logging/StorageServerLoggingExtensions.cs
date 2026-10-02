@@ -117,7 +117,7 @@ public static class StorageServerLoggingExtensions
     /// </summary>
     /// <param name="services">The built host service provider.</param>
     /// <param name="environmentName">Host environment name (no secrets).</param>
-    /// <param name="contentRootPath">Resolved content root used for <c>appsettings.json</c>.</param>
+    /// <param name="contentRootPath">Resolved content root used for <c>VectorNNTP.StorageServer.json</c>.</param>
     public static void WriteLoggingInitialized(
         IServiceProvider services,
         string environmentName,

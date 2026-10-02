@@ -1,4 +1,5 @@
 using Serilog;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -16,6 +17,12 @@ try
         ContentRootPath = AppContext.BaseDirectory,
     });
     builder.Environment.ContentRootPath = AppContext.BaseDirectory;
+    ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
+    ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
+        builder.Configuration,
+        builder.Environment.EnvironmentName);
 
     builder.ConfigureNntpdLogging();
     builder.ConfigureNntpdPlatformHosting();

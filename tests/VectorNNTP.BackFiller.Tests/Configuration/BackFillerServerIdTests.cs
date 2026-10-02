@@ -202,7 +202,7 @@ public sealed class BackFillerServerIdTests
         string? path = null;
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "appsettings.json");
+            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "VectorNNTP.BackFiller.json");
             if (File.Exists(candidate))
             {
                 path = candidate;

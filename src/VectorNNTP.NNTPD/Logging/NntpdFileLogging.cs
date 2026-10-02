@@ -5,7 +5,7 @@ namespace VectorNNTP.NNTPD.Logging;
 
 /// <summary>
 /// Resolves <see cref="NntpdOptions.LogDir"/> into the Serilog File path before
-/// <c>ReadFrom.Configuration</c>. Operational File/Async settings live in <c>appsettings.json</c>.
+/// <c>ReadFrom.Configuration</c>. Operational File/Async settings live in <c>VectorNNTP.NNTPD.json</c>.
 /// </summary>
 /// <remarks>
 /// Serilog.Settings.Configuration cannot expand <c>Nntpd:LogDir</c> into <c>path</c>.
@@ -112,7 +112,7 @@ internal static class NntpdFileLogging
     }
 
     /// <summary>
-    /// In-memory Serilog File/Async keys matching production <c>appsettings.json</c> (path is a placeholder).
+    /// In-memory Serilog File/Async keys matching production <c>VectorNNTP.NNTPD.json</c> (path is a placeholder).
     /// </summary>
     public static Dictionary<string, string?> AsyncFileWriteToKeys(int writeToIndex = 1) => new()
     {

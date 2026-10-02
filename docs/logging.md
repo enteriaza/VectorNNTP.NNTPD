@@ -1,4 +1,4 @@
-﻿# VectorNNTP.NNTPD — Logging (Serilog)
+# VectorNNTP.NNTPD — Logging (Serilog)
 
 Serilog is the **only** logging implementation. Application code continues to use
 `Microsoft.Extensions.Logging.ILogger<T>` abstractions; those resolve to Serilog sinks.
@@ -32,7 +32,7 @@ After `host.Build()`, `NntpdLoggingExtensions.WriteLoggingInitialized` emits one
 
 ## Configuration
 
-Serilog is configured under the `Serilog` section in `appsettings.json` (and environment-specific files).
+Serilog is configured under the `Serilog` section in `VectorNNTP.NNTPD.json` (and environment-specific files).
 
 Console and file have **separate** minimum levels. Do not raise the global / `VectorNNTP.NNTPD` minimum to `Information` — that would starve the file sink of Debug events.
 
@@ -41,7 +41,7 @@ Console and file have **separate** minimum levels. Do not raise the global / `Ve
 | Console | Information+ | Interactive / journald operational use |
 | File | Debug+ | Full diagnostics, including TAKETHIS RX/TX |
 
-There is one source of truth per operational setting. `Serilog:WriteTo` in `appsettings.json` owns File/Async/Archive **arguments**. `Nntpd:LogDir` owns the directory. Code does not re-declare rolling, retention, async buffer, or minimum-level values.
+There is one source of truth per operational setting. `Serilog:WriteTo` in `VectorNNTP.NNTPD.json` owns File/Async/Archive **arguments**. `Nntpd:LogDir` owns the directory. Code does not re-declare rolling, retention, async buffer, or minimum-level values.
 
 | Setting | Source of truth |
 |---------|-----------------|
@@ -192,7 +192,7 @@ Invalid Serilog configuration (unknown sink, malformed JSON) fails host startup 
 
 Prefer `Serilog:*` settings. There is no Microsoft `Logging` section in application configuration.
 
-`appsettings.Development.json` may raise the default minimum to Debug for interactive work. Production sets `VectorNNTP.NNTPD` and the File sink to `Debug` so TAKETHIS RX/TX reach the file without Console Debug noise. Raise the override to `Verbose` only when MEL Trace must also reach the file sink.
+`VectorNNTP.NNTPD.Development.json` may raise the default minimum to Debug for interactive work. Production sets `VectorNNTP.NNTPD` and the File sink to `Debug` so TAKETHIS RX/TX reach the file without Console Debug noise. Raise the override to `Verbose` only when MEL Trace must also reach the file sink.
 
 ## Console and systemd/journald
 

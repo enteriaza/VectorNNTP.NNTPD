@@ -7,7 +7,7 @@ namespace VectorNNTP.NNTPD.Transit;
 /// Applies <see cref="IOptionsMonitor{TOptions}"/> updates to <see cref="TransitConfigurationStore"/>.
 /// </summary>
 /// <remarks>
-/// Host.CreateApplicationBuilder reloads <c>appsettings.json</c> via change tokens
+/// Host.CreateApplicationBuilder reloads <c>VectorNNTP.NNTPD.json</c> via change tokens
 /// (not a custom poll loop). Invalid reloads are ignored so the last valid snapshot remains.
 /// </remarks>
 public sealed class TransitConfigurationHotReload : IDisposable

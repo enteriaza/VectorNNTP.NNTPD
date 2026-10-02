@@ -242,7 +242,7 @@ public sealed class SerilogPathSurveyWriterTests
         var dir = AppContext.BaseDirectory;
         while (dir is not null)
         {
-            var candidate = Path.Combine(dir, "src", "VectorNNTP.NNTPD", "appsettings.json");
+            var candidate = Path.Combine(dir, "src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json");
             if (File.Exists(candidate))
             {
                 return candidate;
@@ -251,7 +251,7 @@ public sealed class SerilogPathSurveyWriterTests
             dir = Directory.GetParent(dir)?.FullName;
         }
 
-        throw new InvalidOperationException("Production appsettings.json was not found.");
+        throw new InvalidOperationException("Production VectorNNTP.NNTPD.json was not found.");
     }
 
     private sealed class CollectingSink : ILogEventSink
