@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Debug;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
@@ -247,6 +248,10 @@ public sealed class SerilogLoggingTests
     {
         var builder = Host.CreateApplicationBuilder();
         TestHostFactory.ConfigureNntpdTestHost(builder);
+        builder.Configuration[$"{NntpdOptions.SectionName}:ServerId"] = "1";
+        builder.Configuration[$"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareZoneIdConfigurationKey}"] =
+            "5811a29d39a0732afb5f160c9b137c3d";
+        builder.Configuration[$"{NntpdOptions.SectionName}:DnsSuffix"] = "usenet.ninja";
         builder.ConfigureNntpdLogging(lc =>
         {
             lc.MinimumLevel.Verbose();

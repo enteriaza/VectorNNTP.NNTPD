@@ -72,13 +72,7 @@ internal static class NntpdFileLogging
             applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
 
-        var applicationName = configuration[$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.ApplicationName)}"];
-        if (string.IsNullOrWhiteSpace(applicationName))
-        {
-            applicationName = new NntpdOptions().ApplicationName;
-        }
-
-        var path = RollingFilePath(logDir, applicationName);
+        var path = RollingFilePath(logDir, ApplicationJsonConfiguration.EntryAssemblyName);
         var pathKey = FindConfiguredFilePathKey(configuration);
         if (pathKey is null)
         {
@@ -120,7 +114,8 @@ internal static class NntpdFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:bufferSize"] = "50000",
         [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "logs/VectorNNTP.NNTPD-.log",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] =
+            "logs/" + ApplicationJsonConfiguration.EntryAssemblyName + "-.log",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",

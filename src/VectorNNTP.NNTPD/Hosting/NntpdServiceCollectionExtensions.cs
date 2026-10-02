@@ -317,7 +317,7 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
             new DelegateRabbitMqConnectionNameProvider(() =>
                 RabbitMqRuntimeOptions.GetDefaultConnectionName(
-                    "VectorNNTP.NNTPD",
+                    ApplicationJsonConfiguration.EntryAssemblyName,
                     sp.GetRequiredService<IOptions<NntpdOptions>>().Value.Fqdn)));
         services.AddRabbitMqInfrastructure();
         services.TryAddEnumerable(
@@ -533,8 +533,7 @@ public static class NntpdServiceCollectionExtensions
 
         builder.Services.AddWindowsService(options =>
         {
-            options.ServiceName = builder.Configuration[$"{NntpdOptions.SectionName}:ApplicationName"]
-                ?? "VectorNNTP.NNTPD";
+            options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName;
         });
 
         builder.Services.AddSystemd();

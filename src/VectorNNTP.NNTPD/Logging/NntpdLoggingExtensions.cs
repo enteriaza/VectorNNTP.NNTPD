@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Serilog;
 using Serilog.Events;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Logging;
 
@@ -24,7 +25,7 @@ public static class NntpdLoggingExtensions
         return new LoggerConfiguration()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
             .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", "VectorNNTP.NNTPD")
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
             .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
             .CreateBootstrapLogger();
     }
@@ -92,7 +93,7 @@ public static class NntpdLoggingExtensions
                     .ReadFrom.Configuration(builder.Configuration)
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext()
-                    .Enrich.WithProperty("Application", "VectorNNTP.NNTPD");
+                    .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
 
                 // Ensure a console sink exists even if configuration omits WriteTo,
                 // so interactive and systemd journal collection always have an output path.
@@ -131,7 +132,7 @@ public static class NntpdLoggingExtensions
         var logger = factory.CreateLogger(NntpdLogCategories.Hosting);
         HostingLogMessages.LoggingInitialized(
             logger,
-            "VectorNNTP.NNTPD",
+            ApplicationJsonConfiguration.EntryAssemblyName,
             factory.GetType().Name,
             NntpdLogCategories.Hosting,
             environmentName,

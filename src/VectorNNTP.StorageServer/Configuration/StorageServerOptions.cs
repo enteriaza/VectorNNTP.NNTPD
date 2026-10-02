@@ -140,10 +140,17 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// </summary>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Gets or sets the application display name used by lifecycle messages.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="ApplicationJsonConfiguration.EntryAssemblyName"/>.
+    /// Log file names, the Serilog application property, the Windows service name,
+    /// and the RabbitMQ connection prefix use the entry assembly name directly.
+    /// </remarks>
     [Required(AllowEmptyStrings = false)]
     [MaxLength(128)]
-    public string ApplicationName { get; set; } = "VectorNNTP.StorageServer";
+    public string ApplicationName { get; set; } = ApplicationJsonConfiguration.EntryAssemblyName;
 
     /// <inheritdoc />
     public TimeSpan GracefulShutdownTimeout { get; set; } = TimeSpan.FromSeconds(30);

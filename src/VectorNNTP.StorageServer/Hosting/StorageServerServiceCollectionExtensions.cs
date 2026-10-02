@@ -106,7 +106,7 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
             new DelegateRabbitMqConnectionNameProvider(() =>
                 RabbitMqRuntimeOptions.GetDefaultConnectionName(
-                    "VectorNNTP.StorageServer",
+                    ApplicationJsonConfiguration.EntryAssemblyName,
                     sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Fqdn)));
         builder.Services.AddRabbitMqInfrastructure();
 
@@ -219,8 +219,7 @@ public static class StorageServerServiceCollectionExtensions
 
         builder.Services.AddWindowsService(options =>
         {
-            options.ServiceName = builder.Configuration[$"{StorageServerOptions.SectionName}:ApplicationName"]
-                ?? "VectorNNTP.StorageServer";
+            options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName;
         });
 
         builder.Services.AddSystemd();

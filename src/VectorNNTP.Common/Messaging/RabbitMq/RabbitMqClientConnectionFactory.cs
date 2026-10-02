@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.Common.Messaging.RabbitMq;
 
@@ -135,7 +136,7 @@ public sealed class RabbitMqClientConnectionFactory : IRabbitMqConnectionFactory
     /// <exception cref="InvalidOperationException">The entry assembly has no short name.</exception>
     private static void PopulateClientProperties(ConnectionFactory factory)
     {
-        var applicationName = ResolveEntryApplicationName();
+        var applicationName = ApplicationJsonConfiguration.EntryAssemblyName;
         var machineName = ResolveClientMachineName(static () => Environment.MachineName);
         var processId = Environment.ProcessId;
         factory.ClientProperties["application"] =
@@ -148,21 +149,6 @@ public sealed class RabbitMqClientConnectionFactory : IRabbitMqConnectionFactory
         factory.ClientProperties["platform"] = Environment.OSVersion.Platform.ToString();
         factory.ClientProperties["process_id"] = processId.ToString(CultureInfo.InvariantCulture);
         factory.ClientProperties["runtime"] = RuntimeInformation.FrameworkDescription;
-    }
-
-    /// <summary>Returns the entry assembly short name.</summary>
-    /// <returns>The entry assembly's <see cref="AssemblyName.Name"/>.</returns>
-    /// <exception cref="InvalidOperationException">The entry assembly or its name is missing.</exception>
-    private static string ResolveEntryApplicationName()
-    {
-        var name = Assembly.GetEntryAssembly()?.GetName().Name;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new InvalidOperationException(
-                "The entry assembly name is required for RabbitMQ client properties.");
-        }
-
-        return name;
     }
 
     /// <summary>Returns the entry assembly's compiled version.</summary>

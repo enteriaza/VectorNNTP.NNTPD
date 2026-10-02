@@ -2864,7 +2864,6 @@
     "AcmeRenewalThresholdDays": 14,
     "AcmeStateDir": "certs/",
     "AllowCleartextAuth": true,
-    "ApplicationName": "VectorNNTP.NNTPD",
     "BindAddress": [
       "198.18.0.66",
       "2c0f:f030:1442:501:198:18:0:66"
@@ -2936,9 +2935,6 @@
         "VectorNNTP.NNTPD": "Debug"
       }
     },
-    "Properties": {
-      "Application": "VectorNNTP.NNTPD"
-    },
     "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async", "Serilog.Sinks.File.Archive" ],
     "WriteTo": [
       {
@@ -2960,7 +2956,7 @@
                 "fileSizeLimitBytes": null,
                 "hooks": "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
                 "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
-                "path": "logs/VectorNNTP.NNTPD-.log",
+                "path": "logs/pending-.log",
                 "restrictedToMinimumLevel": "Debug",
                 "retainedFileCountLimit": 14,
                 "rollOnFileSizeLimit": false,

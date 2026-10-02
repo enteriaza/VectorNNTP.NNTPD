@@ -12,6 +12,7 @@ using Microsoft.Extensions.Options;
 using Serilog;
 using Serilog.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
@@ -140,7 +141,11 @@ public sealed class LoggingPipelineTests
         Assert.Equal(Serilog.Events.LogEventLevel.Information, evt.Level);
         Assert.Contains("SerilogLoggerFactory", evt.RenderMessage(), StringComparison.Ordinal);
         Assert.Contains(NntpdLogCategories.Hosting, evt.RenderMessage(), StringComparison.Ordinal);
-        Assert.Contains("VectorNNTP.NNTPD", evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.True(evt.Properties.TryGetValue("Application", out var application));
+        Assert.Equal(
+            "\"" + ApplicationJsonConfiguration.EntryAssemblyName + "\"",
+            application.ToString());
+        Assert.DoesNotContain("not-the-entry-assembly", application.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("CloudFlare", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Password", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
     }
@@ -414,7 +419,7 @@ public sealed class LoggingPipelineTests
             ["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Information",
             ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,
             ["Serilog:Enrich:0"] = "FromLogContext",
-            ["Serilog:Properties:Application"] = "VectorNNTP.NNTPD",
+            ["Serilog:Properties:Application"] = "not-the-entry-assembly",
         };
         foreach (var pair in NntpdFileLogging.AsyncFileWriteToKeys())
         {

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Serilog;
 using Serilog.Events;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Logging;
 
@@ -28,7 +29,7 @@ public static partial class BackFillerLoggingExtensions
         return new LoggerConfiguration()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
             .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", BackFillerFileLogging.ApplicationName)
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
             .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
             .CreateBootstrapLogger();
     }
@@ -126,7 +127,7 @@ public static partial class BackFillerLoggingExtensions
         var logger = factory.CreateLogger(BackFillerLogCategories.Hosting);
         LoggingInitialized(
             logger,
-            BackFillerFileLogging.ApplicationName,
+            ApplicationJsonConfiguration.EntryAssemblyName,
             factory.GetType().Name,
             BackFillerLogCategories.Hosting,
             environmentName,

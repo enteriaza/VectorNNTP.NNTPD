@@ -8,7 +8,7 @@ Log.Logger = StorageServerLoggingExtensions.CreateBootstrapLogger();
 
 try
 {
-    Log.Information("VectorNNTP.StorageServer host starting");
+    Log.Information("{Application} host starting", ApplicationJsonConfiguration.EntryAssemblyName);
 
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     {
@@ -34,12 +34,12 @@ try
         builder.Environment.ContentRootPath);
     await host.RunAsync().ConfigureAwait(false);
 
-    Log.Information("VectorNNTP.StorageServer host stopped cleanly");
+    Log.Information("{Application} host stopped cleanly", ApplicationJsonConfiguration.EntryAssemblyName);
     return 0;
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "VectorNNTP.StorageServer host terminated unexpectedly");
+    Log.Fatal(ex, "{Application} host terminated unexpectedly", ApplicationJsonConfiguration.EntryAssemblyName);
     return 1;
 }
 finally

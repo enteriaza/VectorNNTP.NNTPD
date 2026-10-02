@@ -133,7 +133,7 @@ public static class BackFillerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
             new DelegateRabbitMqConnectionNameProvider(() =>
                 RabbitMqRuntimeOptions.GetDefaultConnectionName(
-                    "VectorNNTP.BackFiller",
+                    ApplicationJsonConfiguration.EntryAssemblyName,
                     sp.GetRequiredService<IOptions<BackFillerOptions>>().Value.Fqdn)));
         builder.Services.AddRabbitMqInfrastructure();
         builder.Services.AddSingleton<IHostedService>(static sp =>
@@ -234,7 +234,7 @@ public static class BackFillerServiceCollectionExtensions
 
         builder.Services.AddWindowsService(options =>
         {
-            options.ServiceName = "VectorNNTP.BackFiller";
+            options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName;
         });
 
         builder.Services.AddSystemd();

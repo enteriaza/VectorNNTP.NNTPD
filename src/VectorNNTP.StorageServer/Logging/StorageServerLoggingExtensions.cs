@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Serilog;
 using Serilog.Events;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.StorageServer.Logging;
 
@@ -24,7 +25,7 @@ public static class StorageServerLoggingExtensions
         return new LoggerConfiguration()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
             .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", StorageServerFileLogging.ApplicationName)
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
             .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
             .CreateBootstrapLogger();
     }
@@ -92,7 +93,7 @@ public static class StorageServerLoggingExtensions
                     .ReadFrom.Configuration(builder.Configuration)
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext()
-                    .Enrich.WithProperty("Application", StorageServerFileLogging.ApplicationName);
+                    .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
 
                 // Ensure a console sink exists even if configuration omits WriteTo,
                 // so interactive and systemd journal collection always have an output path.
@@ -131,7 +132,7 @@ public static class StorageServerLoggingExtensions
         var logger = factory.CreateLogger(StorageServerLogCategories.Hosting);
         HostingLogMessages.LoggingInitialized(
             logger,
-            StorageServerFileLogging.ApplicationName,
+            ApplicationJsonConfiguration.EntryAssemblyName,
             factory.GetType().Name,
             StorageServerLogCategories.Hosting,
             environmentName,

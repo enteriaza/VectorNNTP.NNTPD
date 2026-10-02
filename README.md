@@ -144,7 +144,7 @@ Section: `Nntpd` (`VectorNNTP.NNTPD.json` / environment variables / command line
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `ApplicationName` | `VectorNNTP.NNTPD` | Display name for logs and Windows Service metadata |
+| `ApplicationName` | Entry assembly name | Optional lifecycle display name. Log files, the Serilog `Application` property, the Windows service name, and the RabbitMQ connection-name prefix use the entry assembly name directly. |
 | `GracefulShutdownTimeout` | `00:00:30` | Overall wall-clock bound for application-service shutdown (also applied to host shutdown when configured) |
 | `StartupTimeout` | `null` | Optional bound for startup; `null` means host cancellation only |
 | `StopHostOnUnexpectedServiceTermination` | `true` | Request host stop when a service execution faults/completes while `Running` |

@@ -15,7 +15,7 @@ namespace VectorNNTP.StorageServer.Logging;
 /// </remarks>
 internal static class StorageServerFileLogging
 {
-    /// <summary>Serilog rolling path token: <c>{ApplicationName}-yyyyMMdd.log</c>.</summary>
+    /// <summary>Serilog rolling path token: <c>{entry assembly name}-yyyyMMdd.log</c>.</summary>
     public const string RollingPathSuffix = "-.log";
 
     /// <summary>
@@ -23,9 +23,6 @@ internal static class StorageServerFileLogging
     /// target directory is null: <c>{original-file-name}.gz</c>.
     /// </summary>
     public const string GzipArchiveSuffix = ".gz";
-
-    /// <summary>Fixed application identity used in enrichment and the rolling file name.</summary>
-    public const string ApplicationName = "VectorNNTP.StorageServer";
 
     /// <summary>Console-sink fallback minimum when <c>Serilog:WriteTo</c> is omitted.</summary>
     public const Serilog.Events.LogEventLevel ConsoleMinimumLevel = Serilog.Events.LogEventLevel.Debug;
@@ -76,13 +73,7 @@ internal static class StorageServerFileLogging
             applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
 
-        var applicationName = configuration[$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.ApplicationName)}"];
-        if (string.IsNullOrWhiteSpace(applicationName))
-        {
-            applicationName = ApplicationName;
-        }
-
-        var path = RollingFilePath(logDir, applicationName);
+        var path = RollingFilePath(logDir, ApplicationJsonConfiguration.EntryAssemblyName);
         var pathKey = FindConfiguredFilePathKey(configuration);
         if (pathKey is null)
         {
@@ -122,7 +113,8 @@ internal static class StorageServerFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:bufferSize"] = "50000",
         [$"Serilog:WriteTo:{writeToIndex}:Args:blockWhenFull"] = "true",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Name"] = "File",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] = "/logs/VectorNNTP.StorageServer-.log",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:path"] =
+            "/logs/" + ApplicationJsonConfiguration.EntryAssemblyName + "-.log",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",

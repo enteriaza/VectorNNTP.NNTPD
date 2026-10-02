@@ -12,7 +12,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
-| `ApplicationName` | string | `VectorNNTP.NNTPD` | no | Display name for logs and Windows Service metadata |
+| `ApplicationName` | string | Entry assembly name | no | Optional lifecycle display name. Log files, the Serilog `Application` property, the Windows service name, and the RabbitMQ connection-name prefix use the entry assembly name directly (`VectorNNTP.NNTPD` when that executable is the process). |
 | `GracefulShutdownTimeout` | `TimeSpan` | `00:00:30` | no | Overall wall-clock bound for the reverse-order application-service stop sequence (also drives host `ShutdownTimeout`). Manager awaits each stop; ignore-cancel services can block until host/supervisor kill. |
 | `StartupTimeout` | `TimeSpan?` | `null` | no | Optional startup bound; `null` means host cancellation only |
 | `StopHostOnUnexpectedServiceTermination` | bool | `true` | no | Request host stop when a service fails while `Running` |

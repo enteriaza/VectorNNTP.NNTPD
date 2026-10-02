@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Debug;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 
@@ -61,20 +62,21 @@ public sealed class SerilogLoggingTests
 
         var evt = Assert.Single(sink.Events, e => e.MessageTemplate.Text.Contains("probe", StringComparison.Ordinal));
         Assert.True(evt.Properties.TryGetValue("Application", out var application));
-        Assert.Equal($"\"{StorageServerFileLogging.ApplicationName}\"", application.ToString());
+        Assert.Equal($"\"{ApplicationJsonConfiguration.EntryAssemblyName}\"", application.ToString());
         Assert.DoesNotContain("VectorNNTP.NNTPD", application.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void BootstrapLogger_UsesStorageServerApplicationProperty()
+    public void BootstrapLogger_UsesEntryAssemblyName()
     {
         var previous = Log.Logger;
         try
         {
+            var name = ApplicationJsonConfiguration.EntryAssemblyName;
+            Assert.False(string.IsNullOrWhiteSpace(name));
             Log.Logger = StorageServerLoggingExtensions.CreateBootstrapLogger();
             Assert.NotNull(Log.Logger);
-            Assert.Equal("VectorNNTP.StorageServer", StorageServerFileLogging.ApplicationName);
-            Assert.DoesNotContain("NNTPD", StorageServerFileLogging.ApplicationName, StringComparison.Ordinal);
+            Assert.NotEqual("VectorNNTP.StorageServer", name);
         }
         finally
         {
@@ -87,9 +89,7 @@ public sealed class SerilogLoggingTests
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(FindProductionAppsettings()));
         var serilog = doc.RootElement.GetProperty("Serilog");
-        Assert.Equal(
-            "VectorNNTP.StorageServer",
-            serilog.GetProperty("Properties").GetProperty("Application").GetString());
+        Assert.False(serilog.TryGetProperty("Properties", out _));
         Assert.DoesNotContain(
             "VectorNNTP.NNTPD",
             serilog.GetRawText(),
@@ -124,7 +124,7 @@ public sealed class SerilogLoggingTests
                 new Dictionary<string, string?>
                 {
                     ["StorageServer:LogDir"] = logDir,
-                    ["StorageServer:ApplicationName"] = StorageServerFileLogging.ApplicationName,
+                    ["StorageServer:ApplicationName"] = ApplicationJsonConfiguration.EntryAssemblyName,
                 });
             StorageServerFileLogging.BindResolvedFilePath(configuration);
 
@@ -179,7 +179,7 @@ public sealed class SerilogLoggingTests
         builder.Configuration["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Debug";
         builder.Configuration["Serilog:WriteTo:0:Args:outputTemplate"] =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
-        builder.Configuration["Serilog:Properties:Application"] = StorageServerFileLogging.ApplicationName;
+        builder.Configuration["Serilog:Properties:Application"] = ApplicationJsonConfiguration.EntryAssemblyName;
 
         builder.ConfigureStorageServerLogging(lc =>
         {

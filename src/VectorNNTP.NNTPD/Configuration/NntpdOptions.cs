@@ -82,10 +82,17 @@ public sealed class NntpdOptions : AcmeCloudflareOptions, IApplicationLifecycleO
     /// </summary>
     public const string NewsmasterPasswordEnvironmentVariable = "NNTPD__NEWSMASTERPASSWORD";
 
-    /// <summary>Gets or sets the application display name used in logs and service registration metadata.</summary>
+    /// <summary>
+    /// Gets or sets the application display name used by lifecycle messages.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="ApplicationJsonConfiguration.EntryAssemblyName"/>.
+    /// Log file names, the Serilog application property, the Windows service name,
+    /// and the RabbitMQ connection prefix use the entry assembly name directly.
+    /// </remarks>
     [Required(AllowEmptyStrings = false)]
     [MaxLength(128)]
-    public string ApplicationName { get; set; } = "VectorNNTP.NNTPD";
+    public string ApplicationName { get; set; } = ApplicationJsonConfiguration.EntryAssemblyName;
 
     /// <summary>
     /// Gets or sets the maximum time allowed for the overall graceful shutdown of application services.

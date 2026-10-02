@@ -47,7 +47,7 @@ public sealed class FileLoggingTests
         Assert.Equal(
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
-        Assert.Equal("logs/VectorNNTP.NNTPD-.log", args.GetProperty("path").GetString());
+        Assert.Equal("logs/pending-.log", args.GetProperty("path").GetString());
         var news = doc.RootElement.GetProperty("Serilog").GetProperty("News");
         Assert.True(news.GetProperty("buffered").GetBoolean());
         Assert.Equal("00:00:01", news.GetProperty("flushToDiskInterval").GetString());
@@ -80,8 +80,11 @@ public sealed class FileLoggingTests
 
             NntpdFileLogging.BindResolvedFilePath(configuration);
 
-            var expected = NntpdFileLogging.RollingFilePath(logDir, "VectorNNTP.NNTPD");
+            var expected = NntpdFileLogging.RollingFilePath(
+                logDir,
+                ApplicationJsonConfiguration.EntryAssemblyName);
             Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
+            Assert.DoesNotContain("VectorNNTP.NNTPD-", configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"], StringComparison.Ordinal);
             Assert.Equal(NntpdNewsLogging.NewsRollingFilePath(logDir), configuration["Serilog:News:path"]);
             Assert.Equal(NntpdPathSurveyLogging.PathSurveyRollingFilePath(logDir), configuration["Serilog:Inpaths:path"]);
             Assert.True(Directory.Exists(logDir));
@@ -285,12 +288,14 @@ public sealed class FileLoggingTests
         Assert.DoesNotContain("file-logging-debug-marker", console, StringComparison.Ordinal);
         Assert.DoesNotContain("TAKETHIS", console, StringComparison.Ordinal);
 
+        var applicationName = ApplicationJsonConfiguration.EntryAssemblyName;
         var daily = Assert.Single(
-            Directory.GetFiles(dir, "VectorNNTP.NNTPD-*.log"),
-            path => Path.GetFileName(path).StartsWith("VectorNNTP.NNTPD-", StringComparison.Ordinal)
+            Directory.GetFiles(dir, applicationName + "-*.log"),
+            path => Path.GetFileName(path).StartsWith(applicationName + "-", StringComparison.Ordinal)
                     && path.EndsWith(".log", StringComparison.Ordinal)
                     && !path.EndsWith(".log.gz", StringComparison.Ordinal));
-        Assert.Matches(@"VectorNNTP\.NNTPD-\d{8}\.log$", Path.GetFileName(daily));
+        Assert.Matches("^" + System.Text.RegularExpressions.Regex.Escape(applicationName) + @"-\d{8}\.log$", Path.GetFileName(daily));
+        Assert.DoesNotContain("VectorNNTP.NNTPD-", Path.GetFileName(daily), StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(dir, "*.gz"));
 
         var fileText = File.ReadAllText(daily);

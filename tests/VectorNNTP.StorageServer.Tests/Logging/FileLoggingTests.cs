@@ -39,7 +39,7 @@ public sealed class FileLoggingTests
         Assert.Equal(
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
-        Assert.Equal("/logs/VectorNNTP.StorageServer-.log", args.GetProperty("path").GetString());
+        Assert.Equal("/logs/pending-.log", args.GetProperty("path").GetString());
         Assert.DoesNotContain("NNTPD", args.GetProperty("path").GetString(), StringComparison.Ordinal);
 
         var usingNames = doc.RootElement.GetProperty("Serilog").GetProperty("Using")
@@ -65,13 +65,18 @@ public sealed class FileLoggingTests
                 {
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDir)}"] = logDir,
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.ApplicationName)}"] =
-                        StorageServerFileLogging.ApplicationName,
+                        "not-the-entry-assembly",
                 });
 
             StorageServerFileLogging.BindResolvedFilePath(configuration);
 
-            var expected = StorageServerFileLogging.RollingFilePath(logDir, StorageServerFileLogging.ApplicationName);
+            var expected = StorageServerFileLogging.RollingFilePath(
+                logDir,
+                ApplicationJsonConfiguration.EntryAssemblyName);
             Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
+            Assert.DoesNotContain("not-the-entry-assembly", expected, StringComparison.Ordinal);
+            Assert.Equal(expected, configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"]);
+            Assert.DoesNotContain("not-the-entry-assembly", expected, StringComparison.Ordinal);
             Assert.True(Directory.Exists(logDir));
             Assert.DoesNotContain("NNTPD", expected, StringComparison.Ordinal);
         }
@@ -126,7 +131,7 @@ public sealed class FileLoggingTests
                 {
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.LogDir)}"] = logDir,
                     [$"{StorageServerOptions.SectionName}:{nameof(StorageServerOptions.ApplicationName)}"] =
-                        StorageServerFileLogging.ApplicationName,
+                        ApplicationJsonConfiguration.EntryAssemblyName,
                 });
             StorageServerFileLogging.BindResolvedFilePath(configuration);
 
@@ -178,7 +183,7 @@ public sealed class FileLoggingTests
 
             builder.Configuration[$"{StorageServerOptions.SectionName}:LogDir"] = logDir;
             builder.Configuration[$"{StorageServerOptions.SectionName}:ApplicationName"] =
-                StorageServerFileLogging.ApplicationName;
+                ApplicationJsonConfiguration.EntryAssemblyName;
             foreach (var pair in StorageServerFileLogging.AsyncFileWriteToKeys())
             {
                 builder.Configuration[pair.Key] = pair.Value;
@@ -188,14 +193,14 @@ public sealed class FileLoggingTests
             builder.Configuration["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Debug";
             builder.Configuration["Serilog:WriteTo:0:Args:outputTemplate"] =
                 "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
-            builder.Configuration["Serilog:Properties:Application"] = StorageServerFileLogging.ApplicationName;
+            builder.Configuration["Serilog:Properties:Application"] = ApplicationJsonConfiguration.EntryAssemblyName;
 
             builder.ConfigureStorageServerLogging();
             using var host = builder.Build();
 
             var bound = builder.Configuration["Serilog:WriteTo:1:Args:configure:0:Args:path"];
             Assert.Equal(
-                StorageServerFileLogging.RollingFilePath(logDir, StorageServerFileLogging.ApplicationName),
+                StorageServerFileLogging.RollingFilePath(logDir, ApplicationJsonConfiguration.EntryAssemblyName),
                 bound);
             Assert.DoesNotContain("NNTPD", bound, StringComparison.Ordinal);
         }

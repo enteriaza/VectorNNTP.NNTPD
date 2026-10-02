@@ -177,8 +177,8 @@ public sealed class BackFillerOptions
     /// Old key: <c>DirLogs</c>. Relative paths resolve through Common
     /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
     /// <see cref="AppContext.BaseDirectory"/>, not the process working directory.
-    /// The Serilog file sink is created under this directory at startup
-    /// (<c>VectorNNTP.BackFiller-.log</c>). This is the only log-directory setting.
+    /// The Serilog file sink is created under this directory at startup.
+    /// The rolling file name is the entry assembly short name. This is the only log-directory setting.
     /// </remarks>
     public string LogDirectory { get; set; } = DefaultLogDirectory;
 

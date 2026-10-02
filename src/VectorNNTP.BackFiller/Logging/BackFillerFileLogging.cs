@@ -20,7 +20,7 @@ namespace VectorNNTP.BackFiller.Logging;
 /// </remarks>
 internal static class BackFillerFileLogging
 {
-    /// <summary>Serilog rolling path token: <c>{ApplicationName}-yyyyMMdd.log</c>.</summary>
+    /// <summary>Serilog rolling path token: <c>{entry assembly name}-yyyyMMdd.log</c>.</summary>
     public const string RollingPathSuffix = "-.log";
 
     /// <summary>
@@ -28,9 +28,6 @@ internal static class BackFillerFileLogging
     /// target directory is null: <c>{original-file-name}.gz</c>.
     /// </summary>
     public const string GzipArchiveSuffix = ".gz";
-
-    /// <summary>Fixed application identity used in the rolling file name.</summary>
-    public const string ApplicationName = "VectorNNTP.BackFiller";
 
     /// <summary>
     /// Console and File sink output template matching production <c>VectorNNTP.BackFiller.json</c>.
@@ -104,7 +101,7 @@ internal static class BackFillerFileLogging
             configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"],
             applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
-        return RollingFilePath(logDir, ApplicationName);
+        return RollingFilePath(logDir, ApplicationJsonConfiguration.EntryAssemblyName);
     }
 
     /// <summary>
@@ -146,7 +143,7 @@ internal static class BackFillerFileLogging
             .MinimumLevel.Override("System", LogEventLevel.Warning)
             .MinimumLevel.Override("VectorNNTP.BackFiller", minimumLevel)
             .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", ApplicationName)
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
             .WriteTo.Console(
                 restrictedToMinimumLevel: sinkLevel,
                 outputTemplate: SinkOutputTemplate)

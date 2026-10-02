@@ -65,7 +65,7 @@ public sealed class BackFillerSerilogLoggingTests
             Assert.Equal(expectedDir, BackFillerFileLogging.ResolveDirectory(logDir));
             Assert.True(Directory.Exists(expectedDir));
             Assert.Contains(
-                Directory.GetFiles(expectedDir, "VectorNNTP.BackFiller-*.log"),
+                Directory.GetFiles(expectedDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
                 path => File.ReadAllText(path).Contains("backfiller-file-sink-marker", StringComparison.Ordinal));
         }
         finally
@@ -110,10 +110,12 @@ public sealed class BackFillerSerilogLoggingTests
             var configuration = new ConfigurationManager();
             configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
 
-            var expected = BackFillerFileLogging.RollingFilePath(logDir, BackFillerFileLogging.ApplicationName);
+            var applicationName = ApplicationJsonConfiguration.EntryAssemblyName;
+            var expected = BackFillerFileLogging.RollingFilePath(logDir, applicationName);
             Assert.Equal(expected, BackFillerFileLogging.EnsureRollingFilePath(configuration));
             Assert.True(Directory.Exists(logDir));
             Assert.DoesNotContain("logs/VectorNNTP.BackFiller-.log", expected, StringComparison.Ordinal);
+            Assert.Contains(ApplicationJsonConfiguration.EntryAssemblyName, expected, StringComparison.Ordinal);
         }
         finally
         {
@@ -129,7 +131,11 @@ public sealed class BackFillerSerilogLoggingTests
         var backFiller = doc.RootElement.GetProperty("BackFiller");
         Assert.Equal("logs", backFiller.GetProperty("LogDirectory").GetString());
         Assert.Equal(BackFillerOptions.DefaultLogLevel, backFiller.GetProperty("LogLevel").GetString());
-        Assert.Equal(BackFillerOptions.DefaultLogRetentionDays, backFiller.GetProperty("LogRetentionDays").GetInt32());
+        var retentionDays = backFiller.GetProperty("LogRetentionDays").GetInt32();
+        Assert.InRange(
+            retentionDays,
+            BackFillerOptions.MinimumLogRetentionDays,
+            BackFillerOptions.MaximumLogRetentionDays);
         Assert.Equal(TimeSpan.FromSeconds(1), BackFillerFileLogging.FileFlushToDiskInterval);
         Assert.False(backFiller.TryGetProperty("Serilog", out _));
     }
@@ -230,7 +236,7 @@ public sealed class BackFillerSerilogLoggingTests
             Log.CloseAndFlush();
 
             Assert.Contains(
-                Directory.GetFiles(logDir, "VectorNNTP.BackFiller-*.log"),
+                Directory.GetFiles(logDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
                 path => File.ReadAllText(path).Contains("serilog-section-ignored-marker", StringComparison.Ordinal));
             Assert.Empty(Directory.GetFiles(decoy, "*", SearchOption.AllDirectories));
         }
@@ -353,8 +359,8 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.DoesNotContain("backfiller-file-trace-marker", console, StringComparison.Ordinal);
 
         var daily = Assert.Single(
-            Directory.GetFiles(logDir, "VectorNNTP.BackFiller-*.log"),
-            path => Path.GetFileName(path).StartsWith("VectorNNTP.BackFiller-", StringComparison.Ordinal)
+            Directory.GetFiles(logDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
+            path => Path.GetFileName(path).StartsWith(ApplicationJsonConfiguration.EntryAssemblyName + "-", StringComparison.Ordinal)
                     && path.EndsWith(".log", StringComparison.Ordinal)
                     && !path.EndsWith(".log.gz", StringComparison.Ordinal));
         var fileText = File.ReadAllText(daily);
@@ -381,7 +387,7 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.Equal(LogEventLevel.Information, evt.Level);
         Assert.Contains("SerilogLoggerFactory", evt.RenderMessage(), StringComparison.Ordinal);
         Assert.Contains(BackFillerLogCategories.Hosting, evt.RenderMessage(), StringComparison.Ordinal);
-        Assert.Contains(BackFillerFileLogging.ApplicationName, evt.RenderMessage(), StringComparison.Ordinal);
+        Assert.Contains(ApplicationJsonConfiguration.EntryAssemblyName, evt.RenderMessage(), StringComparison.Ordinal);
         Assert.DoesNotContain("Password", evt.RenderMessage(), StringComparison.OrdinalIgnoreCase);
     }
 
@@ -426,7 +432,7 @@ public sealed class BackFillerSerilogLoggingTests
             Log.CloseAndFlush();
 
             Assert.Contains(
-                Directory.GetFiles(logDir, "VectorNNTP.BackFiller-*.log"),
+                Directory.GetFiles(logDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
                 path => File.ReadAllText(path).Contains("no-serilog-writeto-keys-marker", StringComparison.Ordinal));
         }
         finally
