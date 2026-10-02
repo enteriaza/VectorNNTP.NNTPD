@@ -483,8 +483,11 @@ public readonly record struct ArticleReadResult(
 /// </remarks>
 public sealed class JournalAcceptRecord
 {
+    private readonly object _payloadGate = new();
     private byte[]? _artData;
     private bool _payloadDetachPermitted;
+    private int _checkpointPins;
+    private int _detachBlockedOnPin;
 
     /// <summary>Initializes an Accept record. Copies <paramref name="artData"/>.</summary>
     /// <param name="version">Wire/schema version. Current is <c>1</c>.</param>
@@ -557,6 +560,11 @@ public sealed class JournalAcceptRecord
     /// Thrown when durable IndexCommitted has not been applied, or when the buffer was already detached.
     /// A second call does not return the buffer again.
     /// </exception>
+    /// <remarks>
+    /// A checkpoint pin blocks this method until <see cref="UnpinForCheckpoint"/> drops the last pin.
+    /// The wait does not take the journal lock. The buffer is cleared only after that wait, while
+    /// <see cref="_payloadGate"/> is held, so a pinned encoder cannot observe a null payload.
+    /// </remarks>
     internal byte[] DetachPayload()
     {
         if (!_payloadDetachPermitted)
@@ -565,10 +573,87 @@ public sealed class JournalAcceptRecord
                 "Journal accept payload can be detached only after durable IndexCommitted.");
         }
 
-        var payload = _artData ?? throw new InvalidOperationException(
-            "Journal accept payload is already detached.");
-        _artData = null;
-        return payload;
+        lock (_payloadGate)
+        {
+            while (_checkpointPins != 0)
+            {
+                _detachBlockedOnPin = 1;
+                Monitor.Wait(_payloadGate);
+            }
+
+            _detachBlockedOnPin = 0;
+            var payload = _artData ?? throw new InvalidOperationException(
+                "Journal accept payload is already detached.");
+            _artData = null;
+            return payload;
+        }
+    }
+
+    /// <summary>
+    /// Holds <see cref="ArtData"/> against <see cref="DetachPayload"/> for one checkpoint encode.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The payload is already detached.</exception>
+    internal void PinForCheckpoint()
+    {
+        lock (_payloadGate)
+        {
+            if (_artData is null)
+            {
+                throw new InvalidOperationException("Journal accept payload is already detached.");
+            }
+
+            _checkpointPins++;
+        }
+    }
+
+    /// <summary>Drops one <see cref="PinForCheckpoint"/> hold and wakes a blocked detach.</summary>
+    /// <exception cref="InvalidOperationException">This record is not checkpoint-pinned.</exception>
+    internal void UnpinForCheckpoint()
+    {
+        lock (_payloadGate)
+        {
+            if (_checkpointPins == 0)
+            {
+                throw new InvalidOperationException("Journal accept payload is not checkpoint-pinned.");
+            }
+
+            _checkpointPins--;
+            if (_checkpointPins == 0)
+            {
+                Monitor.PulseAll(_payloadGate);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads <see cref="ArtData"/> while a checkpoint pin is held.
+    /// </summary>
+    /// <returns>The pinned payload.</returns>
+    /// <exception cref="InvalidOperationException">The record is not pinned, or the payload was detached.</exception>
+    internal ReadOnlyMemory<byte> CheckpointPinnedArtData()
+    {
+        lock (_payloadGate)
+        {
+            if (_checkpointPins == 0)
+            {
+                throw new InvalidOperationException("Journal accept payload is not checkpoint-pinned.");
+            }
+
+            return _artData ?? throw new InvalidOperationException(
+                "Journal accept payload is already detached.");
+        }
+    }
+
+    /// <summary>True while <see cref="DetachPayload"/> is waiting for a checkpoint pin to drop.</summary>
+    internal bool DetachIsBlockedOnCheckpointPin
+    {
+        get
+        {
+            lock (_payloadGate)
+            {
+                return _detachBlockedOnPin != 0;
+            }
+        }
     }
 }
 

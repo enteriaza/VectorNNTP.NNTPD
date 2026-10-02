@@ -148,6 +148,15 @@ internal static partial class StorageMaintenanceLogMessages
         Exception exception);
 
     [LoggerMessage(
+        EventId = 3029,
+        Level = LogLevel.Warning,
+        Message = "Journal checkpoint deferred; compaction state changed during image construction (MaintenanceRunId={MaintenanceRunId})")]
+    public static partial void JournalCheckpointDeferredCompactionChanged(
+        ILogger logger,
+        ulong MaintenanceRunId,
+        Exception exception);
+
+    [LoggerMessage(
         EventId = 3025,
         Level = LogLevel.Information,
         Message = "Index checkpoint attempted (MaintenanceRunId={MaintenanceRunId}, IndexPhysicalBytes={IndexPhysicalBytes}, ThresholdBytes={ThresholdBytes})")]

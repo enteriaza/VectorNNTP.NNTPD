@@ -1871,6 +1871,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             FileArticleStorageEngineLogMessages.CheckpointCompleted(_logger, released);
             return released;
         }
+        catch (CheckpointCompactionChangedException)
+        {
+            throw;
+        }
         catch (CheckpointCapacityDeniedException)
         {
             return 0;

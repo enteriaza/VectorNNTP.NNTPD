@@ -48,10 +48,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// When the physical index threshold is positive and <c>IndexPhysicalBytes</c> has reached it,
 /// the cycle then calls <see cref="FileArticleStorageEngine.CheckpointIndex"/>. The two
 /// checkpoints run one after the other on this cycle. They do not reorder reclaim, retirement,
-/// or compaction. A pending ambiguous journal append is logged and the rest of the cycle
-/// continues. Any other journal checkpoint exception leaves this method. An index checkpoint
-/// exception is logged and leaves this method the same way. A capacity denial is not an
-/// exception: the index call returns no retired bytes and the cycle continues.
+/// or compaction. A pending ambiguous journal append, or a compaction plan that changed while
+/// the checkpoint image was built, is logged and the rest of the cycle continues. Any other
+/// journal checkpoint exception leaves this method. An index checkpoint exception is logged
+/// and leaves this method the same way. A capacity denial is not an exception: the index call
+/// returns no retired bytes and the cycle continues.
 /// </para>
 /// </remarks>
 public sealed class StorageMaintenanceCoordinator
@@ -456,7 +457,8 @@ public sealed class StorageMaintenanceCoordinator
 
     /// <summary>
     /// Checkpoints when the physical journal has reached the configured threshold.
-    /// Does not take the engine gate. <see cref="UnreconciledDurableTailException"/> is deferred.
+    /// Does not take the engine gate. <see cref="UnreconciledDurableTailException"/> and
+    /// <see cref="CheckpointCompactionChangedException"/> are deferred.
     /// </summary>
     private void TryCheckpointJournal(ulong maintenanceRunId)
     {
@@ -497,6 +499,13 @@ public sealed class StorageMaintenanceCoordinator
         catch (UnreconciledDurableTailException ex)
         {
             StorageMaintenanceLogMessages.JournalCheckpointDeferred(_logger, maintenanceRunId, ex);
+        }
+        catch (CheckpointCompactionChangedException ex)
+        {
+            StorageMaintenanceLogMessages.JournalCheckpointDeferredCompactionChanged(
+                _logger,
+                maintenanceRunId,
+                ex);
         }
     }
 

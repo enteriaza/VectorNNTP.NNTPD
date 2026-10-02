@@ -656,6 +656,18 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     internal Action<CheckpointFaultPoint>? CheckpointTestFault { get; set; }
 
     /// <summary>
+    /// Invoked under <see cref="_checkpointSerial"/> and outside <see cref="_gate"/>, before the
+    /// snapshot is captured. Tests only. A throw aborts the attempt before any pin or temp file.
+    /// </summary>
+    internal Action? TestBeforeCheckpointSnapshot { get; set; }
+
+    /// <summary>
+    /// Invoked outside <see cref="_gate"/> after incomplete Accept records are pinned and before
+    /// their payloads are encoded. Tests only.
+    /// </summary>
+    internal Action? TestWhileCheckpointEncoding { get; set; }
+
+    /// <summary>
     /// Invoked before a journal frame is written. Tests only. A throw leaves no durable frame.
     /// </summary>
     internal Action? TestBeforeFrameAppend { get; set; }
@@ -711,10 +723,17 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     /// Committed in-memory entries are removed only after the replacement file is installed
     /// and successfully reopened. Checkpoint failure does not report success and does not
     /// leave a usable live instance with memory/disk divergence.
-    /// When <see cref="CheckpointCapacity"/> is set, the same encoded image is reserved on the
-    /// process-local ledger before the temp file is created and released only after that extra
-    /// file is gone. A capacity refusal throws <see cref="CheckpointCapacityDeniedException"/>
-    /// without creating the temp.
+    /// The historical image is encoded and durability-flushed outside <see cref="_gate"/>.
+    /// <see cref="_gate"/> is held to capture the snapshot, then again to append the cutover
+    /// delta, flush it, and install the replacement.
+    /// When <see cref="CheckpointCapacity"/> is set, the encoded base image is reserved on the
+    /// process-local ledger before the temp file is created. Cutover bytes increase that
+    /// reservation before they are written. The reservation is released once the extra file
+    /// is gone. A capacity refusal throws <see cref="CheckpointCapacityDeniedException"/>
+    /// without leaving the temp installed.
+    /// A compaction plan that changes during image construction throws
+    /// <see cref="CheckpointCompactionChangedException"/> after the temp file, reservation,
+    /// and payload pins are released. The live journal is not replaced.
     /// </remarks>
     public long CheckpointTruncateCommitted() =>
         CheckpointTruncateCommittedReporting(out _, out _);
@@ -731,108 +750,10 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         omittedCompactionIds = [];
         lock (_checkpointSerial)
         {
-            var capacity = CheckpointCapacity;
-            if (capacity is null)
-            {
-                return CheckpointTruncateCommittedCore(out omittedSequences, out omittedCompactionIds);
-            }
-
-            return CheckpointTruncateCommittedReserved(capacity, out omittedSequences, out omittedCompactionIds);
-        }
-    }
-
-    private long CheckpointTruncateCommittedCore(
-        out ulong[] omittedSequences,
-        out ulong[] omittedCompactionIds)
-    {
-        omittedSequences = [];
-        omittedCompactionIds = [];
-        lock (_gate)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            ThrowIfPendingJournalAppendUnlocked();
-            if (!TryCollectCheckpointPlanUnlocked(
-                    out var incomplete,
-                    out var committedKeys,
-                    out var omittedCompactions))
-            {
-                return 0;
-            }
-
-            var before = _stream.Length;
-            InstallReplacementJournalUnlocked(incomplete, omittedCompactions);
-            PublishCheckpointMemoryUnlocked(committedKeys, omittedCompactions);
-            omittedSequences = committedKeys;
-            omittedCompactionIds = omittedCompactions;
-            return LogCheckpointUnlocked(before);
-        }
-    }
-
-    private long CheckpointTruncateCommittedReserved(
-        CheckpointCapacityReservation capacity,
-        out ulong[] omittedSequences,
-        out ulong[] omittedCompactionIds)
-    {
-        omittedSequences = [];
-        omittedCompactionIds = [];
-        ulong? reservationId = null;
-        var reservedBytes = 0L;
-        try
-        {
-            while (true)
-            {
-                long pendingSize;
-                lock (_gate)
-                {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
-                    ThrowIfPendingJournalAppendUnlocked();
-                    if (!TryCollectCheckpointPlanUnlocked(
-                            out var incomplete,
-                            out var committedKeys,
-                            out var omittedCompactions))
-                    {
-                        return 0;
-                    }
-
-                    var image = MaterializeCheckpointImageUnlocked(incomplete, omittedCompactions);
-                    if (image.Length <= reservedBytes)
-                    {
-                        var before = _stream.Length;
-                        InstallReplacementJournalFromImageUnlocked(image);
-                        PublishCheckpointMemoryUnlocked(committedKeys, omittedCompactions);
-                        omittedSequences = committedKeys;
-                        omittedCompactionIds = omittedCompactions;
-                        return LogCheckpointUnlocked(before);
-                    }
-
-                    pendingSize = image.Length;
-                }
-
-                var additional = pendingSize - reservedBytes;
-                if (reservationId is null)
-                {
-                    reservationId = capacity.TryReserve(pendingSize);
-                    if (reservationId is null)
-                    {
-                        throw new CheckpointCapacityDeniedException(pendingSize);
-                    }
-                }
-                else if (!capacity.TryIncrease(reservationId.Value, additional))
-                {
-                    throw new CheckpointCapacityDeniedException(pendingSize);
-                }
-
-                reservedBytes = pendingSize;
-            }
-        }
-        finally
-        {
-            if (!_retainCheckpointTempReservation && reservationId is ulong id)
-            {
-                capacity.Release(id);
-            }
-
-            _retainCheckpointTempReservation = false;
+            return CheckpointReplaceCommitted(
+                CheckpointCapacity,
+                out omittedSequences,
+                out omittedCompactionIds);
         }
     }
 
@@ -903,40 +824,6 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             _stream.Length,
             _nextSequence);
         return released;
-    }
-
-    private byte[] MaterializeCheckpointImageUnlocked(SequenceState[] incomplete, ulong[] omittedCompactionIds)
-    {
-        using var buffer = new MemoryStream();
-        WriteCheckpointBodyUnlocked(buffer, incomplete, omittedCompactionIds);
-        return buffer.ToArray();
-    }
-
-    private void WriteCheckpointBodyUnlocked(
-        Stream destination,
-        SequenceState[] incomplete,
-        ulong[] omittedCompactionIds)
-    {
-        var fence = ArticleJournalFrameCodec.EncodeSequenceFence(_nextSequence);
-        destination.Write(fence, 0, fence.Length);
-        if (_nextSegmentId > 0)
-        {
-            var segmentFence = ArticleJournalFrameCodec.EncodeSegmentIdFence(_nextSegmentId);
-            destination.Write(segmentFence, 0, segmentFence.Length);
-        }
-
-        foreach (var state in incomplete)
-        {
-            var acceptFrame = ArticleJournalFrameCodec.EncodeAccept(state.IncompleteAccept);
-            destination.Write(acceptFrame, 0, acceptFrame.Length);
-            if (state.PhysicalWritten is { } physicalWritten)
-            {
-                var physicalFrame = ArticleJournalFrameCodec.EncodePhysicalWritten(physicalWritten);
-                destination.Write(physicalFrame, 0, physicalFrame.Length);
-            }
-        }
-
-        WriteOpenCompactionFramesUnlocked(destination, omittedCompactionIds);
     }
 
     /// <inheritdoc />
@@ -1523,25 +1410,13 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     }
 
     /// <summary>
-    /// Writes a flushed temporary replacement, installs it, and reopens it.
-    /// Does not mutate <see cref="_bySequence"/>. On failure before successful reopen of a
-    /// replaced file, restores the previous journal stream when possible; otherwise marks
-    /// the instance disposed/unusable.
+    /// Installs a temporary journal that has already been durability-flushed.
+    /// The temp stream must be closed. On failure before a successful reopen of a replaced
+    /// file, restores the previous journal stream when possible; otherwise marks the instance
+    /// disposed/unusable. Does not mutate <see cref="_bySequence"/>.
     /// </summary>
-    private void InstallReplacementJournalUnlocked(SequenceState[] incomplete, ulong[] omittedCompactionIds) =>
-        InstallReplacementJournalCoreUnlocked(temp => WriteCheckpointBodyUnlocked(temp, incomplete, omittedCompactionIds));
-
-    private void InstallReplacementJournalFromImageUnlocked(byte[] image) =>
-        InstallReplacementJournalCoreUnlocked(temp => temp.Write(image, 0, image.Length));
-
-    private void InstallReplacementJournalCoreUnlocked(Action<FileStream> writeBody)
+    private void InstallFlushedCheckpointTempUnlocked(string tempPath)
     {
-        var directory = Path.GetDirectoryName(_journalPath)
-            ?? throw new InvalidOperationException("Journal path has no directory.");
-        var tempPath = Path.Combine(
-            directory,
-            $".{JournalFileName}.{Guid.NewGuid():N}.tmp");
-
         var oldStream = _stream;
         var oldStreamClosed = false;
         var replaced = false;
@@ -1549,18 +1424,6 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
         try
         {
-            using (var temp = new FileStream(
-                       tempPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None,
-                       bufferSize: 64 * 1024,
-                       FileOptions.None))
-            {
-                writeBody(temp);
-                temp.Flush(flushToDisk: true);
-            }
-
             CheckpointTestFault?.Invoke(CheckpointFaultPoint.AfterTempFlushed);
 
             oldStream.Dispose();

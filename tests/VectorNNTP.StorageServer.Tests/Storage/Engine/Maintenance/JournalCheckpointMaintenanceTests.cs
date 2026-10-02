@@ -187,6 +187,49 @@ public sealed class JournalCheckpointMaintenanceTests
     }
 
     [Fact]
+    public async Task CompactionChangeDuringCheckpoint_IsDeferred_AndLaterCheckpointSucceeds()
+    {
+        using var dir = TempStorageDir.Create();
+        await using var engine = FileArticleStorageEngine.Open(dir.Options);
+        var committed = await CommitAsync(engine, "<mnt-ck-compaction-drift@seg.test>");
+        var encodes = 0;
+        engine.Journal.TestWhileCheckpointEncoding = () =>
+        {
+            var n = Interlocked.Increment(ref encodes);
+            if (n > 1)
+            {
+                throw new InvalidOperationException("checkpoint retried after compaction drift");
+            }
+
+            var compactionId = engine.Journal.AllocateCompactionId();
+            Assert.Equal(
+                JournalAppendOutcome.Applied,
+                Wait(engine.Journal.AppendCompactionBeginAsync(
+                    new JournalCompactionBeginRecord(1, compactionId, new SegmentId(9), 1),
+                    CancellationToken.None)));
+        };
+        var sink = new CollectingSink();
+        using var logs = CreateLoggerFactory(sink);
+        var coordinator = CreateCoordinator(engine, thresholdBytes: 1, logs.CreateLogger<StorageMaintenanceCoordinator>());
+
+        var deferred = await coordinator.RunOnceAsync(CancellationToken.None, maintenanceRunId: 12);
+
+        Assert.NotEqual(StorageMaintenanceOutcome.Failed, deferred.Outcome);
+        Assert.Equal(1, encodes);
+        Assert.True(engine.Journal.TryGetSequenceRetention(committed, out var stillCommitted));
+        Assert.True(stillCommitted.IndexCommitted);
+        Assert.Contains(sink.Events, static e => IsEvent(e, 3029));
+        Assert.DoesNotContain(sink.Events, static e => e.Level == LogEventLevel.Error);
+
+        engine.Journal.TestWhileCheckpointEncoding = null;
+        var completed = await coordinator.RunOnceAsync(CancellationToken.None, maintenanceRunId: 13);
+
+        Assert.NotEqual(StorageMaintenanceOutcome.Failed, completed.Outcome);
+        Assert.False(engine.Journal.TryGetSequenceRetention(committed, out _));
+        Assert.Contains(sink.Events, static e => IsEvent(e, 3022));
+    }
+
+    [Fact]
     public async Task CheckpointIOException_FailsTheMaintenanceRun_AndReleasesNoReservation()
     {
         using var dir = TempStorageDir.Create();
@@ -324,6 +367,16 @@ public sealed class JournalCheckpointMaintenanceTests
         _ = start;
         _ = expectedLength;
         throw new IOException("flush-failed");
+    }
+
+    /// <summary>
+    /// Checkpoint test hooks are synchronous. Blocking here is the coordination, not a sleep.
+    /// </summary>
+    private static T Wait<T>(ValueTask<T> task)
+    {
+#pragma warning disable xUnit1031
+        return task.AsTask().GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
     }
 
     private static bool IsEvent(LogEvent logEvent, int eventId) =>
