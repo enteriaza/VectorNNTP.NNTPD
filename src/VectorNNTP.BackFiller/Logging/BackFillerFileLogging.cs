@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using Serilog.Events;
@@ -7,14 +8,15 @@ using VectorNNTP.NNTPD.Configuration;
 namespace VectorNNTP.BackFiller.Logging;
 
 /// <summary>
-/// Resolves <see cref="BackFillerOptions.LogDirectory"/> and applies the fixed BackFiller
+/// Resolves <see cref="BackFillerOptions.LogDirectory"/> and applies the BackFiller
 /// Serilog sink graph in code (Native AOT / single-file safe).
 /// </summary>
 /// <remarks>
-/// Operational Console / Async / File settings match production <c>VectorNNTP.BackFiller.json</c>
-/// <c>Serilog</c> section. The File path is never taken from JSON: it is always
-/// <see cref="RollingFilePath"/> under the resolved log directory. Operator-configurable
-/// location remains <see cref="BackFillerOptions.LogDirectory"/>.
+/// Console, Async, and File settings are fixed in this type. The file path comes from
+/// <see cref="BackFillerOptions.LogDirectory"/>. The minimum level comes from
+/// <see cref="BackFillerOptions.LogLevel"/>. Daily retention comes from
+/// <see cref="BackFillerOptions.LogRetentionDays"/>. A <c>Serilog</c> configuration
+/// section is not read.
 /// </remarks>
 internal static class BackFillerFileLogging
 {
@@ -36,7 +38,7 @@ internal static class BackFillerFileLogging
     public const string SinkOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
-    /// <summary>Restricted minimum level for Console and File sinks.</summary>
+    /// <summary>Restricted minimum level for Console and File sinks when the configured level is at least Debug.</summary>
     public const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
 
     /// <summary>Serilog.Sinks.Async buffer size.</summary>
@@ -45,15 +47,12 @@ internal static class BackFillerFileLogging
     /// <summary>Serilog.Sinks.Async <c>blockWhenFull</c>.</summary>
     public const bool AsyncBlockWhenFull = true;
 
-    /// <summary>File sink uncompressed retention count.</summary>
-    public const int RetainedFileCountLimit = 1;
-
     /// <summary>File sink buffering.</summary>
     public const bool FileBuffered = true;
 
     /// <summary>
-    /// Serilog File <c>flushToDiskInterval</c>. Matches production <c>VectorNNTP.BackFiller.json</c>
-    /// (<c>00:00:01</c>). The host logger is built here, not by <c>ReadFrom.Configuration</c>.
+    /// Serilog File <c>flushToDiskInterval</c> of one second. The host logger is built here,
+    /// not by <c>ReadFrom.Configuration</c>.
     /// </summary>
     public static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);
 
@@ -109,11 +108,23 @@ internal static class BackFillerFileLogging
     }
 
     /// <summary>
-    /// Applies production-equivalent minimum levels, enrichers, Console, and Async+File sinks.
+    /// Applies the code-defined BackFiller sink graph.
     /// </summary>
     /// <remarks>
-    /// Does not use <c>Serilog.Settings.Configuration</c>, assembly scanning, or string-based hooks.
+    /// <para>
+    /// Does not call <c>ReadFrom.Configuration</c> and does not read a <c>Serilog</c> section.
+    /// <see cref="BackFillerOptions.LogDirectory"/>, <see cref="BackFillerOptions.LogLevel"/>, and
+    /// <see cref="BackFillerOptions.LogRetentionDays"/> are read from the BackFiller section before
+    /// sinks are created.
+    /// </para>
+    /// <para>
+    /// Microsoft, Microsoft.Hosting.Lifetime, and System level overrides stay fixed in code.
+    /// The configured level is the default minimum and the <c>VectorNNTP.BackFiller</c> minimum.
+    /// </para>
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// <c>BackFiller:LogLevel</c> or <c>BackFiller:LogRetentionDays</c> is present and invalid.
+    /// </exception>
     public static void ConfigureLogger(
         LoggerConfiguration loggerConfiguration,
         IConfiguration configuration,
@@ -122,32 +133,63 @@ internal static class BackFillerFileLogging
         ArgumentNullException.ThrowIfNull(loggerConfiguration);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        var minimumLevel = BackFillerLogLevelParser.ParseOrDefault(
+            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogLevel)}"]);
+        var retainedFileCountLimit = ReadLogRetentionDays(configuration);
         var path = EnsureRollingFilePath(configuration, applicationBaseDirectory);
+        var sinkLevel = minimumLevel < SinkMinimumLevel ? minimumLevel : SinkMinimumLevel;
 
         loggerConfiguration
-            .MinimumLevel.Information()
+            .MinimumLevel.Is(minimumLevel)
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
-            .MinimumLevel.Override("VectorNNTP.BackFiller", LogEventLevel.Debug)
+            .MinimumLevel.Override("VectorNNTP.BackFiller", minimumLevel)
             .Enrich.FromLogContext()
             .Enrich.WithProperty("Application", ApplicationName)
             .WriteTo.Console(
-                restrictedToMinimumLevel: SinkMinimumLevel,
+                restrictedToMinimumLevel: sinkLevel,
                 outputTemplate: SinkOutputTemplate)
             .WriteTo.Async(
                 a => a.File(
                     path,
-                    restrictedToMinimumLevel: SinkMinimumLevel,
+                    restrictedToMinimumLevel: sinkLevel,
                     outputTemplate: SinkOutputTemplate,
                     fileSizeLimitBytes: null,
                     buffered: FileBuffered,
                     flushToDiskInterval: FileFlushToDiskInterval,
                     rollingInterval: RollingInterval.Day,
                     rollOnFileSizeLimit: RollOnFileSizeLimit,
-                    retainedFileCountLimit: RetainedFileCountLimit,
+                    retainedFileCountLimit: retainedFileCountLimit,
                     hooks: BackFillerSerilogHooks.DailyGzipFastest),
                 bufferSize: AsyncBufferSize,
                 blockWhenFull: AsyncBlockWhenFull);
+    }
+
+    /// <summary>
+    /// Reads <c>BackFiller:LogRetentionDays</c>, or the default when the key is absent.
+    /// </summary>
+    /// <param name="configuration">Application configuration already loaded for the host.</param>
+    /// <returns>The File sink retention count.</returns>
+    /// <exception cref="InvalidOperationException">The configured value is not an integer in range.</exception>
+    public static int ReadLogRetentionDays(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var text = configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogRetentionDays)}"];
+        if (text is null)
+        {
+            return BackFillerOptions.DefaultLogRetentionDays;
+        }
+
+        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var days)
+            || days < BackFillerOptions.MinimumLogRetentionDays
+            || days > BackFillerOptions.MaximumLogRetentionDays)
+        {
+            throw new InvalidOperationException(
+                $"BackFiller:LogRetentionDays '{text}' is not valid. Use an integer in the range {BackFillerOptions.MinimumLogRetentionDays}–{BackFillerOptions.MaximumLogRetentionDays}.");
+        }
+
+        return days;
     }
 }

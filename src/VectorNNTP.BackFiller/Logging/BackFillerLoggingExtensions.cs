@@ -14,10 +14,10 @@ public static partial class BackFillerLoggingExtensions
     /// </summary>
     /// <remarks>
     /// Used by the bootstrap logger. Host Console/File sinks use
-    /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/> (production <c>VectorNNTP.BackFiller.json</c>).
+    /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/>.
     /// </remarks>
     public const string ConsoleOutputTemplate =
-        "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
+        "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
     /// <summary>
     /// Creates an early bootstrap logger used before the Generic Host is built.
@@ -70,7 +70,9 @@ public static partial class BackFillerLoggingExtensions
     /// </para>
     /// <para>
     /// Host sinks are registered explicitly in <see cref="BackFillerFileLogging.ConfigureLogger"/>
-    /// (Native AOT / single-file safe). <c>Serilog.Settings.Configuration</c> is not used.
+    /// from <c>BackFiller:LogDirectory</c>, <c>BackFiller:LogLevel</c>, and
+    /// <c>BackFiller:LogRetentionDays</c>. <c>ReadFrom.Configuration</c> is not used, and a
+    /// <c>Serilog</c> configuration section cannot change the pipeline.
     /// </para>
     /// <para>
     /// Console formatting is owned by Serilog. journald collects Serilog console stdout under

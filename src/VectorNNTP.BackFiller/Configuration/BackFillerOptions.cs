@@ -62,6 +62,18 @@ public sealed class BackFillerOptions
     /// <summary>Default relative log directory.</summary>
     public const string DefaultLogDirectory = "logs";
 
+    /// <summary>Default Serilog minimum level when <see cref="LogLevel"/> is omitted.</summary>
+    public const string DefaultLogLevel = "Debug";
+
+    /// <summary>Default daily file retention when <see cref="LogRetentionDays"/> is omitted.</summary>
+    public const int DefaultLogRetentionDays = 1;
+
+    /// <summary>Minimum accepted <see cref="LogRetentionDays"/>.</summary>
+    public const int MinimumLogRetentionDays = 1;
+
+    /// <summary>Maximum accepted <see cref="LogRetentionDays"/>.</summary>
+    public const int MaximumLogRetentionDays = 3650;
+
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
 
@@ -165,10 +177,30 @@ public sealed class BackFillerOptions
     /// Old key: <c>DirLogs</c>. Relative paths resolve through Common
     /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
     /// <see cref="AppContext.BaseDirectory"/>, not the process working directory.
-    /// Explicit Serilog configuration creates the rolling File sink under this directory
-    /// at startup (<c>VectorNNTP.BackFiller-.log</c>).
+    /// The Serilog file sink is created under this directory at startup
+    /// (<c>VectorNNTP.BackFiller-.log</c>). This is the only log-directory setting.
     /// </remarks>
     public string LogDirectory { get; set; } = DefaultLogDirectory;
+
+    /// <summary>
+    /// Gets or sets the Serilog minimum level.
+    /// </summary>
+    /// <remarks>
+    /// Accepted values are <c>Verbose</c>, <c>Debug</c>, <c>Information</c>, <c>Warning</c>,
+    /// <c>Error</c>, and <c>Fatal</c>. This is not a <c>Serilog</c> configuration key.
+    /// The default matches the previous application and sink floor (<c>Debug</c>).
+    /// </remarks>
+    public string LogLevel { get; set; } = DefaultLogLevel;
+
+    /// <summary>
+    /// Gets or sets how many daily log files Serilog retains.
+    /// </summary>
+    /// <remarks>
+    /// Applied as the File sink <c>retainedFileCountLimit</c> with daily rolling.
+    /// Range <see cref="MinimumLogRetentionDays"/>–<see cref="MaximumLogRetentionDays"/>.
+    /// This is not a <c>Serilog:WriteTo</c> setting.
+    /// </remarks>
+    public int LogRetentionDays { get; set; } = DefaultLogRetentionDays;
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.

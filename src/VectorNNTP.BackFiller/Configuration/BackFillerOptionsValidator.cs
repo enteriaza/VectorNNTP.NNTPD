@@ -41,6 +41,7 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateBindPortTls(options, failures);
         ValidateAcme(options, failures);
         ValidateDirectories(options, failures);
+        ValidateLogging(options, failures);
         ValidateShutdown(options, failures);
         ValidateListener(options, failures);
         ValidateAccountRefresh(options, failures);
@@ -164,6 +165,22 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         if (string.IsNullOrWhiteSpace(options.LogDirectory))
         {
             failures.Add("BackFiller:LogDirectory is required and cannot be empty (old key: DirLogs).");
+        }
+    }
+
+    private static void ValidateLogging(BackFillerOptions options, List<string> failures)
+    {
+        if (!BackFillerLogLevelParser.TryParse(options.LogLevel, out _))
+        {
+            failures.Add(
+                "BackFiller:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.");
+        }
+
+        if (options.LogRetentionDays is < BackFillerOptions.MinimumLogRetentionDays
+            or > BackFillerOptions.MaximumLogRetentionDays)
+        {
+            failures.Add(
+                $"BackFiller:LogRetentionDays must be an integer in the range {BackFillerOptions.MinimumLogRetentionDays}–{BackFillerOptions.MaximumLogRetentionDays}.");
         }
     }
 

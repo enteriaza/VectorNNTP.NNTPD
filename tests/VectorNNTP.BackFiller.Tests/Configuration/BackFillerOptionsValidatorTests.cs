@@ -18,6 +18,39 @@ public sealed class BackFillerOptionsValidatorTests
         Assert.True(result.Succeeded);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(3651)]
+    public void Validate_fails_when_log_retention_days_is_out_of_range(int days)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.LogRetentionDays = days;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static failure => failure.Contains("BackFiller:LogRetentionDays", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Trace")]
+    [InlineData("Critical")]
+    [InlineData("nope")]
+    [InlineData("")]
+    public void Validate_fails_when_log_level_is_not_a_serilog_level(string level)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.LogLevel = level;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static failure => failure.Contains(
+                "BackFiller:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.",
+                StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_fails_when_server_id_is_missing()
     {
