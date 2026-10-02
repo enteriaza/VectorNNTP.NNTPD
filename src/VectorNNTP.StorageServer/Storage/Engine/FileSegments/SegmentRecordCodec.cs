@@ -104,6 +104,27 @@ internal static class SegmentRecordCodec
 
     public const int MaxRecordLength = FixedHeaderLength + MaxArtDataBytes + 4;
 
+    private static readonly AsyncLocal<EncodeCallScope?> EncodeScope = new();
+
+    /// <summary>
+    /// Times <see cref="Encode"/> has been entered on this execution context since <see cref="ResetEncodeCalls"/>.
+    /// Other tests do not affect the count. The successful production append path does not call <see cref="Encode"/>.
+    /// </summary>
+    internal static long EncodeCalls => EncodeScope.Value?.Count ?? 0;
+
+    /// <summary>Starts or zeroes <see cref="EncodeCalls"/> for this execution context.</summary>
+    internal static void ResetEncodeCalls()
+    {
+        var scope = EncodeScope.Value;
+        if (scope is null)
+        {
+            scope = new EncodeCallScope();
+            EncodeScope.Value = scope;
+        }
+
+        scope.Count = 0;
+    }
+
     /// <summary>Computes on-disk record length for an article of <paramref name="artSize"/>.</summary>
     public static int RecordLengthForArtSize(int artSize)
     {
@@ -112,12 +133,20 @@ internal static class SegmentRecordCodec
         return FixedHeaderLength + artSize + 4;
     }
 
-    /// <summary>Encodes one physical record. Returns the buffer and copies identity out.</summary>
+    /// <summary>
+    /// Encodes one physical record into a new buffer.
+    /// Production append does not call this; it writes the header, the existing payload span, and the CRC.
+    /// </summary>
     public static byte[] Encode(
         ArticleId artId,
         ulong artHash,
         ReadOnlySpan<byte> artData)
     {
+        var encodeScope = EncodeScope.Value;
+        if (encodeScope is not null)
+        {
+            encodeScope.Count++;
+        }
         var artSize = artData.Length;
         if (artSize is < 1 or > MaxArtDataBytes)
         {
@@ -125,19 +154,89 @@ internal static class SegmentRecordCodec
         }
 
         var total = RecordLengthForArtSize(artSize);
+        var allocStart = PhysicalProofProbe.MarkAppend();
         var buffer = new byte[total];
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)total);
-        buffer[4] = SchemaVersion;
-        buffer[5] = 0;
-        buffer[6] = 0;
-        buffer[7] = 0;
-        artId.CopyTo(buffer.AsSpan(8, ArticleId.Length));
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(8 + ArticleId.Length, 8), artHash);
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(8 + ArticleId.Length + 8, 4), artSize);
+        PhysicalProofProbe.AddAppendEncodeAlloc(allocStart, total);
+        WriteHeader(buffer.AsSpan(0, FixedHeaderLength), artId, artHash, artSize);
+        var copyStart = PhysicalProofProbe.MarkAppend();
         artData.CopyTo(buffer.AsSpan(FixedHeaderLength, artSize));
+        PhysicalProofProbe.AddAppendEncodeCopy(copyStart);
+        var crcStart = PhysicalProofProbe.MarkAppend();
         var crc = Crc32.HashToUInt32(buffer.AsSpan(0, total - 4));
+        PhysicalProofProbe.AddAppendEncodeCrc(crcStart);
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(total - 4, 4), crc);
         return buffer;
+    }
+
+    /// <summary>
+    /// Fills a 52-byte header and 4-byte CRC for one record.
+    /// Does not copy the payload and does not allocate a payload buffer.
+    /// <paramref name="framedHash"/> is XxHash3 over the header, payload, and CRC.
+    /// </summary>
+    internal static void PrepareProductionFrame(
+        ArticleId artId,
+        ulong artHash,
+        ReadOnlySpan<byte> artData,
+        Span<byte> header,
+        Span<byte> crc,
+        out ulong framedHash)
+    {
+        if (header.Length != FixedHeaderLength)
+        {
+            throw new ArgumentException("Header buffer must be the fixed header length.", nameof(header));
+        }
+
+        if (crc.Length != 4)
+        {
+            throw new ArgumentException("CRC buffer must be 4 bytes.", nameof(crc));
+        }
+
+        WriteHeader(header, artId, artHash, artData.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(crc, Checksum(header, artData));
+        framedHash = FramedHash(header, artData, crc);
+    }
+
+    /// <summary>Writes the fixed record header, including the full-record length.</summary>
+    internal static void WriteHeader(Span<byte> header, ArticleId artId, ulong artHash, int artSize)
+    {
+        if (header.Length != FixedHeaderLength)
+        {
+            throw new ArgumentException("Header buffer must be the fixed header length.", nameof(header));
+        }
+
+        var total = RecordLengthForArtSize(artSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)total);
+        header[4] = SchemaVersion;
+        header[5] = 0;
+        header[6] = 0;
+        header[7] = 0;
+        artId.CopyTo(header.Slice(8, ArticleId.Length));
+        BinaryPrimitives.WriteUInt64LittleEndian(header.Slice(8 + ArticleId.Length, 8), artHash);
+        BinaryPrimitives.WriteInt32LittleEndian(header.Slice(8 + ArticleId.Length + 8, 4), artSize);
+    }
+
+    /// <summary>CRC32 over the header and then the article payload, matching a contiguous record checksum.</summary>
+    internal static uint Checksum(ReadOnlySpan<byte> header, ReadOnlySpan<byte> artData)
+    {
+        var crc = new Crc32();
+        crc.Append(header);
+        crc.Append(artData);
+        return crc.GetCurrentHashAsUInt32();
+    }
+
+    /// <summary>XxHash3 over the header, payload, and CRC, matching a contiguous framed record.</summary>
+    internal static ulong FramedHash(ReadOnlySpan<byte> header, ReadOnlySpan<byte> artData, ReadOnlySpan<byte> crc)
+    {
+        var hash = new XxHash3();
+        hash.Append(header);
+        hash.Append(artData);
+        hash.Append(crc);
+        return hash.GetCurrentHashAsUInt64();
+    }
+
+    private sealed class EncodeCallScope
+    {
+        public long Count { get; set; }
     }
 
     /// <summary>Decode error classification for active-tail repair vs fail-closed.</summary>
@@ -190,7 +289,9 @@ internal static class SegmentRecordCodec
 
         var record = span[..recordLength];
         var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(record.Slice(recordLength - 4, 4));
+        var crcStart = PhysicalProofProbe.Mark();
         var actualCrc = Crc32.HashToUInt32(record[..(recordLength - 4)]);
+        PhysicalProofProbe.AddCrc(crcStart);
         if (expectedCrc != actualCrc)
         {
             error = DecodeError.CorruptChecksum;
@@ -203,17 +304,25 @@ internal static class SegmentRecordCodec
             return false;
         }
 
+        var headerStart = PhysicalProofProbe.Mark();
         artId = ArticleId.FromSpan(record.Slice(8, ArticleId.Length));
         artHash = BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(8 + ArticleId.Length, 8));
         artSize = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(8 + ArticleId.Length + 8, 4));
-        if (artSize is < 1 or > MaxArtDataBytes || FixedHeaderLength + artSize + 4 != recordLength)
+        var headerValid = artSize is >= 1 and <= MaxArtDataBytes && FixedHeaderLength + artSize + 4 == recordLength;
+        PhysicalProofProbe.AddHeader(headerStart);
+        if (!headerValid)
         {
             error = DecodeError.Corrupt;
             return false;
         }
 
+        var copyStart = PhysicalProofProbe.Mark();
         var payload = record.Slice(FixedHeaderLength, artSize).ToArray();
-        if (!ArticleStorageIntegrity.TryProve(payload, artId, artHash, artSize))
+        PhysicalProofProbe.AddCopy(copyStart, artSize);
+        PhysicalProofProbe.PushInner();
+        var proved = ArticleStorageIntegrity.TryProve(payload, artId, artHash, artSize);
+        PhysicalProofProbe.PopLayer();
+        if (!proved)
         {
             error = DecodeError.Corrupt;
             return false;
@@ -252,21 +361,91 @@ internal static class SegmentRecordCodec
             return false;
         }
 
+        var artIdStart = PhysicalProofProbe.Mark();
         if (expectedArtId is { } wantId && wantId != artId)
         {
+            PhysicalProofProbe.AddArtIdCompare(artIdStart);
             return false;
         }
 
+        PhysicalProofProbe.AddArtIdCompare(artIdStart);
+        var artHashStart = PhysicalProofProbe.Mark();
         if (expectedArtHash is { } wantHash && wantHash != artHash)
         {
+            PhysicalProofProbe.AddArtHashCompare(artHashStart);
             return false;
         }
 
+        PhysicalProofProbe.AddArtHashCompare(artHashStart);
+        var artSizeStart = PhysicalProofProbe.Mark();
         if (expectedArtSize is { } wantSize && wantSize != artSize)
+        {
+            PhysicalProofProbe.AddArtSizeCompare(artSizeStart);
+            return false;
+        }
+
+        PhysicalProofProbe.AddArtSizeCompare(artSizeStart);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Proves one complete physical record against the expected Accept identity.
+    /// CRC, schema, header identity, XxHash3, and Message-ID each run once over
+    /// <paramref name="record"/>. The payload is not copied.
+    /// </summary>
+    internal static bool TryProveExactRecord(
+        ReadOnlySpan<byte> record,
+        ArticleId expectedArtId,
+        ulong expectedArtHash,
+        int expectedArtSize)
+    {
+        if (record.Length < MinimumRecordLength || record.Length > MaxRecordLength)
         {
             return false;
         }
 
-        return true;
+        var declaredLength = BinaryPrimitives.ReadUInt32LittleEndian(record);
+        if (declaredLength != (uint)record.Length)
+        {
+            return false;
+        }
+
+        var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(record.Slice(record.Length - 4, 4));
+        if (Crc32.HashToUInt32(record[..^4]) != expectedCrc)
+        {
+            return false;
+        }
+
+        if (record[4] != SchemaVersion || record[5] != 0 || record[6] != 0 || record[7] != 0)
+        {
+            return false;
+        }
+
+        var artId = ArticleId.FromSpan(record.Slice(8, ArticleId.Length));
+        var artHash = BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(8 + ArticleId.Length, 8));
+        var artSize = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(8 + ArticleId.Length + 8, 4));
+        if (artSize is < 1 or > MaxArtDataBytes || FixedHeaderLength + artSize + 4 != record.Length)
+        {
+            return false;
+        }
+
+        if (artId != expectedArtId || artHash != expectedArtHash || artSize != expectedArtSize)
+        {
+            return false;
+        }
+
+        var payload = record.Slice(FixedHeaderLength, artSize);
+        if (XxHash3.HashToUInt64(payload) != expectedArtHash)
+        {
+            return false;
+        }
+
+        if (!ArticleStorageIntegrity.TryExtractMessageIdValue(payload, out var messageId))
+        {
+            return false;
+        }
+
+        return ArticleId.FromMessageId(messageId) == expectedArtId;
     }
 }

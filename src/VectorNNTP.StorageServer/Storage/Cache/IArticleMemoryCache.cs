@@ -58,3 +58,25 @@ public enum ArticleMemoryCachePutOutcome : byte
     /// <summary>Same ArtId with conflicting ArtHash/ArtSize/ArtData; existing entry kept.</summary>
     RejectedConflict = 6,
 }
+
+/// <summary>
+/// Cache that can take ownership of a payload the caller uniquely owns.
+/// </summary>
+/// <remarks>
+/// <see cref="IArticleMemoryCache.Put"/> still copies caller-owned records.
+/// <see cref="AdoptOwned"/> stores the supplied buffer and does not copy it.
+/// </remarks>
+internal interface IArticleMemoryCacheAdoption
+{
+    /// <summary>
+    /// Stores <paramref name="record"/> without copying its payload.
+    /// </summary>
+    /// <remarks>
+    /// The caller transfers ownership of the underlying payload to the cache and must not
+    /// subsequently mutate, reuse, or retain ownership of that payload.
+    /// After <see cref="ArticleMemoryCachePutOutcome.Inserted"/>, the cache owns the buffer.
+    /// A disabled, invalid, oversized, idempotent, or conflicting result does not retain the
+    /// candidate. An exception before publication does not retain it either.
+    /// </remarks>
+    ArticleMemoryCachePutOutcome AdoptOwned(in ArticleRecord record);
+}

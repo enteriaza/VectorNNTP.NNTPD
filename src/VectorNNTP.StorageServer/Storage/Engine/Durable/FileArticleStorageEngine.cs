@@ -81,6 +81,15 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <see cref="RecoverAsync"/>, any still-incomplete sequences are re-linked into the pending
 /// queue when background persist is enabled.
 /// </para>
+/// <para>
+/// One physical worker drains whatever is already queued. Accept frames are durable before a
+/// sequence is queued, so the worker does not append them again. A drain writes the batch's
+/// segment records and flushes that file once, then its PhysicalWritten frames and flushes the
+/// journal once, then its Present frames and flushes the index once, then its IndexCommitted
+/// frames and flushes the journal once. Those in-memory states advance only after the covering
+/// flush returns. Work that arrives during a drain waits for the next one. Startup recovery
+/// still persists one sequence at a time.
+/// </para>
 /// </remarks>
 public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
 {
@@ -109,6 +118,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly int _capacityFreeCapacity;
     private int _usagePressureLatched;
     private readonly object _gate = new();
+
+    /// <summary>
+    /// Protects <see cref="_persistRetryAttempts"/>, <see cref="_persistBlockedRetryAttempts"/>,
+    /// and <see cref="_acceptWithoutPhysicalBytes"/> only.
+    /// Lock order is <see cref="_gate"/> then <see cref="_retryStateGate"/>.
+    /// No path acquires <see cref="_gate"/> while holding <see cref="_retryStateGate"/>.
+    /// </summary>
+    private readonly object _retryStateGate = new();
+
     private readonly Queue<ulong> _pendingSequences = new();
     private readonly HashSet<ulong> _pendingSet = new();
     private readonly HashSet<ulong> _persistInFlight = new();
@@ -128,6 +146,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private long _physicalAppendCount;
     private long _persistRetryScheduledCount;
     private long _persistBlockedRetryScheduledCount;
+    private long _persistBatchCount;
+    private int _lastPersistBatchArticleCount;
+    private long _lastPersistBatchByteCount;
     private int _disposed;
     private int _suspendBackgroundPersist;
 
@@ -208,6 +229,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Number of SATA appends performed by this engine instance (tests).</summary>
     public long PhysicalAppendCount => Volatile.Read(ref _physicalAppendCount);
+
+    /// <summary>Number of worker drains that assembled a persistence batch. Tests only.</summary>
+    internal long PersistBatchCount => Volatile.Read(ref _persistBatchCount);
+
+    /// <summary>Article count of the most recent worker batch. Tests only.</summary>
+    internal int LastPersistBatchArticleCount => Volatile.Read(ref _lastPersistBatchArticleCount);
+
+    /// <summary>Sum of ArtSize for the most recent worker batch. Tests only.</summary>
+    internal long LastPersistBatchByteCount => Volatile.Read(ref _lastPersistBatchByteCount);
 
     /// <summary>Segment-volume capacity, or null when admission is disabled.</summary>
     internal CapacityVolume? SegmentCapacity => _segmentCapacity;
@@ -1193,129 +1223,72 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         var segmentBytes = 0L;
         var journalBytes = 0L;
         var indexBytes = 0L;
+        IndexCommittedProbe.BeginAccept();
+        var acceptWait = IndexCommittedProbe.MarkAccept();
         lock (_gate)
         {
-            if (_index.TryGet(record.ArtId, out var existing)
-                && existing.State == ArticleStorageState.Present)
-            {
-                if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
-                {
-                    // Idempotent duplicate: best-effort LRU refresh; never replace with conflict.
-                    _ = _articleCache.Put(in record);
-                    return Task.FromResult(ArticleAcceptResult.Duplicate(record.ArtId));
-                }
-
-                return Task.FromResult(ArticleAcceptResult.Conflict(record.ArtId));
-            }
-
-            if (_capacityAdmissionEnabled)
-            {
-                segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-                journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
-                indexBytes = ArticleIndexRecordCodec.RecordLength;
-                if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
-                {
-                    return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
-                }
-
-                reservedSegment = true;
-                reservedJournal = true;
-                reservedIndex = true;
-            }
-
+            IndexCommittedProbe.AddAcceptWait(acceptWait);
+            var holdStart = IndexCommittedProbe.MarkAccept();
             try
             {
-                if (!_journal.TryAppendNewAccept(
-                        record.ArtId,
-                        record.ArtHash,
-                        record.ArtSize,
-                        _timeProvider.GetUtcNow(),
-                        artData,
-                        out journalRecord!,
-                        out var rejectOutcome))
+                if (_index.TryGet(record.ArtId, out var existing)
+                    && existing.State == ArticleStorageState.Present)
                 {
-                    RollbackUnboundAccept(
-                        reservedSegment,
-                        reservedJournal,
-                        reservedIndex,
-                        segmentBytes,
-                        journalBytes,
-                        indexBytes);
-                    reservedSegment = false;
-                    reservedJournal = false;
-                    reservedIndex = false;
-
-                    return Task.FromResult(rejectOutcome switch
+                    if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
                     {
-                        ArticleAcceptOutcome.Duplicate => ArticleAcceptResult.Duplicate(record.ArtId),
-                        ArticleAcceptOutcome.Conflict => ArticleAcceptResult.Conflict(record.ArtId),
-                        ArticleAcceptOutcome.RejectedInvalid =>
-                            ArticleAcceptResult.RejectedInvalid(record.ArtId, "integrity"),
-                        _ => ArticleAcceptResult.RejectedPressure(record.ArtId),
-                    });
+                        // Idempotent duplicate: best-effort LRU refresh; never replace with conflict.
+                        _ = _articleCache.Put(in record);
+                        return Task.FromResult(ArticleAcceptResult.Duplicate(record.ArtId));
+                    }
+
+                    return Task.FromResult(ArticleAcceptResult.Conflict(record.ArtId));
                 }
 
-                if (reservedSegment)
+                if (_capacityAdmissionEnabled)
                 {
-                    RequireSegmentVolume().WithLedger(ledger =>
+                    segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+                    journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
+                    indexBytes = ArticleIndexRecordCodec.RecordLength;
+                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
                     {
-                        ledger.BindSequence(journalRecord.Sequence, segmentBytes);
-                        return 0;
-                    });
-                    reservedSegment = false;
+                        return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
+                    }
+
+                    reservedSegment = true;
+                    reservedJournal = true;
+                    reservedIndex = true;
                 }
 
-                if (reservedJournal)
+                try
                 {
-                    RequireControlVolume().WithLedger(ledger =>
+                    var appendStart = IndexCommittedProbe.MarkAccept();
+                    IndexCommittedProbe.EnterAcceptAppend();
+                    bool appended;
+                    ArticleAcceptOutcome rejectOutcomeCaptured = default;
+                    try
                     {
-                        ledger.BindJournalSequence(journalRecord.Sequence, journalBytes);
-                        return 0;
-                    });
-                    reservedJournal = false;
-                }
-
-                if (reservedIndex)
-                {
-                    RequireControlVolume().WithLedger(ledger =>
-                    {
-                        ledger.BindIndexUnbound(journalRecord.Sequence, indexBytes);
-                        return 0;
-                    });
-                    reservedIndex = false;
-                }
-
-                if (!_index.TryGet(record.ArtId, out var indexed)
-                    || indexed.State is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
-                {
-                    _ = _acceptWithoutPhysicalBytes.Add(journalRecord.Sequence);
-                }
-
-                _pendingAcceptAdmission = null;
-            }
-            catch (Exception ex)
-            {
-                var samePending = _pendingAcceptAdmission is { } owned
-                    && owned.ArtId == record.ArtId
-                    && owned.ArtHash == record.ArtHash
-                    && owned.ArtSize == record.ArtSize;
-                if (ex is UnreconciledDurableTailException unreconciled)
-                {
-                    if (unreconciled.CreatedByThisCall)
-                    {
-                        if (_capacityAdmissionEnabled && _pendingAcceptAdmission is null)
+                        appended = _journal.TryAppendNewAccept(
+                            record.ArtId,
+                            record.ArtHash,
+                            record.ArtSize,
+                            _timeProvider.GetUtcNow(),
+                            artData,
+                            out journalRecord!,
+                            out var rejectOutcome);
+                        if (!appended)
                         {
-                            _pendingAcceptAdmission = new PendingAcceptAdmission(
-                                record.ArtId,
-                                record.ArtHash,
-                                record.ArtSize,
-                                segmentBytes,
-                                journalBytes,
-                                indexBytes);
+                            rejectOutcomeCaptured = rejectOutcome;
                         }
                     }
-                    else if (_capacityAdmissionEnabled && !samePending)
+                    finally
                     {
+                        IndexCommittedProbe.ExitAcceptAppend();
+                        IndexCommittedProbe.AddAcceptAppend(appendStart);
+                    }
+
+                    if (!appended)
+                    {
+                        var rejectOutcome = rejectOutcomeCaptured;
                         RollbackUnboundAccept(
                             reservedSegment,
                             reservedJournal,
@@ -1323,29 +1296,117 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                             segmentBytes,
                             journalBytes,
                             indexBytes);
+                        reservedSegment = false;
+                        reservedJournal = false;
+                        reservedIndex = false;
+
+                        return Task.FromResult(rejectOutcome switch
+                        {
+                            ArticleAcceptOutcome.Duplicate => ArticleAcceptResult.Duplicate(record.ArtId),
+                            ArticleAcceptOutcome.Conflict => ArticleAcceptResult.Conflict(record.ArtId),
+                            ArticleAcceptOutcome.RejectedInvalid =>
+                                ArticleAcceptResult.RejectedInvalid(record.ArtId, "integrity"),
+                            _ => ArticleAcceptResult.RejectedPressure(record.ArtId),
+                        });
+                    }
+
+                    if (reservedSegment)
+                    {
+                        RequireSegmentVolume().WithLedger(ledger =>
+                        {
+                            ledger.BindSequence(journalRecord.Sequence, segmentBytes);
+                            return 0;
+                        });
+                        reservedSegment = false;
+                    }
+
+                    if (reservedJournal)
+                    {
+                        RequireControlVolume().WithLedger(ledger =>
+                        {
+                            ledger.BindJournalSequence(journalRecord.Sequence, journalBytes);
+                            return 0;
+                        });
+                        reservedJournal = false;
+                    }
+
+                    if (reservedIndex)
+                    {
+                        RequireControlVolume().WithLedger(ledger =>
+                        {
+                            ledger.BindIndexUnbound(journalRecord.Sequence, indexBytes);
+                            return 0;
+                        });
+                        reservedIndex = false;
+                    }
+
+                    if (!_index.TryGet(record.ArtId, out var indexed)
+                        || indexed.State is not (ArticleStorageState.Evicted or ArticleStorageState.Invalid))
+                    {
+                        AddAcceptWithoutPhysicalBytes(journalRecord.Sequence);
+                    }
+
+                    _pendingAcceptAdmission = null;
+                }
+                catch (Exception ex)
+                {
+                    var samePending = _pendingAcceptAdmission is { } owned
+                        && owned.ArtId == record.ArtId
+                        && owned.ArtHash == record.ArtHash
+                        && owned.ArtSize == record.ArtSize;
+                    if (ex is UnreconciledDurableTailException unreconciled)
+                    {
+                        if (unreconciled.CreatedByThisCall)
+                        {
+                            if (_capacityAdmissionEnabled && _pendingAcceptAdmission is null)
+                            {
+                                _pendingAcceptAdmission = new PendingAcceptAdmission(
+                                    record.ArtId,
+                                    record.ArtHash,
+                                    record.ArtSize,
+                                    segmentBytes,
+                                    journalBytes,
+                                    indexBytes);
+                            }
+                        }
+                        else if (_capacityAdmissionEnabled && !samePending)
+                        {
+                            RollbackUnboundAccept(
+                                reservedSegment,
+                                reservedJournal,
+                                reservedIndex,
+                                segmentBytes,
+                                journalBytes,
+                                indexBytes);
+                        }
+
+                        throw;
+                    }
+
+                    RollbackUnboundAccept(
+                        reservedSegment,
+                        reservedJournal,
+                        reservedIndex,
+                        segmentBytes,
+                        journalBytes,
+                        indexBytes);
+                    if (samePending)
+                    {
+                        _pendingAcceptAdmission = null;
                     }
 
                     throw;
                 }
 
-                RollbackUnboundAccept(
-                    reservedSegment,
-                    reservedJournal,
-                    reservedIndex,
-                    segmentBytes,
-                    journalBytes,
-                    indexBytes);
-                if (samePending)
+                if (!SuspendBackgroundPersist)
                 {
-                    _pendingAcceptAdmission = null;
+                    EnqueuePersistWorkUnlocked(journalRecord.Sequence);
                 }
-
-                throw;
             }
-
-            if (!SuspendBackgroundPersist)
+            finally
             {
-                EnqueuePersistWorkUnlocked(journalRecord.Sequence);
+                IndexCommittedProbe.AddAcceptHold(holdStart);
+                IndexCommittedProbe.EndAccept();
             }
         }
 
@@ -1942,7 +2003,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         // Best-effort populate; Put rejection must not fail the durable read.
         if (TryCreateCacheRecord(in published, artData, out var cacheRecord))
         {
-            _ = _articleCache.Put(in cacheRecord);
+            _ = PublishCreatedCacheRecord(in cacheRecord);
         }
 
         return true;
@@ -2414,6 +2475,35 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
     }
 
+    /// <summary>
+    /// Marks one reserved segment copy written when the bytes are already in the file and the
+    /// reservation is still unwritten. Adoption of a copy this process already reserved uses this
+    /// after a failed segment flush is later made durable.
+    /// </summary>
+    private void NoteSegmentCopyWrittenIfUnwritten(ulong sequence, SegmentId segmentId)
+    {
+        if (!_capacityAdmissionEnabled)
+        {
+            return;
+        }
+
+        var volume = RequireSegmentVolume();
+        lock (_gate)
+        {
+            var unwritten = volume.WithLedger(ledger => ledger.HasUnwrittenSegmentCopy(sequence));
+            if (!unwritten)
+            {
+                return;
+            }
+
+            _ = volume.WithLedger(ledger =>
+            {
+                ledger.NoteSegmentCopyWritten(sequence, segmentId);
+                return true;
+            });
+        }
+    }
+
     private void ReleaseUnwrittenSegmentCopy(ulong sequence)
     {
         if (!_capacityAdmissionEnabled)
@@ -2772,18 +2862,27 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// Populates the process-local cache from journal Accept ArtData after IndexCommitted.
+    /// Populates the process-local cache from the journal Accept buffer after IndexCommitted.
     /// </summary>
+    /// <remarks>
+    /// Callers invoke this only after the IndexCommitted durability flush has returned and the
+    /// journal has applied that state. The cache record is built over the detached Accept buffer.
+    /// A rejection leaves that buffer referenced by neither the journal record nor the cache.
+    /// </remarks>
     private void TryPopulateCacheAfterDurableCommit(JournalAcceptRecord accept)
     {
+        var lookupStart = IndexCommittedProbe.MarkArticle();
         if (!_index.TryGet(accept.ArtId, out var indexed)
             || indexed.State != ArticleStorageState.Present
             || indexed.ArtHash != accept.ArtHash
             || indexed.ArtSize != accept.ArtSize)
         {
+            IndexCommittedProbe.AddIndexLookup(lookupStart);
+            IndexCommittedProbe.NoteIndexMiss();
             return;
         }
 
+        IndexCommittedProbe.AddIndexLookup(lookupStart);
         var metadata = new StoredArticleMetadata(
             indexed.ArtId,
             indexed.ArtHash,
@@ -2792,12 +2891,33 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             ArticleStorageState.Present,
             _timeProvider.GetUtcNow(),
             indexed.Sequence);
-        if (!TryCreateCacheRecord(in metadata, accept.ArtData, out var cacheRecord))
+        var createAllocBefore = IndexCommittedProbe.Allocated();
+        var createStart = IndexCommittedProbe.MarkArticle();
+        IndexCommittedProbe.EnterCreateProof();
+        bool created;
+        ArticleRecord cacheRecord;
+        try
         {
+            created = TryCreateCacheRecordFromDetachedJournalPayload(in metadata, accept, out cacheRecord);
+        }
+        finally
+        {
+            IndexCommittedProbe.ExitProof();
+        }
+
+        IndexCommittedProbe.AddCreateWall(createStart);
+        IndexCommittedProbe.AddCreateAlloc(IndexCommittedProbe.Allocated() - createAllocBefore);
+        if (!created)
+        {
+            IndexCommittedProbe.NoteCreateFailed();
             return;
         }
 
-        _ = _articleCache.Put(in cacheRecord);
+        var putAllocBefore = IndexCommittedProbe.Allocated();
+        var putStart = IndexCommittedProbe.MarkArticle();
+        _ = PublishCreatedCacheRecord(in cacheRecord);
+        IndexCommittedProbe.AddPutWall(putStart);
+        IndexCommittedProbe.AddPutAlloc(IndexCommittedProbe.Allocated() - putAllocBefore);
     }
 
     private bool TryProvePhysicalLocation(
@@ -2805,36 +2925,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         in StoredArticleLocation location,
         out ReadOnlyMemory<byte> artData)
     {
+        // Callers discard the payload. The record is read once and proved in place:
+        // bounds, CRC, schema, ArticleId, ArtHash, ArtSize, one XxHash3, and one Message-ID.
         artData = default;
-
-        // Location.Length is the full physical record length from FileSegmentStore.
-        if (_segments.TryReadProven(
-                location,
-                accept.ArtId,
-                accept.ArtHash,
-                accept.ArtSize,
-                out artData)
-            && ArticleStorageIntegrity.TryProve(
-                artData.Span,
-                accept.ArtId,
-                accept.ArtHash,
-                accept.ArtSize))
-        {
-            return true;
-        }
-
-        // Fallback: some callers may store ArtSize as Length; TryRead extracts ArtData.
-        if (_segments.TryRead(location, out artData)
-            && ArticleStorageIntegrity.TryProve(
-                artData.Span,
-                accept.ArtId,
-                accept.ArtHash,
-                accept.ArtSize))
-        {
-            return true;
-        }
-
-        return false;
+        return _segments.TryProveStoredLocation(
+            location,
+            accept.ArtId,
+            accept.ArtHash,
+            accept.ArtSize);
     }
 
     private async Task<StoredArticleLocation> AppendPhysicalAsync(
@@ -3121,14 +3219,83 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
+    /// Publishes a record just created by <see cref="TryCreateCacheRecord"/>.
+    /// </summary>
+    /// <remarks>
+    /// Transfers the new payload into an <see cref="IArticleMemoryCacheAdoption"/> cache.
+    /// A cache that cannot accept ownership is updated through <see cref="IArticleMemoryCache.Put"/>,
+    /// which copies. The caller does not use <paramref name="record"/> after this returns.
+    /// </remarks>
+    private ArticleMemoryCachePutOutcome PublishCreatedCacheRecord(in ArticleRecord record)
+    {
+        if (_articleCache is IArticleMemoryCacheAdoption adoption)
+        {
+            return adoption.AdoptOwned(in record);
+        }
+
+        return _articleCache.Put(in record);
+    }
+
+    /// <summary>
+    /// Builds a CanonicalV1 cache record over the journal Accept buffer without copying it.
+    /// </summary>
+    /// <remarks>
+    /// Proves the attached payload, then <see cref="JournalAcceptRecord.DetachPayload"/>.
+    /// The returned record is the sole owner of that buffer. A proof failure leaves the payload
+    /// attached. Segment reads keep using <see cref="TryCreateCacheRecord"/>, which copies.
+    /// </remarks>
+    private static bool TryCreateCacheRecordFromDetachedJournalPayload(
+        in StoredArticleMetadata metadata,
+        JournalAcceptRecord accept,
+        out ArticleRecord record)
+    {
+        record = default;
+        var proveStart = IndexCommittedProbe.MarkArticle();
+        var attached = accept.ArtData;
+        if (attached.Length != metadata.ArtSize
+            || !ArticleStorageIntegrity.TryProve(
+                attached.Span,
+                metadata.ArtId,
+                metadata.ArtHash,
+                metadata.ArtSize))
+        {
+            IndexCommittedProbe.AddCreateProve(proveStart);
+            return false;
+        }
+
+        IndexCommittedProbe.AddCreateProve(proveStart);
+        var bytes = accept.DetachPayload();
+        var locateStart = IndexCommittedProbe.MarkArticle();
+        var fields = ArticleFieldTable.Locate(bytes, NntpArticleHeaderName.Date);
+        IndexCommittedProbe.AddCreateLocate(locateStart);
+        record = new ArticleRecord(
+            metadata.ArtId,
+            metadata.ArtHash,
+            default,
+            artLines: 0,
+            canonicalUtc: default,
+            ArticleParseStatus.CanonicalV1,
+            bytes,
+            fields);
+        return true;
+    }
+
+    /// <summary>
     /// Builds a CanonicalV1 <see cref="ArticleRecord"/> for cache insertion from durable bytes.
     /// </summary>
+    /// <remarks>
+    /// The returned record owns a new payload buffer. The caller transfers that buffer with
+    /// <see cref="PublishCreatedCacheRecord"/> and does not mutate, reuse, or retain it.
+    /// Journal IndexCommitted population uses <see cref="TryCreateCacheRecordFromDetachedJournalPayload"/>
+    /// so the Accept buffer is not copied again.
+    /// </remarks>
     private static bool TryCreateCacheRecord(
         in StoredArticleMetadata metadata,
         ReadOnlyMemory<byte> artData,
         out ArticleRecord record)
     {
         record = default;
+        var proveStart = IndexCommittedProbe.MarkArticle();
         if (artData.Length != metadata.ArtSize
             || !ArticleStorageIntegrity.TryProve(
                 artData.Span,
@@ -3136,11 +3303,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 metadata.ArtHash,
                 metadata.ArtSize))
         {
+            IndexCommittedProbe.AddCreateProve(proveStart);
             return false;
         }
 
+        IndexCommittedProbe.AddCreateProve(proveStart);
+        var copyStart = IndexCommittedProbe.MarkArticle();
         var bytes = artData.ToArray();
+        IndexCommittedProbe.AddCreateCopy(copyStart, bytes.Length);
+        var locateStart = IndexCommittedProbe.MarkArticle();
         var fields = ArticleFieldTable.Locate(bytes, NntpArticleHeaderName.Date);
+        IndexCommittedProbe.AddCreateLocate(locateStart);
         record = new ArticleRecord(
             metadata.ArtId,
             metadata.ArtHash,
@@ -3162,61 +3335,54 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 await _workerSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
                 while (true)
                 {
-                    ulong sequence;
+                    List<ulong> batch;
                     lock (_gate)
                     {
-                        if (!_pendingSequences.TryDequeue(out sequence))
+                        if (_pendingSequences.Count == 0)
                         {
                             break;
                         }
 
-                        _ = _pendingSet.Remove(sequence);
+                        batch = new List<ulong>(_pendingSequences.Count);
+                        while (_pendingSequences.TryDequeue(out var sequence))
+                        {
+                            _ = _pendingSet.Remove(sequence);
+                            if (!_persistInFlight.Add(sequence))
+                            {
+                                continue;
+                            }
+
+                            batch.Add(sequence);
+                        }
+                    }
+
+                    if (batch.Count == 0)
+                    {
+                        break;
                     }
 
                     try
                     {
-                        await PersistSequenceExclusiveAsync(sequence, cancellationToken)
-                            .ConfigureAwait(false);
+                        await PersistBatchAsync(batch, cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        FileArticleStorageEngineLogMessages.PersistStageFailed(
-                            _logger,
-                            sequence,
-                            "persist",
-                            ex);
-                        if (IsRetryablePersistFailure(ex))
+                        foreach (var sequence in batch)
                         {
-                            SchedulePersistRetry(sequence);
-                        }
-                        else
-                        {
-                            // Keep the incomplete Accept. Release only copies that were not written.
-                            var releasedUnwrittenSegmentBytes = 0L;
-                            var releasedUnboundIndexBytes = 0L;
-                            var retainedWrittenSegmentBytes = 0L;
-                            var retainedJournalBytes = 0L;
-                            if (_capacityAdmissionEnabled)
+                            if (IsJournalIncomplete(sequence))
                             {
-                                (releasedUnwrittenSegmentBytes, retainedWrittenSegmentBytes) =
-                                    ReadSegmentLedger(ledger => ledger.SegmentCopyReservationBytes(sequence));
-                                (releasedUnboundIndexBytes, retainedJournalBytes) = ReadControlLedger(ledger =>
-                                    (ledger.UnboundIndexReservationBytes(sequence),
-                                        ledger.JournalReservationBytes(sequence)));
+                                HandlePersistFailure(sequence, ex);
                             }
-
-                            ReleaseUnwrittenSegmentCopies(sequence);
-                            ReleaseUnboundIndexReservation(sequence);
-                            FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
-                                _logger,
-                                sequence,
-                                ex.GetType().Name,
-                                ex.Message,
-                                releasedUnwrittenSegmentBytes,
-                                releasedUnboundIndexBytes,
-                                retainedWrittenSegmentBytes,
-                                retainedJournalBytes);
-                            ScheduleBlockedPersistRetry(sequence);
+                        }
+                    }
+                    finally
+                    {
+                        lock (_gate)
+                        {
+                            foreach (var sequence in batch)
+                            {
+                                _ = _persistInFlight.Remove(sequence);
+                            }
                         }
                     }
                 }

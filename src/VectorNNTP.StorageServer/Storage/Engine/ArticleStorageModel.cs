@@ -477,9 +477,15 @@ public readonly record struct ArticleReadResult(
 /// <remarks>
 /// Once Accept is durably appended, the article bytes and identity are reconstructible from
 /// the journal alone without SATA. Schema version is <c>1</c>.
+/// <see cref="DetachPayload"/> transfers the owned buffer after durable IndexCommitted.
+/// Until that call, <see cref="ArtData"/> exposes the buffer. Dropping the journal sequence's
+/// Accept reference does not take this buffer.
 /// </remarks>
 public sealed class JournalAcceptRecord
 {
+    private byte[]? _artData;
+    private bool _payloadDetachPermitted;
+
     /// <summary>Initializes an Accept record. Copies <paramref name="artData"/>.</summary>
     /// <param name="version">Wire/schema version. Current is <c>1</c>.</param>
     /// <param name="sequence">Monotonic journal sequence owning this accept.</param>
@@ -508,7 +514,7 @@ public sealed class JournalAcceptRecord
         ArtHash = artHash;
         ArtSize = artSize;
         AcceptedUtc = acceptedUtc;
-        ArtData = artData.ToArray();
+        _artData = artData.ToArray();
     }
 
     /// <summary>Gets the schema version.</summary>
@@ -529,8 +535,41 @@ public sealed class JournalAcceptRecord
     /// <summary>Gets the accept timestamp.</summary>
     public DateTimeOffset AcceptedUtc { get; }
 
-    /// <summary>Gets the durable canonical ArtData copy.</summary>
-    public ReadOnlyMemory<byte> ArtData { get; }
+    /// <summary>
+    /// Gets the owned canonical ArtData. Empty after <see cref="DetachPayload"/>.
+    /// </summary>
+    public ReadOnlyMemory<byte> ArtData => _artData ?? ReadOnlyMemory<byte>.Empty;
+
+    /// <summary>
+    /// Allows <see cref="DetachPayload"/> after durable IndexCommitted has been applied.
+    /// </summary>
+    /// <remarks>
+    /// Production calls this only from the journal's IndexCommitted apply, which runs after
+    /// <c>Flush(true)</c> has returned. The call does not clear <see cref="ArtData"/>.
+    /// </remarks>
+    internal void PermitPayloadDetach() => _payloadDetachPermitted = true;
+
+    /// <summary>
+    /// Returns the owned ArtData buffer and clears this record's reference to it.
+    /// </summary>
+    /// <returns>The buffer previously exposed by <see cref="ArtData"/>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when durable IndexCommitted has not been applied, or when the buffer was already detached.
+    /// A second call does not return the buffer again.
+    /// </exception>
+    internal byte[] DetachPayload()
+    {
+        if (!_payloadDetachPermitted)
+        {
+            throw new InvalidOperationException(
+                "Journal accept payload can be detached only after durable IndexCommitted.");
+        }
+
+        var payload = _artData ?? throw new InvalidOperationException(
+            "Journal accept payload is already detached.");
+        _artData = null;
+        return payload;
+    }
 }
 
 /// <summary>Durable journal event: SATA location recorded for a sequence.</summary>

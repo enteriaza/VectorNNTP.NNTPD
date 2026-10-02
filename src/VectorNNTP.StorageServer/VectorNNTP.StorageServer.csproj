@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
+    <InternalsVisibleTo Include="VectorNNTP.StorageServer.PersistenceBench" />
   </ItemGroup>
 
   <ItemGroup>

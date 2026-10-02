@@ -28,17 +28,32 @@ public static class ArticleStorageIntegrity
             return false;
         }
 
-        if (XxHash3.HashToUInt64(artData) != expectedArtHash)
+        var xxStart = PhysicalProofProbe.Mark();
+        var icXx = IndexCommittedProbe.MarkLayer();
+        var actualHash = XxHash3.HashToUInt64(artData);
+        PhysicalProofProbe.AddXx(xxStart);
+        IndexCommittedProbe.AddLayerXx(icXx);
+        if (actualHash != expectedArtHash)
         {
             return false;
         }
 
-        if (!TryExtractMessageIdValue(artData, out var messageId))
+        var messageStart = PhysicalProofProbe.Mark();
+        var icMessage = IndexCommittedProbe.MarkLayer();
+        var extracted = TryExtractMessageIdValue(artData, out var messageId);
+        PhysicalProofProbe.AddMessageId(messageStart);
+        IndexCommittedProbe.AddLayerMessage(icMessage);
+        if (!extracted)
         {
             return false;
         }
 
-        return ArticleId.FromMessageId(messageId) == expectedArtId;
+        var blakeStart = PhysicalProofProbe.Mark();
+        var icBlake = IndexCommittedProbe.MarkLayer();
+        var computedId = ArticleId.FromMessageId(messageId);
+        PhysicalProofProbe.AddBlake(blakeStart);
+        IndexCommittedProbe.AddLayerBlake(icBlake);
+        return computedId == expectedArtId;
     }
 
     /// <summary>

@@ -56,6 +56,13 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     internal Action? TestBeforeDurableFlush { get; set; }
 
+    /// <summary>Number of durability flushes of an active segment stream. Tests only.</summary>
+    internal long DurableFlushCount => Volatile.Read(ref _durableFlushCount);
+
+    private long _durableFlushCount;
+    private int _deferDurableFlush;
+    private bool _unflushedCommittedAppend;
+
     /// <summary>
     /// When set, torn-tail truncation throws instead of shrinking the file. Tests only.
     /// </summary>
@@ -276,8 +283,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return false;
         }
 
+        var gateStart = PhysicalProofProbe.Mark();
         lock (_writeGate)
         {
+            PhysicalProofProbe.AddGate(gateStart);
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_segments.TryGetValue(location.SegmentId.Value, out var runtime))
             {
@@ -304,8 +313,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         out ReadOnlyMemory<byte> artData)
     {
         artData = default;
+        var gateStart = PhysicalProofProbe.Mark();
         lock (_writeGate)
         {
+            PhysicalProofProbe.AddGate(gateStart);
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_segments.TryGetValue(location.SegmentId.Value, out var runtime)
                 || runtime.State == SegmentState.Retired)
@@ -320,6 +331,51 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 expectedArtHash,
                 expectedArtSize,
                 out artData);
+        }
+    }
+
+    /// <summary>
+    /// Reads the record at <paramref name="location"/> once and proves it against the expected
+    /// Accept identity. Holds <c>_writeGate</c> for the same lookup, retired-segment rejection,
+    /// and read as <see cref="TryReadProven"/>. Does not copy the payload.
+    /// </summary>
+    internal bool TryProveStoredLocation(
+        in StoredArticleLocation location,
+        ArticleId expectedArtId,
+        ulong expectedArtHash,
+        int expectedArtSize)
+    {
+        IndexCommittedProbe.NotePhysicalDuringArticle();
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_segments.TryGetValue(location.SegmentId.Value, out var runtime)
+                || runtime.State == SegmentState.Retired)
+            {
+                return false;
+            }
+
+            if (location.Offset < 0
+                || location.Length < SegmentRecordCodec.MinimumRecordLength
+                || location.Offset + location.Length > runtime.SizeBytes)
+            {
+                return false;
+            }
+
+            var buffer = new byte[location.Length];
+            runtime.EnsureReadable();
+            runtime.Stream.Seek(location.Offset, SeekOrigin.Begin);
+            var read = runtime.Stream.Read(buffer, 0, buffer.Length);
+            if (read != buffer.Length)
+            {
+                return false;
+            }
+
+            return SegmentRecordCodec.TryProveExactRecord(
+                buffer,
+                expectedArtId,
+                expectedArtHash,
+                expectedArtSize);
         }
     }
 
@@ -525,30 +581,55 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     private ActiveSegmentAppend AppendToActiveUnlocked(ReadOnlyMemory<byte> artData)
     {
+        PhysicalProofProbe.BeginAppend();
+        try
+        {
+            return AppendToActiveUnlockedCore(artData);
+        }
+        finally
+        {
+            PhysicalProofProbe.EndAppend();
+        }
+    }
+
+    private ActiveSegmentAppend AppendToActiveUnlockedCore(ReadOnlyMemory<byte> artData)
+    {
         if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
         {
             throw new ArgumentOutOfRangeException(nameof(artData), "ArtData length out of range.");
         }
 
+        var messageStart = PhysicalProofProbe.MarkAppend();
         if (!ArticleStorageIntegrity.TryExtractMessageIdValue(artData.Span, out var messageId))
         {
             throw new ArgumentException("ArtData must contain a Message-ID header value.", nameof(artData));
         }
 
+        PhysicalProofProbe.AddAppendMessage(messageStart);
+        var blakeStart = PhysicalProofProbe.MarkAppend();
         var artId = ArticleId.FromMessageId(messageId);
+        PhysicalProofProbe.AddAppendBlake(blakeStart);
+        var xxStart = PhysicalProofProbe.MarkAppend();
         var artHash = XxHash3.HashToUInt64(artData.Span);
+        PhysicalProofProbe.AddAppendXx(xxStart);
+        var proveStart = PhysicalProofProbe.MarkAppend();
         if (!ArticleStorageIntegrity.TryProve(artData.Span, artId, artHash, artData.Length))
         {
             throw new ArgumentException("ArtData failed article integrity proof.", nameof(artData));
         }
 
-        var record = SegmentRecordCodec.Encode(artId, artHash, artData.Span);
+        PhysicalProofProbe.AddAppendProve(proveStart);
+
+        Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+        Span<byte> crc = stackalloc byte[4];
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out var framedHash);
+        var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
         EnsureActiveUnlocked();
         var activeId = _activeSegmentId!.Value;
         var runtime = _segments[activeId];
         if (runtime.PendingRecord is not null)
         {
-            return FinishPendingSegmentRecord(runtime, record, artId, artHash, artData.Length);
+            return FinishPendingSegmentRecord(runtime, recordLength, framedHash, artId, artHash, artData.Length);
         }
 
         ReconcileBlockedSegmentTail(runtime);
@@ -556,9 +637,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         // Rotate when current + next would exceed target, unless the segment is empty
         // (a single oversized article may exceed the nominal target).
         if (runtime.SizeBytes > 0
-            && runtime.SizeBytes + record.Length > _targetSegmentBytes)
+            && runtime.SizeBytes + recordLength > _targetSegmentBytes)
         {
             var closedId = activeId;
+            if (_deferDurableFlush > 0 && _unflushedCommittedAppend)
+            {
+                DurableSegmentFlush(runtime.Stream);
+            }
+
             CloseActiveUnlocked(activeId, DateTimeOffset.UtcNow);
             EnsureActiveUnlocked();
             activeId = _activeSegmentId!.Value;
@@ -580,25 +666,36 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         try
         {
             runtime.Stream.Position = offset;
-            runtime.Stream.Write(record, 0, record.Length);
-            TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, record.Length);
-            DurableSegmentFlush(runtime.Stream);
-            return CommitActiveAppend(runtime, offset, record, ambiguousComplete: false);
+            var writeStart = PhysicalProofProbe.MarkAppend();
+            // Header, then the caller's payload span, then CRC. The file grows through these
+            // writes. The CRC is not written before the payload, and the payload is not copied.
+            runtime.Stream.Write(header);
+            runtime.Stream.Write(artData.Span);
+            runtime.Stream.Write(crc);
+            PhysicalProofProbe.AddAppendWrite(writeStart);
+            TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, recordLength);
+            if (_deferDurableFlush == 0)
+            {
+                DurableSegmentFlush(runtime.Stream);
+            }
+
+            return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false);
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
-            var outcome = InspectSegmentAppend(runtime, offset, record);
+            var outcome = InspectSegmentAppend(runtime, offset, recordLength, header, artData.Span, crc);
             if (outcome == AmbiguousAppend.Growth.CompleteExpected)
             {
-                if (runtime.Stream.Length > offset + record.Length)
+                if (runtime.Stream.Length > offset + recordLength)
                 {
                     try
                     {
-                        TruncateSegmentOrBlock(runtime, offset + record.Length, createdByThisCall: true);
+                        TruncateSegmentOrBlock(runtime, offset + recordLength, createdByThisCall: true);
                     }
                     catch (UnreconciledDurableTailException)
                     {
-                        runtime.PendingRecord = new PendingSegmentRecord(offset, record, artId, artHash, artData.Length);
+                        runtime.PendingRecord = new PendingSegmentRecord(
+                            offset, recordLength, framedHash, artId, artHash, artData.Length);
                         throw;
                     }
                 }
@@ -609,14 +706,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 }
                 catch (Exception flushEx) when (flushEx is not UnreconciledDurableTailException)
                 {
-                    runtime.PendingRecord = new PendingSegmentRecord(offset, record, artId, artHash, artData.Length);
+                    runtime.PendingRecord = new PendingSegmentRecord(
+                        offset, recordLength, framedHash, artId, artHash, artData.Length);
                     throw new UnreconciledDurableTailException(
                         $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
                         flushEx,
                         createdByThisCall: true);
                 }
 
-                return CommitActiveAppend(runtime, offset, record, ambiguousComplete: false);
+                return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false);
             }
 
             if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
@@ -630,7 +728,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     private ActiveSegmentAppend FinishPendingSegmentRecord(
         SegmentRuntime runtime,
-        byte[] record,
+        int recordLength,
+        ulong framedHash,
         ArticleId artId,
         ulong artHash,
         int artSize)
@@ -640,8 +739,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         if (pending.ArtId != artId
             || pending.ArtHash != artHash
             || pending.ArtSize != artSize
-            || record.Length != pending.Length
-            || XxHash3.HashToUInt64(record) != pending.PayloadHash)
+            || recordLength != pending.Length
+            || framedHash != pending.PayloadHash)
         {
             throw new UnreconciledDurableTailException(
                 $"Active segment {runtime.SegmentId.Value} pending record does not match the retry payload.",
@@ -675,38 +774,143 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         runtime.PendingRecord = null;
-        return CommitActiveAppend(runtime, pending.Offset, record, ambiguousComplete: false);
+        return CommitActiveAppend(runtime, pending.Offset, recordLength, ambiguousComplete: false);
     }
 
     private void DurableSegmentFlush(FileStream stream)
     {
         TestBeforeDurableFlush?.Invoke();
         stream.Flush(flushToDisk: true);
+        _ = Interlocked.Increment(ref _durableFlushCount);
+        _unflushedCommittedAppend = false;
+    }
+
+    /// <summary>
+    /// Appends every article, then durability-flushes the active segment once.
+    /// Locations are returned only after that flush. A failure leaves earlier durable
+    /// journal state untouched and does not publish these locations.
+    /// </summary>
+    internal StoredArticleLocation[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    {
+        ArgumentNullException.ThrowIfNull(articles);
+        if (articles.Count == 0)
+        {
+            return [];
+        }
+
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var locations = new StoredArticleLocation[articles.Count];
+            _deferDurableFlush++;
+            try
+            {
+                for (var i = 0; i < articles.Count; i++)
+                {
+                    locations[i] = AppendToActiveUnlocked(articles[i]).Location;
+                }
+
+                FlushActiveDurableUnlocked();
+                return locations;
+            }
+            finally
+            {
+                _deferDurableFlush--;
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when segment bytes were committed to the active cursor and their durability flush
+    /// has not returned. PhysicalWritten must not be written while this is true.
+    /// </summary>
+    internal bool HasUnflushedCommittedAppend
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _unflushedCommittedAppend;
+            }
+        }
+    }
+
+    /// <summary>Durability-flushes the active segment when a deferred append is still unflushed.</summary>
+    internal void FlushActiveDurable()
+    {
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            FlushActiveDurableUnlocked();
+        }
+    }
+
+    private void FlushActiveDurableUnlocked()
+    {
+        if (!_unflushedCommittedAppend)
+        {
+            return;
+        }
+
+        if (_activeSegmentId is not { } activeId || !_segments.TryGetValue(activeId, out var runtime))
+        {
+            _unflushedCommittedAppend = false;
+            return;
+        }
+
+        DurableSegmentFlush(runtime.Stream);
     }
 
     private ActiveSegmentAppend CommitActiveAppend(
         SegmentRuntime runtime,
         long offset,
-        byte[] record,
+        int recordLength,
         bool ambiguousComplete)
     {
-        runtime.SizeBytes = offset + record.Length;
-        _catalogue.RecordAppend(runtime.SegmentId, record.Length, runtime.SizeBytes);
+        runtime.SizeBytes = offset + recordLength;
+        _catalogue.RecordAppend(runtime.SegmentId, recordLength, runtime.SizeBytes);
+        if (_deferDurableFlush > 0)
+        {
+            _unflushedCommittedAppend = true;
+        }
+
         return new ActiveSegmentAppend(
-            new StoredArticleLocation(runtime.SegmentId, offset, record.Length),
+            new StoredArticleLocation(runtime.SegmentId, offset, recordLength),
             ambiguousComplete);
     }
 
-    private AmbiguousAppend.Growth InspectSegmentAppend(SegmentRuntime runtime, long start, byte[] record)
+    private AmbiguousAppend.Growth InspectSegmentAppend(
+        SegmentRuntime runtime,
+        long start,
+        int recordLength,
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> crc)
     {
         try
         {
             runtime.Stream.Flush(flushToDisk: false);
             var length = runtime.Stream.Length;
-            var observed = length >= start + record.Length
-                ? ReadExact(runtime.Stream, start, record.Length)
-                : [];
-            return AmbiguousAppend.Classify(start, length, record, observed);
+            if (length <= start)
+            {
+                return AmbiguousAppend.Growth.NoGrowth;
+            }
+
+            if (length < start + recordLength)
+            {
+                return AmbiguousAppend.Growth.IncompleteGrowth;
+            }
+
+            var observed = ReadExact(runtime.Stream, start, recordLength);
+            if (observed.Length != recordLength
+                || !observed.AsSpan(0, header.Length).SequenceEqual(header)
+                || !observed.AsSpan(header.Length, artData.Length).SequenceEqual(artData)
+                || !observed.AsSpan(header.Length + artData.Length, crc.Length).SequenceEqual(crc))
+            {
+                return AmbiguousAppend.Growth.IncompleteGrowth;
+            }
+
+            return AmbiguousAppend.Growth.CompleteExpected;
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
@@ -1759,10 +1963,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return false;
         }
 
+        var allocStart = PhysicalProofProbe.Mark();
         var buffer = new byte[location.Length];
+        PhysicalProofProbe.AddRecordAlloc(allocStart, buffer.Length);
+        var readStart = PhysicalProofProbe.Mark();
         runtime.EnsureReadable();
         runtime.Stream.Seek(location.Offset, SeekOrigin.Begin);
         var read = runtime.Stream.Read(buffer, 0, buffer.Length);
+        PhysicalProofProbe.AddRead(readStart);
         if (read != buffer.Length)
         {
             return false;
@@ -1867,15 +2075,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
 /// <summary>
 /// Process-local complete segment record whose durability flush has not returned.
-/// The article identity is the logical owner. Not restored after restart.
+/// Stores the framed-record hash and article identity. Does not retain the payload.
+/// Not restored after restart.
 /// </summary>
 internal sealed class PendingSegmentRecord
 {
-    internal PendingSegmentRecord(long offset, byte[] payload, ArticleId artId, ulong artHash, int artSize)
+    internal PendingSegmentRecord(
+        long offset,
+        int length,
+        ulong payloadHash,
+        ArticleId artId,
+        ulong artHash,
+        int artSize)
     {
         Offset = offset;
-        Length = payload.Length;
-        PayloadHash = XxHash3.HashToUInt64(payload);
+        Length = length;
+        PayloadHash = payloadHash;
         ArtId = artId;
         ArtHash = artHash;
         ArtSize = artSize;

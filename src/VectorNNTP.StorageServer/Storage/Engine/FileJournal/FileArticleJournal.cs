@@ -162,6 +162,18 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         }
     }
 
+    /// <summary>Number of durability flushes of the journal stream. Tests only.</summary>
+    internal long DurableFlushCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _durableFlushCount;
+            }
+        }
+    }
+
     /// <inheritdoc />
     public long OutstandingRecoverableBytes
     {
@@ -491,12 +503,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                     offset,
                     record.Sequence,
                     encodedIndexCommitted));
-            state.IndexCommitted = true;
-            state.IndexCommittedRecord = record;
-            _ = _outstandingArtIdToSequence.Remove(state.IncompleteAccept.ArtId);
-            _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.ArtSize);
-            state.ReleaseAcceptPayload();
-            LogPressureIfChangedUnlocked();
+            ApplyIndexCommittedUnlocked(state, record);
             return ValueTask.FromResult(JournalAppendOutcome.Applied);
         }
     }
@@ -664,6 +671,8 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     private long _tailValidEnd;
 
     private PendingJournalFrame? _pending;
+    private PendingFrameBatch? _pendingBatch;
+    private long _durableFlushCount;
 
     /// <summary>
     /// Invoked immediately before each durability <see cref="FileStream.Flush(bool)"/>.
@@ -1279,11 +1288,17 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         state.IndexCommittedRecord = record;
         _ = _outstandingArtIdToSequence.Remove(state.IncompleteAccept.ArtId);
         _outstandingRecoverableBytes = Math.Max(0L, _outstandingRecoverableBytes - state.ArtSize);
+        state.IncompleteAccept.PermitPayloadDetach();
         state.ReleaseAcceptPayload();
     }
 
     private void AppendFrameUnlocked(byte[] frame, Func<long, PendingJournalFrame> ownerAt)
     {
+        if (_pendingBatch is not null)
+        {
+            FinishPendingBatchUnlocked();
+        }
+
         if (_pending is not null)
         {
             FinishPendingFrameUnlocked(frame, ownerAt);
@@ -1391,7 +1406,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
     private void ThrowIfPendingJournalAppendUnlocked()
     {
-        if (_pending is null && !_tailUnreconciled)
+        if (_pending is null && _pendingBatch is null && !_tailUnreconciled)
         {
             return;
         }
@@ -1404,7 +1419,10 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     private void DurableFlushUnlocked()
     {
         TestBeforeDurableFlush?.Invoke();
+        var acceptFlush = IndexCommittedProbe.MarkAcceptFlush();
         _stream.Flush(flushToDisk: true);
+        IndexCommittedProbe.AddAcceptFlush(acceptFlush);
+        _durableFlushCount++;
     }
 
     private bool PendingBytesMatchUnlocked(PendingJournalFrame pending)

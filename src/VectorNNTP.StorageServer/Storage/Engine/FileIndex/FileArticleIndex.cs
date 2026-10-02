@@ -60,6 +60,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private readonly string _indexPath;
     private FileStream _stream;
     private long _durableWriteCount;
+    private long _durableFlushCount;
     private long _touchHintCount;
     private readonly Dictionary<ArticleId, long> _useCounts = new();
     private ulong _installedSnapshotGeneration;
@@ -107,6 +108,18 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             lock (_gate)
             {
                 return _durableWriteCount;
+            }
+        }
+    }
+
+    /// <summary>Number of durability flushes of the index stream. Tests only.</summary>
+    internal long DurableFlushCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _durableFlushCount;
             }
         }
     }
@@ -211,6 +224,12 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// Throwing leaves the index file unchanged when it runs before the write.
     /// </summary>
     internal Action? TestBeforeDurableAppend { get; set; }
+
+    /// <summary>
+    /// Invoked immediately before a durability flush of the index stream (tests).
+    /// A throw means the frames written since the previous flush are not durable.
+    /// </summary>
+    internal Action? TestBeforeDurableFlush { get; set; }
 
     /// <summary>
     /// Invoked after a checkpoint replacement is authoritative and the index gate is not held.
@@ -357,6 +376,83 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             AppendDurableUnlocked(metadata);
             _entries[metadata.ArtId] = metadata;
             return DurableIndexAppend.Appended;
+        }
+    }
+
+    /// <summary>
+    /// Appends Present frames that are not already durable, then flushes the index once.
+    /// Entries change only after that flush returns. <paramref name="results"/> and
+    /// <paramref name="frameOffsets"/> are parallel to <paramref name="metadata"/>.
+    /// </summary>
+    internal void CommitPresentBatch(
+        IReadOnlyList<StoredArticleMetadata> metadata,
+        DurableIndexAppend[] results,
+        long[] frameOffsets)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(frameOffsets);
+        if (results.Length != metadata.Count || frameOffsets.Length != metadata.Count)
+        {
+            throw new ArgumentException("Present batch results must align with the metadata.");
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var pending = new List<(int Index, StoredArticleMetadata Metadata, byte[] Frame)>();
+            var pendingIds = new HashSet<ArticleId>();
+            for (var i = 0; i < metadata.Count; i++)
+            {
+                frameOffsets[i] = -1;
+                var item = metadata[i];
+                if (item.State != ArticleStorageState.Present)
+                {
+                    results[i] = DurableIndexAppend.Rejected;
+                    continue;
+                }
+
+                if (_entries.TryGetValue(item.ArtId, out var existing)
+                    && existing.State == ArticleStorageState.Present)
+                {
+                    results[i] = existing.ArtHash == item.ArtHash
+                        && existing.ArtSize == item.ArtSize
+                        && existing.Sequence == item.Sequence
+                        && LocationsEqual(existing.Location, item.Location)
+                        ? DurableIndexAppend.Unchanged
+                        : DurableIndexAppend.Rejected;
+                    continue;
+                }
+
+                if (!pendingIds.Add(item.ArtId))
+                {
+                    results[i] = DurableIndexAppend.Rejected;
+                    continue;
+                }
+
+                pending.Add((i, item, ArticleIndexRecordCodec.Encode(item)));
+            }
+
+            if (pending.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var entry in pending)
+            {
+                TestBeforeDurableAppend?.Invoke();
+                frameOffsets[entry.Index] = _stream.Length;
+                _stream.Seek(0, SeekOrigin.End);
+                _stream.Write(entry.Frame, 0, entry.Frame.Length);
+            }
+
+            DurableIndexFlushUnlocked();
+            foreach (var entry in pending)
+            {
+                _entries[entry.Metadata.ArtId] = entry.Metadata;
+                results[entry.Index] = DurableIndexAppend.Appended;
+                _durableWriteCount++;
+            }
         }
     }
 
@@ -1383,8 +1479,15 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         var frame = ArticleIndexRecordCodec.Encode(metadata);
         _stream.Seek(0, SeekOrigin.End);
         _stream.Write(frame, 0, frame.Length);
-        _stream.Flush(flushToDisk: true);
+        DurableIndexFlushUnlocked();
         _durableWriteCount++;
+    }
+
+    private void DurableIndexFlushUnlocked()
+    {
+        TestBeforeDurableFlush?.Invoke();
+        _stream.Flush(flushToDisk: true);
+        _durableFlushCount++;
     }
 
     private void ReplayAndRecoverUnlocked()

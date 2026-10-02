@@ -114,10 +114,7 @@ public sealed partial class FileArticleStorageEngine
             var attemptsBefore = 0;
             try
             {
-                lock (_gate)
-                {
-                    _ = _persistRetryAttempts.TryGetValue(sequence, out attemptsBefore);
-                }
+                attemptsBefore = ReadPersistRetryAttempts(sequence);
 
                 var incomplete = _journal.EnumerateIncomplete()
                     .FirstOrDefault(s => s.Accept.Sequence == sequence);
@@ -161,14 +158,26 @@ public sealed partial class FileArticleStorageEngine
         return _journal.EnumerateIncomplete().Any(s => s.Accept.Sequence == sequence);
     }
 
-    private void ClearPersistRetryAttempts(ulong sequence)
+    /// <summary>
+    /// Drops process-local retry and never-written state for <paramref name="sequence"/>.
+    /// Takes only <see cref="_retryStateGate"/>.
+    /// </summary>
+    internal void ClearPersistRetryAttempts(ulong sequence)
     {
-        lock (_gate)
+        var waitStart = IndexCommittedProbe.MarkClear();
+        lock (_retryStateGate)
         {
+            var acquired = IndexCommittedProbe.MarkClear();
+            IndexCommittedProbe.AddClearWait(waitStart, acquired);
+            var dictStart = IndexCommittedProbe.MarkClear();
             _ = _persistRetryAttempts.Remove(sequence);
             _ = _persistBlockedRetryAttempts.Remove(sequence);
             _ = _acceptWithoutPhysicalBytes.Remove(sequence);
+            IndexCommittedProbe.AddClearDict(dictStart);
+            IndexCommittedProbe.AddClearHold(acquired);
         }
+
+        IndexCommittedProbe.AddClearAfter(IndexCommittedProbe.MarkClear());
     }
 
     /// <summary>
@@ -178,7 +187,7 @@ public sealed partial class FileArticleStorageEngine
     /// </summary>
     private bool CanSkipProvenLocationScan(JournalAcceptRecord accept)
     {
-        lock (_gate)
+        lock (_retryStateGate)
         {
             if (!_acceptWithoutPhysicalBytes.Contains(accept.Sequence))
             {
@@ -197,14 +206,97 @@ public sealed partial class FileArticleStorageEngine
 
     /// <summary>
     /// Drops the never-written mark so the next attempt searches for physical bytes.
+    /// Takes only <see cref="_retryStateGate"/>.
     /// </summary>
-    private void RemoveAcceptWithoutPhysicalBytes(ulong sequence)
+    internal void RemoveAcceptWithoutPhysicalBytes(ulong sequence)
     {
-        lock (_gate)
+        lock (_retryStateGate)
         {
             _ = _acceptWithoutPhysicalBytes.Remove(sequence);
         }
     }
+
+    /// <summary>
+    /// Records that this process journaled <paramref name="sequence"/> and has not appended it.
+    /// Caller may already hold <see cref="_gate"/>. This method takes only <see cref="_retryStateGate"/>.
+    /// </summary>
+    private void AddAcceptWithoutPhysicalBytes(ulong sequence)
+    {
+        lock (_retryStateGate)
+        {
+            _ = _acceptWithoutPhysicalBytes.Add(sequence);
+        }
+    }
+
+    private int ReadPersistRetryAttempts(ulong sequence)
+    {
+        lock (_retryStateGate)
+        {
+            _ = _persistRetryAttempts.TryGetValue(sequence, out var attempt);
+            return attempt;
+        }
+    }
+
+    private void IncrementPersistRetryAttempts(ulong sequence, out int attempt)
+    {
+        lock (_retryStateGate)
+        {
+            _ = _persistRetryAttempts.TryGetValue(sequence, out attempt);
+            attempt++;
+            _persistRetryAttempts[sequence] = attempt;
+        }
+    }
+
+    private int ReadPersistBlockedRetryAttempts(ulong sequence)
+    {
+        lock (_retryStateGate)
+        {
+            _ = _persistBlockedRetryAttempts.TryGetValue(sequence, out var attempt);
+            return attempt;
+        }
+    }
+
+    private void IncrementPersistBlockedRetryAttempts(ulong sequence, out int attempt)
+    {
+        lock (_retryStateGate)
+        {
+            _ = _persistBlockedRetryAttempts.TryGetValue(sequence, out attempt);
+            attempt++;
+            _persistBlockedRetryAttempts[sequence] = attempt;
+        }
+    }
+
+    /// <summary>Test seam for the Accept never-written mark. Uses <see cref="_retryStateGate"/> only.</summary>
+    internal void TestAddAcceptWithoutPhysicalBytes(ulong sequence) => AddAcceptWithoutPhysicalBytes(sequence);
+
+    /// <summary>Test seam for never-written membership. Uses <see cref="_retryStateGate"/> only.</summary>
+    internal bool TestContainsAcceptWithoutPhysicalBytes(ulong sequence)
+    {
+        lock (_retryStateGate)
+        {
+            return _acceptWithoutPhysicalBytes.Contains(sequence);
+        }
+    }
+
+    /// <summary>Test seam for one IO-retry increment. Does not schedule a delay.</summary>
+    internal int TestIncrementPersistRetryAttempts(ulong sequence)
+    {
+        IncrementPersistRetryAttempts(sequence, out var attempt);
+        return attempt;
+    }
+
+    /// <summary>Test seam for one blocked-retry increment. Does not schedule a delay.</summary>
+    internal int TestIncrementPersistBlockedRetryAttempts(ulong sequence)
+    {
+        IncrementPersistBlockedRetryAttempts(sequence, out var attempt);
+        return attempt;
+    }
+
+    /// <summary>Test seam for the current IO-retry count. Uses <see cref="_retryStateGate"/> only.</summary>
+    internal int TestReadPersistRetryAttempts(ulong sequence) => ReadPersistRetryAttempts(sequence);
+
+    /// <summary>Test seam for the current blocked-retry count. Uses <see cref="_retryStateGate"/> only.</summary>
+    internal int TestReadPersistBlockedRetryAttempts(ulong sequence) => ReadPersistBlockedRetryAttempts(sequence);
 
     private void SchedulePersistRetry(ulong sequence)
     {
@@ -213,13 +305,7 @@ public sealed partial class FileArticleStorageEngine
             return;
         }
 
-        int attempt;
-        lock (_gate)
-        {
-            _ = _persistRetryAttempts.TryGetValue(sequence, out attempt);
-            attempt++;
-            _persistRetryAttempts[sequence] = attempt;
-        }
+        IncrementPersistRetryAttempts(sequence, out var attempt);
 
         var delay = TestPersistRetryDelay ?? ComputePersistRetryDelay(attempt);
         _ = Interlocked.Increment(ref _persistRetryScheduledCount);
@@ -293,13 +379,7 @@ public sealed partial class FileArticleStorageEngine
             return;
         }
 
-        int attempt;
-        lock (_gate)
-        {
-            _ = _persistBlockedRetryAttempts.TryGetValue(sequence, out attempt);
-            attempt++;
-            _persistBlockedRetryAttempts[sequence] = attempt;
-        }
+        IncrementPersistBlockedRetryAttempts(sequence, out var attempt);
 
         var delay = TestPersistRetryDelay ?? ComputePersistRetryDelay(attempt);
         _ = Interlocked.Increment(ref _persistBlockedRetryScheduledCount);
@@ -309,6 +389,64 @@ public sealed partial class FileArticleStorageEngine
             attempt,
             delay.TotalMilliseconds);
         _ = PersistRetryAfterDelayAsync(sequence, delay);
+    }
+
+    /// <summary>
+    /// Links durable incomplete sequences into the worker queue. Tests use this to start one
+    /// drain after accepts that were taken while background persist was suspended.
+    /// </summary>
+    internal void TestEnqueueIncompleteWork()
+    {
+        if (Volatile.Read(ref _suspendBackgroundPersist) != 0)
+        {
+            SuspendBackgroundPersist = false;
+        }
+
+        EnqueueIncompleteFromJournal();
+    }
+
+    /// <summary>
+    /// Records one sequence failure from the worker. Retryable filesystem failures keep
+    /// reservations. Other failures release only copies that were not written.
+    /// </summary>
+    private void HandlePersistFailure(ulong sequence, Exception ex)
+    {
+        FileArticleStorageEngineLogMessages.PersistStageFailed(
+            _logger,
+            sequence,
+            "persist",
+            ex);
+        if (IsRetryablePersistFailure(ex))
+        {
+            SchedulePersistRetry(sequence);
+            return;
+        }
+
+        var releasedUnwrittenSegmentBytes = 0L;
+        var releasedUnboundIndexBytes = 0L;
+        var retainedWrittenSegmentBytes = 0L;
+        var retainedJournalBytes = 0L;
+        if (_capacityAdmissionEnabled)
+        {
+            (releasedUnwrittenSegmentBytes, retainedWrittenSegmentBytes) =
+                ReadSegmentLedger(ledger => ledger.SegmentCopyReservationBytes(sequence));
+            (releasedUnboundIndexBytes, retainedJournalBytes) = ReadControlLedger(ledger =>
+                (ledger.UnboundIndexReservationBytes(sequence),
+                    ledger.JournalReservationBytes(sequence)));
+        }
+
+        ReleaseUnwrittenSegmentCopies(sequence);
+        ReleaseUnboundIndexReservation(sequence);
+        FileArticleStorageEngineLogMessages.PersistNonRetryableFailure(
+            _logger,
+            sequence,
+            ex.GetType().Name,
+            ex.Message,
+            releasedUnwrittenSegmentBytes,
+            releasedUnboundIndexBytes,
+            retainedWrittenSegmentBytes,
+            retainedJournalBytes);
+        ScheduleBlockedPersistRetry(sequence);
     }
 }
 
