@@ -142,7 +142,7 @@ public sealed class BackFillerServerIdTests
                        "CloudFlareZoneId": "0123456789abcdef0123456789abcdef",
                        "BindAddress": [ "127.0.0.1" ],
                        "BindPortTls": 1190,
-                       "LogDirectory": "logs"
+                       "Logging": { "File": { "LogDir": "logs" } }
                      },
                      "RabbitMQ": {
                        "Hosts": [ "127.0.0.1" ],

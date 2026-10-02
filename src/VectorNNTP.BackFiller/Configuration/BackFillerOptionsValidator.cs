@@ -40,7 +40,6 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         ValidateIdentity(options, failures);
         ValidateBindPortTls(options, failures);
         ValidateAcme(options, failures);
-        ValidateDirectories(options, failures);
         ValidateLogging(options, failures);
         ValidateShutdown(options, failures);
         ValidateListener(options, failures);
@@ -160,27 +159,62 @@ public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOpti
         }
     }
 
-    private static void ValidateDirectories(BackFillerOptions options, List<string> failures)
-    {
-        if (string.IsNullOrWhiteSpace(options.LogDirectory))
-        {
-            failures.Add("BackFiller:LogDirectory is required and cannot be empty (old key: DirLogs).");
-        }
-    }
-
     private static void ValidateLogging(BackFillerOptions options, List<string> failures)
     {
-        if (!BackFillerLogLevelParser.TryParse(options.LogLevel, out _))
+        var logging = options.Logging ?? new BackFillerLoggingOptions();
+        if (!BackFillerLogLevelParser.TryParse(logging.LogLevel, out _))
         {
             failures.Add(
-                "BackFiller:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.");
+                "BackFiller:Logging:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.");
         }
 
-        if (options.LogRetentionDays is < BackFillerOptions.MinimumLogRetentionDays
-            or > BackFillerOptions.MaximumLogRetentionDays)
+        if (logging.LogRetentionDays is < BackFillerLoggingOptions.MinimumLogRetentionDays
+            or > BackFillerLoggingOptions.MaximumLogRetentionDays)
         {
             failures.Add(
-                $"BackFiller:LogRetentionDays must be an integer in the range {BackFillerOptions.MinimumLogRetentionDays}–{BackFillerOptions.MaximumLogRetentionDays}.");
+                $"BackFiller:Logging:LogRetentionDays must be an integer in the range {BackFillerLoggingOptions.MinimumLogRetentionDays}–{BackFillerLoggingOptions.MaximumLogRetentionDays}.");
+        }
+
+        var file = logging.File ?? new BackFillerFileLoggingTargetOptions();
+        if (file.Enabled && string.IsNullOrWhiteSpace(file.LogDir))
+        {
+            failures.Add("BackFiller:Logging:File:LogDir is required when file logging is enabled (old key: DirLogs).");
+        }
+
+        var rabbit = logging.RabbitMq ?? new BackFillerRabbitMqLoggingTargetOptions();
+        if (rabbit.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(rabbit.Exchange))
+            {
+                failures.Add("BackFiller:Logging:RabbitMQ:Exchange is required when RabbitMQ logging is enabled.");
+            }
+
+            if (string.IsNullOrWhiteSpace(rabbit.RoutingKey))
+            {
+                failures.Add("BackFiller:Logging:RabbitMQ:RoutingKey is required when RabbitMQ logging is enabled.");
+            }
+        }
+
+        var syslog = logging.Syslog ?? new BackFillerSyslogLoggingTargetOptions();
+        if (!syslog.Enabled)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(syslog.Host))
+        {
+            failures.Add("BackFiller:Logging:Syslog:Host is required when syslog logging is enabled.");
+        }
+
+        if (syslog.Port is < 1 or > 65535)
+        {
+            failures.Add("BackFiller:Logging:Syslog:Port must be an integer in the range 1–65535.");
+        }
+
+        if (!string.Equals(syslog.Protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.UdpProtocol, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(syslog.Protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.TcpProtocol, StringComparison.OrdinalIgnoreCase))
+        {
+            failures.Add("BackFiller:Logging:Syslog:Protocol must be Udp or Tcp.");
         }
     }
 

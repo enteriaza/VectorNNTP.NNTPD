@@ -84,7 +84,7 @@ public sealed class SystemdHostIntegrationTests
         var tlsPort = GetFreePort();
         pairs["BackFiller:BindPortTls"] = tlsPort.ToString();
         pairs["BackFiller:BindAddress:0"] = "*";
-        pairs["BackFiller:LogDirectory"] = Directory.CreateTempSubdirectory("bf-systemd-logs-").FullName;
+        pairs["BackFiller:Logging:File:LogDir"] = Directory.CreateTempSubdirectory("bf-systemd-logs-").FullName;
         builder.Configuration.AddInMemoryCollection(pairs);
         builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
         builder.Services.AddSingleton<ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());

@@ -25,7 +25,6 @@ internal static class BackFillerTestOptions
             AcmeDirectoryUrl = BackFillerOptions.DefaultAcmeDirectoryUrl,
             AcmeRenewalThresholdDays = BackFillerOptions.DefaultAcmeRenewalThresholdDays,
             AcmeStateDir = "certs/",
-            LogDirectory = "logs",
             CertificateDirectory = "certs",
         };
     }
@@ -46,7 +45,7 @@ internal static class BackFillerTestOptions
             ["BackFiller:ServerId"] = "1",
             ["BackFiller:DnsSuffix"] = "usenet.ninja",
             ["BackFiller:CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
-            ["BackFiller:LogDirectory"] = "logs",
+            ["BackFiller:Logging:File:LogDir"] = "logs",
             ["BackFiller:BindAddress:0"] = "127.0.0.1",
             ["BackFiller:BindPortTls"] = "1190",
             ["BackFiller:AcmeDirectoryUrl"] = BackFillerOptions.DefaultAcmeDirectoryUrl,

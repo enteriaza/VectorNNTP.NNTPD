@@ -96,7 +96,7 @@ public sealed class BackFillerApplicationLocalPathTests
         {
             var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
             pairs["BackFiller:AcmeStateDir"] = absoluteCerts;
-            pairs["BackFiller:LogDirectory"] = absoluteLogs;
+            pairs["BackFiller:Logging:File:LogDir"] = absoluteLogs;
             using var host = CreateHost(pairs: pairs);
             var runtime = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
             Assert.Equal(Expected(absoluteCerts), runtime.CertificateDirectory);
@@ -114,7 +114,7 @@ public sealed class BackFillerApplicationLocalPathTests
     {
         var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
         pairs["BackFiller:AcmeStateDir"] = "nested-certs/";
-        pairs["BackFiller:LogDirectory"] = "nested-logs";
+        pairs["BackFiller:Logging:File:LogDir"] = "nested-logs";
         using var host = CreateHost(pairs: pairs);
         var runtime = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
         Assert.Equal(Expected("nested-certs/"), runtime.CertificateDirectory);

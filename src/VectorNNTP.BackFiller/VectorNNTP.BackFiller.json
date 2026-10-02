@@ -25,9 +25,26 @@
       "ParserAccumulationMaxBytes": 262144,
       "TlsHandshakeTimeoutSeconds": 30
     },
-    "LogDirectory": "logs",
-    "LogLevel": "Debug",
-    "LogRetentionDays": 21,
+    "Logging": {
+      "LogLevel": "Debug",
+      "LogRetentionDays": 1,
+      "Json": false,
+      "File": {
+        "Enabled": true,
+        "LogDir": "logs"
+      },
+      "Syslog": {
+        "Enabled": false,
+        "Host": "",
+        "Port": 514,
+        "Protocol": "Udp"
+      },
+      "RabbitMQ": {
+        "Enabled": false,
+        "Exchange": "logs",
+        "RoutingKey": "backfiller"
+      }
+    },
     "ServerId": 1,
     "Shutdown": {
       "DrainQueuedWork": true,

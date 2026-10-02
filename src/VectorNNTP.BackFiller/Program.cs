@@ -3,8 +3,13 @@ using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.BackFiller.Logging;
 
-BackFillerLoggingExtensions.UseAutoFlushConsoleOutput();
-Log.Logger = BackFillerLoggingExtensions.CreateBootstrapLogger();
+var loggingCommandLine = BackFillerLoggingCommandLine.FromArguments(args);
+if (loggingCommandLine.Console)
+{
+    BackFillerLoggingExtensions.UseAutoFlushConsoleOutput();
+}
+
+Log.Logger = BackFillerLoggingExtensions.CreateBootstrapLogger(loggingCommandLine);
 
 try
 {
@@ -23,7 +28,7 @@ try
         builder.Configuration,
         builder.Environment.EnvironmentName);
 
-    builder.ConfigureBackFillerLogging();
+    builder.ConfigureBackFillerLogging(commandLine: loggingCommandLine);
     builder.ConfigureBackFillerPlatformHosting();
     builder.AddBackFillerHosting();
 

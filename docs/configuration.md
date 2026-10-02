@@ -538,6 +538,27 @@ Example (no secrets):
 
 Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via `VECTOR__RABBITMQ__USERNAME` and `VECTOR__RABBITMQ__PASSWORD`, or user secrets.
 
+## BackFiller logging (`BackFiller:Logging`)
+
+`BackFiller:Logging` is the only logging configuration surface. The host does not read a `Serilog` section, and JSON cannot select sink types, enrichers, filters, or formatter types. The console sink is off unless the process is started with `--console`. There is no `ApplicationName` setting. The rolling file name is the entry assembly name (`{entry assembly name}-yyyyMMdd.log`).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `Logging:LogLevel` | string | `Debug` | Serilog minimum level for enabled targets: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`. |
+| `Logging:LogRetentionDays` | int | `1` | Daily file retention, range `1`–`3650`. Used when the file target is enabled. |
+| `Logging:Json` | bool | `false` | When `true`, compatible targets use Serilog's JSON formatter. There is no per-target formatter setting. |
+| `Logging:File:Enabled` | bool | `true` | Rolling file sink. Buffered, flushed about once per second, daily rolling, gzip archive hook. |
+| `Logging:File:LogDir` | string | `logs` | Directory for the file target. Required when file logging is enabled. Empty is accepted when file logging is disabled. Relative paths resolve through Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. |
+| `Logging:RabbitMQ:Enabled` | bool | `false` | Publish log events on the existing `RabbitMqService` connection. Broker connectivity stays in `RabbitMq.json`. |
+| `Logging:RabbitMQ:Exchange` | string | `logs` | Exchange used when RabbitMQ logging is enabled. The sink does not declare it. |
+| `Logging:RabbitMQ:RoutingKey` | string | `backfiller` | Routing key used when RabbitMQ logging is enabled. |
+| `Logging:Syslog:Enabled` | bool | `false` | Remote syslog sink. |
+| `Logging:Syslog:Host` | string | empty | Required when syslog is enabled. |
+| `Logging:Syslog:Port` | int | `514` | `1`–`65535` when syslog is enabled. |
+| `Logging:Syslog:Protocol` | string | `Udp` | `Udp` or `Tcp` when syslog is enabled. TLS syslog is not supported. |
+
+File, RabbitMQ, and syslog may be enabled together, including with `--console`. Disabled targets are not validated beyond normal binding. RabbitMQ logging does not take host, username, password, virtual host, or TLS settings. A publish failure is reported through Serilog's self-log and does not stop the process.
+
 ## BackFiller article retention (`BackFiller:ArticleRetention`)
 
 In-memory retention holds CanonicalV1 `ArtData` between ArticleWork Success and VATP OPEN. A published Success RequestId is a hard OPEN capability until OPEN consumes it, cancel, `RetentionTtlSeconds` expiry, or process dispose. FIFO reclaim under `MaximumRetainedPayloadGigabytes` skips entries that still have openable RequestIds; capacity pressure rejects new admissions (`CapacityUnavailable`) instead of invalidating those capabilities. See `docs/vatp.md`.

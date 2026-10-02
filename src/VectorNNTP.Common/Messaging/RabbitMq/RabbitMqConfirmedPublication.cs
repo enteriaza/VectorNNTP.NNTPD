@@ -10,10 +10,14 @@ namespace VectorNNTP.Common.Messaging.RabbitMq;
 /// <param name="CorrelationId">Optional AMQP CorrelationId.</param>
 /// <param name="ContentType">Optional AMQP content type.</param>
 /// <param name="RequestIdHeader">Optional AMQP <c>RequestId</c> header value.</param>
-/// <param name="ExpirationMilliseconds">AMQP per-message expiration in milliseconds, as a string.</param>
+/// <param name="ExpirationMilliseconds">
+/// AMQP per-message expiration in milliseconds, as a string. Whitespace omits expiration.
+/// </param>
 /// <param name="Persistent">Whether the message uses persistent delivery mode.</param>
 /// <param name="Mandatory">Whether the broker must return unroutable messages.</param>
 /// <param name="Body">Application payload bytes.</param>
+/// <param name="ContentEncoding">Optional AMQP content encoding, such as <c>utf-8</c>.</param>
+/// <param name="Timestamp">Optional AMQP timestamp. Omitted from the frame when null.</param>
 public sealed record RabbitMqConfirmedPublication(
     string Exchange,
     string RoutingKey,
@@ -25,4 +29,6 @@ public sealed record RabbitMqConfirmedPublication(
     string ExpirationMilliseconds,
     bool Persistent,
     bool Mandatory,
-    ReadOnlyMemory<byte> Body);
+    ReadOnlyMemory<byte> Body,
+    string? ContentEncoding = null,
+    DateTimeOffset? Timestamp = null);

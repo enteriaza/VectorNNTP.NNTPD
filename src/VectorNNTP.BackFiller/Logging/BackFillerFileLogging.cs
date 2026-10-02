@@ -1,22 +1,28 @@
 using System.Globalization;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Serilog;
+using Serilog.Configuration;
 using Serilog.Events;
+using Serilog.Formatting;
+using Serilog.Formatting.Display;
+using Serilog.Formatting.Json;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Logging;
 
 /// <summary>
-/// Resolves <see cref="BackFillerOptions.LogDirectory"/> and applies the BackFiller
+/// Resolves <see cref="BackFillerFileLoggingTargetOptions.LogDir"/> and applies the BackFiller
 /// Serilog sink graph in code (Native AOT / single-file safe).
 /// </summary>
 /// <remarks>
-/// Console, Async, and File settings are fixed in this type. The file path comes from
-/// <see cref="BackFillerOptions.LogDirectory"/>. The minimum level comes from
-/// <see cref="BackFillerOptions.LogLevel"/>. Daily retention comes from
-/// <see cref="BackFillerOptions.LogRetentionDays"/>. A <c>Serilog</c> configuration
-/// section is not read.
+/// File, syslog, RabbitMQ, and optional console sinks are created here. The file directory is
+/// <c>BackFiller:Logging:File:LogDir</c>. Level, retention, JSON formatting, and target
+/// switches come from <see cref="BackFillerLoggingOptions"/>. A <c>Serilog</c> configuration
+/// section is not read. RabbitMQ logging publishes through <see cref="RabbitMqLogEventSink"/>
+/// on the existing <see cref="IRabbitMqService"/> connection.
 /// </remarks>
 internal static class BackFillerFileLogging
 {
@@ -30,12 +36,12 @@ internal static class BackFillerFileLogging
     public const string GzipArchiveSuffix = ".gz";
 
     /// <summary>
-    /// Console and File sink output template matching production <c>VectorNNTP.BackFiller.json</c>.
+    /// Text output template used when <see cref="BackFillerLoggingOptions.Json"/> is false.
     /// </summary>
     public const string SinkOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
-    /// <summary>Restricted minimum level for Console and File sinks when the configured level is at least Debug.</summary>
+    /// <summary>Restricted minimum level for sinks when the configured level is at least Debug.</summary>
     public const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
 
     /// <summary>Serilog.Sinks.Async buffer size.</summary>
@@ -62,13 +68,11 @@ internal static class BackFillerFileLogging
     /// <paramref name="applicationBaseDirectory"/> (default
     /// <see cref="AppContext.BaseDirectory"/>). Absolute paths stay absolute.
     /// </summary>
-    public static string ResolveDirectory(string? logDirectory, string? applicationBaseDirectory = null)
+    public static string ResolveDirectory(string logDirectory, string? applicationBaseDirectory = null)
     {
-        var configured = string.IsNullOrWhiteSpace(logDirectory)
-            ? BackFillerOptions.DefaultLogDirectory
-            : logDirectory.Trim();
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
         return ApplicationLocalPath.ResolveApplicationLocalPath(
-            configured,
+            logDirectory.Trim(),
             applicationBaseDirectory ?? AppContext.BaseDirectory);
     }
 
@@ -97,9 +101,7 @@ internal static class BackFillerFileLogging
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var logDir = ResolveDirectory(
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"],
-            applicationBaseDirectory);
+        var logDir = ResolveDirectory(ReadRequiredFileLogDir(BindLogging(configuration)), applicationBaseDirectory);
         Directory.CreateDirectory(logDir);
         return RollingFilePath(logDir, ApplicationJsonConfiguration.EntryAssemblyName);
     }
@@ -107,34 +109,53 @@ internal static class BackFillerFileLogging
     /// <summary>
     /// Applies the code-defined BackFiller sink graph.
     /// </summary>
+    /// <param name="loggerConfiguration">The Serilog configuration to update.</param>
+    /// <param name="configuration">Application configuration.</param>
+    /// <param name="applicationBaseDirectory">
+    /// Directory used to resolve a relative file-log path. Defaults to <see cref="AppContext.BaseDirectory"/>.
+    /// </param>
+    /// <param name="commandLine">
+    /// Process switches that enable the console sink and ambient context enrichment.
+    /// </param>
+    /// <param name="services">
+    /// Host services used to resolve <see cref="IRabbitMqService"/> when RabbitMQ logging is enabled.
+    /// </param>
     /// <remarks>
-    /// <para>
     /// Does not call <c>ReadFrom.Configuration</c> and does not read a <c>Serilog</c> section.
-    /// <see cref="BackFillerOptions.LogDirectory"/>, <see cref="BackFillerOptions.LogLevel"/>, and
-    /// <see cref="BackFillerOptions.LogRetentionDays"/> are read from the BackFiller section before
-    /// sinks are created.
-    /// </para>
-    /// <para>
-    /// Microsoft, Microsoft.Hosting.Lifetime, and System level overrides stay fixed in code.
-    /// The configured level is the default minimum and the <c>VectorNNTP.BackFiller</c> minimum.
-    /// </para>
+    /// File, syslog, RabbitMQ, and console sinks are added only when their switches are on. Targets are not
+    /// mutually exclusive. <paramref name="commandLine"/> enables the console sink and, when requested,
+    /// ambient context enrichment. Those switches are not configuration settings.
     /// </remarks>
-    /// <exception cref="InvalidOperationException">
-    /// <c>BackFiller:LogLevel</c> or <c>BackFiller:LogRetentionDays</c> is present and invalid.
-    /// </exception>
+    /// <exception cref="InvalidOperationException">Logging configuration is invalid.</exception>
     public static void ConfigureLogger(
         LoggerConfiguration loggerConfiguration,
         IConfiguration configuration,
-        string? applicationBaseDirectory = null)
+        string? applicationBaseDirectory = null,
+        BackFillerLoggingCommandLine commandLine = default,
+        IServiceProvider? services = null)
     {
         ArgumentNullException.ThrowIfNull(loggerConfiguration);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var minimumLevel = BackFillerLogLevelParser.ParseOrDefault(
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogLevel)}"]);
-        var retainedFileCountLimit = ReadLogRetentionDays(configuration);
-        var path = EnsureRollingFilePath(configuration, applicationBaseDirectory);
+        var logging = BindLogging(configuration);
+        var minimumLevel = BackFillerLogLevelParser.ParseOrDefault(logging.LogLevel);
+        var retainedFileCountLimit = ReadLogRetentionDays(logging);
+        var rabbit = logging.RabbitMq ?? new BackFillerRabbitMqLoggingTargetOptions();
+        if (rabbit.Enabled)
+        {
+            ValidateEnabledRabbitMq(rabbit);
+        }
+
+        var syslog = logging.Syslog ?? new BackFillerSyslogLoggingTargetOptions();
+        if (syslog.Enabled)
+        {
+            ValidateEnabledSyslog(syslog);
+        }
+
         var sinkLevel = minimumLevel < SinkMinimumLevel ? minimumLevel : SinkMinimumLevel;
+        ITextFormatter? jsonFormatter = logging.Json ? new JsonFormatter(renderMessage: true) : null;
+        var file = logging.File ?? new BackFillerFileLoggingTargetOptions();
+        var fileEnabled = file.Enabled;
 
         loggerConfiguration
             .MinimumLevel.Is(minimumLevel)
@@ -142,51 +163,228 @@ internal static class BackFillerFileLogging
             .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
             .MinimumLevel.Override("VectorNNTP.BackFiller", minimumLevel)
-            .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
-            .WriteTo.Console(
-                restrictedToMinimumLevel: sinkLevel,
-                outputTemplate: SinkOutputTemplate)
-            .WriteTo.Async(
-                a => a.File(
-                    path,
-                    restrictedToMinimumLevel: sinkLevel,
-                    outputTemplate: SinkOutputTemplate,
-                    fileSizeLimitBytes: null,
-                    buffered: FileBuffered,
-                    flushToDiskInterval: FileFlushToDiskInterval,
-                    rollingInterval: RollingInterval.Day,
-                    rollOnFileSizeLimit: RollOnFileSizeLimit,
-                    retainedFileCountLimit: retainedFileCountLimit,
-                    hooks: BackFillerSerilogHooks.DailyGzipFastest),
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
+
+        if (commandLine.EnrichFromLogContext)
+        {
+            loggerConfiguration.Enrich.FromLogContext();
+        }
+
+        if (commandLine.Console)
+        {
+            WriteConsole(loggerConfiguration, sinkLevel, jsonFormatter);
+        }
+
+        if (fileEnabled)
+        {
+            var path = EnsureRollingFilePath(configuration, applicationBaseDirectory);
+            loggerConfiguration.WriteTo.Async(
+                sink => WriteFile(sink, path, sinkLevel, retainedFileCountLimit, jsonFormatter),
                 bufferSize: AsyncBufferSize,
                 blockWhenFull: AsyncBlockWhenFull);
+        }
+
+        if (rabbit.Enabled)
+        {
+            WriteRabbitMq(loggerConfiguration, rabbit, sinkLevel, jsonFormatter, services);
+        }
+
+        if (syslog.Enabled)
+        {
+            WriteSyslog(loggerConfiguration, syslog, sinkLevel, jsonFormatter);
+        }
+    }
+
+    /// <summary>Binds <c>BackFiller:Logging</c>. Missing keys keep the option defaults.</summary>
+    public static BackFillerLoggingOptions BindLogging(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var logging = new BackFillerLoggingOptions();
+        configuration.GetSection($"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}").Bind(logging);
+        logging.File ??= new BackFillerFileLoggingTargetOptions();
+        logging.RabbitMq ??= new BackFillerRabbitMqLoggingTargetOptions();
+        logging.Syslog ??= new BackFillerSyslogLoggingTargetOptions();
+        return logging;
     }
 
     /// <summary>
-    /// Reads <c>BackFiller:LogRetentionDays</c>, or the default when the key is absent.
+    /// Reads retention from a bound logging section, or the default when the object uses the default.
     /// </summary>
-    /// <param name="configuration">Application configuration already loaded for the host.</param>
-    /// <returns>The File sink retention count.</returns>
-    /// <exception cref="InvalidOperationException">The configured value is not an integer in range.</exception>
-    public static int ReadLogRetentionDays(IConfiguration configuration)
+    /// <exception cref="InvalidOperationException">The value is outside the accepted range.</exception>
+    public static int ReadLogRetentionDays(BackFillerLoggingOptions logging)
     {
-        ArgumentNullException.ThrowIfNull(configuration);
-
-        var text = configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogRetentionDays)}"];
-        if (text is null)
-        {
-            return BackFillerOptions.DefaultLogRetentionDays;
-        }
-
-        if (!int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var days)
-            || days < BackFillerOptions.MinimumLogRetentionDays
-            || days > BackFillerOptions.MaximumLogRetentionDays)
+        ArgumentNullException.ThrowIfNull(logging);
+        var days = logging.LogRetentionDays;
+        if (days < BackFillerLoggingOptions.MinimumLogRetentionDays
+            || days > BackFillerLoggingOptions.MaximumLogRetentionDays)
         {
             throw new InvalidOperationException(
-                $"BackFiller:LogRetentionDays '{text}' is not valid. Use an integer in the range {BackFillerOptions.MinimumLogRetentionDays}–{BackFillerOptions.MaximumLogRetentionDays}.");
+                $"BackFiller:Logging:LogRetentionDays '{days.ToString(CultureInfo.InvariantCulture)}' is not valid. Use an integer in the range {BackFillerLoggingOptions.MinimumLogRetentionDays}–{BackFillerLoggingOptions.MaximumLogRetentionDays}.");
         }
 
         return days;
     }
+
+    private static string ReadRequiredFileLogDir(BackFillerLoggingOptions logging)
+    {
+        var file = logging.File ?? new BackFillerFileLoggingTargetOptions();
+        if (!file.Enabled)
+        {
+            throw new InvalidOperationException("BackFiller file logging is disabled.");
+        }
+
+        if (string.IsNullOrWhiteSpace(file.LogDir))
+        {
+            throw new InvalidOperationException(
+                "BackFiller:Logging:File:LogDir is required when file logging is enabled (old key: DirLogs).");
+        }
+
+        return file.LogDir.Trim();
+    }
+
+    private static void ValidateEnabledRabbitMq(BackFillerRabbitMqLoggingTargetOptions rabbit)
+    {
+        if (string.IsNullOrWhiteSpace(rabbit.Exchange))
+        {
+            throw new InvalidOperationException(
+                "BackFiller:Logging:RabbitMQ:Exchange is required when RabbitMQ logging is enabled.");
+        }
+
+        if (string.IsNullOrWhiteSpace(rabbit.RoutingKey))
+        {
+            throw new InvalidOperationException(
+                "BackFiller:Logging:RabbitMQ:RoutingKey is required when RabbitMQ logging is enabled.");
+        }
+    }
+
+    private static void WriteRabbitMq(
+        LoggerConfiguration loggerConfiguration,
+        BackFillerRabbitMqLoggingTargetOptions rabbit,
+        LogEventLevel sinkLevel,
+        ITextFormatter? jsonFormatter,
+        IServiceProvider? services)
+    {
+        var rabbitMq = services?.GetService<IRabbitMqService>()
+            ?? throw new InvalidOperationException(
+                "BackFiller:Logging:RabbitMQ is enabled but IRabbitMqService is not registered.");
+        ITextFormatter formatter = jsonFormatter
+            ?? new MessageTemplateTextFormatter(SinkOutputTemplate, CultureInfo.InvariantCulture);
+        var sink = new RabbitMqLogEventSink(
+            rabbitMq,
+            rabbit.Exchange,
+            rabbit.RoutingKey,
+            ApplicationJsonConfiguration.EntryAssemblyName,
+            formatter,
+            jsonFormatter is null ? RabbitMqLogEventSink.TextContentType : RabbitMqLogEventSink.JsonContentType);
+        loggerConfiguration.WriteTo.Async(
+            writeTo => writeTo.Sink(sink, restrictedToMinimumLevel: sinkLevel),
+            bufferSize: AsyncBufferSize,
+            blockWhenFull: AsyncBlockWhenFull);
+    }
+
+    private static void ValidateEnabledSyslog(BackFillerSyslogLoggingTargetOptions syslog)
+    {
+        if (string.IsNullOrWhiteSpace(syslog.Host))
+        {
+            throw new InvalidOperationException(
+                "BackFiller:Logging:Syslog:Host is required when syslog logging is enabled.");
+        }
+
+        if (syslog.Port is < 1 or > 65535)
+        {
+            throw new InvalidOperationException(
+                "BackFiller:Logging:Syslog:Port must be an integer in the range 1–65535.");
+        }
+
+        if (!IsUdp(syslog.Protocol) && !IsTcp(syslog.Protocol))
+        {
+            throw new InvalidOperationException("BackFiller:Logging:Syslog:Protocol must be Udp or Tcp.");
+        }
+    }
+
+    private static void WriteConsole(
+        LoggerConfiguration loggerConfiguration,
+        LogEventLevel sinkLevel,
+        ITextFormatter? jsonFormatter)
+    {
+        if (jsonFormatter is null)
+        {
+            loggerConfiguration.WriteTo.Console(
+                restrictedToMinimumLevel: sinkLevel,
+                outputTemplate: SinkOutputTemplate);
+            return;
+        }
+
+        loggerConfiguration.WriteTo.Console(jsonFormatter, restrictedToMinimumLevel: sinkLevel);
+    }
+
+    private static void WriteFile(
+        LoggerSinkConfiguration sink,
+        string path,
+        LogEventLevel sinkLevel,
+        int retainedFileCountLimit,
+        ITextFormatter? jsonFormatter)
+    {
+        if (jsonFormatter is null)
+        {
+            sink.File(
+                path,
+                restrictedToMinimumLevel: sinkLevel,
+                outputTemplate: SinkOutputTemplate,
+                fileSizeLimitBytes: null,
+                buffered: FileBuffered,
+                flushToDiskInterval: FileFlushToDiskInterval,
+                rollingInterval: RollingInterval.Day,
+                rollOnFileSizeLimit: RollOnFileSizeLimit,
+                retainedFileCountLimit: retainedFileCountLimit,
+                hooks: BackFillerSerilogHooks.DailyGzipFastest);
+            return;
+        }
+
+        sink.File(
+            jsonFormatter,
+            path,
+            restrictedToMinimumLevel: sinkLevel,
+            fileSizeLimitBytes: null,
+            buffered: FileBuffered,
+            flushToDiskInterval: FileFlushToDiskInterval,
+            rollingInterval: RollingInterval.Day,
+            rollOnFileSizeLimit: RollOnFileSizeLimit,
+            retainedFileCountLimit: retainedFileCountLimit,
+            hooks: BackFillerSerilogHooks.DailyGzipFastest);
+    }
+
+    private static void WriteSyslog(
+        LoggerConfiguration loggerConfiguration,
+        BackFillerSyslogLoggingTargetOptions syslog,
+        LogEventLevel sinkLevel,
+        ITextFormatter? jsonFormatter)
+    {
+        var host = syslog.Host.Trim();
+        var appName = ApplicationJsonConfiguration.EntryAssemblyName;
+        if (IsUdp(syslog.Protocol))
+        {
+            loggerConfiguration.WriteTo.UdpSyslog(
+                host,
+                syslog.Port,
+                appName: appName,
+                restrictedToMinimumLevel: sinkLevel,
+                formatter: jsonFormatter);
+            return;
+        }
+
+        loggerConfiguration.WriteTo.TcpSyslog(
+            host,
+            syslog.Port,
+            appName: appName,
+            useTls: false,
+            restrictedToMinimumLevel: sinkLevel,
+            formatter: jsonFormatter);
+    }
+
+    private static bool IsUdp(string? protocol) =>
+        string.Equals(protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.UdpProtocol, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTcp(string? protocol) =>
+        string.Equals(protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.TcpProtocol, StringComparison.OrdinalIgnoreCase);
 }

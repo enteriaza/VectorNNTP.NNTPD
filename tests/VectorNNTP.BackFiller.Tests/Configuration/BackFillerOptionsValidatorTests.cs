@@ -25,12 +25,12 @@ public sealed class BackFillerOptionsValidatorTests
     public void Validate_fails_when_log_retention_days_is_out_of_range(int days)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.LogRetentionDays = days;
+        options.Logging.LogRetentionDays = days;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
-            static failure => failure.Contains("BackFiller:LogRetentionDays", StringComparison.Ordinal));
+            static failure => failure.Contains("BackFiller:Logging:LogRetentionDays", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -41,13 +41,13 @@ public sealed class BackFillerOptionsValidatorTests
     public void Validate_fails_when_log_level_is_not_a_serilog_level(string level)
     {
         var options = BackFillerTestOptions.CreateValid();
-        options.LogLevel = level;
+        options.Logging.LogLevel = level;
         var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
             static failure => failure.Contains(
-                "BackFiller:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.",
+                "BackFiller:Logging:LogLevel must be one of Verbose, Debug, Information, Warning, Error, Fatal.",
                 StringComparison.Ordinal));
     }
 
@@ -332,5 +332,108 @@ public sealed class BackFillerOptionsValidatorTests
         var options = new BackFillerOptions();
         configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
         Assert.Equal(3, options.ServerId);
+    }
+
+    [Fact]
+    public void Validate_ignores_syslog_and_rabbit_fields_while_those_targets_are_disabled()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.Syslog.Protocol = "Tls";
+        options.Logging.Syslog.Port = 0;
+        options.Logging.Syslog.Host = "";
+        options.Logging.RabbitMq.Exchange = "";
+        options.Logging.RabbitMq.RoutingKey = "";
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_rejects_enabled_syslog_without_a_host()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.Syslog.Enabled = true;
+        options.Logging.Syslog.Host = " ";
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("Syslog:Host", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(65536)]
+    public void Validate_rejects_enabled_syslog_port_outside_1_to_65535(int port)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.Syslog.Enabled = true;
+        options.Logging.Syslog.Host = "127.0.0.1";
+        options.Logging.Syslog.Port = port;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("Syslog:Port", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Tls")]
+    [InlineData("")]
+    public void Validate_rejects_enabled_syslog_protocol_other_than_udp_or_tcp(string protocol)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.Syslog.Enabled = true;
+        options.Logging.Syslog.Host = "127.0.0.1";
+        options.Logging.Syslog.Protocol = protocol;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("Syslog:Protocol", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Udp")]
+    [InlineData("tcp")]
+    public void Validate_accepts_enabled_syslog_udp_and_tcp(string protocol)
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.Syslog.Enabled = true;
+        options.Logging.Syslog.Host = "127.0.0.1";
+        options.Logging.Syslog.Protocol = protocol;
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_requires_rabbit_exchange_and_routing_key_only_when_enabled()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.RabbitMq.Enabled = true;
+        options.Logging.RabbitMq.Exchange = " ";
+        options.Logging.RabbitMq.RoutingKey = "";
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("RabbitMQ:Exchange", StringComparison.Ordinal));
+        Assert.Contains(result.Failures!, static failure => failure.Contains("RabbitMQ:RoutingKey", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_accepts_empty_file_log_directory_when_file_logging_is_disabled()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.File.Enabled = false;
+        options.Logging.File.LogDir = " ";
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public void Validate_rejects_empty_file_log_directory_when_file_logging_is_enabled()
+    {
+        var options = BackFillerTestOptions.CreateValid();
+        options.Logging.File.Enabled = true;
+        options.Logging.File.LogDir = "";
+        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+        Assert.Contains(result.Failures!, static failure => failure.Contains("File:LogDir", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_defaults_file_logging_to_enabled_with_logs()
+    {
+        var options = new BackFillerOptions();
+        Assert.True(options.Logging.File.Enabled);
+        Assert.Equal("logs", options.Logging.File.LogDir);
+        Assert.False(options.Logging.RabbitMq.Enabled);
     }
 }

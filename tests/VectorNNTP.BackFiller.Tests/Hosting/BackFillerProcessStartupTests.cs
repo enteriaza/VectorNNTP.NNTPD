@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.NNTPD.Configuration;
@@ -37,6 +38,8 @@ public sealed class BackFillerProcessStartupTests
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "unit-test-cloudflare-key-not-secret";
             process.StartInfo.Environment["VECTOR__CLOUDFLAREZONEID"] = "0123456789abcdef0123456789abcdef";
 
+            var applicationPath = arguments.Length > 0 ? arguments[0] : fileName;
+            var logBefore = SnapshotLogs(applicationPath);
             Assert.True(process.Start());
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
@@ -51,7 +54,7 @@ public sealed class BackFillerProcessStartupTests
                 Assert.Fail("BackFiller process did not exit within 20s after invalid BindPortTls.");
             }
 
-            var output = string.Concat(await stdout, await stderr);
+            var output = string.Concat(await stdout, await stderr, ReadNewLogs(applicationPath, logBefore));
             Assert.Equal(1, process.ExitCode);
             Assert.Contains("BindPortTls", output, StringComparison.Ordinal);
             Assert.DoesNotContain("super-secret", output, StringComparison.Ordinal);
@@ -90,6 +93,8 @@ public sealed class BackFillerProcessStartupTests
             process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "";
             process.StartInfo.Environment["VECTOR__ACMECERTIFICATEPASSWORD"] = "";
 
+            var applicationPath = arguments.Length > 0 ? arguments[0] : fileName;
+            var logBefore = SnapshotLogs(applicationPath);
             Assert.True(process.Start());
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
@@ -104,7 +109,7 @@ public sealed class BackFillerProcessStartupTests
                 Assert.Fail("BackFiller process did not exit within 20s while loading appsettings from a foreign cwd.");
             }
 
-            var output = string.Concat(await stdout, await stderr);
+            var output = string.Concat(await stdout, await stderr, ReadNewLogs(applicationPath, logBefore));
             Assert.Equal(1, process.ExitCode);
             Assert.True(
                 output.Contains("ConnectionStrings:NntpDB", StringComparison.Ordinal)
@@ -119,6 +124,49 @@ public sealed class BackFillerProcessStartupTests
         {
             TryDelete(workingDirectory);
         }
+    }
+
+    private static Dictionary<string, long> SnapshotLogs(string applicationPath)
+    {
+        var snapshot = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var logDir = Path.Combine(Path.GetDirectoryName(applicationPath)!, "logs");
+        if (!Directory.Exists(logDir))
+        {
+            return snapshot;
+        }
+
+        foreach (var file in Directory.GetFiles(logDir, "*.log"))
+        {
+            snapshot[file] = new FileInfo(file).Length;
+        }
+
+        return snapshot;
+    }
+
+    private static string ReadNewLogs(string applicationPath, Dictionary<string, long> before)
+    {
+        var logDir = Path.Combine(Path.GetDirectoryName(applicationPath)!, "logs");
+        if (!Directory.Exists(logDir))
+        {
+            return string.Empty;
+        }
+
+        var text = new StringBuilder();
+        foreach (var file in Directory.GetFiles(logDir, "*.log"))
+        {
+            before.TryGetValue(file, out var offset);
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (offset > stream.Length)
+            {
+                offset = 0;
+            }
+
+            stream.Position = offset;
+            using var reader = new StreamReader(stream);
+            text.Append(reader.ReadToEnd());
+        }
+
+        return text.ToString();
     }
 
     private static (string FileName, string[] Arguments) ResolveApplicationStart()

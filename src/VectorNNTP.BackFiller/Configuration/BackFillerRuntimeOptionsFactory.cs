@@ -18,7 +18,7 @@ public static class BackFillerRuntimeOptionsFactory
     /// <param name="nntpDb">Validated shared NntpDB options.</param>
     /// <param name="contentRootPath">
     /// Application binary directory used to resolve relative
-    /// <see cref="BackFillerOptions.LogDirectory"/> and certificate paths.
+    /// <c>BackFiller:Logging:File:LogDir</c> and certificate paths.
     /// Production hosting passes <see cref="AppContext.BaseDirectory"/>. When omitted,
     /// relative paths resolve against <see cref="AppContext.BaseDirectory"/> rather than
     /// the process working directory or an IDE project content root.
@@ -129,7 +129,7 @@ public static class BackFillerRuntimeOptionsFactory
             BindAddressTokens: tokens,
             CanonicalBindAddresses: addresses,
             BindPortTls: bindPortTls,
-            LogDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(options.LogDirectory, contentRootPath),
+            LogDirectory: ResolveFileLogDirectory(options, contentRootPath),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             Shutdown: new BackFillerShutdownRuntimeOptions(
                 TimeSpan.FromSeconds(shutdown.GracePeriodSeconds),
@@ -159,5 +159,16 @@ public static class BackFillerRuntimeOptionsFactory
                 nntpDbBuilder.Database ?? string.Empty,
                 nntpDbBuilder.UserID ?? string.Empty),
             AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
+    }
+
+    private static string ResolveFileLogDirectory(BackFillerOptions options, string? contentRootPath)
+    {
+        var file = options.Logging?.File ?? new BackFillerFileLoggingTargetOptions();
+        if (string.IsNullOrWhiteSpace(file.LogDir))
+        {
+            return string.Empty;
+        }
+
+        return ApplicationLocalPath.ResolveApplicationLocalPath(file.LogDir, contentRootPath);
     }
 }

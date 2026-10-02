@@ -72,7 +72,6 @@ internal sealed class RabbitMqClientPublishChannel : IRabbitMqPublishChannel
         ArgumentNullException.ThrowIfNull(publication.Exchange);
         ArgumentException.ThrowIfNullOrWhiteSpace(publication.RoutingKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(publication.MessageId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(publication.ExpirationMilliseconds);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         if (!_channel.IsOpen)
         {
@@ -138,10 +137,24 @@ internal sealed class RabbitMqClientPublishChannel : IRabbitMqPublishChannel
         var properties = new BasicProperties
         {
             MessageId = publication.MessageId,
-            Expiration = publication.ExpirationMilliseconds,
             DeliveryMode = publication.Persistent ? DeliveryModes.Persistent : DeliveryModes.Transient,
             Persistent = publication.Persistent,
         };
+
+        if (!string.IsNullOrWhiteSpace(publication.ExpirationMilliseconds))
+        {
+            properties.Expiration = publication.ExpirationMilliseconds;
+        }
+
+        if (!string.IsNullOrWhiteSpace(publication.ContentEncoding))
+        {
+            properties.ContentEncoding = publication.ContentEncoding;
+        }
+
+        if (publication.Timestamp is { } timestamp)
+        {
+            properties.Timestamp = new AmqpTimestamp(timestamp.ToUnixTimeSeconds());
+        }
 
         if (!string.IsNullOrWhiteSpace(publication.AppId))
         {

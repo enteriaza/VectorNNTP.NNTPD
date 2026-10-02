@@ -108,7 +108,7 @@ public sealed class BackFillerSerilogLoggingTests
         try
         {
             var configuration = new ConfigurationManager();
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir;
 
             var applicationName = ApplicationJsonConfiguration.EntryAssemblyName;
             var expected = BackFillerFileLogging.RollingFilePath(logDir, applicationName);
@@ -129,13 +129,21 @@ public sealed class BackFillerSerilogLoggingTests
         using var doc = JsonDocument.Parse(File.ReadAllText(FindProductionAppsettings()));
         Assert.False(doc.RootElement.TryGetProperty("Serilog", out _));
         var backFiller = doc.RootElement.GetProperty("BackFiller");
-        Assert.Equal("logs", backFiller.GetProperty("LogDirectory").GetString());
-        Assert.Equal(BackFillerOptions.DefaultLogLevel, backFiller.GetProperty("LogLevel").GetString());
-        var retentionDays = backFiller.GetProperty("LogRetentionDays").GetInt32();
-        Assert.InRange(
-            retentionDays,
-            BackFillerOptions.MinimumLogRetentionDays,
-            BackFillerOptions.MaximumLogRetentionDays);
+        Assert.False(backFiller.TryGetProperty("LogDir", out _));
+        Assert.False(backFiller.TryGetProperty("LogDirectory", out _));
+        Assert.False(backFiller.TryGetProperty("LogLevel", out _));
+        var logging = backFiller.GetProperty("Logging");
+        Assert.Equal(BackFillerLoggingOptions.DefaultLogLevel, logging.GetProperty("LogLevel").GetString());
+        Assert.Equal(BackFillerLoggingOptions.DefaultLogRetentionDays, logging.GetProperty("LogRetentionDays").GetInt32());
+        Assert.False(logging.GetProperty("Json").GetBoolean());
+        Assert.True(logging.GetProperty("File").GetProperty("Enabled").GetBoolean());
+        Assert.Equal("logs", logging.GetProperty("File").GetProperty("LogDir").GetString());
+        Assert.False(logging.GetProperty("RabbitMQ").GetProperty("Enabled").GetBoolean());
+        Assert.Equal("logs", logging.GetProperty("RabbitMQ").GetProperty("Exchange").GetString());
+        Assert.Equal("backfiller", logging.GetProperty("RabbitMQ").GetProperty("RoutingKey").GetString());
+        Assert.False(logging.GetProperty("Syslog").GetProperty("Enabled").GetBoolean());
+        Assert.Equal(514, logging.GetProperty("Syslog").GetProperty("Port").GetInt32());
+        Assert.Equal("Udp", logging.GetProperty("Syslog").GetProperty("Protocol").GetString());
         Assert.Equal(TimeSpan.FromSeconds(1), BackFillerFileLogging.FileFlushToDiskInterval);
         Assert.False(backFiller.TryGetProperty("Serilog", out _));
     }
@@ -157,7 +165,7 @@ public sealed class BackFillerSerilogLoggingTests
                 logDir,
                 settings: new Dictionary<string, string?>
                 {
-                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogLevel)}"] = configured,
+                    [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogLevel)}"] = configured,
                 });
             var logger = host.Services.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("VectorNNTP.BackFiller");
@@ -182,8 +190,8 @@ public sealed class BackFillerSerilogLoggingTests
         try
         {
             var configuration = new ConfigurationManager();
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogRetentionDays)}"] = "9";
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir;
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogRetentionDays)}"] = "9";
 
             var loggerConfiguration = new LoggerConfiguration();
             BackFillerFileLogging.ConfigureLogger(loggerConfiguration, configuration);
@@ -213,8 +221,8 @@ public sealed class BackFillerSerilogLoggingTests
                 logDir,
                 settings: new Dictionary<string, string?>
                 {
-                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogLevel)}"] = "Warning",
-                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogRetentionDays)}"] = "4",
+                    [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogLevel)}"] = "Warning",
+                    [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogRetentionDays)}"] = "4",
                     ["Serilog:MinimumLevel:Default"] = "Verbose",
                     ["Serilog:MinimumLevel:Override:VectorNNTP.BackFiller"] = "Verbose",
                     ["Serilog:WriteTo:0:Name"] = "Console",
@@ -259,12 +267,12 @@ public sealed class BackFillerSerilogLoggingTests
         try
         {
             var configuration = new ConfigurationManager();
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogLevel)}"] = configured;
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir;
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogLevel)}"] = configured;
 
             var error = Assert.Throws<InvalidOperationException>(
                 () => BackFillerFileLogging.ConfigureLogger(new LoggerConfiguration(), configuration));
-            Assert.Contains("BackFiller:LogLevel", error.Message, StringComparison.Ordinal);
+            Assert.Contains("BackFiller:Logging:LogLevel", error.Message, StringComparison.Ordinal);
             Assert.Contains("Verbose, Debug, Information, Warning, Error, or Fatal", error.Message, StringComparison.Ordinal);
         }
         finally
@@ -280,7 +288,7 @@ public sealed class BackFillerSerilogLoggingTests
         try
         {
             var configuration = new ConfigurationManager();
-            configuration[$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir;
+            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir;
 
             var loggerConfiguration = new LoggerConfiguration();
             BackFillerFileLogging.ConfigureLogger(loggerConfiguration, configuration);
@@ -292,7 +300,7 @@ public sealed class BackFillerSerilogLoggingTests
                 static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
-            Assert.Equal(BackFillerOptions.DefaultLogRetentionDays, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
+            Assert.Equal(BackFillerLoggingOptions.DefaultLogRetentionDays, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
             Assert.Same(BackFillerSerilogHooks.DailyGzipFastest, ReadInstanceField(fileSink, "_hooks"));
 
@@ -308,7 +316,7 @@ public sealed class BackFillerSerilogLoggingTests
                 BackFillerFileLogging.AsyncBufferSize,
                 Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
 
-            Assert.Contains(
+            Assert.DoesNotContain(
                 sinks,
                 static n => n.GetType().Name.Contains("Console", StringComparison.Ordinal));
             AssertFlushesOncePerSecond(sinks);
@@ -332,7 +340,8 @@ public sealed class BackFillerSerilogLoggingTests
             Console.SetOut(captured);
             host = CreateLoggingHost(
                 logDir,
-                configure: static lc => lc.MinimumLevel.Override("VectorNNTP.BackFiller", LogEventLevel.Verbose));
+                configure: static lc => lc.MinimumLevel.Override("VectorNNTP.BackFiller", LogEventLevel.Verbose),
+                commandLine: new BackFillerLoggingCommandLine(Console: true, EnrichFromLogContext: false));
             var logger = host.Services.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("VectorNNTP.BackFiller");
 
@@ -401,6 +410,8 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.Contains("Serilog.Sinks.Console", names);
         Assert.Contains("Serilog.Sinks.File.Archive", names);
         Assert.Contains("Serilog.Sinks.Async", names);
+        Assert.Contains("Serilog.Sinks.Syslog", names);
+        Assert.DoesNotContain("Serilog.Sinks.RabbitMQ", names);
         Assert.DoesNotContain("Serilog.Settings.Configuration", names);
         Assert.NotNull(BackFillerSerilogHooks.DailyGzipFastest);
     }
@@ -419,7 +430,7 @@ public sealed class BackFillerSerilogLoggingTests
             builder.Configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
-                    [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] = logDir,
+                    [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir,
                 });
             builder.ConfigureBackFillerLogging();
             host = builder.Build();
@@ -445,7 +456,8 @@ public sealed class BackFillerSerilogLoggingTests
     private static IHost CreateLoggingHost(
         string? logDir = null,
         Action<LoggerConfiguration>? configure = null,
-        IReadOnlyDictionary<string, string?>? settings = null)
+        IReadOnlyDictionary<string, string?>? settings = null,
+        BackFillerLoggingCommandLine commandLine = default)
     {
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
         {
@@ -453,7 +465,7 @@ public sealed class BackFillerSerilogLoggingTests
         });
         var pairs = new Dictionary<string, string?>
         {
-            [$"{BackFillerOptions.SectionName}:{nameof(BackFillerOptions.LogDirectory)}"] =
+            [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] =
                 logDir ?? CreateTempLogDir(),
         };
         if (settings is not null)
@@ -465,7 +477,7 @@ public sealed class BackFillerSerilogLoggingTests
         }
 
         builder.Configuration.AddInMemoryCollection(pairs);
-        builder.ConfigureBackFillerLogging(configure);
+        builder.ConfigureBackFillerLogging(configure, commandLine);
         return builder.Build();
     }
 

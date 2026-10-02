@@ -41,7 +41,7 @@ public sealed class BackFillerPlatformHostingTests
         builder.ConfigureBackFillerPlatformHosting();
 
         Assert.Contains(
-            "options.ServiceName = \"VectorNNTP.BackFiller\"",
+            "options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName",
             File.ReadAllText(FindPlatformHostingSource()),
             StringComparison.Ordinal);
         Assert.False(

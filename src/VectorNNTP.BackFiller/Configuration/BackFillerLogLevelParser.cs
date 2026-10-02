@@ -3,7 +3,7 @@ using Serilog.Events;
 namespace VectorNNTP.BackFiller.Configuration;
 
 /// <summary>
-/// Parses <see cref="BackFillerOptions.LogLevel"/> into a Serilog level.
+/// Parses <see cref="BackFillerLoggingOptions.LogLevel"/> into a Serilog level.
 /// </summary>
 /// <remarks>
 /// Accepts only the Serilog names <c>Verbose</c>, <c>Debug</c>, <c>Information</c>,
@@ -36,7 +36,7 @@ internal static class BackFillerLogLevelParser
     }
 
     /// <summary>
-    /// Parses <paramref name="text"/>, using <see cref="BackFillerOptions.DefaultLogLevel"/> when it is omitted.
+    /// Parses <paramref name="text"/>, using <see cref="BackFillerLoggingOptions.DefaultLogLevel"/> when it is omitted.
     /// </summary>
     /// <param name="text">Configured level text, or <see langword="null"/> when the key is absent.</param>
     /// <returns>The Serilog minimum level.</returns>
@@ -45,9 +45,9 @@ internal static class BackFillerLogLevelParser
     {
         if (text is null)
         {
-            if (!TryParse(BackFillerOptions.DefaultLogLevel, out var fallback))
+            if (!TryParse(BackFillerLoggingOptions.DefaultLogLevel, out var fallback))
             {
-                throw new InvalidOperationException("BackFiller:LogLevel default is not a Serilog level.");
+                throw new InvalidOperationException("BackFiller:Logging:LogLevel default is not a Serilog level.");
             }
 
             return fallback;
@@ -56,7 +56,7 @@ internal static class BackFillerLogLevelParser
         if (!TryParse(text, out var level))
         {
             throw new InvalidOperationException(
-                $"BackFiller:LogLevel '{text}' is not valid. Use Verbose, Debug, Information, Warning, Error, or Fatal.");
+                $"BackFiller:Logging:LogLevel '{text}' is not valid. Use Verbose, Debug, Information, Warning, Error, or Fatal.");
         }
 
         return level;

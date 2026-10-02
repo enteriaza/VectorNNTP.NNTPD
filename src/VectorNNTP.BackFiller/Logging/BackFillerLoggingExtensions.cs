@@ -24,14 +24,22 @@ public static partial class BackFillerLoggingExtensions
     /// Creates an early bootstrap logger used before the Generic Host is built.
     /// </summary>
     /// <returns>A bootstrap logger assigned to <see cref="Log.Logger"/>.</returns>
-    public static Serilog.ILogger CreateBootstrapLogger()
+    internal static Serilog.ILogger CreateBootstrapLogger(BackFillerLoggingCommandLine commandLine = default)
     {
-        return new LoggerConfiguration()
+        var configuration = new LoggerConfiguration()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
-            .Enrich.FromLogContext()
-            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName)
-            .WriteTo.Console(outputTemplate: ConsoleOutputTemplate)
-            .CreateBootstrapLogger();
+            .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
+        if (commandLine.EnrichFromLogContext)
+        {
+            configuration.Enrich.FromLogContext();
+        }
+
+        if (commandLine.Console)
+        {
+            configuration.WriteTo.Console(outputTemplate: ConsoleOutputTemplate);
+        }
+
+        return configuration.CreateBootstrapLogger();
     }
 
     /// <summary>
@@ -62,6 +70,9 @@ public static partial class BackFillerLoggingExtensions
     /// Optional additional Serilog configuration applied after the explicit host logger graph.
     /// Used by tests to attach in-memory sinks without reintroducing MEL providers.
     /// </param>
+    /// <param name="commandLine">
+    /// Process switches that enable the console sink and ambient context enrichment.
+    /// </param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
     /// <remarks>
     /// <para>
@@ -71,9 +82,10 @@ public static partial class BackFillerLoggingExtensions
     /// </para>
     /// <para>
     /// Host sinks are registered explicitly in <see cref="BackFillerFileLogging.ConfigureLogger"/>
-    /// from <c>BackFiller:LogDirectory</c>, <c>BackFiller:LogLevel</c>, and
-    /// <c>BackFiller:LogRetentionDays</c>. <c>ReadFrom.Configuration</c> is not used, and a
-    /// <c>Serilog</c> configuration section cannot change the pipeline.
+    /// from <c>BackFiller:Logging</c>, including <c>BackFiller:Logging:File:LogDir</c>.
+    /// <c>ReadFrom.Configuration</c> is not used, and a <c>Serilog</c> configuration section
+    /// cannot change the pipeline. The console sink is added only when
+    /// <see cref="BackFillerLoggingCommandLine.Console"/> is true.
     /// </para>
     /// <para>
     /// Console formatting is owned by Serilog. journald collects Serilog console stdout under
@@ -81,9 +93,10 @@ public static partial class BackFillerLoggingExtensions
     /// stripped by <c>ConfigureBackFillerPlatformHosting</c> and are not part of this logging pipeline.
     /// </para>
     /// </remarks>
-    public static HostApplicationBuilder ConfigureBackFillerLogging(
+    internal static HostApplicationBuilder ConfigureBackFillerLogging(
         this HostApplicationBuilder builder,
-        Action<LoggerConfiguration>? configure = null)
+        Action<LoggerConfiguration>? configure = null,
+        BackFillerLoggingCommandLine commandLine = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -97,7 +110,11 @@ public static partial class BackFillerLoggingExtensions
         builder.Services.AddSerilog(
             (services, loggerConfiguration) =>
             {
-                BackFillerFileLogging.ConfigureLogger(loggerConfiguration, builder.Configuration);
+                BackFillerFileLogging.ConfigureLogger(
+                    loggerConfiguration,
+                    builder.Configuration,
+                    commandLine: commandLine,
+                    services: services);
                 loggerConfiguration.ReadFrom.Services(services);
                 configure?.Invoke(loggerConfiguration);
             },

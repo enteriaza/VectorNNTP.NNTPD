@@ -34,7 +34,8 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// </para>
 /// <para>
 /// Intentional key rename from the old worker: <c>BackFiller:Id</c> is now
-/// <c>BackFiller:ServerId</c>. <c>DirLogs</c> is <see cref="LogDirectory"/>;
+/// <c>BackFiller:ServerId</c>. <c>DirLogs</c> is
+/// <c>BackFiller:Logging:File:LogDir</c>;
 /// <c>DirCerts</c> is <see cref="CertificateDirectory"/> /
 /// <see cref="AcmeStateDir"/>.
 /// </para>
@@ -58,21 +59,6 @@ public sealed class BackFillerOptions
 
     /// <summary>Default DNS suffix when the key is omitted.</summary>
     public const string DefaultDnsSuffix = "usenet.ninja";
-
-    /// <summary>Default relative log directory.</summary>
-    public const string DefaultLogDirectory = "logs";
-
-    /// <summary>Default Serilog minimum level when <see cref="LogLevel"/> is omitted.</summary>
-    public const string DefaultLogLevel = "Debug";
-
-    /// <summary>Default daily file retention when <see cref="LogRetentionDays"/> is omitted.</summary>
-    public const int DefaultLogRetentionDays = 1;
-
-    /// <summary>Minimum accepted <see cref="LogRetentionDays"/>.</summary>
-    public const int MinimumLogRetentionDays = 1;
-
-    /// <summary>Maximum accepted <see cref="LogRetentionDays"/>.</summary>
-    public const int MaximumLogRetentionDays = 3650;
 
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
@@ -170,37 +156,8 @@ public sealed class BackFillerOptions
     /// </remarks>
     public string AcmeStateDir { get; set; } = DefaultAcmeStateDir;
 
-    /// <summary>
-    /// Gets or sets the directory used for application log files.
-    /// </summary>
-    /// <remarks>
-    /// Old key: <c>DirLogs</c>. Relative paths resolve through Common
-    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/> against
-    /// <see cref="AppContext.BaseDirectory"/>, not the process working directory.
-    /// The Serilog file sink is created under this directory at startup.
-    /// The rolling file name is the entry assembly short name. This is the only log-directory setting.
-    /// </remarks>
-    public string LogDirectory { get; set; } = DefaultLogDirectory;
-
-    /// <summary>
-    /// Gets or sets the Serilog minimum level.
-    /// </summary>
-    /// <remarks>
-    /// Accepted values are <c>Verbose</c>, <c>Debug</c>, <c>Information</c>, <c>Warning</c>,
-    /// <c>Error</c>, and <c>Fatal</c>. This is not a <c>Serilog</c> configuration key.
-    /// The default matches the previous application and sink floor (<c>Debug</c>).
-    /// </remarks>
-    public string LogLevel { get; set; } = DefaultLogLevel;
-
-    /// <summary>
-    /// Gets or sets how many daily log files Serilog retains.
-    /// </summary>
-    /// <remarks>
-    /// Applied as the File sink <c>retainedFileCountLimit</c> with daily rolling.
-    /// Range <see cref="MinimumLogRetentionDays"/>–<see cref="MaximumLogRetentionDays"/>.
-    /// This is not a <c>Serilog:WriteTo</c> setting.
-    /// </remarks>
-    public int LogRetentionDays { get; set; } = DefaultLogRetentionDays;
+    /// <summary>Gets or sets application-owned logging targets.</summary>
+    public BackFillerLoggingOptions Logging { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.

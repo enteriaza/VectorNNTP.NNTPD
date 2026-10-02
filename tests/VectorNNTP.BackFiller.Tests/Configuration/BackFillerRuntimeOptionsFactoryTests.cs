@@ -103,7 +103,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         {
             Environment.CurrentDirectory = otherCwd;
             var options = BackFillerTestOptions.CreateValid();
-            options.LogDirectory = "logs";
+            options.Logging.File.LogDir = "logs";
             options.CertificateDirectory = "certs";
             options.AcmeStateDir = "certs";
             var runtime = BackFillerRuntimeOptionsFactory.Create(
@@ -132,7 +132,7 @@ public sealed class BackFillerRuntimeOptionsFactoryTests
         try
         {
             var options = BackFillerTestOptions.CreateValid();
-            options.LogDirectory = absoluteLogs;
+            options.Logging.File.LogDir = absoluteLogs;
             options.CertificateDirectory = absoluteCerts;
             options.AcmeStateDir = absoluteCerts;
             var runtime = BackFillerRuntimeOptionsFactory.Create(

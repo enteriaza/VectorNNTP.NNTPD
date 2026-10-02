@@ -129,6 +129,8 @@ internal sealed class FakeBackFillerRabbitMqConnection : IRabbitMqConnection
 
     public TaskCompletionSource? BlockCreatePublishChannel { get; set; }
 
+    public Action<FakeBackFillerRabbitMqPublishChannel>? OnPublishChannelCreated { get; set; }
+
     public FakePublishConfirmBehavior DefaultPublishConfirmBehavior { get; set; } =
         FakePublishConfirmBehavior.Wait;
 
@@ -192,6 +194,7 @@ internal sealed class FakeBackFillerRabbitMqConnection : IRabbitMqConnection
         {
             ConfirmBehavior = DefaultPublishConfirmBehavior,
         };
+        OnPublishChannelCreated?.Invoke(channel);
         PublishChannels.Add(channel);
         return channel;
     }
