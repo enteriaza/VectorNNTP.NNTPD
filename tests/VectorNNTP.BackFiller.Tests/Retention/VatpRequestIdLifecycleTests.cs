@@ -320,7 +320,8 @@ public sealed class VatpRequestIdLifecycleTests
         var handler = new ControllableArticleWorkHandler
         {
             Outcome = ArticleWorkOutcome.Success,
-            CacheUri = ArticleWorkTestDeliveries.CanonicalCacheUri,
+            Fqdn = ArticleWorkTestDeliveries.CanonicalFqdn,
+            VatpPort = ArticleWorkTestDeliveries.CanonicalVatpPort,
             ArticleId = prepared.Record.ArtId,
         };
         var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, maxPayloadBytes: 64 * 1024);

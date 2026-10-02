@@ -179,9 +179,10 @@ public sealed class DurableIndexArticlePresenceTests
         await service.StartAsync(CancellationToken.None);
         var factory = new RecordingStorageServerRabbitMqConnectionFactory();
         var rabbit = CreateRabbitMq(factory);
+        var runtime = CreateRuntime(dirs);
         var consumer = new StorageArticleLookupConsumerService(
             rabbit,
-            CreateRuntime(dirs),
+            runtime,
             new DurableIndexArticlePresence(service),
             NullLogger<StorageArticleLookupConsumerService>.Instance);
         try
@@ -220,7 +221,9 @@ public sealed class DurableIndexArticlePresenceTests
             Assert.True(StorageArticleLookupWireProtocol.TryParseResponseV1(hit.Body.Span, out var response, out _));
             Assert.NotNull(response);
             Assert.Equal(record.ArtId, response.ArticleId);
-            Assert.Contains(record.ArtId.ToLowerHexString(), response.Uri, StringComparison.Ordinal);
+            Assert.Equal(runtime.Fqdn, response.Fqdn);
+            Assert.Equal(runtime.BindPortTls, response.VatpPort);
+            Assert.DoesNotContain("uri", Encoding.UTF8.GetString(hit.Body.Span), StringComparison.Ordinal);
 
             Assert.True(service.Engine.TryEvict(record.ArtId));
             await channel.DeliverAsync(

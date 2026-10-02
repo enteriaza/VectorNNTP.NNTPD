@@ -430,7 +430,8 @@ public sealed class ArticleWorkResponsePublicationTests
             ArticleWorkTestDeliveries.CanonicalCorrelationId,
             ArticleWorkTestDeliveries.CanonicalReplyTo,
             Error: null,
-            ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleWorkTestDeliveries.CanonicalFqdn,
+            ArticleWorkTestDeliveries.CanonicalVatpPort,
             ArticleWorkTestDeliveries.CanonicalArticleIdHex);
         var consumer = new FakeBackFillerRabbitMqChannel(1);
 
@@ -541,7 +542,8 @@ public sealed class ArticleWorkResponsePublicationTests
         new()
         {
             Outcome = ArticleWorkOutcome.Success,
-            CacheUri = ArticleWorkTestDeliveries.CanonicalCacheUri,
+            Fqdn = ArticleWorkTestDeliveries.CanonicalFqdn,
+            VatpPort = ArticleWorkTestDeliveries.CanonicalVatpPort,
             ArticleId = VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(
                 ArticleWorkTestDeliveries.CanonicalArticleIdHex),
         };

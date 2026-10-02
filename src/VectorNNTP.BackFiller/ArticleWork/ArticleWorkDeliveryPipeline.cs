@@ -81,7 +81,8 @@ public sealed class ArticleWorkDeliveryPipeline
                     delivery.CorrelationId,
                     delivery.ReplyTo,
                     failure.Reason,
-                    cacheUri: null,
+                    fqdn: null,
+                    vatpPort: null,
                     articleIdHex: null,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -104,7 +105,8 @@ public sealed class ArticleWorkDeliveryPipeline
 
         ArticleWorkOutcome outcome;
         string? error;
-        string? cacheUri = null;
+        string? fqdn = null;
+        int? vatpPort = null;
         string? articleIdHex = null;
         try
         {
@@ -120,7 +122,8 @@ public sealed class ArticleWorkDeliveryPipeline
                     ? ArticleWorkOutcome.UnexpectedFailure
                     : result.Outcome;
                 error = result.Error;
-                cacheUri = result.CacheUri;
+                fqdn = result.Fqdn;
+                vatpPort = result.VatpPort;
                 articleIdHex = result.ArticleId?.ToLowerHexString();
                 result.Article?.Dispose();
             }
@@ -169,7 +172,8 @@ public sealed class ArticleWorkDeliveryPipeline
                     item.CorrelationId,
                     item.ReplyTo,
                     error,
-                    cacheUri,
+                    fqdn,
+                    vatpPort,
                     articleIdHex,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -233,7 +237,8 @@ public sealed class ArticleWorkDeliveryPipeline
         string? correlationId,
         string? replyTo,
         string? error,
-        string? cacheUri,
+        string? fqdn,
+        int? vatpPort,
         string? articleIdHex,
         CancellationToken cancellationToken)
     {
@@ -253,7 +258,8 @@ public sealed class ArticleWorkDeliveryPipeline
                         correlationId,
                         replyTo,
                         error,
-                        outcome == ArticleWorkOutcome.Success ? cacheUri : null,
+                        outcome == ArticleWorkOutcome.Success ? fqdn : null,
+                        outcome == ArticleWorkOutcome.Success ? vatpPort : null,
                         outcome == ArticleWorkOutcome.Success ? articleIdHex : null),
                     cancellationToken)
                 .ConfigureAwait(false);

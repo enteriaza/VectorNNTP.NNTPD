@@ -8,9 +8,8 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
 /// Retrieves an ARTICLE, builds a CanonicalV1 <see cref="ArticleRecord"/>, then retains it for
-/// VATP OPEN by RequestId. Article Work Success publishes a <c>vatp://</c> URI whose path is the
-/// lowercase hexadecimal <see cref="ArticleId"/> (same value as Success <c>articleId</c>); that URI
-/// is routing metadata, not a transfer protocol.
+/// VATP OPEN by RequestId. Article Work Success publishes this BackFiller's FQDN, VATP port, and the
+/// lowercase hexadecimal <see cref="ArticleId"/>. Those fields are routing metadata, not a transfer protocol.
 /// </summary>
 public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {
@@ -50,8 +49,11 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     /// <summary>Gets the last retention classification (tests).</summary>
     public ArticleRetentionKind? LastRetentionKind { get; private set; }
 
-    /// <summary>Gets the last cache URI (tests).</summary>
-    public string? LastCacheUri { get; private set; }
+    /// <summary>Gets the last retained BackFiller FQDN (tests).</summary>
+    public string? LastFqdn { get; private set; }
+
+    /// <summary>Gets the last retained VATP listen port (tests).</summary>
+    public int? LastVatpPort { get; private set; }
 
     /// <inheritdoc />
     public async ValueTask<ArticleWorkHandlerResult> HandleAsync(
@@ -60,7 +62,8 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     {
         ArgumentNullException.ThrowIfNull(item);
         LastRetentionKind = null;
-        LastCacheUri = null;
+        LastFqdn = null;
+        LastVatpPort = null;
         LastPayload = null;
         LastRecord = null;
         if (cancellationToken.IsCancellationRequested)
@@ -136,14 +139,16 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
                 record,
                 created.SelectedDateHeaderName);
             LastRetentionKind = retained.Kind;
-            LastCacheUri = retained.CacheUri;
+            LastFqdn = retained.Fqdn;
+            LastVatpPort = retained.VatpPort;
             if (retained.IsAvailable)
             {
                 return new ArticleWorkHandlerResult(
                     ArticleWorkOutcome.Success,
                     null,
                     Article: null,
-                    CacheUri: retained.CacheUri,
+                    Fqdn: retained.Fqdn,
+                    VatpPort: retained.VatpPort,
                     ArticleId: record.ArtId);
             }
 
@@ -151,7 +156,8 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
                 ArticleWorkOutcome.RetentionRejected,
                 retained.Kind.ToString(),
                 Article: null,
-                CacheUri: null,
+                Fqdn: null,
+                VatpPort: null,
                 ArticleId: null);
         }
     }

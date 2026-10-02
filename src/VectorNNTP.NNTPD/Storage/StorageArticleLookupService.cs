@@ -128,7 +128,7 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
                     articleId,
                     first.ServerId,
                     first.Fqdn,
-                    first.Uri,
+                    first.VatpPort,
                     Error: null)
                 {
                     Alternates = operation,

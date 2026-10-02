@@ -291,14 +291,14 @@ public sealed class StorageArticleLookupServiceTests
             2,
             "cache02.usenet.ninja",
             request.ArticleId,
-            StorageArticleLookupWireProtocol.BuildCacheUri("cache02.usenet.ninja", 1192, request.ArticleId));
+            1192);
         var sameEndpoint = new StorageArticleLookupResponse(
             1,
             request.RequestId,
             9,
-            "cache09.usenet.ninja",
+            first.Fqdn,
             request.ArticleId,
-            first.Uri);
+            first.VatpPort);
         Assert.False(service.TryDispatchResponse(publication.CorrelationId, duplicateServer));
         Assert.False(service.TryDispatchResponse(publication.CorrelationId, sameEndpoint));
 
@@ -341,7 +341,7 @@ public sealed class StorageArticleLookupServiceTests
                 4,
                 "cache04.usenet.ninja",
                 request!.ArticleId,
-                StorageArticleLookupWireProtocol.BuildCacheUri("cache04.usenet.ninja", 1191, request.ArticleId))));
+                1191)));
         Assert.False(service.TryDispatchResponse(
             publication.CorrelationId,
             new StorageArticleLookupResponse(
@@ -350,7 +350,7 @@ public sealed class StorageArticleLookupServiceTests
                 5,
                 "cache05.usenet.ninja",
                 otherArticle,
-                StorageArticleLookupWireProtocol.BuildCacheUri("cache05.usenet.ninja", 1191, otherArticle))));
+                1191)));
         Assert.False(service.TryDispatchResponse(
             publication.CorrelationId,
             new StorageArticleLookupResponse(
@@ -359,7 +359,7 @@ public sealed class StorageArticleLookupServiceTests
                 6,
                 "cache06.usenet.ninja",
                 request.ArticleId,
-                StorageArticleLookupWireProtocol.BuildCacheUri("cache06.usenet.ninja", 1191, otherArticle))));
+                0)));
         Assert.False(lookupTask.IsCompleted);
 
         Assert.True(service.TryDispatchResponse(
@@ -382,7 +382,7 @@ public sealed class StorageArticleLookupServiceTests
             serverId,
             fqdn,
             request.ArticleId,
-            StorageArticleLookupWireProtocol.BuildCacheUri(fqdn, 1191, request.ArticleId));
+            1191);
 
     private static RabbitMqService CreateRabbitMq(FakeRabbitMqConnectionFactory factory)
     {

@@ -6,7 +6,8 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// <param name="MessageId">Request Message-ID when the responder could establish it.</param>
 /// <param name="Backbone">Request backbone when the responder could establish it.</param>
 /// <param name="Outcome">Terminal response outcome.</param>
-/// <param name="Uri">Success-only cache URI. Absent for non-success outcomes.</param>
+/// <param name="Fqdn">Success-only BackFiller FQDN. Absent for non-success outcomes.</param>
+/// <param name="VatpPort">Success-only TLS VATP listen port. Absent for non-success outcomes.</param>
 /// <param name="ArticleId">Success-only CanonicalV1 ArtId. Absent for non-success outcomes.</param>
 /// <param name="Error">Terminal-failure detail. Absent for success.</param>
 internal sealed record ArticleWorkResponse(
@@ -15,6 +16,7 @@ internal sealed record ArticleWorkResponse(
     string? MessageId,
     string? Backbone,
     ArticleWorkOutcome Outcome,
-    string? Uri,
+    string? Fqdn,
+    int? VatpPort,
     VectorNNTP.Common.Articles.ArticleId? ArticleId,
     string? Error);

@@ -268,7 +268,7 @@ public sealed class ArticleWorkRpcServiceTests
     private static byte[] SuccessBody(string requestId)
     {
         return Encoding.UTF8.GetBytes(
-            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"<12345@example.invalid>","backbone":"Storage","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""");
+            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"<12345@example.invalid>","backbone":"Storage","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""");
     }
 
     private sealed class EmptyManagementInventory : IRabbitMqManagementQueueInventory

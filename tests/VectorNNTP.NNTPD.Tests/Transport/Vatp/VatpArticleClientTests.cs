@@ -19,7 +19,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -41,7 +42,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -66,7 +68,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -98,7 +101,8 @@ public sealed class VatpArticleClientTests
         var pool = CreatePool(server);
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
         var tasks = articles.Select(a =>
-            client.FetchArticleAsync(server.CreateCacheUri(), a.RequestId, a.Record.ArtId, CancellationToken.None))
+            client.FetchArticleAsync(server.Host,
+            server.Port, a.RequestId, a.Record.ArtId, CancellationToken.None))
             .ToArray();
         var results = await Task.WhenAll(tasks);
 
@@ -134,12 +138,14 @@ public sealed class VatpArticleClientTests
         using var cts = new CancellationTokenSource();
 
         var keepTask = client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             keep.RequestId,
             keep.Record.ArtId,
             CancellationToken.None);
         var cancelTask = client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             cancel.RequestId,
             cancel.Record.ArtId,
             cts.Token);
@@ -164,7 +170,8 @@ public sealed class VatpArticleClientTests
         var retry = CreateArticle("<post-cancel-large@example.test>", body: BuildLargeBody(740 * 1024));
         server.Register(retry.Record, retry.SelectedDateHeaderName);
         var retryResult = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             retry.RequestId,
             retry.Record.ArtId,
             CancellationToken.None);
@@ -182,7 +189,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -206,7 +214,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -226,7 +235,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -244,7 +254,8 @@ public sealed class VatpArticleClientTests
         server.Register(prepared.Record, prepared.SelectedDateHeaderName);
         var client = CreateClient(server);
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -277,7 +288,8 @@ public sealed class VatpArticleClientTests
         var wrongId = ArticleId.FromMessageId("<other@example.test>"u8);
         var client = CreateClient(server);
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             wrongId,
             CancellationToken.None);
@@ -299,7 +311,8 @@ public sealed class VatpArticleClientTests
         var pool = CreatePool(server);
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
         var tasks = articles.Select(a =>
-            client.FetchArticleAsync(server.CreateCacheUri(), a.RequestId, a.Record.ArtId, CancellationToken.None))
+            client.FetchArticleAsync(server.Host,
+            server.Port, a.RequestId, a.Record.ArtId, CancellationToken.None))
             .ToArray();
         var results = await Task.WhenAll(tasks);
         Assert.All(results, r => Assert.Equal(VatpFetchKind.Success, r.Kind));
@@ -316,7 +329,8 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             cts.Token);
@@ -334,7 +348,8 @@ public sealed class VatpArticleClientTests
         server.Register(prepared.Record, prepared.SelectedDateHeaderName);
         var client = CreateClient(server);
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -351,14 +366,16 @@ public sealed class VatpArticleClientTests
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
         server.Mode = VatpLoopbackTestServer.TransferMode.DisconnectMidData;
         _ = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
         await WaitUntilAsync(() => pool.AliveConnectionCount(server.Host, server.Port) == 0, TimeSpan.FromSeconds(3));
         server.Mode = VatpLoopbackTestServer.TransferMode.Complete;
         var retry = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -376,8 +393,12 @@ public sealed class VatpArticleClientTests
             TestTcpConnectHost = IPAddress.Loopback.ToString(),
         };
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
-        var uri = $"vatp://wrong.host.test:{server.Port}/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
-        var result = await client.FetchArticleAsync(uri, prepared.RequestId, prepared.Record.ArtId, CancellationToken.None);
+        var result = await client.FetchArticleAsync(
+            "wrong.host.test",
+            server.Port,
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
         Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
     }
 
@@ -390,7 +411,8 @@ public sealed class VatpArticleClientTests
         server.Register(prepared.Record, prepared.SelectedDateHeaderName);
         var client = CreateClient(server);
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -408,7 +430,8 @@ public sealed class VatpArticleClientTests
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -420,7 +443,8 @@ public sealed class VatpArticleClientTests
 
         server.Mode = VatpLoopbackTestServer.TransferMode.Complete;
         var retry = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -439,7 +463,8 @@ public sealed class VatpArticleClientTests
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -453,7 +478,8 @@ public sealed class VatpArticleClientTests
 
         server.Mode = VatpLoopbackTestServer.TransferMode.Complete;
         var retry = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -475,7 +501,8 @@ public sealed class VatpArticleClientTests
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
 
         var r1 = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             first.RequestId,
             first.Record.ArtId,
             CancellationToken.None);
@@ -485,7 +512,8 @@ public sealed class VatpArticleClientTests
         // Spurious late END/FAIL for stream 1 and META/DATA/END for 0x7FFFFFFE must not
         // inject state or kill the pooled connection.
         var r2 = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             second.RequestId,
             second.Record.ArtId,
             CancellationToken.None);
@@ -511,7 +539,8 @@ public sealed class VatpArticleClientTests
             var prepared = CreateArticle($"<stream-mono-{i}@example.test>");
             server.Register(prepared.Record, prepared.SelectedDateHeaderName);
             var result = await client.FetchArticleAsync(
-                server.CreateCacheUri(),
+                server.Host,
+            server.Port,
                 prepared.RequestId,
                 prepared.Record.ArtId,
                 CancellationToken.None);
@@ -542,14 +571,16 @@ public sealed class VatpArticleClientTests
         using var cts = new CancellationTokenSource();
 
         var heldTask = client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             held.RequestId,
             held.Record.ArtId,
             cts.Token);
         await heldStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var otherResult = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             other.RequestId,
             other.Record.ArtId,
             CancellationToken.None);
@@ -586,12 +617,14 @@ public sealed class VatpArticleClientTests
         using var cts = new CancellationTokenSource();
 
         var keepTask = client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             keep.RequestId,
             keep.Record.ArtId,
             CancellationToken.None);
         var cancelTask = client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             cancel.RequestId,
             cancel.Record.ArtId,
             cts.Token);
@@ -618,7 +651,8 @@ public sealed class VatpArticleClientTests
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
 
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -627,7 +661,8 @@ public sealed class VatpArticleClientTests
 
         server.Mode = VatpLoopbackTestServer.TransferMode.Complete;
         var retry = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
@@ -642,20 +677,22 @@ public sealed class VatpArticleClientTests
         var client = CreateClient(server);
 
         var emptyRequest = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             Guid.Empty,
             prepared.Record.ArtId,
             CancellationToken.None);
         Assert.Equal(VatpFetchKind.ProtocolFailure, emptyRequest.Kind);
         Assert.Equal(0, emptyRequest.AcceptedDataBytes);
 
-        var badUri = await client.FetchArticleAsync(
-            "not-a-cache-uri",
+        var badEndpoint = await client.FetchArticleAsync(
+            "vatp" + "://" + "backfiller.test",
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);
-        Assert.Equal(VatpFetchKind.ProtocolFailure, badUri.Kind);
-        Assert.Equal(0, badUri.AcceptedDataBytes);
+        Assert.Equal(VatpFetchKind.ProtocolFailure, badEndpoint.Kind);
+        Assert.Equal(0, badEndpoint.AcceptedDataBytes);
     }
 
     [Fact]
@@ -668,8 +705,12 @@ public sealed class VatpArticleClientTests
             TestTcpConnectHost = IPAddress.Loopback.ToString(),
         };
         var client = new VatpArticleClient(pool, NullLogger<VatpArticleClient>.Instance);
-        var uri = $"vatp://wrong.host.test:{server.Port}/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
-        var result = await client.FetchArticleAsync(uri, prepared.RequestId, prepared.Record.ArtId, CancellationToken.None);
+        var result = await client.FetchArticleAsync(
+            "wrong.host.test",
+            server.Port,
+            prepared.RequestId,
+            prepared.Record.ArtId,
+            CancellationToken.None);
         Assert.Equal(VatpFetchKind.ConnectionFailure, result.Kind);
         Assert.Equal(0, result.AcceptedDataBytes);
     }
@@ -708,7 +749,8 @@ public sealed class VatpArticleClientTests
         var wrongId = ArticleId.FromMessageId("<other-bytes@example.test>"u8);
         var client = CreateClient(server);
         var result = await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             wrongId,
             CancellationToken.None);
@@ -800,7 +842,8 @@ public sealed class VatpArticleClientTests
     {
         var client = CreateClient(server);
         return await client.FetchArticleAsync(
-            server.CreateCacheUri(),
+            server.Host,
+            server.Port,
             prepared.RequestId,
             prepared.Record.ArtId,
             CancellationToken.None);

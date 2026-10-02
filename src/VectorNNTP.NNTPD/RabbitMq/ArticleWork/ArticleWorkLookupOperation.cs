@@ -64,7 +64,8 @@ internal sealed class ArticleWorkLookupOperation
             RequestId,
             MessageId,
             response.Backbone,
-            response.Uri,
+            response.Fqdn,
+            response.VatpPort,
             response.ArticleId,
             response.Error,
             exchange));

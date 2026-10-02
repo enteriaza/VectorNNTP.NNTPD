@@ -21,14 +21,12 @@ Article bytes do not travel over RabbitMQ, JSON, XML, or protobuf.
 
 | Plane | Transport | Carries |
 |-------|-----------|---------|
-| Control | RabbitMQ ArticleWork RPC | RequestId, Message-ID, backbone, outcome, `uri`, `articleId` |
+| Control | RabbitMQ ArticleWork RPC | RequestId, Message-ID, backbone, outcome, `fqdn`, `vatpPort`, `articleId` |
 | Data | VATP over TLS TCP | META + ArtData (`ArticleRecord`) |
 
-Success JSON `uri` is `vatp://{fqdn}:{BindPortTls}/{articleIdHex}` (routing
-endpoint). The path is the 64-character lowercase hexadecimal `ArticleId`
-(same value as Success JSON `articleId`). Success JSON `articleId` is the
-64-character lowercase hexadecimal BLAKE3 `ArticleId`. VATP OPEN uses
-**RequestId + ArticleId** together; the URI path is not a VATP identity.
+Success JSON carries the BackFiller FQDN, the TLS VATP listen port, and the
+64-character lowercase hexadecimal `ArticleId`. Those fields are routing
+metadata. VATP OPEN uses **RequestId + ArticleId** together.
 
 ## Byte order and header
 
@@ -90,8 +88,8 @@ Not on the wire: ArtId, ArtType, CanonicalUtc, ParseStatus, header/body split.
 
 - `ArticleId` = BLAKE3(Message-ID value bytes). Carried on OPEN; recomputed from ArtData.
 - `ArtHash` = XxHash3-64(ArtData). Carried on META; recomputed from ArtData.
-- Success `vatp://` URI path = lowercase hexadecimal `ArticleId` (same as Success `articleId`).
-  Host/port are for VATP dialing only; the path is not a VATP lookup key.
+- Success `articleId` = lowercase hexadecimal `ArticleId`. Success `fqdn` and `vatpPort`
+  are the TLS dial target. None of those JSON fields is a VATP lookup key.
 
 ## Canonical transfer factory
 
@@ -222,9 +220,9 @@ per-stream WINDOW credit and round-robin DATA scheduling.
 
 ## NNTPD Phase 3 client
 
-`IVatpArticleClient.FetchArticleAsync(cacheUri, requestId, articleId, ct)`:
+`IVatpArticleClient.FetchArticleAsync(fqdn, vatpPort, requestId, articleId, ct)`:
 
-1. Parses `vatp://` host/port for the TLS dial target (`TargetHost` / SNI = FQDN).
+1. Dials the supplied FQDN and VATP port (`TargetHost` / SNI = FQDN).
 2. Acquires a pooled multiplexed VATP connection (keyed by host+port; bounded).
 3. Client HELLO → server HELLO.
 4. OPEN(RequestId, ArticleId) on a client-assigned StreamId ≠ 0.
@@ -236,6 +234,7 @@ TLS is mandatory (1.2/1.3). There is no plaintext fallback and no certificate
 bypass. Clients send WINDOW updates to replenish server send credit. CANCEL is
 sent for caller cancellation when the connection remains usable.
 
-ArticleWork Success must include `articleId` (validated on parse). Failure
-responses must not include `uri` or `articleId`. Message-id ARTICLE/HEAD/BODY/STAT
+ArticleWork Success must include `fqdn`, `vatpPort`, and `articleId` (validated on parse).
+A response that includes `uri` is rejected. Failure responses must not include
+`fqdn`, `vatpPort`, or `articleId`. Message-id ARTICLE/HEAD/BODY/STAT
 handlers consume `IVatpArticleClient` after ArticleWork Success.

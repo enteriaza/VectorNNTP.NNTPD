@@ -21,8 +21,10 @@ public sealed class ArticleWorkResponseWireProtocolTests
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, root.GetProperty("messageId").GetString());
         Assert.Equal("Giganews", root.GetProperty("backbone").GetString());
         Assert.Equal("Success", root.GetProperty("outcome").GetString());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalCacheUri, root.GetProperty("uri").GetString());
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalFqdn, root.GetProperty("fqdn").GetString());
+        Assert.Equal(ArticleWorkTestDeliveries.CanonicalVatpPort, root.GetProperty("vatpPort").GetInt32());
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, root.GetProperty("articleId").GetString());
+        Assert.False(root.TryGetProperty("uri", out _));
         Assert.False(root.TryGetProperty("error", out _));
         Assert.DoesNotContain("payload", Encoding.UTF8.GetString(json), StringComparison.OrdinalIgnoreCase);
     }
@@ -42,12 +44,14 @@ public sealed class ArticleWorkResponseWireProtocolTests
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalNotFoundResponseJson, Encoding.UTF8.GetString(json));
         using var document = JsonDocument.Parse(json);
         Assert.False(document.RootElement.TryGetProperty("uri", out _));
+        Assert.False(document.RootElement.TryGetProperty("fqdn", out _));
+        Assert.False(document.RootElement.TryGetProperty("vatpPort", out _));
         Assert.False(document.RootElement.TryGetProperty("articleId", out _));
         Assert.Equal("No article with that message-id", document.RootElement.GetProperty("error").GetString());
     }
 
     [Fact]
-    public void InvalidRequest_may_emit_null_identities_and_never_includes_uri()
+    public void InvalidRequest_may_emit_null_identities_and_never_includes_endpoint_fields()
     {
         var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
             ArticleWorkOutcome.InvalidRequest,
@@ -65,6 +69,8 @@ public sealed class ArticleWorkResponseWireProtocolTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("backbone").ValueKind);
         Assert.Equal("InvalidRequest", root.GetProperty("outcome").GetString());
         Assert.False(root.TryGetProperty("uri", out _));
+        Assert.False(root.TryGetProperty("fqdn", out _));
+        Assert.False(root.TryGetProperty("vatpPort", out _));
         Assert.Equal("Malformed JSON.", root.GetProperty("error").GetString());
     }
 
@@ -73,17 +79,29 @@ public sealed class ArticleWorkResponseWireProtocolTests
     {
         using var document = JsonDocument.Parse(ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent()));
         var names = document.RootElement.EnumerateObject().Select(static property => property.Name).ToArray();
-        Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "uri", "articleId"], names);
+        Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "fqdn", "vatpPort", "articleId"], names);
     }
 
-    [Fact]
-    public void Success_rejects_uri_path_that_does_not_equal_article_id()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("nodots")]
+    [InlineData("Backfiller01.usenet.ninja")]
+    [InlineData("vatp" + "://" + "backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14")]
+    public void Success_rejects_invalid_fqdn(string? fqdn)
     {
-        var intent = SuccessIntent() with
-        {
-            Uri = "vatp://backfiller01.usenet.ninja:119/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        };
+        var intent = SuccessIntent() with { Fqdn = fqdn };
+        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+    }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(65536)]
+    public void Success_rejects_invalid_vatp_port(int? port)
+    {
+        var intent = SuccessIntent() with { VatpPort = port };
         Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
     }
 
@@ -135,6 +153,7 @@ public sealed class ArticleWorkResponseWireProtocolTests
             ArticleWorkTestDeliveries.CanonicalCorrelationId,
             ArticleWorkTestDeliveries.CanonicalReplyTo,
             Error: null,
-            ArticleWorkTestDeliveries.CanonicalCacheUri,
+            ArticleWorkTestDeliveries.CanonicalFqdn,
+            ArticleWorkTestDeliveries.CanonicalVatpPort,
             ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 }

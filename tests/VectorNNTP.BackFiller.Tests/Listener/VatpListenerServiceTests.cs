@@ -449,7 +449,7 @@ public sealed class VatpListenerServiceTests
     public async Task Resource_duplicate_stream_id_is_rejected()
     {
         await using var context = await VatpListenerContext.StartAsync();
-        var first = RetainArticle(context.Authority, "<stream-dup-a@example.test>");
+        var first = RetainArticle(context.Authority, "<stream-dup-a@example.test>", BuildLargeBody(128 * 1024));
         var second = RetainArticle(context.Authority, "<stream-dup-b@example.test>");
         await using var client = await ConnectAsync(context);
         await ExchangeHelloAsync(client.Stream);

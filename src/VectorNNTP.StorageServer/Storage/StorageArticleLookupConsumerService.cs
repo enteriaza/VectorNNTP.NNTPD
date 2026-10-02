@@ -227,10 +227,7 @@ public sealed class StorageArticleLookupConsumerService : IApplicationService
                 _runtime.ServerId,
                 _runtime.Fqdn,
                 request.ArticleId,
-                StorageArticleLookupWireProtocol.BuildCacheUri(
-                    _runtime.Fqdn,
-                    _runtime.BindPortTls,
-                    request.ArticleId));
+                _runtime.BindPortTls);
             var body = StorageArticleLookupWireProtocol.SerializeResponseV1(response);
 
             await PublishResponseAsync(

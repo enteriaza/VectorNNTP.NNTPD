@@ -1,8 +1,8 @@
 using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
@@ -12,7 +12,8 @@ namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 /// </summary>
 /// <remarks>
 /// Property names are <c>version</c>, <c>requestId</c>, <c>messageId</c>, <c>backbone</c>,
-/// and on responses <c>outcome</c>, <c>uri</c>, <c>articleId</c>, and <c>error</c>. AMQP <c>CorrelationId</c>,
+/// and on responses <c>outcome</c>, <c>fqdn</c>, <c>vatpPort</c>, <c>articleId</c>, and <c>error</c>.
+/// A response that includes <c>uri</c> is rejected. AMQP <c>CorrelationId</c>,
 /// <c>ReplyTo</c>, and <c>Expiration</c> are never JSON fields. JSON <c>requestId</c> must
 /// match the AMQP <c>RequestId</c> property. Serialization writes compact UTF-8 with no indentation.
 /// </remarks>
@@ -146,15 +147,34 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            var hasUri = root.TryGetProperty("uri", out var uriElement);
+            if (root.TryGetProperty("uri", out _))
+            {
+                reason = "Response payload must not include 'uri'.";
+                return false;
+            }
+
+            var hasFqdn = root.TryGetProperty("fqdn", out var fqdnElement);
+            var hasVatpPort = root.TryGetProperty("vatpPort", out var vatpPortElement);
             var hasError = root.TryGetProperty("error", out var errorElement);
             var hasArticleId = root.TryGetProperty("articleId", out var articleIdElement);
-            string? uri = null;
+            string? fqdn = null;
+            int? vatpPort = null;
             string? error = null;
             ArticleId? articleId = null;
-            if (hasUri && !TryReadStringValue(uriElement, "uri", out uri, out reason))
+            if (hasFqdn && !TryReadStringValue(fqdnElement, "fqdn", out fqdn, out reason))
             {
                 return false;
+            }
+
+            if (hasVatpPort)
+            {
+                if (vatpPortElement.ValueKind != JsonValueKind.Number || !vatpPortElement.TryGetInt32(out var parsedPort))
+                {
+                    reason = "Response payload property 'vatpPort' must be an integer.";
+                    return false;
+                }
+
+                vatpPort = parsedPort;
             }
 
             if (hasError && !TryReadStringValue(errorElement, "error", out error, out reason))
@@ -186,8 +206,10 @@ internal static partial class ArticleWorkWireProtocol
                     requestId,
                     messageId,
                     backbone,
-                    hasUri,
-                    uri,
+                    hasFqdn,
+                    fqdn,
+                    hasVatpPort,
+                    vatpPort,
                     hasArticleId,
                     articleId,
                     hasError,
@@ -203,7 +225,8 @@ internal static partial class ArticleWorkWireProtocol
                 messageId,
                 backbone,
                 outcome,
-                uri,
+                fqdn,
+                vatpPort,
                 articleId,
                 error);
             reason = string.Empty;
@@ -211,18 +234,15 @@ internal static partial class ArticleWorkWireProtocol
         }
     }
 
-    [GeneratedRegex(
-        "^vatp://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{64}$",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex CanonicalCacheUriRegex();
-
     private static bool TryValidateOutcomeContract(
         ArticleWorkOutcome outcome,
         Guid? requestId,
         string? messageId,
         string? backbone,
-        bool hasUri,
-        string? uri,
+        bool hasFqdn,
+        string? fqdn,
+        bool hasVatpPort,
+        int? vatpPort,
         bool hasArticleId,
         ArticleId? articleId,
         bool hasError,
@@ -250,24 +270,21 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            if (!hasUri || string.IsNullOrWhiteSpace(uri) || !CanonicalCacheUriRegex().IsMatch(uri))
+            if (!hasFqdn || !VatpEndpointFields.IsCanonicalFqdn(fqdn))
             {
-                reason = "Success response payload requires a canonical non-empty 'uri'.";
+                reason = "Success response payload requires a lowercase dotted DNS 'fqdn'.";
+                return false;
+            }
+
+            if (!hasVatpPort || vatpPort is not int port || !VatpEndpointFields.IsCanonicalPort(port))
+            {
+                reason = "Success response payload requires a 'vatpPort' in the range 1–65535.";
                 return false;
             }
 
             if (!hasArticleId || articleId is null)
             {
                 reason = "Success response payload requires a concrete 'articleId'.";
-                return false;
-            }
-
-            var slash = uri.LastIndexOf('/');
-            if (slash < 0
-                || !ArticleId.TryParseLowerHex(uri.AsSpan(slash + 1), out var pathArticleId)
-                || pathArticleId != articleId.Value)
-            {
-                reason = "Success response uri path must equal articleId.";
                 return false;
             }
 
@@ -300,9 +317,9 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            if (hasUri)
+            if (hasFqdn || hasVatpPort)
             {
-                reason = "Terminal failure response payload must not include 'uri'.";
+                reason = "Terminal failure response payload must not include 'fqdn' or 'vatpPort'.";
                 return false;
             }
 
@@ -339,9 +356,9 @@ internal static partial class ArticleWorkWireProtocol
             return false;
         }
 
-        if (hasUri)
+        if (hasFqdn || hasVatpPort)
         {
-            reason = "InvalidRequest payload must not include 'uri'.";
+            reason = "InvalidRequest payload must not include 'fqdn' or 'vatpPort'.";
             return false;
         }
 

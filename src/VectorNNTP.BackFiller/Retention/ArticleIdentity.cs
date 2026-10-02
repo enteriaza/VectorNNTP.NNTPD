@@ -4,7 +4,7 @@ namespace VectorNNTP.BackFiller.Retention;
 
 /// <summary>
 /// Message-ID plus its canonical <see cref="ArticleId"/> hex used in Article Work Success
-/// <c>vatp://</c> URI path metadata and retention collision checks.
+/// metadata and retention collision checks.
 /// Not a VATP transfer key (VATP uses RequestId + ArticleId).
 /// </summary>
 /// <param name="MessageId">Exact Message-ID string. Not normalized.</param>

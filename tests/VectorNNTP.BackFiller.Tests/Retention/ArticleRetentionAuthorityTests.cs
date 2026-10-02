@@ -12,7 +12,7 @@ public sealed class ArticleRetentionAuthorityTests
     private static readonly DateTimeOffset Start = new(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void RetainCanonical_then_open_exposes_owned_artdata_and_uri()
+    public void RetainCanonical_then_open_exposes_owned_artdata_and_endpoint()
     {
         var time = new ManualTimeProvider(Start);
         var authority = Create(time, maxBytes: 1024 * 1024);
@@ -24,15 +24,16 @@ public sealed class ArticleRetentionAuthorityTests
             prepared.SelectedDateHeaderName);
 
         Assert.Equal(ArticleRetentionKind.Retained, retained.Kind);
-        Assert.Equal("vatp://backfiller.test:1190/" + retained.Identity!.Value.ArticleIdHex, retained.CacheUri);
-        Assert.Equal(prepared.Record.ArtId.ToLowerHexString(), retained.Identity.Value.ArticleIdHex);
+        Assert.Equal("backfiller.test", retained.Fqdn);
+        Assert.Equal(1190, retained.VatpPort);
+        Assert.Equal(prepared.Record.ArtId.ToLowerHexString(), retained.Identity!.Value.ArticleIdHex);
         Assert.Equal(prepared.Record.ArtSize, authority.RetainedPayloadBytes);
         Assert.Equal(1, authority.RetainedCount);
 
         using var open = authority.TryOpenTransfer(prepared.RequestId, prepared.Record.ArtId);
         Assert.Equal(VatpOpenKind.Opened, open.Kind);
         Assert.True(open.Lease!.Record.ArtData.Span.SequenceEqual(prepared.ArtData));
-        Assert.Equal(retained.CacheUri, open.Lease.CacheUri);
+        Assert.Equal(prepared.Record.ArtId.ToLowerHexString(), open.Lease.Identity.ArticleIdHex);
     }
 
     [Fact]

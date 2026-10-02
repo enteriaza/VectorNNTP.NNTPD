@@ -68,9 +68,6 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
         _articles[record.ArtId] = new RegisteredArticle(record, selectedDateHeaderName, modeOverride, heldStarted);
     }
 
-    public string CreateCacheUri(string articleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14") =>
-        $"vatp://backfiller.test:{Port}/{articleIdHex}";
-
     public async ValueTask DisposeAsync()
     {
         await _cts.CancelAsync().ConfigureAwait(false);

@@ -13,7 +13,8 @@ public sealed class ArticleWorkRpcClientTests
 {
     private static readonly byte[] MessageIdBytes = "<12345@example.invalid>"u8.ToArray();
     private const string MessageId = "<12345@example.invalid>";
-    private const string SuccessUri = "vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+    private const string SuccessFqdn = "backfiller01.usenet.ninja";
+    private const int SuccessVatpPort = 119;
     private const string SuccessArticleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Fact]
@@ -487,7 +488,7 @@ public sealed class ArticleWorkRpcClientTests
     private static byte[] SuccessBody(Guid requestId, string backbone)
     {
         return Encoding.UTF8.GetBytes(
-            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"Success","uri":"{{SuccessUri}}","articleId":"{{SuccessArticleIdHex}}"}""");
+            $$"""{"version":1,"requestId":"{{requestId}}","messageId":"{{MessageId}}","backbone":"{{backbone}}","outcome":"Success","fqdn":"{{SuccessFqdn}}","vatpPort":{{SuccessVatpPort}},"articleId":"{{SuccessArticleIdHex}}"}""");
     }
 
     private static byte[] FailureBody(Guid requestId, ArticleWorkOutcome outcome, string error, string backbone)

@@ -2,6 +2,7 @@ using System.Text;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
+using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -275,8 +276,10 @@ internal static class Article
         }
 
         if (lookup.Outcome != ArticleWorkOutcome.Success
-            || string.IsNullOrWhiteSpace(lookup.Uri)
-            || lookup.ArticleId is not { } expectedArtId)
+            || lookup.ArticleId is not { } expectedArtId
+            || !VatpEndpointFields.IsCanonicalFqdn(lookup.Fqdn)
+            || lookup.VatpPort is not int vatpPort
+            || !VatpEndpointFields.IsCanonicalPort(vatpPort))
         {
             ArticleRetrievalLogMessages.TransferUnavailable(
                 Logger,
@@ -288,7 +291,10 @@ internal static class Article
         var vatp = context.Session.VatpArticleClient;
         if (vatp is null)
         {
-            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", lookup.Uri);
+            ArticleRetrievalLogMessages.TransferUnavailable(
+                Logger,
+                "VatpClientMissing",
+                EndpointDetail(lookup.Fqdn, vatpPort));
             return ResolveResult.Temporary();
         }
 
@@ -296,7 +302,8 @@ internal static class Article
         try
         {
             fetch = await vatp.FetchArticleAsync(
-                lookup.Uri,
+                lookup.Fqdn,
+                vatpPort,
                 lookup.RequestId,
                 expectedArtId,
                 cancellationToken).ConfigureAwait(false);
@@ -307,7 +314,7 @@ internal static class Article
         }
         catch (Exception ex)
         {
-            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, lookup.Uri, lookup.RequestId);
+            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, lookup.Fqdn, vatpPort, lookup.RequestId);
             return ResolveResult.Temporary();
         }
 
@@ -327,14 +334,14 @@ internal static class Article
         StorageArticleLookupResult fleet,
         CancellationToken cancellationToken)
     {
-        if (fleet.ArticleId != articleId || !TryBindStorageUri(fleet.Uri, articleId, out var cacheUri))
+        if (fleet.ArticleId != articleId || !TryBindStorageEndpoint(fleet.Fqdn, fleet.VatpPort, out var host, out var port))
         {
             ArticleRetrievalLogMessages.StorageLookupCompleted(
                 Logger,
                 "unavailable",
                 articleId.ToLowerHexString(),
                 fleet.RequestId);
-            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "StorageUri", fleet.Uri);
+            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "StorageEndpoint", EndpointDetail(fleet.Fqdn, fleet.VatpPort));
             return ResolveResult.Temporary();
         }
 
@@ -346,7 +353,7 @@ internal static class Article
                 "found",
                 articleId.ToLowerHexString(),
                 fleet.RequestId);
-            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", cacheUri);
+            ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", EndpointDetail(host, port));
             return ResolveResult.Temporary();
         }
 
@@ -362,7 +369,8 @@ internal static class Article
         {
             fetch = await FetchStorageCandidateAsync(
                 vatp,
-                cacheUri,
+                host,
+                port,
                 fleet.RequestId,
                 articleId,
                 serverId,
@@ -392,7 +400,8 @@ internal static class Article
                 {
                     fetch = await FetchStorageCandidateAsync(
                         vatp,
-                        next.Uri,
+                        next.Fqdn,
+                        next.VatpPort,
                         fleet.RequestId,
                         articleId,
                         next.ServerId,
@@ -423,7 +432,8 @@ internal static class Article
 
     private static async ValueTask<VatpFetchResult> FetchStorageCandidateAsync(
         IVatpArticleClient vatp,
-        string cacheUri,
+        string fqdn,
+        int vatpPort,
         Guid requestId,
         ArticleId articleId,
         int serverId,
@@ -438,7 +448,7 @@ internal static class Article
             attempt);
         try
         {
-            var fetch = await vatp.FetchArticleAsync(cacheUri, requestId, articleId, cancellationToken)
+            var fetch = await vatp.FetchArticleAsync(fqdn, vatpPort, requestId, articleId, cancellationToken)
                 .ConfigureAwait(false);
             if (fetch.Kind != VatpFetchKind.Success)
             {
@@ -461,7 +471,7 @@ internal static class Article
         }
         catch (Exception ex)
         {
-            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, cacheUri, requestId);
+            ArticleRetrievalLogMessages.VatpFetchFailed(Logger, ex, fqdn, vatpPort, requestId);
             throw;
         }
     }
@@ -476,23 +486,22 @@ internal static class Article
             or VatpFetchKind.RemoteTransferFailure
             or VatpFetchKind.ProtocolFailure;
 
-    private static bool TryBindStorageUri(string? uri, in ArticleId articleId, out string cacheUri)
+    private static bool TryBindStorageEndpoint(string? fqdn, int? vatpPort, out string host, out int port)
     {
-        cacheUri = string.Empty;
-        if (string.IsNullOrWhiteSpace(uri)
-            || !CacheArticleUriParser.TryParse(uri, out var parsed, out _))
+        host = string.Empty;
+        port = 0;
+        if (!VatpEndpointFields.IsCanonicalFqdn(fqdn) || vatpPort is not int parsed || !VatpEndpointFields.IsCanonicalPort(parsed))
         {
             return false;
         }
 
-        if (!ArticleId.TryParseLowerHex(parsed.ArticleIdHex, out var pathId) || pathId != articleId)
-        {
-            return false;
-        }
-
-        cacheUri = uri;
+        host = fqdn;
+        port = parsed;
         return true;
     }
+
+    private static string EndpointDetail(string? fqdn, int? vatpPort) =>
+        FormattableString.Invariant($"fqdn={fqdn} port={vatpPort}");
 
     private static ResolveResult MapFetch(
         VatpFetchResult fetch,

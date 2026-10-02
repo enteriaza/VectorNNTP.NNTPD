@@ -145,6 +145,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 ArticleRetentionKind.InvalidPayload,
                 null,
                 null,
+                null,
                 RetainedPayloadBytes,
                 0);
         }
@@ -159,6 +160,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 RetainedPayloadBytes);
             return new ArticleRetentionResult(
                 ArticleRetentionKind.PayloadExceedsCapacity,
+                null,
                 null,
                 null,
                 RetainedPayloadBytes,
@@ -204,7 +206,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                     return new ArticleRetentionResult(
                         ArticleRetentionKind.AlreadyPresent,
                         existing.Identity,
-                        existing.CacheUri,
+                        existing.Fqdn,
+                        existing.VatpPort,
                         _retainedBytes,
                         0);
                 }
@@ -231,7 +234,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
             var entry = new RetainedEntry(
                 identity,
-                CacheArticleUri.Create(_fqdn, _bindPort, identity),
+                _fqdn,
+                _bindPort,
                 record,
                 selectedDateHeaderName,
                 now,
@@ -247,7 +251,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             return new ArticleRetentionResult(
                 ArticleRetentionKind.Retained,
                 identity,
-                entry.CacheUri,
+                entry.Fqdn,
+                entry.VatpPort,
                 _retainedBytes,
                 released);
         }
@@ -308,7 +313,6 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
                 record,
                 selectedDate,
                 entry.Identity,
-                entry.CacheUri,
                 () => ReleaseLease(entry));
             return VatpOpenResult.Opened(lease);
         }
@@ -586,7 +590,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
         long released)
     {
         ArticleRetentionLogMessages.Rejected(_logger, kind, identity.ArticleIdHex, payloadBytes, _retainedBytes);
-        return new ArticleRetentionResult(kind, identity, null, _retainedBytes, released);
+        return new ArticleRetentionResult(kind, identity, null, null, _retainedBytes, released);
     }
 
     private sealed class RetainedEntry
@@ -600,7 +604,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         internal RetainedEntry(
             ArticleIdentity identity,
-            string cacheUri,
+            string fqdn,
+            int vatpPort,
             ArticleRecord record,
             NntpArticleHeaderName selectedDateHeaderName,
             DateTimeOffset insertedUtc,
@@ -608,7 +613,8 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
             long generation)
         {
             Identity = identity;
-            CacheUri = cacheUri;
+            Fqdn = fqdn;
+            VatpPort = vatpPort;
             _record = record;
             _selectedDateHeaderName = selectedDateHeaderName;
             PayloadBytes = record.ArtSize;
@@ -619,7 +625,9 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
 
         internal ArticleIdentity Identity { get; }
 
-        internal string CacheUri { get; }
+        internal string Fqdn { get; }
+
+        internal int VatpPort { get; }
 
         internal int PayloadBytes { get; }
 

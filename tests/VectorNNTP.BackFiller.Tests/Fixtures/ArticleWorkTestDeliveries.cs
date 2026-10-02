@@ -21,13 +21,13 @@ internal static class ArticleWorkTestDeliveries
     internal const string CanonicalCorrelationId = "61d4b5f6-8b24-4c14-8d40-741a378abfc8";
     internal const string CanonicalReplyTo = "nnrpd.rpc.responses";
     internal const string CanonicalMessageId = "<12345@example.invalid>";
-    internal const string CanonicalCacheUri =
-        "vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+    internal const string CanonicalFqdn = "backfiller01.usenet.ninja";
+    internal const int CanonicalVatpPort = 119;
     /// <summary>BLAKE3 ArticleId hex for <see cref="CanonicalMessageId"/>.</summary>
     internal const string CanonicalArticleIdHex =
         "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
     internal const string CanonicalSuccessResponseJson =
-        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""";
+        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""";
     internal const string CanonicalNotFoundResponseJson =
         """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}""";
 

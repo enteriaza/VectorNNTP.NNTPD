@@ -21,14 +21,11 @@ public sealed record StorageArticleLookupRequest(
 /// <param name="ServerId">Responding StorageServer numeric identity.</param>
 /// <param name="Fqdn">Responding StorageServer FQDN.</param>
 /// <param name="ArticleId">Article identity confirmed present.</param>
-/// <param name="Uri">
-/// Cache URI NNTPD uses for subsequent VATP retrieval
-/// (<c>vatp://{fqdn}:{port}/{articleIdHex}</c>).
-/// </param>
+/// <param name="VatpPort">TLS VATP listen port used for subsequent retrieval.</param>
 public sealed record StorageArticleLookupResponse(
     int Version,
     Guid RequestId,
     int ServerId,
     string Fqdn,
     ArticleId ArticleId,
-    string Uri);
+    int VatpPort);

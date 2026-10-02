@@ -12,8 +12,8 @@ internal static partial class ArticleRetrievalLogMessages
     [LoggerMessage(
         EventId = 2611,
         Level = LogLevel.Warning,
-        Message = "VATP article fetch failed for {Uri} request {RequestId}")]
-    public static partial void VatpFetchFailed(ILogger logger, Exception ex, string Uri, Guid RequestId);
+        Message = "VATP article fetch failed for {Fqdn}:{VatpPort} request {RequestId}")]
+    public static partial void VatpFetchFailed(ILogger logger, Exception ex, string Fqdn, int VatpPort, Guid RequestId);
 
     [LoggerMessage(
         EventId = 2612,

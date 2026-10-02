@@ -56,13 +56,11 @@ public sealed class VatpTransferLease : IDisposable
         ArticleRecord record,
         NntpArticleHeaderName selectedDateHeaderName,
         ArticleIdentity identity,
-        string cacheUri,
         Action release)
     {
         Record = record;
         SelectedDateHeaderName = selectedDateHeaderName;
         Identity = identity;
-        CacheUri = cacheUri;
         _release = release;
     }
 
@@ -74,9 +72,6 @@ public sealed class VatpTransferLease : IDisposable
 
     /// <summary>Gets the Message-ID / ArticleId identity.</summary>
     public ArticleIdentity Identity { get; }
-
-    /// <summary>Gets the cache URI for this entry.</summary>
-    public string CacheUri { get; }
 
     /// <inheritdoc />
     public void Dispose()

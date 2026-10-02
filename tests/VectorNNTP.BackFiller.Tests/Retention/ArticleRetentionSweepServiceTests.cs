@@ -49,7 +49,7 @@ public sealed class ArticleRetentionSweepServiceTests
             Guid requestId,
             VectorNNTP.Common.Articles.ArticleRecord record,
             VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName) =>
-            new(ArticleRetentionKind.ShuttingDown, null, null, 0, 0);
+            new(ArticleRetentionKind.ShuttingDown, null, null, null, 0, 0);
 
         public VatpOpenResult TryOpenTransfer(
             Guid requestId,

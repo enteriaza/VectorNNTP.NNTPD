@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Messaging.Cache;
 
 namespace VectorNNTP.NNTPD.Transport.Vatp;
 
@@ -16,7 +17,8 @@ internal sealed class VatpArticleClient : IVatpArticleClient
 
     /// <inheritdoc />
     public async Task<VatpFetchResult> FetchArticleAsync(
-        string cacheUri,
+        string fqdn,
+        int vatpPort,
         Guid requestId,
         ArticleId articleId,
         CancellationToken cancellationToken)
@@ -26,14 +28,17 @@ internal sealed class VatpArticleClient : IVatpArticleClient
             return VatpFetchResult.ProtocolFailure("RequestId must not be empty.", requestId, articleId);
         }
 
-        if (!CacheArticleUriParser.TryParse(cacheUri, out var endpoint, out var parseError))
+        if (!VatpEndpointFields.IsCanonicalFqdn(fqdn))
         {
-            return VatpFetchResult.ProtocolFailure(parseError, requestId, articleId);
+            return VatpFetchResult.ProtocolFailure("VATP endpoint requires a lowercase dotted DNS fqdn.", requestId, articleId);
         }
 
-        _ = endpoint.ArticleIdHex;
+        if (!VatpEndpointFields.IsCanonicalPort(vatpPort))
+        {
+            return VatpFetchResult.ProtocolFailure("VATP endpoint requires a port in the range 1–65535.", requestId, articleId);
+        }
 
-        var (connection, acquireFailure) = await _pool.AcquireAsync(endpoint.Host, endpoint.Port, cancellationToken)
+        var (connection, acquireFailure) = await _pool.AcquireAsync(fqdn, vatpPort, cancellationToken)
             .ConfigureAwait(false);
         if (acquireFailure is { } failure)
         {

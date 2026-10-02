@@ -2,15 +2,14 @@ using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Transport.Vatp;
 
 namespace VectorNNTP.NNTPD.Storage;
 
 /// <summary>One validated StorageServer presence response retained for a single lookup.</summary>
 /// <param name="ServerId">Responding StorageServer id.</param>
 /// <param name="Fqdn">Responding StorageServer FQDN.</param>
-/// <param name="Uri">Cache URI for VATP retrieval.</param>
-internal readonly record struct StorageArticleCandidate(int ServerId, string Fqdn, string Uri);
+/// <param name="VatpPort">TLS VATP listen port for retrieval.</param>
+internal readonly record struct StorageArticleCandidate(int ServerId, string Fqdn, int VatpPort);
 
 /// <summary>
 /// Later positives for one in-flight lookup. Completes when an alternate arrives or the
@@ -44,7 +43,7 @@ public enum StorageArticleLookupOutcome
 /// <param name="ArticleId">Queried article identity.</param>
 /// <param name="ServerId">Winning StorageServer id when found.</param>
 /// <param name="Fqdn">Winning StorageServer FQDN when found.</param>
-/// <param name="Uri">Cache URI for subsequent VATP retrieval when found.</param>
+/// <param name="VatpPort">TLS VATP listen port when found.</param>
 /// <param name="Error">Detail when not found.</param>
 public sealed record StorageArticleLookupResult(
     StorageArticleLookupOutcome Outcome,
@@ -52,7 +51,7 @@ public sealed record StorageArticleLookupResult(
     ArticleId ArticleId,
     int? ServerId,
     string? Fqdn,
-    string? Uri,
+    int? VatpPort,
     string? Error)
 {
     /// <summary>
@@ -333,16 +332,14 @@ internal sealed class StorageArticleLookupOperation : IStorageArticleAlternateSo
         }
 
         if (response.ArticleId != ArticleId
-            || string.IsNullOrWhiteSpace(response.Uri)
-            || !CacheArticleUriParser.TryParse(response.Uri, out var parsed, out _)
-            || !ArticleId.TryParseLowerHex(parsed.ArticleIdHex, out var pathId)
-            || pathId != ArticleId)
+            || !VatpEndpointFields.IsCanonicalFqdn(response.Fqdn)
+            || !VatpEndpointFields.IsCanonicalPort(response.VatpPort))
         {
             return false;
         }
 
-        candidate = new StorageArticleCandidate(response.ServerId, response.Fqdn, response.Uri);
-        endpointKey = parsed.Host.Trim() + ":" + parsed.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        candidate = new StorageArticleCandidate(response.ServerId, response.Fqdn, response.VatpPort);
+        endpointKey = response.Fqdn + ":" + response.VatpPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return true;
     }
 }

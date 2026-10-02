@@ -11,7 +11,8 @@ namespace VectorNNTP.Common.Messaging.Cache;
 /// <remarks>
 /// Request properties: <c>version</c>, <c>requestId</c>, <c>articleId</c>.
 /// Response properties: <c>version</c>, <c>requestId</c>, <c>serverId</c>, <c>fqdn</c>,
-/// <c>articleId</c>, <c>uri</c>. AMQP <c>CorrelationId</c>, <c>ReplyTo</c>, and
+/// <c>articleId</c>, <c>vatpPort</c>. A response that includes <c>uri</c> is rejected.
+/// AMQP <c>CorrelationId</c>, <c>ReplyTo</c>, and
 /// <c>Expiration</c> are never JSON fields.
 /// </remarks>
 public static class StorageArticleLookupWireProtocol
@@ -115,9 +116,14 @@ public static class StorageArticleLookupWireProtocol
             throw new InvalidOperationException("Storage lookup response requires a non-empty fqdn.");
         }
 
-        if (string.IsNullOrWhiteSpace(response.Uri))
+        if (!VatpEndpointFields.IsCanonicalFqdn(response.Fqdn))
         {
-            throw new InvalidOperationException("Storage lookup response requires a non-empty uri.");
+            throw new InvalidOperationException("Storage lookup response requires a canonical fqdn.");
+        }
+
+        if (!VatpEndpointFields.IsCanonicalPort(response.VatpPort))
+        {
+            throw new InvalidOperationException("Storage lookup response requires a vatpPort in the range 1–65535.");
         }
 
         var writer = new ArrayBufferWriter<byte>();
@@ -128,7 +134,7 @@ public static class StorageArticleLookupWireProtocol
         jsonWriter.WriteNumber("serverId", response.ServerId);
         jsonWriter.WriteString("fqdn", response.Fqdn);
         jsonWriter.WriteString("articleId", response.ArticleId.ToLowerHexString());
-        jsonWriter.WriteString("uri", response.Uri);
+        jsonWriter.WriteNumber("vatpPort", response.VatpPort);
         jsonWriter.WriteEndObject();
         jsonWriter.Flush();
         return writer.WrittenSpan.ToArray();
@@ -184,9 +190,22 @@ public static class StorageArticleLookupWireProtocol
                 return false;
             }
 
-            if (!TryReadString(root, "uri", out var uri, out reason) || string.IsNullOrWhiteSpace(uri))
+            if (root.TryGetProperty("uri", out _))
             {
-                reason = "Lookup response uri is required.";
+                reason = "Lookup response must not include 'uri'.";
+                return false;
+            }
+
+            if (!TryReadInt32(root, "vatpPort", out var vatpPort, out reason)
+                || !VatpEndpointFields.IsCanonicalPort(vatpPort))
+            {
+                reason = "Lookup response vatpPort must be an integer in the range 1–65535.";
+                return false;
+            }
+
+            if (!VatpEndpointFields.IsCanonicalFqdn(fqdn))
+            {
+                reason = "Lookup response fqdn must be a lowercase dotted DNS name.";
                 return false;
             }
 
@@ -196,25 +215,10 @@ public static class StorageArticleLookupWireProtocol
                 serverId,
                 fqdn.Trim(),
                 articleId,
-                uri.Trim());
+                vatpPort);
             reason = string.Empty;
             return true;
         }
-    }
-
-    /// <summary>
-    /// Builds the Success cache URI used by NNTPD for subsequent VATP OPEN:
-    /// <c>vatp://{fqdn}:{port}/{articleIdHex}</c>.
-    /// </summary>
-    public static string BuildCacheUri(string fqdn, int port, ArticleId articleId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
-        if (port is < 1 or > 65535)
-        {
-            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be 1–65535.");
-        }
-
-        return $"vatp://{fqdn.Trim()}:{port}/{articleId.ToLowerHexString()}";
     }
 
     private static Utf8JsonWriter CreateWriter(ArrayBufferWriter<byte> writer) =>

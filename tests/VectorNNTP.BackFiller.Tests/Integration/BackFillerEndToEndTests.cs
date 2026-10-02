@@ -30,7 +30,9 @@ public sealed class BackFillerEndToEndTests
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, document.RootElement.GetProperty("messageId").GetString());
         Assert.Equal("Giganews", document.RootElement.GetProperty("backbone").GetString());
         Assert.Equal("Success", document.RootElement.GetProperty("outcome").GetString());
-        Assert.Equal(harness.Handler.LastCacheUri, document.RootElement.GetProperty("uri").GetString());
+        Assert.Equal(harness.Handler.LastFqdn, document.RootElement.GetProperty("fqdn").GetString());
+        Assert.Equal(harness.Handler.LastVatpPort, document.RootElement.GetProperty("vatpPort").GetInt32());
+        Assert.False(document.RootElement.TryGetProperty("uri", out _));
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalCorrelationId, publication.CorrelationId);
         Assert.Equal(ArticleWorkTestDeliveries.CanonicalReplyTo, publication.RoutingKey);
         Assert.Equal(ArticleWorkResponseWireProtocol.JsonContentType, publication.ContentType);
@@ -46,8 +48,9 @@ public sealed class BackFillerEndToEndTests
 
         var articleIdHex = document.RootElement.GetProperty("articleId").GetString();
         Assert.Equal(ArticleId.HexLength, articleIdHex!.Length);
-        Assert.EndsWith('/' + articleIdHex, harness.Handler.LastCacheUri, StringComparison.Ordinal);
-        Assert.Equal(articleIdHex, document.RootElement.GetProperty("uri").GetString()!.Split('/')[^1]);
+        Assert.Equal("backfiller.test", harness.Handler.LastFqdn);
+        Assert.Equal(1190, harness.Handler.LastVatpPort);
+        Assert.Equal(articleIdHex, document.RootElement.GetProperty("articleId").GetString());
         Assert.True(ArticleId.TryParseLowerHex(articleIdHex, out var articleId));
         Assert.Equal(harness.Handler.LastRecord!.Value.ArtId, articleId);
         using var open = harness.Retention.TryOpenTransfer(
@@ -155,9 +158,6 @@ public sealed class BackFillerEndToEndTests
         var first = RetentionTestArticles.RetainPrepared(harness.Retention, "<one@example.invalid>", "payload-a\r\n");
         var second = RetentionTestArticles.RetainPrepared(harness.Retention, "<two@example.invalid>", "payload-b\r\n");
         Assert.NotEqual(first.Record.ArtId, second.Record.ArtId);
-        Assert.NotEqual(
-            CacheArticleUri.Create("backfiller.test", 1190, first.Record.ArtId),
-            CacheArticleUri.Create("backfiller.test", 1190, second.Record.ArtId));
         Assert.Equal(first.Record.ArtSize + second.Record.ArtSize, harness.Retention.RetainedPayloadBytes);
         Assert.Equal(2, harness.Retention.RetainedCount);
     }

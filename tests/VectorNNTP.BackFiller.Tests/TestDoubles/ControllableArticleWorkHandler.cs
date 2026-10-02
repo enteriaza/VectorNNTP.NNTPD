@@ -10,7 +10,9 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
 
     public string? Error { get; set; }
 
-    public string? CacheUri { get; set; }
+    public string? Fqdn { get; set; }
+
+    public int? VatpPort { get; set; }
 
     public ArticleId? ArticleId { get; set; }
 
@@ -50,7 +52,8 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
             return new ArticleWorkHandlerResult(
                 stage.Outcome,
                 stage.Error,
-                CacheUri: stage.CacheUri,
+                Fqdn: stage.Fqdn,
+                VatpPort: stage.VatpPort,
                 ArticleId: stage.ArticleId);
         }
 
@@ -66,7 +69,7 @@ internal sealed class ControllableArticleWorkHandler : IArticleWorkHandler
             throw Throw;
         }
 
-        return new ArticleWorkHandlerResult(Outcome, Error, CacheUri: CacheUri, ArticleId: ArticleId);
+        return new ArticleWorkHandlerResult(Outcome, Error, Fqdn: Fqdn, VatpPort: VatpPort, ArticleId: ArticleId);
     }
 }
 
@@ -75,6 +78,7 @@ internal sealed record ArticleWorkControlStage(
     TaskCompletionSource? Gate,
     ArticleWorkOutcome Outcome,
     string? Error = null,
-    string? CacheUri = null,
+    string? Fqdn = null,
+    int? VatpPort = null,
     Exception? Throw = null,
     ArticleId? ArticleId = null);

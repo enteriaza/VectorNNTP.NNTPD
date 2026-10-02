@@ -2,12 +2,13 @@ using System.Buffers;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Messaging.Cache;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
 /// Compact UTF-8 JSON contract for Article Work v1 responses.
-/// Property names are exact: version, requestId, messageId, backbone, outcome, uri, articleId, error.
+/// Property names are exact: version, requestId, messageId, backbone, outcome, fqdn, vatpPort, articleId, error.
 /// </summary>
 public static class ArticleWorkResponseWireProtocol
 {
@@ -74,7 +75,8 @@ public static class ArticleWorkResponseWireProtocol
         json.WriteString("outcome", OutcomeName(intent.Outcome));
         if (intent.Outcome == ArticleWorkOutcome.Success)
         {
-            json.WriteString("uri", intent.Uri);
+            json.WriteString("fqdn", intent.Fqdn);
+            json.WriteNumber("vatpPort", intent.VatpPort!.Value);
             json.WriteString("articleId", intent.ArticleIdHex);
         }
         else
@@ -104,9 +106,14 @@ public static class ArticleWorkResponseWireProtocol
         {
             case ArticleWorkOutcome.Success:
                 RequireIdentity(intent);
-                if (string.IsNullOrWhiteSpace(intent.Uri))
+                if (!VatpEndpointFields.IsCanonicalFqdn(intent.Fqdn))
                 {
-                    throw new InvalidOperationException("Success response requires a cache URI from retention.");
+                    throw new InvalidOperationException("Success response requires a lowercase dotted DNS fqdn.");
+                }
+
+                if (intent.VatpPort is not int vatpPort || !VatpEndpointFields.IsCanonicalPort(vatpPort))
+                {
+                    throw new InvalidOperationException("Success response requires a vatpPort in the range 1–65535.");
                 }
 
                 if (string.IsNullOrWhiteSpace(intent.ArticleIdHex)
@@ -114,14 +121,6 @@ public static class ArticleWorkResponseWireProtocol
                 {
                     throw new InvalidOperationException(
                         "Success response requires a 64-character lowercase hexadecimal articleId.");
-                }
-
-                if (string.IsNullOrWhiteSpace(intent.Uri)
-                    || !intent.Uri.StartsWith("vatp://", StringComparison.Ordinal)
-                    || !intent.Uri.EndsWith('/' + intent.ArticleIdHex, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        "Success uri path must equal the Success articleId (lowercase hexadecimal ArticleId).");
                 }
 
                 if (intent.Error is not null)
@@ -134,9 +133,9 @@ public static class ArticleWorkResponseWireProtocol
             case ArticleWorkOutcome.ArticleNotFound:
             case ArticleWorkOutcome.InvalidArticle:
                 RequireIdentity(intent);
-                if (intent.Uri is not null)
+                if (intent.Fqdn is not null || intent.VatpPort is not null)
                 {
-                    throw new InvalidOperationException("Terminal failure response must not include uri.");
+                    throw new InvalidOperationException("Terminal failure response must not include fqdn or vatpPort.");
                 }
 
                 if (intent.ArticleIdHex is not null)
@@ -157,9 +156,9 @@ public static class ArticleWorkResponseWireProtocol
                     throw new InvalidOperationException("InvalidRequest must not use Guid.Empty.");
                 }
 
-                if (intent.Uri is not null)
+                if (intent.Fqdn is not null || intent.VatpPort is not null)
                 {
-                    throw new InvalidOperationException("InvalidRequest must not include uri.");
+                    throw new InvalidOperationException("InvalidRequest must not include fqdn or vatpPort.");
                 }
 
                 if (intent.ArticleIdHex is not null)

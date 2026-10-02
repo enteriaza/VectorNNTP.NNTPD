@@ -5,8 +5,8 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 /// <remarks>
 /// Identities are never invented: missing parse fields stay null.
-/// <see cref="Uri"/> is the Phase 5 retention <c>vatp://</c> value for Success only.
-/// The publisher must not reconstruct that URI.
+/// <see cref="Fqdn"/> and <see cref="VatpPort"/> are the Success dial endpoint.
+/// The publisher must not encode them into a URI.
 /// </remarks>
 /// <param name="Outcome">Terminal protocol outcome.</param>
 /// <param name="RequestId">Logical request identity when recovered.</param>
@@ -15,7 +15,8 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="CorrelationId">AMQP correlation to echo on the response.</param>
 /// <param name="ReplyTo">AMQP reply destination.</param>
 /// <param name="Error">Failure reason for terminal non-success outcomes.</param>
-/// <param name="Uri">Retention cache URI for Success. Must be absent otherwise.</param>
+/// <param name="Fqdn">BackFiller FQDN for Success. Must be absent otherwise.</param>
+/// <param name="VatpPort">TLS VATP listen port for Success. Must be absent otherwise.</param>
 /// <param name="ArticleIdHex">64-char lowercase BLAKE3 ArtId hex for Success. Must be absent otherwise.</param>
 public sealed record ArticleWorkResponseIntent(
     ArticleWorkOutcome Outcome,
@@ -25,7 +26,8 @@ public sealed record ArticleWorkResponseIntent(
     string? CorrelationId,
     string? ReplyTo,
     string? Error,
-    string? Uri = null,
+    string? Fqdn = null,
+    int? VatpPort = null,
     string? ArticleIdHex = null);
 
 /// <summary>

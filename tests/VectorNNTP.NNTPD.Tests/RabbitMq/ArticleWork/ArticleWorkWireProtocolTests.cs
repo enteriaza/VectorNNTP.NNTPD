@@ -32,10 +32,14 @@ public sealed class ArticleWorkWireProtocolTests
         Assert.Equal(4, document.RootElement.EnumerateObject().Count());
     }
 
+    private const string SuccessFqdn = "backfiller01.usenet.ninja";
+    private const int SuccessVatpPort = 119;
+    private const string SuccessArticleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+
     [Fact]
     public void TryParseResponseV1_AcceptsCanonicalSuccess()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}"""u8;
+        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}"""u8;
         Assert.True(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Equal(string.Empty, reason);
         Assert.NotNull(response);
@@ -43,10 +47,10 @@ public sealed class ArticleWorkWireProtocolTests
         Assert.Equal(RequestId, response.RequestId);
         Assert.Equal("<12345@example.invalid>", response.MessageId);
         Assert.Equal("Giganews", response.Backbone);
-        Assert.Equal("vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14", response.Uri);
+        Assert.Equal(SuccessFqdn, response.Fqdn);
+        Assert.Equal(SuccessVatpPort, response.VatpPort);
         Assert.Equal(
-            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(
-                "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"),
+            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(SuccessArticleIdHex),
             response.ArticleId);
         Assert.Null(response.Error);
     }
@@ -54,7 +58,7 @@ public sealed class ArticleWorkWireProtocolTests
     [Fact]
     public void TryParseResponseV1_RejectsSuccessWithoutArticleId()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}"""u8;
+        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119}"""u8;
         Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Null(response);
         Assert.Contains("articleId", reason, StringComparison.Ordinal);
@@ -63,10 +67,36 @@ public sealed class ArticleWorkWireProtocolTests
     [Fact]
     public void TryParseResponseV1_RejectsSuccessWithInvalidArticleId()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"NOT-HEX"}"""u8;
+        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"NOT-HEX"}"""u8;
         Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Null(response);
         Assert.Contains("articleId", reason, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("nodots")]
+    [InlineData("")]
+    [InlineData("Backfiller01.usenet.ninja")]
+    public void TryParseResponseV1_RejectsInvalidFqdn(string fqdn)
+    {
+        var json = Encoding.UTF8.GetBytes(
+            $$"""{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"{{fqdn}}","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""");
+        Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
+        Assert.Null(response);
+        Assert.Contains("fqdn", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(65536)]
+    public void TryParseResponseV1_RejectsInvalidVatpPort(int port)
+    {
+        var json = Encoding.UTF8.GetBytes(
+            $$"""{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":{{port}},"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""");
+        Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
+        Assert.Null(response);
+        Assert.Contains("vatpPort", reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -75,24 +105,29 @@ public sealed class ArticleWorkWireProtocolTests
         var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}"""u8;
         Assert.True(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out _));
         Assert.Equal(ArticleWorkOutcome.ArticleNotFound, response!.Outcome);
-        Assert.Null(response.Uri);
+        Assert.Null(response.Fqdn);
+        Assert.Null(response.VatpPort);
         Assert.Null(response.ArticleId);
         Assert.Equal("No article with that message-id", response.Error);
     }
 
     [Fact]
-    public void TryParseResponseV1_RejectsSuccessWhenUriPathDoesNotMatchArticleId()
+    public void TryParseResponseV1_RejectsLegacyUriField()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}"""u8;
+        var legacy = "vatp" + "://" + "backfiller01.usenet.ninja:119/" + SuccessArticleIdHex;
+        var json = Encoding.UTF8.GetBytes(
+            $$"""{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"{{SuccessArticleIdHex}}","uri":"{{legacy}}"}""");
         Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Null(response);
-        Assert.Contains("uri path", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("uri", reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void TryParseResponseV1_RejectsLegacy32CharMd5UriPath()
+    public void TryParseResponseV1_RejectsUriOnlySuccess()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}"""u8;
+        var legacy = "vatp" + "://" + "backfiller01.usenet.ninja:119/" + SuccessArticleIdHex;
+        var json = Encoding.UTF8.GetBytes(
+            $$"""{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"{{legacy}}","articleId":"{{SuccessArticleIdHex}}"}""");
         Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Null(response);
         Assert.Contains("uri", reason, StringComparison.OrdinalIgnoreCase);
@@ -101,7 +136,7 @@ public sealed class ArticleWorkWireProtocolTests
     [Fact]
     public void TryParseResponseV1_RejectsSuccessWithError()
     {
-        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","uri":"vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","error":"nope"}"""u8;
+        var json = """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14","error":"nope"}"""u8;
         Assert.False(ArticleWorkWireProtocol.TryParseResponseV1(json, out var response, out var reason));
         Assert.Null(response);
         Assert.Contains("error", reason, StringComparison.Ordinal);

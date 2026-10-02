@@ -23,13 +23,27 @@ public sealed class StorageArticleLookupWireProtocolTests
             2,
             "cache02.usenet.ninja",
             articleId,
-            StorageArticleLookupWireProtocol.BuildCacheUri("cache02.usenet.ninja", 1191, articleId));
+            1191);
         var responseBytes = StorageArticleLookupWireProtocol.SerializeResponseV1(response);
         Assert.True(StorageArticleLookupWireProtocol.TryParseResponseV1(responseBytes, out var parsedResponse, out _));
         Assert.NotNull(parsedResponse);
         Assert.Equal(response.Fqdn, parsedResponse.Fqdn);
-        Assert.Equal(response.Uri, parsedResponse.Uri);
+        Assert.Equal(response.VatpPort, parsedResponse.VatpPort);
+        Assert.Equal(response.ArticleId, parsedResponse.ArticleId);
+        Assert.DoesNotContain("uri", Encoding.UTF8.GetString(responseBytes), StringComparison.Ordinal);
         Assert.DoesNotContain("targetStorage", Encoding.UTF8.GetString(requestBytes), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryParseResponseV1_RejectsLegacyUriField()
+    {
+        var articleId = ArticleId.FromMessageId("<lookup@example.com>"u8);
+        var legacy = "vatp" + "://" + "cache02.usenet.ninja:1191/" + articleId.ToLowerHexString();
+        var json = Encoding.UTF8.GetBytes(
+            $$"""{"version":1,"requestId":"{{Guid.NewGuid()}}","serverId":2,"fqdn":"cache02.usenet.ninja","articleId":"{{articleId.ToLowerHexString()}}","vatpPort":1191,"uri":"{{legacy}}"}""");
+        Assert.False(StorageArticleLookupWireProtocol.TryParseResponseV1(json, out var response, out var reason));
+        Assert.Null(response);
+        Assert.Contains("uri", reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
