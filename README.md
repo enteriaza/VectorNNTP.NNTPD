@@ -59,14 +59,32 @@ dotnet run --project src/VectorNNTP.NNTPD
 
 Stop with Ctrl+C (SIGINT) or SIGTERM. The host initiates a single graceful shutdown of application services. systemd notify/watchdog remain inactive outside a systemd notify environment.
 
-## Running as a Windows Service
+## Release publish
 
-Publish and install (elevated PowerShell):
+`tools/Publish-Release.ps1` publishes VectorNNTP.NNTPD, VectorNNTP.StorageServer, VectorNNTP.BackFiller, and NNTPCancelMessage as self-contained x64 Native AOT binaries. One platform directory holds every application, its `{entry assembly name}.json` file, and a single shared `RabbitMq.json`.
 
 ```powershell
-dotnet publish src/VectorNNTP.NNTPD -c Release -o C:\Services\VectorNNTP.NNTPD
+powershell -File tools/Publish-Release.ps1 -Platform win-64
+powershell -File tools/Publish-Release.ps1 -Platform linux-64
+powershell -File tools/Publish-Release.ps1 -Platform all
+```
+
+Artifacts:
+
+```text
+release/win-64/      win-x64 Native AOT
+release/linux-64/    linux-x64 Native AOT
+```
+
+The script restores and publishes from the repository root regardless of the current directory. `win-64` and `linux-64` are the only release platforms. The four applications reference the `StuDev.AotAnywhere` 1.0.4 MSBuild SDK, so both releases can be produced on this Windows machine. Linux linking uses the Zig toolchain that NuGet restores with that SDK. No Docker, WSL, or global Zig install is required. A globalization-enabled Linux host still needs `libicu`.
+
+## Running as a Windows Service
+
+Publish with `tools/Publish-Release.ps1 -Platform win-64`, then install (elevated PowerShell):
+
+```powershell
 New-Service -Name "VectorNNTP.NNTPD" `
-  -BinaryPathName "C:\Services\VectorNNTP.NNTPD\VectorNNTP.NNTPD.exe" `
+  -BinaryPathName "C:\path\to\VectorNNTP\release\win-64\VectorNNTP.NNTPD.exe" `
   -DisplayName "VectorNNTP NNTPD" `
   -StartupType Automatic
 Start-Service VectorNNTP.NNTPD
@@ -81,9 +99,9 @@ See **[docs/systemd.md](docs/systemd.md)** for full install, operations, and tro
 Quick path:
 
 ```bash
-dotnet publish src/VectorNNTP.NNTPD -c Release -r linux-x64 --self-contained true -o /tmp/vectornntpd-publish
+pwsh -File tools/Publish-Release.ps1 -Platform linux-64
 sudo mkdir -p /opt/vectornntp/nntpd
-sudo cp -a /tmp/vectornntpd-publish/. /opt/vectornntp/nntpd/
+sudo cp -a release/linux-64/. /opt/vectornntp/nntpd/
 sudo cp deploy/systemd/vectornntpd.service /etc/systemd/system/vectornntpd.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now vectornntpd

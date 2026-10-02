@@ -26,26 +26,20 @@ Limitations:
 
 ## Publishing
 
-### Framework-dependent (smaller publish; requires .NET 10 runtime on the host)
+Production releases are self-contained linux-x64 Native AOT builds. From the repository, on Windows or with PowerShell on Linux:
 
 ```bash
-dotnet publish src/VectorNNTP.NNTPD -c Release -r linux-x64 --self-contained false -o /tmp/vectornntpd-publish
+pwsh -File tools/Publish-Release.ps1 -Platform linux-64
 ```
 
-### Self-contained (no shared framework required on the host)
-
-```bash
-dotnet publish src/VectorNNTP.NNTPD -c Release -r linux-x64 --self-contained true -o /tmp/vectornntpd-publish
-```
-
-Choose `linux-arm64` when targeting ARM servers.
+The four application binaries, their `{entry assembly name}.json` files, and one `RabbitMq.json` are written to `release/linux-64/`. Windows uses `tools/Publish-Release.ps1 -Platform win-64` and writes `release/win-64/`. `-Platform all` builds both. `StuDev.AotAnywhere` 1.0.4 lets this Windows machine publish the linux-x64 Native AOT release; NuGet restores the Zig linker with the SDK. The Linux host still needs `libicu` because the applications stay globalization-enabled.
 
 ## Installation
 
 ```bash
 sudo useradd --system --home /opt/vectornntp --shell /usr/sbin/nologin vectornntp
 sudo mkdir -p /opt/vectornntp/nntpd
-sudo cp -a /tmp/vectornntpd-publish/. /opt/vectornntp/nntpd/
+sudo cp -a release/linux-64/. /opt/vectornntp/nntpd/
 sudo chown -R vectornntp:vectornntp /opt/vectornntp
 sudo chmod 755 /opt/vectornntp/nntpd/VectorNNTP.NNTPD
 
@@ -189,20 +183,20 @@ Limitations match NNTPD (NOTIFY_SOCKET consumed by the hosting package; applicat
 
 ## Publishing
 
+BackFiller is included in the same linux-x64 Native AOT release as NNTPD:
+
 ```bash
-dotnet publish src/VectorNNTP.BackFiller -c Release -r linux-x64 --self-contained false -o /tmp/vectornntp-backfiller-publish
-# or:
-dotnet publish src/VectorNNTP.BackFiller -c Release -r linux-x64 --self-contained true -o /tmp/vectornntp-backfiller-publish
+pwsh -File tools/Publish-Release.ps1 -Platform linux-64
 ```
 
-Choose `linux-arm64` when targeting ARM servers.
+`release/linux-64/VectorNNTP.BackFiller` is produced next to the other three applications and the single shared `RabbitMq.json`.
 
 ## Installation
 
 ```bash
 sudo useradd --system --home /opt/vectornntp --shell /usr/sbin/nologin vectornntp
 sudo mkdir -p /opt/vectornntp/backfiller
-sudo cp -a /tmp/vectornntp-backfiller-publish/. /opt/vectornntp/backfiller/
+sudo cp -a release/linux-64/. /opt/vectornntp/backfiller/
 sudo chown -R vectornntp:vectornntp /opt/vectornntp
 sudo chmod 755 /opt/vectornntp/backfiller/VectorNNTP.BackFiller
 

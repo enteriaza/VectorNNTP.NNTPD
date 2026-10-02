@@ -34,4 +34,30 @@
     </PropertyGroup>
   </Target>
 
+  <!--
+    Production publish is self-contained Native AOT for win-x64 and linux-x64 only.
+    A normal build does not set RuntimeIdentifier, so libraries, tests, and tools stay portable.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTP.NNTPD' OR '$(MSBuildProjectName)' == 'VectorNNTP.StorageServer' OR '$(MSBuildProjectName)' == 'VectorNNTP.BackFiller' OR '$(MSBuildProjectName)' == 'VectorNNTP.NNTPCancelMessage'">
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <SelfContained Condition="'$(RuntimeIdentifier)' == 'win-x64' OR '$(RuntimeIdentifier)' == 'linux-x64'">true</SelfContained>
+    <PublishAot Condition="'$(RuntimeIdentifier)' == 'win-x64' OR '$(RuntimeIdentifier)' == 'linux-x64'">true</PublishAot>
+    <!--
+      Native AOT enables the trimmer. Existing options validation, Serilog hook lookup,
+      and framework packages use reflection. Those IL trim warnings stay warnings for this
+      publish mode so a real compile or linker failure still stops the release.
+    -->
+    <NoWarn Condition="'$(PublishAot)' == 'true'">$(NoWarn);IL2026;IL2057;IL2104;IL3050;IL2025;IL2046;IL2050;IL2067;IL2070;IL2072;IL2075;IL2087;IL2090;IL2091;IL3000;IL3002</NoWarn>
+    <WarningsNotAsErrors Condition="'$(PublishAot)' == 'true'">$(WarningsNotAsErrors);IL2026;IL2057;IL2104;IL3050;IL2025;IL2046;IL2050;IL2067;IL2070;IL2072;IL2075;IL2087;IL2090;IL2091</WarningsNotAsErrors>
+    <ILLinkTreatWarningsAsErrors Condition="'$(PublishAot)' == 'true'">false</ILLinkTreatWarningsAsErrors>
+    <IlcTreatWarningsAsErrors Condition="'$(PublishAot)' == 'true'">false</IlcTreatWarningsAsErrors>
+    <SuppressAotAnalysisWarnings Condition="'$(PublishAot)' == 'true'">true</SuppressAotAnalysisWarnings>
+  </PropertyGroup>
+
+  <Target Name="RejectUnsupportedProductionRuntimeIdentifier"
+          BeforeTargets="Restore;Build;Publish"
+          Condition="('$(MSBuildProjectName)' == 'VectorNNTP.NNTPD' OR '$(MSBuildProjectName)' == 'VectorNNTP.StorageServer' OR '$(MSBuildProjectName)' == 'VectorNNTP.BackFiller' OR '$(MSBuildProjectName)' == 'VectorNNTP.NNTPCancelMessage') AND '$(RuntimeIdentifier)' != '' AND '$(RuntimeIdentifier)' != 'win-x64' AND '$(RuntimeIdentifier)' != 'linux-x64'">
+    <Error Text="Production applications publish only win-x64 and linux-x64. RuntimeIdentifier '$(RuntimeIdentifier)' is not supported." />
+  </Target>
+
 </Project>

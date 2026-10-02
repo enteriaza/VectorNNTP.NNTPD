@@ -16,6 +16,7 @@ obj/
 TestResults/
 publish/
 artifacts/
+release/
 
 ## Experimental / historical knowledge base (not production)
 .artifacts/

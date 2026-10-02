@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Worker">
 
+  <Sdk Name="StuDev.AotAnywhere" Version="1.0.4" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
