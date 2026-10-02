@@ -14,7 +14,7 @@ namespace VectorNNTP.NNTPD.Logging;
 /// <para>
 /// Operational File/Async settings bind from <c>Serilog:News</c> using the same
 /// argument names as the application File sink (path, rolling, retention,
-/// buffering, hooks). The INN line format is not read from configuration; the
+/// buffering, <c>flushToDiskInterval</c>, hooks). The INN line format is not read from configuration; the
 /// sink is always constructed with <see cref="InnNewsTextFormatter"/>.
 /// </para>
 /// <para>
@@ -113,6 +113,7 @@ public static class NntpdNewsLogging
             news.GetValue<long?>("fileSizeLimitBytes"),
             news.GetValue("bufferSize", 50000),
             news.GetValue("blockWhenFull", true),
+            news.GetValue<TimeSpan?>("flushToDiskInterval"),
             ResolveArchiveHooks(news["hooks"]));
     }
 
@@ -134,6 +135,7 @@ public static class NntpdNewsLogging
                     restrictedToMinimumLevel: LogEventLevel.Information,
                     fileSizeLimitBytes: settings.FileSizeLimitBytes,
                     buffered: settings.Buffered,
+                    flushToDiskInterval: settings.FlushToDiskInterval,
                     rollingInterval: settings.RollingInterval,
                     rollOnFileSizeLimit: settings.RollOnFileSizeLimit,
                     retainedFileCountLimit: settings.RetainedFileCountLimit,
@@ -185,6 +187,10 @@ public static class NntpdNewsLogging
 /// <param name="FileSizeLimitBytes">Serilog File size cap; <see langword="null"/> is unlimited.</param>
 /// <param name="BufferSize">Serilog.Sinks.Async buffer size.</param>
 /// <param name="BlockWhenFull">Whether Async blocks when the buffer is full.</param>
+/// <param name="FlushToDiskInterval">
+/// Serilog File periodic flush. <see langword="null"/> leaves buffering until dispose.
+/// Production <c>Serilog:News</c> sets one second.
+/// </param>
 /// <param name="Hooks">Resolved File archive hooks (compression).</param>
 public readonly record struct NewsFileSinkSettings(
     string Path,
@@ -195,4 +201,5 @@ public readonly record struct NewsFileSinkSettings(
     long? FileSizeLimitBytes,
     int BufferSize,
     bool BlockWhenFull,
+    TimeSpan? FlushToDiskInterval,
     ArchiveHooks Hooks);

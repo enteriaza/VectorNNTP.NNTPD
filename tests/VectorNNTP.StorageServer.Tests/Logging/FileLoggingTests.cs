@@ -30,6 +30,7 @@ public sealed class FileLoggingTests
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
         Assert.Equal(14, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.True(args.GetProperty("buffered").GetBoolean());
+        Assert.Equal("00:00:01", args.GetProperty("flushToDiskInterval").GetString());
         Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
         Assert.Equal(
@@ -154,6 +155,7 @@ public sealed class FileLoggingTests
             var boundedCapacity = queue.GetType().GetProperty("BoundedCapacity")?.GetValue(queue)
                                   ?? throw new InvalidOperationException("BoundedCapacity was not found.");
             Assert.Equal(50000, Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
+            AssertFlushesOncePerSecond(sinks);
         }
         finally
         {
@@ -253,6 +255,22 @@ public sealed class FileLoggingTests
         }
 
         return null;
+    }
+
+    private static void AssertFlushesOncePerSecond(IEnumerable<object> sinks)
+    {
+        var flush = Assert.Single(
+            sinks,
+            static n => n.GetType().Name.Equals("PeriodicFlushToDiskSink", StringComparison.Ordinal));
+        var timer = ReadInstanceField(flush, "_timer")
+                    ?? throw new InvalidOperationException("PeriodicFlushToDiskSink._timer was not found.");
+        var holder = timer.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(timer)
+                     ?? throw new InvalidOperationException("Timer._timer was not found.");
+        var queueTimer = holder.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(holder)
+                         ?? throw new InvalidOperationException("TimerHolder._timer was not found.");
+        var period = queueTimer.GetType().GetField("_period", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(queueTimer)
+                     ?? throw new InvalidOperationException($"{queueTimer.GetType().FullName}._period was not found.");
+        Assert.Equal(1000u, Assert.IsType<uint>(period));
     }
 
     private static IEnumerable<object> WalkLogEventSinks(Serilog.ILogger logger)

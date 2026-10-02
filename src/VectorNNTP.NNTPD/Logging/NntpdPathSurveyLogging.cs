@@ -14,7 +14,7 @@ namespace VectorNNTP.NNTPD.Logging;
 /// <para>
 /// Operational File/Async settings bind from <c>Serilog:Inpaths</c> using the same
 /// argument names as the application File sink (path, rolling, retention,
-/// buffering, hooks). The Path-survey line format is not read from configuration;
+/// buffering, <c>flushToDiskInterval</c>, hooks). The Path-survey line format is not read from configuration;
 /// the sink is always constructed with <see cref="InnPathSurveyTextFormatter"/>.
 /// </para>
 /// <para>
@@ -103,6 +103,7 @@ public static class NntpdPathSurveyLogging
             inpaths.GetValue<long?>("fileSizeLimitBytes"),
             inpaths.GetValue("bufferSize", 50000),
             inpaths.GetValue("blockWhenFull", true),
+            inpaths.GetValue<TimeSpan?>("flushToDiskInterval"),
             ResolveArchiveHooks(inpaths["hooks"]));
     }
 
@@ -140,6 +141,7 @@ public static class NntpdPathSurveyLogging
                     restrictedToMinimumLevel: LogEventLevel.Information,
                     fileSizeLimitBytes: settings.FileSizeLimitBytes,
                     buffered: settings.Buffered,
+                    flushToDiskInterval: settings.FlushToDiskInterval,
                     rollingInterval: settings.RollingInterval,
                     rollOnFileSizeLimit: settings.RollOnFileSizeLimit,
                     retainedFileCountLimit: settings.RetainedFileCountLimit,
@@ -171,6 +173,10 @@ public static class NntpdPathSurveyLogging
 /// <param name="FileSizeLimitBytes">Serilog File size cap; <see langword="null"/> is unlimited.</param>
 /// <param name="BufferSize">Serilog.Sinks.Async buffer size.</param>
 /// <param name="BlockWhenFull">Whether Async blocks when the buffer is full.</param>
+/// <param name="FlushToDiskInterval">
+/// Serilog File periodic flush. <see langword="null"/> leaves buffering until dispose.
+/// Production <c>Serilog:Inpaths</c> sets one second.
+/// </param>
 /// <param name="Hooks">Resolved File archive hooks (compression).</param>
 public readonly record struct PathSurveyFileSinkSettings(
     string Path,
@@ -181,4 +187,5 @@ public readonly record struct PathSurveyFileSinkSettings(
     long? FileSizeLimitBytes,
     int BufferSize,
     bool BlockWhenFull,
+    TimeSpan? FlushToDiskInterval,
     ArchiveHooks Hooks);

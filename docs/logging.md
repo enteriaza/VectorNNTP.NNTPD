@@ -46,7 +46,7 @@ There is one source of truth per operational setting. `Serilog:WriteTo` in `apps
 | Setting | Source of truth |
 |---------|-----------------|
 | Console minimum / template | `Serilog:WriteTo` Console args |
-| File minimum / template / rolling / retention / buffered / size limit | `Serilog:WriteTo` Async → File args |
+| File minimum / template / rolling / retention / buffered / `flushToDiskInterval` / size limit | `Serilog:WriteTo` Async → File args |
 | Async buffer / `blockWhenFull` | `Serilog:WriteTo` Async args |
 | Gzip + `CompressionLevel.Fastest` | File `hooks` string → `NntpdSerilogHooks.DailyGzipFastest` |
 | Log directory | `Nntpd:LogDir` |
@@ -55,7 +55,7 @@ There is one source of truth per operational setting. `Serilog:WriteTo` in `apps
 
 `ArchiveHooks` cannot be constructed from JSON scalars. The File `hooks` argument is the Settings.Configuration type/member string `VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD` (`CompressionLevel.Fastest`, no archive count limit). That factory is the only File/Archive construction left in code.
 
-Daily rolling uses Serilog `rollingInterval: Day` (local midnight). The active file is `{ApplicationName}-yyyyMMdd.log` (for example `VectorNNTP.NNTPD-20260925.log`). `fileSizeLimitBytes` is JSON `null` and `rollOnFileSizeLimit` is `false` so a single day may exceed 10 GB.
+Daily rolling uses Serilog `rollingInterval: Day` (local midnight). The active file is `{ApplicationName}-yyyyMMdd.log` (for example `VectorNNTP.NNTPD-20260925.log`). `fileSizeLimitBytes` is JSON `null` and `rollOnFileSizeLimit` is `false` so a single day may exceed 10 GB. `buffered` stays true. `flushToDiskInterval` is `00:00:01`, so Serilog wraps the rolling file sink with `PeriodicFlushToDiskSink` and flushes whichever file is current about once per second. The same interval is set on `Serilog:News` and `Serilog:Inpaths`.
 
 Gzip runs only because Serilog deletes rolled uncompressed files. `ArchiveHooks.OnFileDeleting` copies the doomed `.log` to `{filename}.gz` in the same directory, then Serilog deletes the uncompressed original. The application File sink `retainedFileCountLimit` is **14 uncompressed daily files**. That is not gzip-archive retention and is not the Path-survey (`inpaths`) limit: Serilog's matcher is `{ApplicationName}-*.log` and does not select `.log.gz`. A rolled application log is gzipped when it falls outside those 14 uncompressed days. Historical `.gz` files stay until an external retention process removes them. The active file is not compressed.
 
@@ -106,7 +106,7 @@ Feed is the inbound Transit identifier already known on the NNTP session (`Autho
 
 Temporary capacity or pre-article responses (`435` not wanted, `436` try later, TAKETHIS `400`, POST `440`) are not article-rejection news events and are not written as `-`.
 
-Operational file behaviour is the same Serilog File/Async contract as application logs and is configured under `Serilog:News` (path, `rollingInterval`, `retainedFileCountLimit`, `fileSizeLimitBytes`, `rollOnFileSizeLimit`, `hooks` compression, `buffered`, Async `bufferSize` / `blockWhenFull`). `Nntpd:LogDir` still resolves the directory; the runtime path is `{LogDir}/news-yyyyMMdd.log` for daily rolling. Changing those Serilog settings changes the news file. Changing them does not change the INN formatter.
+Operational file behaviour is the same Serilog File/Async contract as application logs and is configured under `Serilog:News` (path, `rollingInterval`, `retainedFileCountLimit`, `fileSizeLimitBytes`, `rollOnFileSizeLimit`, `hooks` compression, `buffered`, `flushToDiskInterval`, Async `bufferSize` / `blockWhenFull`). `Nntpd:LogDir` still resolves the directory; the runtime path is `{LogDir}/news-yyyyMMdd.log` for daily rolling. Changing those Serilog settings changes the news file. Changing them does not change the INN formatter.
 
 A news-log I/O failure is reported through application diagnostics and does not produce a second NNTP response. The dedicated news logger is not written to Console or the application File sink, so normal application logs do not contain INN `news` lines.
 

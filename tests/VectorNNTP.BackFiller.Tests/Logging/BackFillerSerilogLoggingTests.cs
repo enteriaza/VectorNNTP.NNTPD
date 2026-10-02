@@ -158,6 +158,8 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
         Assert.Equal(BackFillerFileLogging.RetainedFileCountLimit, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.Equal(BackFillerFileLogging.FileBuffered, args.GetProperty("buffered").GetBoolean());
+        Assert.Equal("00:00:01", args.GetProperty("flushToDiskInterval").GetString());
+        Assert.Equal(TimeSpan.FromSeconds(1), BackFillerFileLogging.FileFlushToDiskInterval);
         Assert.Equal(BackFillerFileLogging.RollOnFileSizeLimit, args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
         Assert.Equal("logs/VectorNNTP.BackFiller-.log", args.GetProperty("path").GetString());
@@ -207,6 +209,7 @@ public sealed class BackFillerSerilogLoggingTests
             Assert.Contains(
                 sinks,
                 static n => n.GetType().Name.Contains("Console", StringComparison.Ordinal));
+            AssertFlushesOncePerSecond(sinks);
         }
         finally
         {
@@ -379,6 +382,7 @@ public sealed class BackFillerSerilogLoggingTests
             ["Serilog:WriteTo:1:Args:configure:0:Args:restrictedToMinimumLevel"] = "Debug",
             ["Serilog:WriteTo:1:Args:configure:0:Args:outputTemplate"] = BackFillerFileLogging.SinkOutputTemplate,
             ["Serilog:WriteTo:1:Args:configure:0:Args:buffered"] = "true",
+            ["Serilog:WriteTo:1:Args:configure:0:Args:flushToDiskInterval"] = "00:00:01",
             ["Serilog:WriteTo:1:Args:configure:0:Args:rollingInterval"] = "Day",
             ["Serilog:WriteTo:1:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
             ["Serilog:WriteTo:1:Args:configure:0:Args:retainedFileCountLimit"] = "1",
@@ -437,6 +441,22 @@ public sealed class BackFillerSerilogLoggingTests
         }
 
         return null;
+    }
+
+    private static void AssertFlushesOncePerSecond(IEnumerable<object> sinks)
+    {
+        var flush = Assert.Single(
+            sinks,
+            static n => n.GetType().Name.Equals("PeriodicFlushToDiskSink", StringComparison.Ordinal));
+        var timer = ReadInstanceField(flush, "_timer")
+                    ?? throw new InvalidOperationException("PeriodicFlushToDiskSink._timer was not found.");
+        var holder = timer.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(timer)
+                     ?? throw new InvalidOperationException("Timer._timer was not found.");
+        var queueTimer = holder.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(holder)
+                         ?? throw new InvalidOperationException("TimerHolder._timer was not found.");
+        var period = queueTimer.GetType().GetField("_period", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(queueTimer)
+                     ?? throw new InvalidOperationException($"{queueTimer.GetType().FullName}._period was not found.");
+        Assert.Equal(1000u, Assert.IsType<uint>(period));
     }
 
     private static IEnumerable<object> WalkLogEventSinks(object root)

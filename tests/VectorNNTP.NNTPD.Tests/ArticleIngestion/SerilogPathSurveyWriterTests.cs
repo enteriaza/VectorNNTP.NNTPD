@@ -35,6 +35,7 @@ public sealed class SerilogPathSurveyWriterTests
         Assert.Equal(1_048_576, settings.FileSizeLimitBytes);
         Assert.Equal(250, settings.BufferSize);
         Assert.False(settings.BlockWhenFull);
+        Assert.Null(settings.FlushToDiskInterval);
         Assert.Same(NntpdSerilogHooks.DailyGzipFastest, settings.Hooks);
     }
 

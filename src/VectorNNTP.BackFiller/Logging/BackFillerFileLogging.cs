@@ -51,6 +51,12 @@ internal static class BackFillerFileLogging
     /// <summary>File sink buffering.</summary>
     public const bool FileBuffered = true;
 
+    /// <summary>
+    /// Serilog File <c>flushToDiskInterval</c>. Matches production <c>appsettings.json</c>
+    /// (<c>00:00:01</c>). The host logger is built here, not by <c>ReadFrom.Configuration</c>.
+    /// </summary>
+    public static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);
+
     /// <summary>File sink size-based rolling.</summary>
     public const bool RollOnFileSizeLimit = false;
 
@@ -136,6 +142,7 @@ internal static class BackFillerFileLogging
                     outputTemplate: SinkOutputTemplate,
                     fileSizeLimitBytes: null,
                     buffered: FileBuffered,
+                    flushToDiskInterval: FileFlushToDiskInterval,
                     rollingInterval: RollingInterval.Day,
                     rollOnFileSizeLimit: RollOnFileSizeLimit,
                     retainedFileCountLimit: RetainedFileCountLimit,

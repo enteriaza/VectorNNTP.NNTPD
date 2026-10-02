@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -37,6 +38,7 @@ public sealed class FileLoggingTests
         // Serilog's delete callback can hand off completed files at daily rotation.
         Assert.Equal(14, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.True(args.GetProperty("buffered").GetBoolean());
+        Assert.Equal("00:00:01", args.GetProperty("flushToDiskInterval").GetString());
         Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
         Assert.Equal(
@@ -46,6 +48,12 @@ public sealed class FileLoggingTests
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
         Assert.Equal("logs/VectorNNTP.NNTPD-.log", args.GetProperty("path").GetString());
+        var news = doc.RootElement.GetProperty("Serilog").GetProperty("News");
+        Assert.True(news.GetProperty("buffered").GetBoolean());
+        Assert.Equal("00:00:01", news.GetProperty("flushToDiskInterval").GetString());
+        var inpaths = doc.RootElement.GetProperty("Serilog").GetProperty("Inpaths");
+        Assert.True(inpaths.GetProperty("buffered").GetBoolean());
+        Assert.Equal("00:00:01", inpaths.GetProperty("flushToDiskInterval").GetString());
         var usingNames = doc.RootElement.GetProperty("Serilog").GetProperty("Using")
             .EnumerateArray().Select(static e => e.GetString()).ToArray();
         Assert.Contains("Serilog.Sinks.File", usingNames);
@@ -126,6 +134,41 @@ public sealed class FileLoggingTests
             var boundedCapacity = queue.GetType().GetProperty("BoundedCapacity")?.GetValue(queue)
                                   ?? throw new InvalidOperationException("BoundedCapacity was not found.");
             Assert.Equal(50000, Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
+            AssertFlushesOncePerSecond(sinks);
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+            TryDelete(logDir);
+        }
+    }
+
+    [Fact]
+    public void ProductionNewsAndInpaths_FlushCurrentFileOncePerSecond()
+    {
+        var logDir = CreateTempLogDir();
+        try
+        {
+            var configuration = new ConfigurationManager();
+            configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
+            configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.LogDir)}"] = logDir,
+                    [$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.ApplicationName)}"] = "VectorNNTP.NNTPD",
+                });
+            NntpdFileLogging.BindResolvedFilePath(configuration);
+
+            Assert.Equal(TimeSpan.FromSeconds(1), NntpdNewsLogging.ReadSettings(configuration).FlushToDiskInterval);
+            Assert.Equal(TimeSpan.FromSeconds(1), NntpdPathSurveyLogging.ReadSettings(configuration).FlushToDiskInterval);
+
+            using var news = NntpdNewsLogging.CreateLogger(configuration);
+            using var inpaths = NntpdPathSurveyLogging.CreateLogger(
+                configuration,
+                new IgnoringCompletedPathSurveyFileHandler(),
+                NullLogger.Instance);
+            AssertFlushesOncePerSecond(WalkLogEventSinks(news));
+            AssertFlushesOncePerSecond(WalkLogEventSinks(inpaths));
         }
         finally
         {
@@ -372,6 +415,29 @@ public sealed class FileLoggingTests
         }
 
         return null;
+    }
+
+    private static void AssertFlushesOncePerSecond(IEnumerable<object> sinks)
+    {
+        var flush = Assert.Single(
+            sinks,
+            static n => n.GetType().Name.Equals("PeriodicFlushToDiskSink", StringComparison.Ordinal));
+        var timer = ReadInstanceField(flush, "_timer")
+                    ?? throw new InvalidOperationException("PeriodicFlushToDiskSink._timer was not found.");
+        var holder = timer.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(timer)
+                     ?? throw new InvalidOperationException("Timer._timer was not found.");
+        var queueTimer = holder.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(holder)
+                         ?? throw new InvalidOperationException("TimerHolder._timer was not found.");
+        var period = queueTimer.GetType().GetField("_period", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(queueTimer)
+                     ?? throw new InvalidOperationException($"{queueTimer.GetType().FullName}._period was not found.");
+        Assert.Equal(1000u, Assert.IsType<uint>(period));
+    }
+
+    private sealed class IgnoringCompletedPathSurveyFileHandler : ICompletedPathSurveyFileHandler
+    {
+        public void OnCompletedFile(string completedFilePath)
+        {
+        }
     }
 
     private static IEnumerable<object> WalkLogEventSinks(object root)

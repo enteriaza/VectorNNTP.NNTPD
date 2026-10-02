@@ -128,6 +128,7 @@ internal static class StorageServerFileLogging
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:fileSizeLimitBytes"] = null,
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:buffered"] = "true",
+        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:flushToDiskInterval"] = "00:00:01",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollingInterval"] = "Day",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "14",
