@@ -48,8 +48,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     private readonly Func<IngestionPressureSnapshot>? _samplePressure;
     private readonly IArticlePlacementClient? _placement;
     private readonly IStorageServerRegistry? _placementRegistry;
-    private readonly IReplicationIntentStore? _replicationIntent;
-    private readonly IStorageServerRoster? _replicationRoster;
     private readonly CancellationTokenSource _articleRunCts = new();
     private readonly CancellationTokenSource _overviewRunCts = new();
     private Task? _execution;
@@ -74,9 +72,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IPathSurveyWriter? pathSurvey = null,
         Func<IngestionPressureSnapshot>? samplePressure = null,
         IArticlePlacementClient? placement = null,
-        IStorageServerRegistry? placementRegistry = null,
-        IReplicationIntentStore? replicationIntent = null,
-        IStorageServerRoster? replicationRoster = null)
+        IStorageServerRegistry? placementRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(persister);
@@ -96,8 +92,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _samplePressure = samplePressure;
         _placement = placement;
         _placementRegistry = placementRegistry;
-        _replicationIntent = replicationIntent;
-        _replicationRoster = replicationRoster;
     }
 
     /// <inheritdoc />
@@ -291,10 +285,10 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// The target is the active registry entry with a dialable VATP port and the lowest
     /// <see cref="StorageServerFleetEntry.ServerId"/>, then ordinal FQDN. Advertised free
     /// space is ignored. This method does not call
-    /// <see cref="StorageServerPlacementSelector"/>, <see cref="PlaceAfterPersistAsync"/>,
-    /// <see cref="PlaceReplicaAsync"/>, or <see cref="IReplicationIntentStore"/>.
+    /// <see cref="StorageServerPlacementSelector"/> or <see cref="PlaceAfterPersistAsync"/>.
     /// Accepted and Duplicate are terminal success. Every other
-    /// <see cref="ArticlePlacementKind"/> is logged once and not retried.
+    /// <see cref="ArticlePlacementKind"/> is logged once and not retried. NNTPD does not
+    /// place a second copy.
     /// </remarks>
     private async Task StoreBackFillerAsync(InboundArticle article, CancellationToken cancellationToken)
     {
@@ -388,8 +382,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// </summary>
     /// <remarks>
     /// Lowest <see cref="StorageServerFleetEntry.ServerId"/>, then ordinal FQDN.
-    /// Entries without a VATP port from 1 through 65535 are skipped. Free space,
-    /// replica ranking, and placement persistence are not used.
+    /// Entries without a VATP port from 1 through 65535 are skipped. Free space
+    /// and placement persistence are not used.
     /// </remarks>
     private static bool TrySelectBackFillerTarget(
         IReadOnlyList<StorageServerFleetEntry> active,
@@ -419,9 +413,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     }
 
     /// <summary>
-    /// First STORE after persist, then at most one best-effort replica STORE.
-    /// Ingest success is the first Accepted or Duplicate result. Failures stay in this
-    /// method so they cannot requeue OverviewDB work or undo persistence.
+    /// One STORE after persist. Accepted and Duplicate complete placement.
+    /// Failures stay in this method so they cannot requeue OverviewDB work or undo persistence.
+    /// NNTPD does not select or store a second copy.
     /// </summary>
     private async Task PlaceAfterPersistAsync(InboundArticle article, CancellationToken cancellationToken)
     {
@@ -501,12 +495,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                     break;
             }
 
-            if (!result.Succeeded)
-            {
-                return;
-            }
-
-            await PlaceReplicaAsync(article.Record, active, target, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -524,235 +512,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 Elapsed(started));
         }
     }
-
-    /// <summary>
-    /// One replica STORE. The target is the durable pin when one exists; otherwise the
-    /// existing 5H.2 selection is pinned before the STORE starts. A pin is never replaced.
-    /// </summary>
-    private async Task PlaceReplicaAsync(
-        ArticleRecord record,
-        IReadOnlyList<StorageServerFleetEntry> active,
-        StorageServerFleetEntry first,
-        CancellationToken cancellationToken)
-    {
-        var started = Stopwatch.GetTimestamp();
-        var artId = record.ArtId.ToLowerHexString();
-        var replication = _options.Value.Replication ?? new ReplicationOptions();
-        if (!replication.SecondCopySender)
-        {
-            ArticlePlacementLogMessages.SecondCopySenderDisabled(_logger, artId, first.ServerId, Elapsed(started));
-            return;
-        }
-
-        if (_replicationIntent is not { IsSecondCopySender: true })
-        {
-            ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
-            return;
-        }
-
-        if (cancellationToken.IsCancellationRequested)
-        {
-            ArticlePlacementLogMessages.ReplicaNotStarted(_logger, artId, first.ServerId, Elapsed(started));
-            return;
-        }
-
-        if (!TryResolveReplicaDial(record.ArtId, active, first, out var replica, out var port))
-        {
-            return;
-        }
-
-        try
-        {
-            var result = await _placement!.PlaceAsync(record, replica, cancellationToken).ConfigureAwait(false);
-            var elapsed = Elapsed(started);
-            switch (result.Kind)
-            {
-                case ArticlePlacementKind.Accepted:
-                    ArticlePlacementLogMessages.ReplicaAccepted(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Duplicate:
-                    ArticlePlacementLogMessages.ReplicaDuplicate(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Conflict:
-                    ArticlePlacementLogMessages.ReplicaConflict(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedCapacity:
-                    ArticlePlacementLogMessages.ReplicaRejectedCapacity(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedPressure:
-                    ArticlePlacementLogMessages.ReplicaRejectedPressure(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedInvalid:
-                    ArticlePlacementLogMessages.ReplicaRejectedInvalid(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Cancelled:
-                    ArticlePlacementLogMessages.ReplicaCancelled(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.AcknowledgementNotObserved:
-                    ArticlePlacementLogMessages.ReplicaAcknowledgementNotObserved(
-                        _logger, artId, first.ServerId, replica.ServerId, port, replica.Fqdn, elapsed);
-                    break;
-                default:
-                    if (IsTimeout(result.Failure))
-                    {
-                        ArticlePlacementLogMessages.ReplicaTimedOut(
-                            _logger,
-                            artId,
-                            first.ServerId,
-                            replica.ServerId,
-                            port,
-                            replica.Fqdn,
-                            result.Failure ?? "timeout",
-                            elapsed);
-                    }
-                    else
-                    {
-                        ArticlePlacementLogMessages.ReplicaTransportFailed(
-                            _logger,
-                            artId,
-                            first.ServerId,
-                            replica.ServerId,
-                            port,
-                            replica.Fqdn,
-                            result.Failure ?? result.Kind.ToString(),
-                            elapsed);
-                    }
-
-                    break;
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            ArticlePlacementLogMessages.ReplicaCancelled(
-                _logger,
-                artId,
-                first.ServerId,
-                replica.ServerId,
-                port,
-                replica.Fqdn,
-                Elapsed(started));
-        }
-        catch (Exception ex)
-        {
-            ArticlePlacementLogMessages.ReplicaTransportFailed(
-                _logger,
-                artId,
-                first.ServerId,
-                replica.ServerId,
-                port,
-                replica.Fqdn,
-                ex.GetType().Name,
-                Elapsed(started));
-        }
-    }
-
-    private bool TryResolveReplicaDial(
-        ArticleId articleId,
-        IReadOnlyList<StorageServerFleetEntry> active,
-        StorageServerFleetEntry first,
-        out StorageServerFleetEntry replica,
-        out int port)
-    {
-        var started = Stopwatch.GetTimestamp();
-        var artId = articleId.ToLowerHexString();
-        replica = default;
-        port = 0;
-        if (_replicationIntent is null)
-        {
-            ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
-            return false;
-        }
-
-        if (!_replicationIntent.TryGet(articleId, out var intent))
-        {
-            if (!StorageServerPlacementSelector.TrySelectExcluding(active, first.Fqdn, out var selected)
-                || selected.VatpPort is not int)
-            {
-                ArticlePlacementLogMessages.ReplicaNoTarget(_logger, artId, first.ServerId, Elapsed(started));
-                return false;
-            }
-
-            try
-            {
-                var pin = _replicationIntent.TryEstablish(articleId, first.ServerId, selected.ServerId);
-                intent = pin.Intent;
-            }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or InvalidDataException)
-            {
-                ArticlePlacementLogMessages.ReplicaPinNotDurable(_logger, artId, first.ServerId, Elapsed(started));
-                return false;
-            }
-        }
-
-        if (!TryDialPinned(intent.TargetServerId, active, out replica) || replica.VatpPort is not int dialPort)
-        {
-            ArticlePlacementLogMessages.PinnedTargetUndialable(
-                _logger,
-                artId,
-                first.ServerId,
-                intent.TargetServerId,
-                Elapsed(started));
-            return false;
-        }
-
-        port = dialPort;
-        return true;
-    }
-
-    private bool TryDialPinned(
-        int serverId,
-        IReadOnlyList<StorageServerFleetEntry> active,
-        out StorageServerFleetEntry entry)
-    {
-        if (_replicationRoster is not null
-            && _replicationRoster.TryGet(serverId, out var roster)
-            && roster.VatpPort is >= 1 and <= 65535)
-        {
-            entry = new StorageServerFleetEntry(
-                roster.ServerId,
-                roster.Fqdn,
-                0,
-                0,
-                0,
-                _time.GetUtcNow(),
-                roster.VatpPort);
-            return true;
-        }
-
-        foreach (var candidate in active)
-        {
-            if (candidate.ServerId == serverId && candidate.VatpPort is >= 1 and <= 65535)
-            {
-                entry = candidate;
-                return true;
-            }
-        }
-
-        if (_placementRegistry is not null)
-        {
-            foreach (var candidate in _placementRegistry.Snapshot())
-            {
-                if (candidate.ServerId == serverId && candidate.VatpPort is >= 1 and <= 65535)
-                {
-                    entry = candidate;
-                    return true;
-                }
-            }
-        }
-
-        entry = default;
-        return false;
-    }
-
-    private static bool IsTimeout(string? failure) =>
-        failure is not null && failure.Contains("timeout", StringComparison.OrdinalIgnoreCase);
 
     private static long Elapsed(long started) =>
         (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;

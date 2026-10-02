@@ -22,7 +22,6 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
     private readonly IRabbitMqService _rabbitMq;
     private readonly IOptions<NntpdOptions> _nntpdOptions;
     private readonly IStorageServerRegistry _registry;
-    private readonly IStorageServerRoster? _roster;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<StorageServerFleetConsumerService> _logger;
     private readonly object _sessionGate = new();
@@ -36,8 +35,7 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
         IOptions<NntpdOptions> nntpdOptions,
         IStorageServerRegistry registry,
         ILogger<StorageServerFleetConsumerService> logger,
-        TimeProvider? timeProvider = null,
-        IStorageServerRoster? roster = null)
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(rabbitMq);
         ArgumentNullException.ThrowIfNull(nntpdOptions);
@@ -46,7 +44,6 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
         _rabbitMq = rabbitMq;
         _nntpdOptions = nntpdOptions;
         _registry = registry;
-        _roster = roster;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -246,10 +243,6 @@ internal sealed class StorageServerFleetConsumerService : IApplicationService
             }
 
             _registry.ApplyAdvertisement(advertisement, receivedAt);
-            if (_roster is not null && advertisement.VatpPort is >= 1 and <= 65535)
-            {
-                _roster.Observe(advertisement.ServerId, advertisement.Fqdn, advertisement.VatpPort.Value);
-            }
             await session.Channel.BasicAckAsync(delivery.DeliveryTag, CancellationToken.None)
                 .ConfigureAwait(false);
         }

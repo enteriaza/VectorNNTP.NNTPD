@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Net.Security;
 using System.Net.Sockets;
 using VectorNNTP.Common.Articles;
@@ -99,12 +100,24 @@ public sealed class ArticlePlacementClient : IArticlePlacementClient
         catch (Exception ex)
         {
             _ = _logger;
-            return new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, ex.GetType().Name);
+            return new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, DescribeTransportFailure(ex));
         }
         finally
         {
             tcp?.Dispose();
         }
+    }
+
+    private static string DescribeTransportFailure(Exception ex)
+    {
+        if (ex is SocketException socket)
+        {
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"SocketException: SocketErrorCode={socket.SocketErrorCode} HResult={socket.HResult} Message={socket.Message}");
+        }
+
+        return ex.GetType().Name;
     }
 }
 

@@ -88,41 +88,6 @@ public static class StorageServerPlacementSelector
         return found;
     }
 
-    /// <summary>
-    /// Selects the next eligible entry after excluding <paramref name="excludedFqdn"/>.
-    /// Ordering matches <see cref="TrySelect"/>.
-    /// </summary>
-    public static bool TrySelectExcluding(
-        IReadOnlyList<StorageServerFleetEntry> active,
-        string excludedFqdn,
-        out StorageServerFleetEntry selected)
-    {
-        ArgumentNullException.ThrowIfNull(active);
-        ArgumentException.ThrowIfNullOrEmpty(excludedFqdn);
-        selected = default;
-        var found = false;
-        foreach (var entry in active)
-        {
-            if (string.Equals(entry.Fqdn, excludedFqdn, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (entry.VatpPort is not (>= 1 and <= 65535))
-            {
-                continue;
-            }
-
-            if (!found || Prefer(entry, selected))
-            {
-                selected = entry;
-                found = true;
-            }
-        }
-
-        return found;
-    }
-
     private static bool Prefer(in StorageServerFleetEntry candidate, in StorageServerFleetEntry current)
     {
         if (candidate.AvailableBytes != current.AvailableBytes)

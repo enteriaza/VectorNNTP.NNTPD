@@ -51,7 +51,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         ValidateFeedDiagnostics(options, failures);
         ValidateXTraceKeys(options, failures);
         ValidateNewsmaster(options, failures);
-        ValidateReplication(options, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
@@ -525,24 +524,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             {
                 failures.Add(ex.Message);
             }
-        }
-    }
-
-    private static void ValidateReplication(NntpdOptions options, List<string> failures)
-    {
-        var replication = options.Replication ?? new ReplicationOptions();
-        if (!replication.SecondCopySender)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(replication.Directory)
-            || replication.Directory.Length > 512
-            || replication.Directory.AsSpan().ContainsAny('\r', '\n', '\0'))
-        {
-            failures.Add(
-                "Nntpd:Replication:Directory is required when Nntpd:Replication:SecondCopySender is true. " +
-                "Exactly one NNTPD instance may set SecondCopySender.");
         }
     }
 

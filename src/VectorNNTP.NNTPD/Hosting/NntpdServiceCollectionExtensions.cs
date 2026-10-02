@@ -330,28 +330,6 @@ public static class NntpdServiceCollectionExtensions
                 sp.GetRequiredService<RabbitMqTopologyService>()));
 
         services.TryAddSingleton<IStorageServerRegistry, StorageServerRegistry>();
-        services.TryAddSingleton<IStorageServerRoster>(static sp =>
-        {
-            var replication = sp.GetRequiredService<IOptions<NntpdOptions>>().Value.Replication
-                ?? new ReplicationOptions();
-            if (!replication.SecondCopySender || string.IsNullOrWhiteSpace(replication.Directory))
-            {
-                return NullStorageServerRoster.Instance;
-            }
-
-            return DurableStorageServerRoster.Open(replication.Directory);
-        });
-        services.TryAddSingleton<IReplicationIntentStore>(static sp =>
-        {
-            var replication = sp.GetRequiredService<IOptions<NntpdOptions>>().Value.Replication
-                ?? new ReplicationOptions();
-            if (!replication.SecondCopySender || string.IsNullOrWhiteSpace(replication.Directory))
-            {
-                return DisabledReplicationIntentStore.Instance;
-            }
-
-            return ReplicationIntentStore.Open(replication.Directory);
-        });
         services.TryAddSingleton<StorageServerFleetConsumerService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageServerFleetConsumerService>(static sp =>
