@@ -12,11 +12,11 @@ public sealed class CacheArticleUriTests
         var artId = ArticleId.FromMessageId(Encoding.ASCII.GetBytes("<12345@example.invalid>"));
         var uri = CacheArticleUri.Create("backfiller01.usenet.ninja", 1190, artId);
         Assert.Equal(
-            "cache://backfiller01.usenet.ninja:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
+            "vatp://backfiller01.usenet.ninja:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
             uri);
         Assert.EndsWith('/' + artId.ToLowerHexString(), uri, StringComparison.Ordinal);
         Assert.DoesNotContain("%", uri, StringComparison.Ordinal);
-        Assert.StartsWith("cache://", uri, StringComparison.Ordinal);
+        Assert.StartsWith("vatp://", uri, StringComparison.Ordinal);
     }
 
     [Fact]

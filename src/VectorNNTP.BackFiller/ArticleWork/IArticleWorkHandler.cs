@@ -6,7 +6,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="Outcome">Processing outcome. Must not be <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
 /// <param name="Error">Optional diagnostic reason. Never a secret.</param>
 /// <param name="Article">Owned retrieved payload when not transferred into retention. Caller/pipeline must dispose it.</param>
-/// <param name="CacheUri">Success <c>cache://</c> URI when retention admitted or already held the article.</param>
+/// <param name="CacheUri">Success <c>vatp://</c> URI when retention admitted or already held the article.</param>
 /// <param name="ArticleId">Success CanonicalV1 ArtId when retention admitted or already held the article.</param>
 public readonly record struct ArticleWorkHandlerResult(
     ArticleWorkOutcome Outcome,

@@ -40,7 +40,7 @@ public sealed class ArticleRetrievalVatpCommandTests
         streamingPermitted: false);
 
     private const string MessageId = "<vatp-article@example.test>";
-    private const string CacheUri = "cache://backfiller.test:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+    private const string CacheUri = "vatp://backfiller.test:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Theory]
     [InlineData("ARTICLE")]
@@ -1081,7 +1081,7 @@ public sealed class ArticleRetrievalVatpCommandTests
         var stored = PrepareArticle(MessageId);
         var filled = PrepareArticle("<backfill-only@example.test>");
         var storageUri = StorageCacheUri(stored.Record.ArtId);
-        var backfillUri = "cache://backfiller.test:119/" + filled.Record.ArtId.ToLowerHexString();
+        var backfillUri = "vatp://backfiller.test:119/" + filled.Record.ArtId.ToLowerHexString();
         await using var storedDuplex = await ArticleDuplex.CreateAsync();
         await using var filledDuplex = await ArticleDuplex.CreateAsync();
         var storedLookup = new StubStorageLookup(StorageFound(stored.Record.ArtId, Guid.NewGuid(), storageUri));
@@ -1174,10 +1174,10 @@ public sealed class ArticleRetrievalVatpCommandTests
     }
 
     private static string StorageHostUri(ArticleId articleId, string host, int port) =>
-        $"cache://{host}:{port}/{articleId.ToLowerHexString()}";
+        $"vatp://{host}:{port}/{articleId.ToLowerHexString()}";
 
     private static string StorageCacheUri(ArticleId articleId) =>
-        $"cache://cache01.usenet.ninja:563/{articleId.ToLowerHexString()}";
+        $"vatp://cache01.usenet.ninja:563/{articleId.ToLowerHexString()}";
 
     private static StorageArticleLookupResult StorageFound(ArticleId articleId, Guid requestId, string? uri = null) =>
         new(

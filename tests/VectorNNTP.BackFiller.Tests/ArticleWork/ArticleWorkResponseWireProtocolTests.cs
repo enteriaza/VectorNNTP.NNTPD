@@ -81,7 +81,7 @@ public sealed class ArticleWorkResponseWireProtocolTests
     {
         var intent = SuccessIntent() with
         {
-            Uri = "cache://backfiller01.usenet.ninja:119/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            Uri = "vatp://backfiller01.usenet.ninja:119/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         };
 
         Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));

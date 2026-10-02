@@ -5,7 +5,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 /// <remarks>
 /// Identities are never invented: missing parse fields stay null.
-/// <see cref="Uri"/> is the Phase 5 retention <c>cache://</c> value for Success only.
+/// <see cref="Uri"/> is the Phase 5 retention <c>vatp://</c> value for Success only.
 /// The publisher must not reconstruct that URI.
 /// </remarks>
 /// <param name="Outcome">Terminal protocol outcome.</param>

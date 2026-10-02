@@ -24,7 +24,7 @@ Article bytes do not travel over RabbitMQ, JSON, XML, or protobuf.
 | Control | RabbitMQ ArticleWork RPC | RequestId, Message-ID, backbone, outcome, `uri`, `articleId` |
 | Data | VATP over TLS TCP | META + ArtData (`ArticleRecord`) |
 
-Success JSON `uri` is `cache://{fqdn}:{BindPortTls}/{articleIdHex}` (routing
+Success JSON `uri` is `vatp://{fqdn}:{BindPortTls}/{articleIdHex}` (routing
 endpoint). The path is the 64-character lowercase hexadecimal `ArticleId`
 (same value as Success JSON `articleId`). Success JSON `articleId` is the
 64-character lowercase hexadecimal BLAKE3 `ArticleId`. VATP OPEN uses
@@ -90,7 +90,7 @@ Not on the wire: ArtId, ArtType, CanonicalUtc, ParseStatus, header/body split.
 
 - `ArticleId` = BLAKE3(Message-ID value bytes). Carried on OPEN; recomputed from ArtData.
 - `ArtHash` = XxHash3-64(ArtData). Carried on META; recomputed from ArtData.
-- Success `cache://` URI path = lowercase hexadecimal `ArticleId` (same as Success `articleId`).
+- Success `vatp://` URI path = lowercase hexadecimal `ArticleId` (same as Success `articleId`).
   Host/port are for VATP dialing only; the path is not a VATP lookup key.
 
 ## Canonical transfer factory
@@ -224,7 +224,7 @@ per-stream WINDOW credit and round-robin DATA scheduling.
 
 `IVatpArticleClient.FetchArticleAsync(cacheUri, requestId, articleId, ct)`:
 
-1. Parses `cache://` host/port for the TLS dial target (`TargetHost` / SNI = FQDN).
+1. Parses `vatp://` host/port for the TLS dial target (`TargetHost` / SNI = FQDN).
 2. Acquires a pooled multiplexed VATP connection (keyed by host+port; bounded).
 3. Client HELLO → server HELLO.
 4. OPEN(RequestId, ArticleId) on a client-assigned StreamId ≠ 0.

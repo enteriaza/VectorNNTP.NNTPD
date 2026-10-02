@@ -69,7 +69,7 @@ internal sealed class VatpLoopbackTestServer : IAsyncDisposable
     }
 
     public string CreateCacheUri(string articleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14") =>
-        $"cache://backfiller.test:{Port}/{articleIdHex}";
+        $"vatp://backfiller.test:{Port}/{articleIdHex}";
 
     public async ValueTask DisposeAsync()
     {

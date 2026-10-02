@@ -204,7 +204,7 @@ public static class StorageArticleLookupWireProtocol
 
     /// <summary>
     /// Builds the Success cache URI used by NNTPD for subsequent VATP OPEN:
-    /// <c>cache://{fqdn}:{port}/{articleIdHex}</c>.
+    /// <c>vatp://{fqdn}:{port}/{articleIdHex}</c>.
     /// </summary>
     public static string BuildCacheUri(string fqdn, int port, ArticleId articleId)
     {
@@ -214,7 +214,7 @@ public static class StorageArticleLookupWireProtocol
             throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be 1–65535.");
         }
 
-        return $"cache://{fqdn.Trim()}:{port}/{articleId.ToLowerHexString()}";
+        return $"vatp://{fqdn.Trim()}:{port}/{articleId.ToLowerHexString()}";
     }
 
     private static Utf8JsonWriter CreateWriter(ArrayBufferWriter<byte> writer) =>

@@ -23,7 +23,7 @@ public sealed record StorageArticleLookupRequest(
 /// <param name="ArticleId">Article identity confirmed present.</param>
 /// <param name="Uri">
 /// Cache URI NNTPD uses for subsequent VATP retrieval
-/// (<c>cache://{fqdn}:{port}/{articleIdHex}</c>).
+/// (<c>vatp://{fqdn}:{port}/{articleIdHex}</c>).
 /// </param>
 public sealed record StorageArticleLookupResponse(
     int Version,

@@ -13,7 +13,7 @@ public sealed class ArticleWorkRpcClientTests
 {
     private static readonly byte[] MessageIdBytes = "<12345@example.invalid>"u8.ToArray();
     private const string MessageId = "<12345@example.invalid>";
-    private const string SuccessUri = "cache://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+    private const string SuccessUri = "vatp://backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
     private const string SuccessArticleIdHex = "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
 
     [Fact]

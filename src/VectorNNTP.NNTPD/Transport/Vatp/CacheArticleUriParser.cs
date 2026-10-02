@@ -4,7 +4,7 @@ using VectorNNTP.Common.Articles;
 namespace VectorNNTP.NNTPD.Transport.Vatp;
 
 /// <summary>
-/// Parses RabbitMQ Success <c>cache://</c> URIs into host, port, and ArticleId path components.
+/// Parses RabbitMQ Success <c>vatp://</c> URIs into host, port, and ArticleId path components.
 /// Host/port are used for VATP dialing; the path is the lowercase hexadecimal ArticleId and is
 /// not a VATP lookup key.
 /// </summary>
@@ -14,7 +14,7 @@ public static partial class CacheArticleUriParser
     public readonly record struct ParsedCacheArticleUri(string Host, int Port, string ArticleIdHex);
 
     /// <summary>
-    /// Attempts to parse <c>cache://{fqdn}:{port}/{64 hex ArticleId}</c>.
+    /// Attempts to parse <c>vatp://{fqdn}:{port}/{64 hex ArticleId}</c>.
     /// </summary>
     public static bool TryParse(string cacheUri, out ParsedCacheArticleUri parsed, out string error)
     {
@@ -28,11 +28,11 @@ public static partial class CacheArticleUriParser
 
         if (!CanonicalCacheUriRegex().IsMatch(cacheUri))
         {
-            error = "Cache URI is not in the canonical cache:// form.";
+            error = "Cache URI is not in the canonical vatp:// form.";
             return false;
         }
 
-        var withoutScheme = cacheUri.AsSpan("cache://".Length);
+        var withoutScheme = cacheUri.AsSpan("vatp://".Length);
         var slash = withoutScheme.IndexOf('/');
         if (slash <= 0)
         {
@@ -67,7 +67,7 @@ public static partial class CacheArticleUriParser
     }
 
     [GeneratedRegex(
-        "^cache://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{64}$",
+        "^vatp://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?:(?:6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3})/[0-9a-f]{64}$",
         RegexOptions.CultureInvariant)]
     private static partial Regex CanonicalCacheUriRegex();
 }

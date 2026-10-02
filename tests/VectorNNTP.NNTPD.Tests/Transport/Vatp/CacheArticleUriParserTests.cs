@@ -10,7 +10,7 @@ public sealed class CacheArticleUriParserTests
     [Fact]
     public void TryParse_accepts_canonical_uri_with_64_char_article_id()
     {
-        var uri = $"cache://backfiller01.usenet.ninja:119/{ArticleIdHex}";
+        var uri = $"vatp://backfiller01.usenet.ninja:119/{ArticleIdHex}";
         Assert.True(CacheArticleUriParser.TryParse(uri, out var parsed, out _));
         Assert.Equal("backfiller01.usenet.ninja", parsed.Host);
         Assert.Equal(119, parsed.Port);
@@ -21,9 +21,9 @@ public sealed class CacheArticleUriParserTests
     [Theory]
     [InlineData("")]
     [InlineData("http://example.test:1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("cache://nodots:119/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("cache://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160")] // legacy 32-char MD5
-    [InlineData("cache://backfiller01.usenet.ninja:119/DCAB316BA0E91C6ABBAD8D5759BFF207932DBE9168C88954C6DD9240B4A6DA14")] // uppercase
+    [InlineData("vatp://nodots:119/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("vatp://backfiller01.usenet.ninja:119/30edc94157aa16fe644a45a1f1ffe160")] // legacy 32-char MD5
+    [InlineData("vatp://backfiller01.usenet.ninja:119/DCAB316BA0E91C6ABBAD8D5759BFF207932DBE9168C88954C6DD9240B4A6DA14")] // uppercase
     public void TryParse_rejects_invalid(string uri)
     {
         Assert.False(CacheArticleUriParser.TryParse(uri, out _, out var error));

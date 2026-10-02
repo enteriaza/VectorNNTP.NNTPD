@@ -24,7 +24,7 @@ public sealed class ArticleRetentionAuthorityTests
             prepared.SelectedDateHeaderName);
 
         Assert.Equal(ArticleRetentionKind.Retained, retained.Kind);
-        Assert.Equal("cache://backfiller.test:1190/" + retained.Identity!.Value.ArticleIdHex, retained.CacheUri);
+        Assert.Equal("vatp://backfiller.test:1190/" + retained.Identity!.Value.ArticleIdHex, retained.CacheUri);
         Assert.Equal(prepared.Record.ArtId.ToLowerHexString(), retained.Identity.Value.ArticleIdHex);
         Assert.Equal(prepared.Record.ArtSize, authority.RetainedPayloadBytes);
         Assert.Equal(1, authority.RetainedCount);

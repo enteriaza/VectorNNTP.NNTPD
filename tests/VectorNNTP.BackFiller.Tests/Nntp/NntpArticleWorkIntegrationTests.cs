@@ -39,7 +39,7 @@ public sealed class NntpArticleWorkIntegrationTests
         Assert.NotNull(handler.LastPayload);
         Assert.Contains("body"u8, handler.LastPayload);
         Assert.Equal(
-            "cache://backfiller.test:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
+            "vatp://backfiller.test:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
             handler.LastCacheUri);
         Assert.Empty(publisher.Published);
         var settlement = Assert.Single(channel.Settlements);
@@ -76,7 +76,7 @@ public sealed class NntpArticleWorkIntegrationTests
 
         Assert.Equal(ArticleWorkOutcome.Success, outcome);
         Assert.Equal(
-            "cache://backfiller.test:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
+            "vatp://backfiller.test:1190/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14",
             handler.LastCacheUri);
         var publication = Assert.Single(
             Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(publisher.Channel).Publications);

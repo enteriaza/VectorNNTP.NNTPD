@@ -117,7 +117,7 @@ public static class ArticleWorkResponseWireProtocol
                 }
 
                 if (string.IsNullOrWhiteSpace(intent.Uri)
-                    || !intent.Uri.StartsWith("cache://", StringComparison.Ordinal)
+                    || !intent.Uri.StartsWith("vatp://", StringComparison.Ordinal)
                     || !intent.Uri.EndsWith('/' + intent.ArticleIdHex, StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException(
