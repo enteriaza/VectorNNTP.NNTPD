@@ -444,20 +444,49 @@ public sealed class JournalReplayStreamingTests
     }
 
     [Fact]
-    public void JournalLargerThanIntMaxValue_FailsClosedWithTheSameCeiling()
+    public void JournalLongerThanIntMaxValue_ReplaysValidFrames()
     {
         using var dir = TempControlDir.Create();
-        var path = JournalPath(dir);
-        var ceiling = (long)int.MaxValue + 1;
-        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        var backing = Path.Combine(dir.ControlDir, "logical.journal");
+        var source = new SyntheticCommittedJournalStream(backing);
+        using var journal = FileArticleJournal.Open(dir.Options, source);
+
+        Assert.True(journal.JournalPhysicalBytes > int.MaxValue);
+        Assert.Equal(source.LogicalLength, journal.JournalPhysicalBytes);
+        Assert.Equal(0, journal.OutstandingRecoverableBytes);
+        Assert.Empty(journal.EnumerateIncomplete());
+        Assert.Equal((ulong)source.SequenceCount + 1, journal.NextSequence);
+        Assert.Equal(source.AcceptFrameLength, journal.LargestReplayFrameBufferBytes);
+        Assert.True(journal.LargestReplayFrameBufferBytes <= ArticleJournalFrameCodec.MaxFrameLength);
+        Assert.True(new FileInfo(backing).Length < 4096);
+    }
+
+    [Fact]
+    public void JournalLongerThanIntMaxValue_CorruptFrameBeforeEof_FailsClosed()
+    {
+        using var dir = TempControlDir.Create();
+        var first = CreateRecord("<stream-long-mid-1@example.test>", "one\r\n");
+        var second = CreateRecord("<stream-long-mid-2@example.test>", "two\r\n");
+        using (var journal = FileArticleJournal.Open(dir.Options))
         {
-            stream.SetLength(ceiling);
+            Assert.True(Append(journal, first, out _));
+            Assert.True(Append(journal, second, out _));
         }
 
-        var ex = Assert.Throws<ArticleJournalCorruptException>(() => FileArticleJournal.Open(dir.Options));
-        Assert.Contains($"exceeds supported size ({ceiling} bytes)", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(0L, ex.Offset);
-        Assert.Equal(ceiling, new FileInfo(path).Length);
+        var path = JournalPath(dir);
+        CorruptFirstFrameChecksum(path);
+        var prefix = File.ReadAllBytes(path);
+        var backing = Path.Combine(dir.ControlDir, "logical.journal");
+        var logicalLength = (long)int.MaxValue + prefix.Length;
+        var ex = Assert.Throws<ArticleJournalCorruptException>(() =>
+            FileArticleJournal.Open(
+                dir.Options,
+                new PrefixLengthJournalStream(backing, prefix, logicalLength)));
+
+        Assert.Contains("trailing bytes", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("exceeds supported size", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(prefix, File.ReadAllBytes(path));
+        Assert.True(new FileInfo(backing).Length < 4096);
     }
 
     [Fact]
@@ -804,5 +833,238 @@ public sealed class JournalReplayStreamingTests
         }
 
         private string Root { get; }
+    }
+
+    /// <summary>
+    /// Presents a journal longer than <see cref="int.MaxValue"/> as repeated committed
+    /// sequences. The backing file stays empty; frame bytes are produced while they are read.
+    /// </summary>
+    private sealed class SyntheticCommittedJournalStream : FileStream
+    {
+        private readonly byte[] _accept;
+        private readonly int _physicalLength;
+        private readonly int _indexLength;
+        private readonly long _stride;
+        private readonly StoredArticleLocation _location;
+        private ulong _acceptSequence;
+        private byte[] _window = [];
+        private long _windowStart;
+        private long _windowSequence = -1;
+        private int _windowKind = -1;
+        private long _position;
+
+        public SyntheticCommittedJournalStream(string path)
+            : base(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 4096, FileOptions.None)
+        {
+            var artData = new byte[ArticleJournalFrameCodec.MaxArtDataBytes];
+            var digest = new byte[ArticleId.Length];
+            digest.AsSpan().Fill(0x11);
+            var artId = ArticleId.FromSpan(digest);
+            var accept = new JournalAcceptRecord(
+                version: 1,
+                sequence: 1,
+                artId,
+                artHash: 1,
+                artSize: artData.Length,
+                acceptedUtc: DateTimeOffset.UnixEpoch,
+                artData);
+            _accept = ArticleJournalFrameCodec.EncodeAccept(accept);
+            _location = new StoredArticleLocation(new SegmentId(1), Offset: 0, artData.Length);
+            _physicalLength = ArticleJournalFrameCodec.EncodePhysicalWritten(
+                new JournalPhysicalWrittenRecord(1, 1, _location)).Length;
+            _indexLength = ArticleJournalFrameCodec.EncodeIndexCommitted(
+                new JournalIndexCommittedRecord(1, 1)).Length;
+            _stride = (long)_accept.Length + _physicalLength + _indexLength;
+            SequenceCount = ((long)int.MaxValue / _stride) + 1;
+            LogicalLength = SequenceCount * _stride;
+            _acceptSequence = 1;
+        }
+
+        public long SequenceCount { get; }
+
+        public long LogicalLength { get; }
+
+        public int AcceptFrameLength => _accept.Length;
+
+        public override long Length => LogicalLength;
+
+        public override long Position
+        {
+            get => _position;
+            set => _position = value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            var next = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                SeekOrigin.End => LogicalLength + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+            };
+            if (next < 0)
+            {
+                throw new IOException("Journal position is before the start of the stream.");
+            }
+
+            _position = next;
+            return _position;
+        }
+
+        public override void SetLength(long value) =>
+            throw new InvalidOperationException("Synthetic journal length is fixed.");
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty || _position >= LogicalLength)
+            {
+                return 0;
+            }
+
+            var copied = 0;
+            while (copied < buffer.Length && _position < LogicalLength)
+            {
+                EnsureWindow(_position);
+                var intoFrame = (int)(_windowStart + _window.Length - _position);
+                var count = Math.Min(buffer.Length - copied, intoFrame);
+                _window.AsSpan((int)(_position - _windowStart), count).CopyTo(buffer.Slice(copied, count));
+                _position += count;
+                copied += count;
+            }
+
+            return copied;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            return Read(buffer.AsSpan(offset, count));
+        }
+
+        private void EnsureWindow(long position)
+        {
+            var sequenceIndex = position / _stride;
+            var within = (int)(position % _stride);
+            var kind = within < _accept.Length
+                ? 0
+                : within < _accept.Length + _physicalLength
+                    ? 1
+                    : 2;
+            if (_windowSequence == sequenceIndex && _windowKind == kind)
+            {
+                return;
+            }
+
+            var sequence = (ulong)sequenceIndex + 1;
+            long start;
+            if (kind == 0)
+            {
+                FillAccept(sequence);
+                _window = _accept;
+                start = sequenceIndex * _stride;
+            }
+            else if (kind == 1)
+            {
+                _window = ArticleJournalFrameCodec.EncodePhysicalWritten(
+                    new JournalPhysicalWrittenRecord(1, sequence, _location));
+                start = (sequenceIndex * _stride) + _accept.Length;
+            }
+            else
+            {
+                _window = ArticleJournalFrameCodec.EncodeIndexCommitted(new JournalIndexCommittedRecord(1, sequence));
+                start = (sequenceIndex * _stride) + _accept.Length + _physicalLength;
+            }
+
+            _windowStart = start;
+            _windowSequence = sequenceIndex;
+            _windowKind = kind;
+        }
+
+        private void FillAccept(ulong sequence)
+        {
+            if (_acceptSequence == sequence)
+            {
+                return;
+            }
+
+            BinaryPrimitives.WriteUInt64LittleEndian(_accept.AsSpan(8, 8), sequence);
+            var crcOffset = _accept.Length - 4;
+            var crc = Crc32.HashToUInt32(_accept.AsSpan(0, crcOffset));
+            BinaryPrimitives.WriteUInt32LittleEndian(_accept.AsSpan(crcOffset, 4), crc);
+            _acceptSequence = sequence;
+        }
+    }
+
+    /// <summary>
+    /// Serves a small prefix and reports a caller-chosen length. Used to enter replay when
+    /// <see cref="FileStream.Length"/> exceeds <see cref="int.MaxValue"/> without storing that file.
+    /// </summary>
+    private sealed class PrefixLengthJournalStream : FileStream
+    {
+        private readonly byte[] _prefix;
+        private readonly long _logicalLength;
+        private long _position;
+
+        public PrefixLengthJournalStream(string path, byte[] prefix, long logicalLength)
+            : base(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 4096, FileOptions.None)
+        {
+            ArgumentNullException.ThrowIfNull(prefix);
+            if (logicalLength < prefix.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(logicalLength));
+            }
+
+            _prefix = prefix;
+            _logicalLength = logicalLength;
+        }
+
+        public override long Length => _logicalLength;
+
+        public override long Position
+        {
+            get => _position;
+            set => _position = value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            var next = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                SeekOrigin.End => _logicalLength + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+            };
+            if (next < 0)
+            {
+                throw new IOException("Journal position is before the start of the stream.");
+            }
+
+            _position = next;
+            return _position;
+        }
+
+        public override void SetLength(long value) =>
+            throw new InvalidOperationException("Synthetic journal length is fixed.");
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (buffer.IsEmpty || _position >= _prefix.Length)
+            {
+                return 0;
+            }
+
+            var count = Math.Min(buffer.Length, _prefix.Length - (int)_position);
+            _prefix.AsSpan((int)_position, count).CopyTo(buffer);
+            _position += count;
+            return count;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            return Read(buffer.AsSpan(offset, count));
+        }
     }
 }

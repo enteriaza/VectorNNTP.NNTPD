@@ -354,6 +354,32 @@ public sealed class FileSegmentStoreTests
     }
 
     [Fact]
+    public async Task N4b_CorruptLength_FailsClosed()
+    {
+        using var dir = TempSegmentDir.Create();
+        using (var storeA = FileSegmentStore.Open(dir.Options))
+        {
+            var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
+            _ = await appender.AppendAsync(CreateArtData("<n4b-len@example.test>", "len\r\n"), CancellationToken.None);
+        }
+
+        var path = Directory.EnumerateFiles(dir.SegmentDir, "seg-*.active").Single();
+        var bytes = File.ReadAllBytes(path);
+        var illegal = new byte[bytes.Length + 4];
+        bytes.CopyTo(illegal, 0);
+        illegal[^4] = 0xFF;
+        illegal[^3] = 0xFF;
+        illegal[^2] = 0xFF;
+        illegal[^1] = 0xFF;
+        File.WriteAllBytes(path, illegal);
+
+        var ex = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        Assert.Contains("CorruptLength", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("exceeds supported size", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(illegal, File.ReadAllBytes(path));
+    }
+
+    [Fact]
     public async Task N5_RetiredCorruptRecord_RemainsUnrepairedAndUnreadable()
     {
         using var dir = TempSegmentDir.Create();

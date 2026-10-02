@@ -22,8 +22,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// article persistence and location identity (<see cref="StoredArticleLocation"/>).
 /// </para>
 /// <para>
-/// Active segment: an incomplete final record is truncated on open. A complete record
-/// with an invalid CRC fails closed, including when that record is the final record.
+/// Active segment repair reads one record at a time from a long file offset. Each read
+/// is bounded by the maximum physical record length. An incomplete final record is
+/// truncated on open. A complete record with an invalid CRC fails closed, including
+/// when that record is the final record. A segment is not rejected because its total
+/// length exceeds <see cref="int.MaxValue"/>.
 /// Closed and retired segments are catalogued from filename,
 /// lifecycle, and file length only; payload CRC is proved on the targeted read path.
 /// </para>
@@ -109,6 +112,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal long DiscoveryPayloadBytesRead { get; private set; }
 
     /// <summary>
+    /// Largest single record buffer allocated while repairing the active tail.
+    /// Stays at zero when discovery does not read an active payload.
+    /// </summary>
+    internal int ActiveRepairMaxRecordBytes { get; private set; }
+
+    /// <summary>
     /// Times candidate discovery sequentially decoded an Active segment.
     /// Stays zero when the repaired Active prefix supplies record boundaries.
     /// </summary>
@@ -121,10 +130,17 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal long ActiveCandidatePayloadProofBytesRead { get; private set; }
 
     /// <summary>
-    /// Optional replacement for the active-tail payload read. Tests only.
-    /// Closed and retired discovery must not call it.
+    /// Optional replacement for the active-tail bytes. Tests only.
+    /// The buffer is scanned with the same record walk as a file. Closed and retired
+    /// discovery must not call it.
     /// </summary>
     internal Func<string, byte[]>? TestDiscoveryPayloadReader { get; set; }
+
+    /// <summary>
+    /// Optional replacement for the active-tail stream. Tests only.
+    /// Production repair opens the segment file and reads one bounded record at a time.
+    /// </summary>
+    internal Func<string, FileStream>? TestActiveRepairStreamFactory { get; set; }
 
     /// <summary>
     /// Invoked after the active discovery stream is opened and before <see cref="Stream.Seek"/>.
@@ -1042,28 +1058,58 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     private long RepairActiveTail(string path, SegmentId segmentId, long fileLength)
     {
-        if (fileLength == 0)
+        if (fileLength == 0
+            && TestDiscoveryPayloadReader is null
+            && TestActiveRepairStreamFactory is null)
         {
             PublishActiveValidatedPrefix(segmentId, sizeBytes: 0, []);
             return 0;
         }
 
-        if (fileLength > int.MaxValue)
+        using var stream = OpenActiveRepairStream(path);
+        var length = stream.Length;
+        if (length == 0)
         {
-            throw new SegmentStoreCorruptException(
-                $"Active segment {segmentId} exceeds supported size.",
-                path);
+            PublishActiveValidatedPrefix(segmentId, sizeBytes: 0, []);
+            return 0;
         }
 
-        var bytes = ReadDiscoveryPayload(path);
         var records = new List<ActiveValidatedRecord>();
-        var offset = 0;
-        while (offset < bytes.Length)
+        long offset = 0;
+        while (offset < length)
         {
-            var span = bytes.AsSpan(offset);
+            var remaining = length - offset;
+            if (remaining < 4)
+            {
+                ReadRepairExact(stream, new byte[(int)remaining], path, segmentId);
+                return TruncateTornActiveTail(stream, path, segmentId, offset, length, records, SegmentRecordCodec.DecodeError.Incomplete);
+            }
+
+            var lengthPrefix = new byte[4];
+            ReadRepairExact(stream, lengthPrefix, path, segmentId);
+            var total = BinaryPrimitives.ReadUInt32LittleEndian(lengthPrefix);
+            if (total < SegmentRecordCodec.MinimumRecordLength || total > SegmentRecordCodec.MaxRecordLength)
+            {
+                return FailClosedActiveTail(path, segmentId, offset, SegmentRecordCodec.DecodeError.CorruptLength);
+            }
+
+            var recordLength = (int)total;
+            if (offset + recordLength > length)
+            {
+                return TruncateTornActiveTail(stream, path, segmentId, offset, length, records, SegmentRecordCodec.DecodeError.Incomplete);
+            }
+
+            if (recordLength > ActiveRepairMaxRecordBytes)
+            {
+                ActiveRepairMaxRecordBytes = recordLength;
+            }
+
+            var buffer = new byte[recordLength];
+            lengthPrefix.CopyTo(buffer.AsSpan(0, 4));
+            ReadRepairExact(stream, buffer.AsSpan(4), path, segmentId);
             if (SegmentRecordCodec.TryDecode(
-                    span,
-                    out var recordLength,
+                    buffer,
+                    out recordLength,
                     out var artId,
                     out var artHash,
                     out var artSize,
@@ -1076,41 +1122,116 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 continue;
             }
 
+            var reachesEnd = offset + Math.Max(recordLength, 0) >= length;
             if (error == SegmentRecordCodec.DecodeError.Incomplete
-                || (error == SegmentRecordCodec.DecodeError.Corrupt
-                    && offset + Math.Max(recordLength, 0) >= bytes.Length))
+                || (error == SegmentRecordCodec.DecodeError.Corrupt && reachesEnd))
             {
                 // Incomplete declared bytes, or a CRC-valid record that fails a later field check
                 // and reaches EOF. A complete record with a bad CRC is not this case.
-                FileSegmentStoreLogMessages.TruncatingTornTail(
-                    _logger,
-                    segmentId.Value,
-                    offset,
-                    bytes.Length,
-                    error.ToString());
-                using var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.ReadWrite,
-                    FileShare.None,
-                    bufferSize: 4096,
-                    FileOptions.None);
-                stream.SetLength(offset);
-                stream.Flush(flushToDisk: true);
-                PublishActiveValidatedPrefix(segmentId, offset, records);
-                return offset;
+                return TruncateTornActiveTail(stream, path, segmentId, offset, length, records, error);
             }
 
             // A complete record with a bad CRC, an illegal length, or corruption with bytes after
             // it fails closed. The prefix is not published, so a failed repair cannot become candidates.
-            FileSegmentStoreLogMessages.ClosedCorrupt(_logger, path, offset, error.ToString());
-            throw new SegmentStoreCorruptException(
-                $"Active segment {segmentId} corrupt at offset {offset} ({error}).",
-                path);
+            return FailClosedActiveTail(path, segmentId, offset, error);
         }
 
         PublishActiveValidatedPrefix(segmentId, offset, records);
         return offset;
+    }
+
+    private long TruncateTornActiveTail(
+        Stream stream,
+        string path,
+        SegmentId segmentId,
+        long validEnd,
+        long fileLength,
+        List<ActiveValidatedRecord> records,
+        SegmentRecordCodec.DecodeError error)
+    {
+        FileSegmentStoreLogMessages.TruncatingTornTail(
+            _logger,
+            segmentId.Value,
+            validEnd,
+            fileLength,
+            error.ToString());
+        if (stream is FileStream file)
+        {
+            file.SetLength(validEnd);
+            file.Flush(flushToDisk: true);
+        }
+        else
+        {
+            using var truncating = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.None);
+            truncating.SetLength(validEnd);
+            truncating.Flush(flushToDisk: true);
+        }
+
+        PublishActiveValidatedPrefix(segmentId, validEnd, records);
+        return validEnd;
+    }
+
+    private long FailClosedActiveTail(
+        string path,
+        SegmentId segmentId,
+        long offset,
+        SegmentRecordCodec.DecodeError error)
+    {
+        FileSegmentStoreLogMessages.ClosedCorrupt(_logger, path, offset, error.ToString());
+        throw new SegmentStoreCorruptException(
+            $"Active segment {segmentId} corrupt at offset {offset} ({error}).",
+            path);
+    }
+
+    private void ReadRepairExact(Stream stream, Span<byte> destination, string path, SegmentId segmentId)
+    {
+        var filled = 0;
+        while (filled < destination.Length)
+        {
+            var read = stream.Read(destination[filled..]);
+            if (read == 0)
+            {
+                throw new SegmentStoreCorruptException(
+                    $"Active segment {segmentId} ended before offset {DiscoveryPayloadBytesRead + destination.Length - filled}.",
+                    path);
+            }
+
+            filled += read;
+            DiscoveryPayloadBytesRead += read;
+        }
+    }
+
+    /// <summary>
+    /// Opens the active segment for a sequential record walk.
+    /// A test reader or stream factory replaces the file bytes. Production reads the file.
+    /// </summary>
+    private Stream OpenActiveRepairStream(string path)
+    {
+        var reader = TestDiscoveryPayloadReader;
+        if (reader is not null)
+        {
+            return new MemoryStream(reader(path), writable: false);
+        }
+
+        var factory = TestActiveRepairStreamFactory;
+        if (factory is not null)
+        {
+            return factory(path);
+        }
+
+        return new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            FileOptions.SequentialScan);
     }
 
     /// <summary>
@@ -1140,15 +1261,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
-    /// Reads an active segment for tail repair. This is the only discovery path that
-    /// loads payload bytes.
+    /// Repaired Active prefix observed by the latest tail walk. Tests only.
     /// </summary>
-    private byte[] ReadDiscoveryPayload(string path)
+    internal bool TryGetActiveValidatedPrefix(out long sizeBytes, out int recordCount, out long lastOffset)
     {
-        var reader = TestDiscoveryPayloadReader;
-        var bytes = reader is not null ? reader(path) : File.ReadAllBytes(path);
-        DiscoveryPayloadBytesRead += bytes.LongLength;
-        return bytes;
+        if (_activeValidatedPrefix is not { } prefix)
+        {
+            sizeBytes = 0;
+            recordCount = 0;
+            lastOffset = 0;
+            return false;
+        }
+
+        sizeBytes = prefix.SizeBytes;
+        recordCount = prefix.Records.Length;
+        lastOffset = recordCount == 0 ? 0 : prefix.Records[^1].Offset;
+        return true;
     }
 
     /// <summary>

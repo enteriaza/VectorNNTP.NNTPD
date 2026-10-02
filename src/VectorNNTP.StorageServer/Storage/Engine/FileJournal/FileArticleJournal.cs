@@ -20,6 +20,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 /// </para>
 /// <para>
 /// Replay applies a contiguous prefix of CRC-verified frames, one frame buffer at a time.
+/// File length and replay offset stay <see cref="long"/> values. A journal longer than
+/// <see cref="int.MaxValue"/> is replayed; it is not rejected for its total size.
 /// An incomplete final frame, one that does not contain its declared length, is truncated
 /// to the last good boundary. A complete frame with an invalid CRC fails closed via
 /// <see cref="ArticleJournalCorruptException"/>, including when that frame is the final frame.
@@ -241,6 +243,30 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 FileOptions.None)
             : new ReplayReadLimitFileStream(path, replayReadLimit);
 
+        return FinishOpen(options, path, stream, log);
+    }
+
+    /// <summary>
+    /// Replays an already opened journal stream. Tests only. Production open does not use this.
+    /// The journal takes ownership of <paramref name="stream"/> and disposes it, including when
+    /// replay fails.
+    /// </summary>
+    internal static FileArticleJournal Open(
+        ArticleStorageRuntimeOptions options,
+        FileStream stream,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(stream);
+        return FinishOpen(options, stream.Name, stream, logger ?? NullLogger.Instance);
+    }
+
+    private static FileArticleJournal FinishOpen(
+        ArticleStorageRuntimeOptions options,
+        string path,
+        FileStream stream,
+        ILogger log)
+    {
         var journal = new FileArticleJournal(options, path, stream, log);
         try
         {
@@ -936,13 +962,6 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         {
             _stream.Seek(0, SeekOrigin.End);
             return;
-        }
-
-        if (fileLength > int.MaxValue)
-        {
-            throw new ArticleJournalCorruptException(
-                $"Article journal exceeds supported size ({fileLength} bytes).",
-                0);
         }
 
         _stream.Seek(0, SeekOrigin.Begin);
