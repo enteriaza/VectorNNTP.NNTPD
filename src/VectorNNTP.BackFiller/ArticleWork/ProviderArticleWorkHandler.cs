@@ -96,7 +96,7 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
                     "Retrieved article payload could not be transferred into retention.");
             }
 
-            var created = ArticleRecordFactory.TryCreate(_parser, retrieval.Article.Memory);
+            var created = ArticleRecordFactory.TryCreate(_parser, retrieval.Article.Memory, ArticlePathMode.Traverse);
             if (!created.IsAccepted)
             {
                 if (created.ParseFailure != NntpArticleParseFailureCode.None)

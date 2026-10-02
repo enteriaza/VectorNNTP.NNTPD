@@ -17,6 +17,7 @@ using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session;
+using VectorNNTP.NNTPD.Session.Framing;
 using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Fixtures;
@@ -58,25 +59,30 @@ public sealed class ArticleRetrievalVatpCommandTests
 
         await DispatchLineAsync(duplex, session, $"{verb} {MessageId}");
 
+        byte[]? served = null;
         switch (verb)
         {
             case "ARTICLE":
                 {
-                    var wire = Encoding.ASCII.GetString(await duplex.ReadMultilineAsync());
+                    var multiline = await duplex.ReadMultilineAsync();
+                    var wire = Encoding.ASCII.GetString(multiline);
                     Assert.StartsWith($"220 0 {MessageId}\r\n", wire, StringComparison.Ordinal);
                     Assert.Contains("Message-ID: " + MessageId, wire, StringComparison.Ordinal);
                     Assert.Contains("hello\r\n", wire, StringComparison.Ordinal);
                     Assert.Contains("..dot\r\n", wire, StringComparison.Ordinal); // restuffed
                     Assert.EndsWith(".\r\n", wire, StringComparison.Ordinal);
+                    served = DestuffCustomerMultiline(multiline);
                     break;
                 }
             case "HEAD":
                 {
-                    var wire = Encoding.ASCII.GetString(await duplex.ReadMultilineAsync());
+                    var multiline = await duplex.ReadMultilineAsync();
+                    var wire = Encoding.ASCII.GetString(multiline);
                     Assert.StartsWith($"221 0 {MessageId}\r\n", wire, StringComparison.Ordinal);
                     Assert.Contains("Message-ID: " + MessageId, wire, StringComparison.Ordinal);
                     Assert.DoesNotContain("hello", wire, StringComparison.Ordinal);
                     Assert.EndsWith(".\r\n", wire, StringComparison.Ordinal);
+                    served = DestuffCustomerMultiline(multiline);
                     break;
                 }
             case "BODY":
@@ -99,8 +105,96 @@ public sealed class ArticleRetrievalVatpCommandTests
         Assert.Equal(1, vatp.FetchCount);
         Assert.Equal(CacheUri, vatp.Uri);
         Assert.Equal(1, queue.AdmitCalls);
-        Assert.Equal(InboundArticleProducer.BackFiller, Assert.Single(queue.Admitted).Producer);
-        Assert.True(queue.Admitted[0].Payload.Equals(prepared.Record.ArtData));
+        var admitted = Assert.Single(queue.Admitted);
+        Assert.Equal(InboundArticleProducer.BackFiller, admitted.Producer);
+        var hopped = ArticleRecordFactory.TryCreate(
+            new NntpArticleParser(NntpdOptions.FormatFqdn(1, "usenet.ninja")),
+            prepared.Record.ArtData);
+        Assert.True(hopped.IsAccepted, hopped.MaterializeFailure.ToString());
+        Assert.Equal(prepared.Record.ArtId, hopped.Record.ArtId);
+        Assert.True(admitted.Record.ArtData.Span.SequenceEqual(hopped.Record.ArtData.Span));
+        var path = Encoding.ASCII.GetString(admitted.Record.Path);
+        Assert.StartsWith("nntpd01.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Contains("news.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Contains("!nntpd.test!", path, StringComparison.Ordinal);
+        Assert.EndsWith("!peer.example", path, StringComparison.Ordinal);
+        Assert.DoesNotContain("cache01", path, StringComparison.Ordinal);
+        if (verb == "ARTICLE")
+        {
+            Assert.NotNull(served);
+            Assert.True(served.AsSpan().SequenceEqual(admitted.Record.ArtData.Span));
+            Assert.False(served.AsSpan().SequenceEqual(prepared.Record.ArtData.Span));
+        }
+        else if (verb == "HEAD")
+        {
+            Assert.NotNull(served);
+            Assert.True(ArticleWireReconstructor.TrySplitHeadersAndBody(
+                admitted.Record.ArtData.Span,
+                out var admittedHeaders,
+                out _));
+            Assert.True(served.AsSpan().SequenceEqual(admittedHeaders));
+            Assert.True(ArticleWireReconstructor.TrySplitHeadersAndBody(
+                prepared.Record.ArtData.Span,
+                out var fetchedHeaders,
+                out _));
+            Assert.False(served.AsSpan().SequenceEqual(fetchedHeaders));
+        }
+    }
+
+    [Theory]
+    [InlineData("ARTICLE")]
+    [InlineData("HEAD")]
+    public async Task StorageHit_TraversesOnceOnIngress(string verb)
+    {
+        var stored = PrepareArticle(MessageId, body: "hello\r\n");
+        var entered = ArticleRecordFactory.TryCreate(
+            new NntpArticleParser(NntpdOptions.FormatFqdn(1, "usenet.ninja")),
+            stored.Record.ArtData,
+            ArticlePathMode.Traverse);
+        Assert.True(entered.IsAccepted, entered.MaterializeFailure.ToString());
+        Assert.Equal(stored.Record.ArtId, entered.Record.ArtId);
+        Assert.False(entered.Record.ArtData.Span.SequenceEqual(stored.Record.ArtData.Span));
+
+        var storageUri = StorageCacheUri(stored.Record.ArtId);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var queue = new RecordingIngestionQueue();
+        var lookup = new StubStorageLookup(StorageFound(stored.Record.ArtId, Guid.NewGuid(), storageUri));
+        var rpc = new StubArticleWorkRpcClient(ArticleWorkOutcome.Success, stored.Record.ArtId, CacheUri);
+        var vatp = new RecordingVatpArticleClient(
+            VatpFetchResult.FromSuccess(stored.Record, Guid.NewGuid(), stored.Record.ArtId));
+        var session = duplex.CreateSession(
+            articleWorkRpc: rpc,
+            vatp: vatp,
+            ingestion: queue,
+            storageLookup: lookup);
+
+        await DispatchLineAsync(duplex, session, $"{verb} {MessageId}");
+
+        var served = DestuffCustomerMultiline(await duplex.ReadMultilineAsync());
+        var path = Encoding.ASCII.GetString(entered.Record.Path);
+        Assert.StartsWith("nntpd01.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Contains("news.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Contains("!nntpd.test!", path, StringComparison.Ordinal);
+        Assert.Equal(1, CountPathToken(path, "news.usenet.ninja"));
+        Assert.Equal(1, CountPathToken(path, "nntpd01.usenet.ninja"));
+        if (verb == "ARTICLE")
+        {
+            Assert.True(served.AsSpan().SequenceEqual(entered.Record.ArtData.Span));
+            Assert.False(served.AsSpan().SequenceEqual(stored.Record.ArtData.Span));
+        }
+        else
+        {
+            Assert.True(ArticleWireReconstructor.TrySplitHeadersAndBody(
+                entered.Record.ArtData.Span,
+                out var headers,
+                out _));
+            Assert.True(served.AsSpan().SequenceEqual(headers));
+        }
+
+        Assert.Contains("Path: " + path, Encoding.ASCII.GetString(served), StringComparison.Ordinal);
+        Assert.Equal(0, queue.AdmitCalls);
+        Assert.Equal(0, rpc.LookupCount);
+        Assert.Equal(storageUri, vatp.Uri);
     }
 
     [Fact]
@@ -1107,6 +1201,35 @@ public sealed class ArticleRetrievalVatpCommandTests
             null,
             null,
             error);
+
+    private static int CountPathToken(string path, string token)
+    {
+        var count = 0;
+        foreach (var part in path.Split('!'))
+        {
+            if (part.Equals(token, StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static byte[] DestuffCustomerMultiline(byte[] multiline)
+    {
+        var span = multiline.AsSpan();
+        var firstCrlf = span.IndexOf("\r\n"u8);
+        Assert.True(firstCrlf >= 0);
+        var stuffed = span[(firstCrlf + 2)..];
+        Assert.True(stuffed.EndsWith(".\r\n"u8));
+        stuffed = stuffed[..^3];
+        Assert.True(NntpArticleDestuffer.TryDestuffStuffedWire(
+            stuffed,
+            NntpdOptions.DefaultMaxArticleSize,
+            out var destuffed));
+        return destuffed;
+    }
 
     private static Prepared PrepareArticle(string messageId, string body = "body\r\n")
     {

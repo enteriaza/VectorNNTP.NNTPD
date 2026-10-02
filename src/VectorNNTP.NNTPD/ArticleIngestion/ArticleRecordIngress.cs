@@ -27,7 +27,7 @@ internal static class ArticleRecordIngress
         ReadOnlyMemory<byte> destuffedArticle)
     {
         ArgumentNullException.ThrowIfNull(parser);
-        return ArticleRecordFactory.TryCreate(parser, destuffedArticle);
+        return ArticleRecordFactory.TryCreate(parser, destuffedArticle, ArticlePathMode.Traverse);
     }
 
     /// <summary>
@@ -52,7 +52,7 @@ internal static class ArticleRecordIngress
             return ArticleRecordCreateResult.RejectedParse(NntpArticleParseFailureCode.ArticleTooLarge);
         }
 
-        return ArticleRecordFactory.TryCreate(parser, destuffed);
+        return ArticleRecordFactory.TryCreate(parser, destuffed, ArticlePathMode.Traverse);
     }
 
     /// <summary>

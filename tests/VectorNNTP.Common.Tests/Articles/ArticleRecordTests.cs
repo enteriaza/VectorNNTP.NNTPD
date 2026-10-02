@@ -216,7 +216,7 @@ public sealed class ArticleRecordTests
 
         var parse = parser.Parse(destuffed);
         Assert.True(parse.IsAccepted);
-        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse);
+        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, ArticlePathMode.Traverse);
         Assert.True(materialize.IsAccepted);
         Assert.NotNull(materialize.ArticleBytes);
         Assert.NotEqual(destuffed.Length, materialize.ArticleBytes.Length);

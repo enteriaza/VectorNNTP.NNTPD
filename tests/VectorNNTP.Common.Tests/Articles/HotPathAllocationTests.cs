@@ -151,11 +151,11 @@ public sealed class HotPathAllocationTests
         var parse = parser.Parse(article);
         Assert.True(parse.IsAccepted);
 
-        _ = NntpArticleCanonicalMaterializer.Materialize(parse);
-        _ = NntpArticleCanonicalMaterializer.Materialize(parse);
+        _ = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
+        _ = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.True(result.IsAccepted);

@@ -184,7 +184,7 @@ public sealed class ArticleRecordArtHashTests
         var parser = new NntpArticleParser(LocalFqdn);
         var parse = parser.Parse(destuffed);
         Assert.True(parse.IsAccepted);
-        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse);
+        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, ArticlePathMode.Traverse);
         Assert.True(materialize.IsAccepted);
         Assert.NotNull(materialize.ArticleBytes);
 
@@ -211,7 +211,7 @@ public sealed class ArticleRecordArtHashTests
         var parser = new NntpArticleParser(LocalFqdn);
         var parse = parser.Parse(destuffed);
         Assert.True(parse.IsAccepted);
-        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse);
+        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, ArticlePathMode.Traverse);
         Assert.True(materialize.IsAccepted);
         Assert.NotNull(materialize.ArticleBytes);
 

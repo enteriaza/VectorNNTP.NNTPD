@@ -1,5 +1,6 @@
 using System.Buffers;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine;
@@ -9,8 +10,9 @@ namespace VectorNNTP.StorageServer.Listener;
 /// <summary>
 /// VATP server session: client HELLO, then OPEN served from
 /// <see cref="IStorageArticleOpenBoundary"/> as META, credit-paced DATA/FIN, and END.
-/// STORE is a separate receive stream that calls <see cref="IArticleStorageEngine.AcceptAsync"/>
-/// and replies with RESULT.
+/// STORE is a separate receive stream. After META matches the inbound bytes, Path is
+/// rematerialized with <see cref="StorageServerOptions.Fqdn"/> and that record is passed to
+/// <see cref="IArticleStorageEngine.AcceptAsync"/>. Retrieval does not rewrite Path.
 /// </summary>
 public sealed partial class StorageVatpSession : IAsyncDisposable
 {
@@ -24,6 +26,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly IArticleStorageEngine? _placementEngine;
     private readonly StoreAssemblyAdmission? _storeAdmission;
+    private readonly NntpArticleParser? _storePathParser;
     private readonly Dictionary<uint, SendStream> _streams = [];
     private readonly Dictionary<uint, StoreStream> _storeStreams = [];
     private readonly ArticleTransferReadyRing _readyRing = new();
@@ -40,7 +43,8 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         ILogger logger,
         ArticleTransferLimits? limits = null,
         IArticleStorageEngine? placementEngine = null,
-        StoreAssemblyAdmission? storeAdmission = null)
+        StoreAssemblyAdmission? storeAdmission = null,
+        string? storePathIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(openBoundary);
@@ -53,6 +57,9 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         _logger = logger;
         _placementEngine = placementEngine;
         _storeAdmission = storeAdmission;
+        _storePathParser = string.IsNullOrWhiteSpace(storePathIdentity)
+            ? null
+            : new NntpArticleParser(storePathIdentity.Trim());
     }
 
     /// <summary>Runs until peer close, cancellation, or fatal protocol error.</summary>

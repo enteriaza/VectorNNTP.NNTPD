@@ -56,6 +56,7 @@ public sealed class ArticlePathCanonicalizerTests
             LocalIdentity,
             kind,
             containsTracker,
+            ArticlePathMode.Traverse,
             destination,
             out var written));
         Assert.True(destination[..written].SequenceEqual("news.usenet.ninja!bf01.usenet.ninja!foo!bar"u8));
@@ -99,6 +100,7 @@ public sealed class ArticlePathCanonicalizerTests
             LocalIdentity,
             kind,
             containsTracker,
+            ArticlePathMode.Traverse,
             destination,
             out var written));
         Assert.True(destination[..written].SequenceEqual("bf01.usenet.ninja!NEWS.USENET.NINJA!foo"u8));
@@ -124,6 +126,7 @@ public sealed class ArticlePathCanonicalizerTests
             LocalIdentity,
             kind,
             containsTracker,
+            ArticlePathMode.Traverse,
             destination,
             out var written));
         Assert.True(destination[..written].SequenceEqual("news.usenet.ninja!bf01.usenet.ninja!news.usenet.ninja.extra!foo"u8));
@@ -131,12 +134,12 @@ public sealed class ArticlePathCanonicalizerTests
     }
 
     [Fact]
-    public void TryWriteCanonicalPath_WhenLocalIdentityAlreadyPresent_DoesNotDuplicateApplicationHop()
+    public void TryWriteCanonicalPath_WhenLocalIdentityIsLeftmost_PrependsAgain()
     {
         WriteAndAssert(
             "bf01.usenet.ninja!news.example.org",
             "bf01.usenet.ninja",
-            "news.usenet.ninja!bf01.usenet.ninja!news.example.org");
+            "news.usenet.ninja!bf01.usenet.ninja!bf01.usenet.ninja!news.example.org");
     }
 
     [Fact]
@@ -186,9 +189,86 @@ public sealed class ArticlePathCanonicalizerTests
             LocalIdentity,
             kind,
             containsTracker,
+            ArticlePathMode.Traverse,
             destination,
             out var written));
         Assert.True(destination[..written].SequenceEqual("news.usenet.ninja!bf01.usenet.ninja"u8));
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_WhenLocalIdentityOccursLater_PrependsAgain()
+    {
+        WriteAndAssert(
+            "cache02.usenet.ninja!nntpd01.usenet.ninja!news.usenet.ninja",
+            "nntpd01.usenet.ninja",
+            "nntpd01.usenet.ninja!cache02.usenet.ninja!nntpd01.usenet.ninja!news.usenet.ninja");
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_Normalize_WhenTrackerIsPresent_DoesNotPrependApplicationHop()
+    {
+        WriteAndAssert(
+            "cache01.usenet.ninja!news.usenet.ninja!nntpd01.usenet.ninja",
+            "news.usenet.ninja",
+            "cache01.usenet.ninja!news.usenet.ninja!nntpd01.usenet.ninja",
+            ArticlePathMode.Normalize);
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_WhenLeftmostMatchesIgnoringCase_PrependsAgain()
+    {
+        WriteAndAssert(
+            "NNTPD01.USENET.NINJA!cache02.usenet.ninja",
+            "nntpd01.usenet.ninja",
+            "news.usenet.ninja!nntpd01.usenet.ninja!NNTPD01.USENET.NINJA!cache02.usenet.ninja");
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_BackFillerThenNntpdThenCaches_KeepsNewestFirst()
+    {
+        var path = "peer.example";
+        path = Rewrite(path, "backfiller01.usenet.ninja");
+        Assert.Equal("news.usenet.ninja!backfiller01.usenet.ninja!peer.example", path);
+        path = Rewrite(path, "nntpd01.usenet.ninja");
+        path = Rewrite(path, "cache02.usenet.ninja");
+        path = Rewrite(path, "nntpd01.usenet.ninja");
+        path = Rewrite(path, "cache01.usenet.ninja");
+        Assert.Equal(
+            "cache01.usenet.ninja!nntpd01.usenet.ninja!cache02.usenet.ninja!nntpd01.usenet.ninja!news.usenet.ninja!backfiller01.usenet.ninja!peer.example",
+            path);
+        Assert.Equal(
+            "cache01.usenet.ninja!" + path,
+            Rewrite(path, "cache01.usenet.ninja"));
+        Assert.Equal(path, Rewrite(path, "cache01.usenet.ninja", ArticlePathMode.Normalize));
+        Assert.Equal(1, CountToken(Encoding.ASCII.GetBytes(path), "news.usenet.ninja"u8));
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_Normalize_InsertsTrackerOnceAndKeepsApplicationHops()
+    {
+        WriteAndAssert(
+            "nntpd01.usenet.ninja!nntpd01.usenet.ninja!peer.example",
+            "cache01.usenet.ninja",
+            "news.usenet.ninja!nntpd01.usenet.ninja!nntpd01.usenet.ninja!peer.example",
+            ArticlePathMode.Normalize);
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_Normalize_CollapsesRepeatedTrackerAndIsIdempotent()
+    {
+        const string raw = "news.usenet.ninja!nntpd01.usenet.ninja!NEWS.USENET.NINJA!peer.example";
+        const string once = "news.usenet.ninja!nntpd01.usenet.ninja!peer.example";
+        WriteAndAssert(raw, "cache01.usenet.ninja", once, ArticlePathMode.Normalize);
+        WriteAndAssert(once, "cache01.usenet.ninja", once, ArticlePathMode.Normalize);
+    }
+
+    [Fact]
+    public void TryWriteCanonicalPath_Traverse_DoesNotDeduplicateApplicationFqdn()
+    {
+        WriteAndAssert(
+            "nntpd01.usenet.ninja!cache01.usenet.ninja!nntpd01.usenet.ninja!news.usenet.ninja!backfiller01.usenet.ninja",
+            "nntpd01.usenet.ninja",
+            "nntpd01.usenet.ninja!nntpd01.usenet.ninja!cache01.usenet.ninja!nntpd01.usenet.ninja!news.usenet.ninja!backfiller01.usenet.ninja");
     }
 
     [Fact]
@@ -204,7 +284,34 @@ public sealed class ArticlePathCanonicalizerTests
         Assert.Equal(NntpArticleParseFailureCode.InvalidPath, failure);
     }
 
-    private static void WriteAndAssert(string rawPath, string localIdentity, string expected)
+    private static string Rewrite(string rawPath, string localIdentity, ArticlePathMode mode = ArticlePathMode.Traverse)
+    {
+        var raw = Encoding.ASCII.GetBytes(rawPath);
+        var local = Encoding.ASCII.GetBytes(localIdentity);
+        Assert.True(ArticlePathCanonicalizer.TryAnalyze(
+            raw,
+            local,
+            pathPresent: true,
+            out var kind,
+            out var containsTracker,
+            out _));
+        Span<byte> destination = stackalloc byte[512];
+        Assert.True(ArticlePathCanonicalizer.TryWriteCanonicalPath(
+            raw,
+            local,
+            kind,
+            containsTracker,
+            mode,
+            destination,
+            out var written));
+        return Encoding.ASCII.GetString(destination[..written]);
+    }
+
+    private static void WriteAndAssert(
+        string rawPath,
+        string localIdentity,
+        string expected,
+        ArticlePathMode mode = ArticlePathMode.Traverse)
     {
         var raw = Encoding.ASCII.GetBytes(rawPath);
         var local = Encoding.ASCII.GetBytes(localIdentity);
@@ -216,12 +323,13 @@ public sealed class ArticlePathCanonicalizerTests
             out var containsTracker,
             out _));
 
-        Span<byte> destination = stackalloc byte[256];
+        Span<byte> destination = stackalloc byte[512];
         Assert.True(ArticlePathCanonicalizer.TryWriteCanonicalPath(
             raw,
             local,
             kind,
             containsTracker,
+            mode,
             destination,
             out var written));
         Assert.Equal(expected, Encoding.ASCII.GetString(destination[..written]));

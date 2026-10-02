@@ -11,11 +11,30 @@ public enum ArticlePathKind
     /// <summary>Path was present but contained only separators or whitespace.</summary>
     Empty = 1,
 
-    /// <summary>A validated component already equals the local identity (case-insensitive).</summary>
+    /// <summary>The leftmost validated component already equals the local identity (case-insensitive).</summary>
     AlreadyContainsLocalIdentity = 2,
 
-    /// <summary>Validated components exist and the local identity must be prepended.</summary>
+    /// <summary>
+    /// The local identity is not the leftmost hop. Writes use <see cref="ArticlePathMode"/> rather than this classification.
+    /// </summary>
     NeedsLocalIdentityPrepend = 3,
+}
+
+/// <summary>
+/// Selects whether a Path rewrite records a receiving-system traversal.
+/// </summary>
+public enum ArticlePathMode
+{
+    /// <summary>
+    /// Validate and normalize Path without adding an application hop.
+    /// <c>news.usenet.ninja</c> is inserted when absent and reduced to one occurrence.
+    /// </summary>
+    Normalize = 0,
+
+    /// <summary>
+    /// Normalize Path and always prepend the receiving system's application FQDN.
+    /// </summary>
+    Traverse = 1,
 }
 
 /// <summary>
@@ -40,7 +59,7 @@ public static class ArticlePathCanonicalizer
     /// Validates a raw Path value and classifies the rewrite that a later materializer would apply.
     /// </summary>
     /// <param name="rawPath">Raw Path header value bytes, or empty when the header is absent.</param>
-    /// <param name="localIdentity">Local application FQDN that would be prepended when missing.</param>
+    /// <param name="localIdentity">Local application FQDN. Analysis reports whether it is leftmost; writes use <see cref="ArticlePathMode"/>.</param>
     /// <param name="pathPresent">Whether a Path header was present.</param>
     /// <param name="kind">Rewrite classification when validation succeeds.</param>
     /// <param name="containsOrganizationalTracker">
@@ -89,7 +108,7 @@ public static class ArticlePathCanonicalizer
         }
 
         var sawComponent = false;
-        var alreadyPresent = false;
+        var leftmostMatchesLocal = false;
         while (TryConsumePathComponent(ref remaining, out var component))
         {
             if (component.IsEmpty)
@@ -103,15 +122,15 @@ public static class ArticlePathCanonicalizer
                 return false;
             }
 
+            if (!sawComponent)
+            {
+                leftmostMatchesLocal = AsciiEqualsIgnoreCase(component, localIdentity);
+            }
+
             sawComponent = true;
             if (AsciiEqualsIgnoreCase(component, OrganizationalTrackerHost))
             {
                 containsOrganizationalTracker = true;
-            }
-
-            if (AsciiEqualsIgnoreCase(component, localIdentity))
-            {
-                alreadyPresent = true;
             }
         }
 
@@ -121,7 +140,7 @@ public static class ArticlePathCanonicalizer
             return true;
         }
 
-        kind = alreadyPresent
+        kind = leftmostMatchesLocal
             ? ArticlePathKind.AlreadyContainsLocalIdentity
             : ArticlePathKind.NeedsLocalIdentityPrepend;
         return true;
@@ -134,21 +153,24 @@ public static class ArticlePathCanonicalizer
     /// <param name="localIdentity">Local application FQDN written as an application hop when needed.</param>
     /// <param name="kind">Rewrite classification from <see cref="TryAnalyze"/>.</param>
     /// <param name="containsOrganizationalTracker">Whether the organizational tracker token is already present.</param>
+    /// <param name="mode">Normalize leaves application hops unchanged. Traverse always prepends <paramref name="localIdentity"/>.</param>
     /// <param name="destination">Destination receiving ASCII Path bytes.</param>
     /// <param name="bytesWritten">Bytes written on success.</param>
     /// <returns><see langword="true"/> when <paramref name="destination"/> was large enough.</returns>
     /// <remarks>
-    /// First Vector traversal (tracker absent) writes
+    /// <see cref="ArticlePathMode.Traverse"/> with the tracker absent writes
     /// <c>news.usenet.ninja!{application-fqdn}!existing</c>.
-    /// Later traversals (tracker already present) write
-    /// <c>{application-fqdn}!existing</c>.
-    /// Empty Path tokens from repeated <c>!</c> separators are dropped, matching existing rules.
+    /// A later traverse writes <c>{application-fqdn}!existing</c> even when that FQDN is already present.
+    /// <see cref="ArticlePathMode.Normalize"/> does not write an application FQDN.
+    /// <c>news.usenet.ninja</c> is inserted when absent and reduced to the first occurrence.
+    /// Empty Path tokens from repeated <c>!</c> separators are dropped.
     /// </remarks>
     public static bool TryWriteCanonicalPath(
         ReadOnlySpan<byte> rawPath,
         ReadOnlySpan<byte> localIdentity,
         ArticlePathKind kind,
         bool containsOrganizationalTracker,
+        ArticlePathMode mode,
         Span<byte> destination,
         out int bytesWritten)
     {
@@ -156,13 +178,18 @@ public static class ArticlePathCanonicalizer
             ? ReadOnlySpan<byte>.Empty
             : TrimAscii(rawPath);
 
-        var prependTracker = !containsOrganizationalTracker;
-        var prependLocal = kind is not ArticlePathKind.AlreadyContainsLocalIdentity;
+        var traverse = mode == ArticlePathMode.Traverse;
+        var localIsTracker = traverse
+            && !localIdentity.IsEmpty
+            && AsciiEqualsIgnoreCase(localIdentity, OrganizationalTrackerHost);
+        var prependTracker = !containsOrganizationalTracker && !localIsTracker;
+        var applicationHop = traverse ? localIdentity : default;
 
         return TryWriteJoinedComponents(
             remaining,
             prependTracker ? OrganizationalTrackerHost : default,
-            prependLocal ? localIdentity : default,
+            applicationHop,
+            trackerAlreadyEmitted: prependTracker || localIsTracker,
             destination,
             out bytesWritten);
     }
@@ -190,6 +217,7 @@ public static class ArticlePathCanonicalizer
         ReadOnlySpan<byte> remaining,
         ReadOnlySpan<byte> prepend1,
         ReadOnlySpan<byte> prepend2,
+        bool trackerAlreadyEmitted,
         Span<byte> destination,
         out int bytesWritten)
     {
@@ -206,6 +234,16 @@ public static class ArticlePathCanonicalizer
             if (component.IsEmpty)
             {
                 continue;
+            }
+
+            if (AsciiEqualsIgnoreCase(component, OrganizationalTrackerHost))
+            {
+                if (trackerAlreadyEmitted)
+                {
+                    continue;
+                }
+
+                trackerAlreadyEmitted = true;
             }
 
             if (!TryWriteHop(component, ref first, destination, ref bytesWritten))

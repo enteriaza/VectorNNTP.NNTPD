@@ -16,6 +16,7 @@ namespace VectorNNTP.StorageServer.Tests.Listener;
 
 public sealed class StorageVatpStoreTests
 {
+    private const string CacheFqdn = "cache01.usenet.ninja";
     private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
 
     [Fact]
@@ -50,7 +51,11 @@ public sealed class StorageVatpStoreTests
         var conflicted = await harness.StoreAndReadAsync(conflict, streamId: 3);
         Assert.Equal((byte)ArticleAcceptOutcome.Conflict, Outcome(conflicted));
         var read = await WaitPresentAsync(engine, first.Record.ArtId);
-        Assert.True(read.ArtData.Span.SequenceEqual(first.Record.ArtData.Span));
+        var stored = Stored(first);
+        Assert.Equal(first.Record.ArtId, read.Metadata.ArtId);
+        Assert.Equal(stored.ArtHash, read.Metadata.ArtHash);
+        Assert.True(read.ArtData.Span.SequenceEqual(stored.ArtData.Span));
+        Assert.False(read.ArtData.Span.SequenceEqual(conflict.Record.ArtData.Span));
     }
 
     [Fact]
@@ -152,7 +157,7 @@ public sealed class StorageVatpStoreTests
         Assert.Equal((byte)ArticleAcceptOutcome.Accepted, Outcome(frames));
         await harness.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeCancel(1)));
         var still = await WaitPresentAsync(engine, built.Record.ArtId);
-        Assert.Equal(built.Record.ArtHash, still.Metadata.ArtHash);
+        Assert.Equal(Stored(built).ArtHash, still.Metadata.ArtHash);
     }
 
     [Fact]
@@ -223,7 +228,8 @@ public sealed class StorageVatpStoreTests
             ListenerOptions(),
             NullLogger.Instance,
             placementEngine: engine,
-            storeAdmission: new StoreAssemblyAdmission(1));
+            storeAdmission: new StoreAssemblyAdmission(1),
+            storePathIdentity: CacheFqdn);
         using var cts = new CancellationTokenSource();
         var run = session.RunAsync(cts.Token);
         await transport.ClientWriteAsync(VatpFrameEncoder.ToSingleBuffer(
@@ -238,7 +244,7 @@ public sealed class StorageVatpStoreTests
         await using var recovered = FileArticleStorageEngine.Open(dir.Options, NullLogger.Instance);
         await recovered.RecoverAsync(CancellationToken.None);
         Assert.True(recovered.TryRead(built.Record.ArtId, out var read));
-        Assert.True(read.ArtData.Span.SequenceEqual(built.Record.ArtData.Span));
+        Assert.True(read.ArtData.Span.SequenceEqual(Stored(built).ArtData.Span));
         cts.Cancel();
         await session.DisposeAsync();
     }
@@ -270,7 +276,7 @@ public sealed class StorageVatpStoreTests
 
     private static Built Build(string messageId, string body)
     {
-        var parser = new NntpArticleParser("cache01.usenet.ninja");
+        var parser = new NntpArticleParser("nntpd01.usenet.ninja");
         var text = new StringBuilder()
             .Append("Path: peer.example\r\n")
             .Append("Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n")
@@ -283,6 +289,79 @@ public sealed class StorageVatpStoreTests
         var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(text.ToString()));
         Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
         return new Built(created.Record, created.SelectedDateHeaderName);
+    }
+
+    private static ArticleRecord Stored(Built inbound)
+    {
+        var created = ArticleRecordFactory.TryCreate(new NntpArticleParser(CacheFqdn), inbound.Record.ArtData);
+        Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
+        Assert.Equal(inbound.Record.ArtId, created.Record.ArtId);
+        return created.Record;
+    }
+
+    [Fact]
+    public void StoreRewrite_WhenCacheHopAlreadyPresent_PrependsAgain()
+    {
+        var inbound = Build("<store-path-again@seg.test>", "body\r\n");
+        var once = Stored(inbound);
+        var again = ArticleRecordFactory.TryCreate(new NntpArticleParser(CacheFqdn), once.ArtData);
+        Assert.True(again.IsAccepted, again.MaterializeFailure.ToString());
+        Assert.Equal(once.ArtId, again.Record.ArtId);
+        Assert.NotEqual(once.ArtHash, again.Record.ArtHash);
+        var path = Encoding.ASCII.GetString(again.Record.Path);
+        Assert.StartsWith("cache01.usenet.ninja!cache01.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Equal(2, CountHop(path, "cache01.usenet.ninja"));
+        Assert.Equal(1, CountHop(path, "news.usenet.ninja"));
+    }
+
+    [Fact]
+    public async Task Store_PrependsCacheHop_AndRetryIsDuplicateWithoutASecondHop()
+    {
+        var inbound = Build("<store-path@seg.test>", "body\r\n");
+        var engine = CreateMemory();
+        await using var harness = await Harness.StartAsync(engine);
+        var accepted = await harness.StoreAndReadAsync(inbound);
+        Assert.Equal((byte)ArticleAcceptOutcome.Accepted, Outcome(accepted));
+
+        var stored = Stored(inbound);
+        var read = await WaitPresentAsync(engine, inbound.Record.ArtId);
+        Assert.Equal(inbound.Record.ArtId, read.Metadata.ArtId);
+        Assert.NotEqual(inbound.Record.ArtHash, read.Metadata.ArtHash);
+        Assert.Equal(stored.ArtHash, read.Metadata.ArtHash);
+        Assert.True(read.ArtData.Span.SequenceEqual(stored.ArtData.Span));
+        var path = Encoding.ASCII.GetString(stored.Path);
+        Assert.StartsWith("cache01.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Contains("!nntpd01.usenet.ninja!", path, StringComparison.Ordinal);
+        Assert.Equal(1, CountHop(path, "cache01.usenet.ninja"));
+        Assert.Contains("news.usenet.ninja", path, StringComparison.Ordinal);
+
+        var duplicate = await harness.StoreAndReadAsync(inbound, streamId: 2);
+        Assert.Equal((byte)ArticleAcceptOutcome.Duplicate, Outcome(duplicate));
+        var again = await WaitPresentAsync(engine, inbound.Record.ArtId);
+        Assert.True(again.ArtData.Span.SequenceEqual(stored.ArtData.Span));
+        Assert.Equal(1, CountHop(Encoding.ASCII.GetString(stored.Path), "cache01.usenet.ninja"));
+
+        var served = ArticleRecordFactory.TryCreate(
+            new NntpArticleParser(ArticlePathCanonicalizer.OrganizationalTrackerHost),
+            again.ArtData,
+            ArticlePathMode.Normalize);
+        Assert.True(served.IsAccepted);
+        Assert.True(served.Record.ArtData.Span.SequenceEqual(again.ArtData.Span));
+        Assert.Equal(stored.ArtHash, served.Record.ArtHash);
+    }
+
+    private static int CountHop(string path, string hop)
+    {
+        var count = 0;
+        foreach (var component in path.Split('!'))
+        {
+            if (string.Equals(component, hop, StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static byte[] StoreFrame(ArticleId articleId, uint streamId)
@@ -334,7 +413,8 @@ public sealed class StorageVatpStoreTests
                 NullLogger.Instance,
                 limits,
                 engine,
-                admission ?? new StoreAssemblyAdmission(4));
+                admission ?? new StoreAssemblyAdmission(4),
+                CacheFqdn);
             var harness = new Harness(transport, session);
             await harness.SendHelloAsync();
             return harness;

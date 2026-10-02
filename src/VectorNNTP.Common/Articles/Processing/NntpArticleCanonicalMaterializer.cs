@@ -134,10 +134,13 @@ public static class NntpArticleCanonicalMaterializer
     /// Builds a canonicalized article payload from a parser-accepted article.
     /// </summary>
     /// <param name="parseResult">Accepted parse result carrying Date/Path metadata and source-byte header slices.</param>
+    /// <param name="pathMode">Normalize revalidates Path. Traverse prepends the parser's application FQDN.</param>
     /// <returns>
     /// A result that owns one exact-size canonical buffer on success, or a failure classification without an output buffer.
     /// </returns>
-    public static NntpArticleCanonicalMaterializeResult Materialize(in NntpArticleParseResult parseResult)
+    public static NntpArticleCanonicalMaterializeResult Materialize(
+        in NntpArticleParseResult parseResult,
+        ArticlePathMode pathMode)
     {
         if (!parseResult.IsAccepted)
         {
@@ -169,7 +172,7 @@ public static class NntpArticleCanonicalMaterializer
         canonicalDate = canonicalDate[..dateWritten];
 
         Span<byte> canonicalPath = stackalloc byte[ArticlePathCanonicalizer.MaxPathLength + 256];
-        if (!parseResult.TryWriteCanonicalPath(canonicalPath, out var pathWritten))
+        if (!parseResult.TryWriteCanonicalPath(pathMode, canonicalPath, out var pathWritten))
         {
             return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
         }

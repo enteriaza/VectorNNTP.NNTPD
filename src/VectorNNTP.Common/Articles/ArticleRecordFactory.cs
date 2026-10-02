@@ -27,14 +27,27 @@ namespace VectorNNTP.Common.Articles;
 public static class ArticleRecordFactory
 {
     /// <summary>
-    /// Parses, classifies, and materializes destuffed article bytes into a CanonicalV1 record.
+    /// Parses and materializes an article, recording a receiving-system Path hop.
     /// </summary>
-    /// <param name="parser">Common article parser (local identity used for Path hops).</param>
+    /// <param name="parser">Common article parser. Its local identity is the application FQDN.</param>
     /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
     /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
     public static ArticleRecordCreateResult TryCreate(
         NntpArticleParser parser,
         ReadOnlyMemory<byte> destuffedArticle)
+        => TryCreate(parser, destuffedArticle, ArticlePathMode.Traverse);
+
+    /// <summary>
+    /// Parses, classifies, and materializes destuffed article bytes into a CanonicalV1 record.
+    /// </summary>
+    /// <param name="parser">Common article parser. Its local identity is the application FQDN used by <see cref="ArticlePathMode.Traverse"/>.</param>
+    /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
+    /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN. <see cref="ArticlePathMode.Normalize"/> does not.</param>
+    /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
+    public static ArticleRecordCreateResult TryCreate(
+        NntpArticleParser parser,
+        ReadOnlyMemory<byte> destuffedArticle,
+        ArticlePathMode pathMode)
     {
         ArgumentNullException.ThrowIfNull(parser);
 
@@ -44,7 +57,7 @@ public static class ArticleRecordFactory
             return ArticleRecordCreateResult.RejectedParse(parse.FailureCode);
         }
 
-        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse);
+        var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, pathMode);
         if (!materialize.IsAccepted || materialize.ArticleBytes is null)
         {
             return ArticleRecordCreateResult.RejectedMaterialize(materialize.FailureCode);
@@ -231,7 +244,7 @@ public static class ArticleRecordFactory
 }
 
 /// <summary>
-/// Result of one <see cref="ArticleRecordFactory.TryCreate"/> attempt.
+/// Result of one article-record creation attempt.
 /// </summary>
 public readonly struct ArticleRecordCreateResult
 {

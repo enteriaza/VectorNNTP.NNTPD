@@ -11,9 +11,9 @@ namespace VectorNNTP.StorageServer.Listener;
 /// <remarks>
 /// Calls <see cref="IArticleStorageEngine.TryRead"/> only. Does not read segments, the
 /// cache, the journal, or the index directly. Stored ArtData is already CanonicalV1.
-/// Re-parsing with the organizational tracker as the local identity does not prepend
-/// another Path hop when that tracker is already present, so a matching factory result
-/// keeps the stored ArticleId, ArtHash, and ArtSize. A rewrite is rejected and is not sent.
+/// Re-parsing uses <see cref="ArticlePathMode.Normalize"/>, which does not add a hop, so a
+/// matching factory result keeps the stored ArticleId, ArtHash, and ArtSize. A rewrite is
+/// rejected and is not sent.
 /// </remarks>
 public sealed class StorageArticleOpenBoundary : IStorageArticleOpenBoundary
 {
@@ -67,7 +67,7 @@ public sealed class StorageArticleOpenBoundary : IStorageArticleOpenBoundary
             return StorageArticleOpenResult.Rejected("article-unavailable");
         }
 
-        var created = ArticleRecordFactory.TryCreate(_parser, read.ArtData);
+        var created = ArticleRecordFactory.TryCreate(_parser, read.ArtData, ArticlePathMode.Normalize);
         if (!created.IsAccepted
             || created.Record.ParseStatus != ArticleParseStatus.CanonicalV1
             || created.Record.ArtId != read.Metadata.ArtId

@@ -64,7 +64,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
     }
 
     [Fact]
-    public void Materialize_WhenPathAlreadyContainsLocalFqdn_DoesNotDuplicatePathComponent()
+    public void Materialize_WhenPathAlreadyContainsLocalFqdn_PrependsAgain()
     {
         var parser = new NntpArticleParser(LocalFqdn);
         var originalArticle = BuildArticle(
@@ -81,8 +81,8 @@ public sealed class NntpArticleCanonicalMaterializerTests
         Assert.True(parse.IsAccepted);
 
         var headers = GetHeaderText(MaterializeAccepted(parse));
-        Assert.Contains("Path: news.usenet.ninja!backfiller01.usenet.ninja!news.example.org", headers, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(headers, "backfiller01.usenet.ninja"));
+        Assert.Contains("Path: news.usenet.ninja!backfiller01.usenet.ninja!backfiller01.usenet.ninja!news.example.org", headers, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(headers, "backfiller01.usenet.ninja"));
         Assert.Equal(1, CountOccurrences(headers, "news.usenet.ninja"));
     }
 
@@ -375,7 +375,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
         var parse = parser.Parse(originalArticle);
         Assert.False(parse.IsAccepted);
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.ParseNotAccepted, result.FailureCode);
         Assert.Null(result.ArticleBytes);
@@ -442,7 +442,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
             - parse.OriginalPathValue.Length;
         Assert.True(expectedCanonicalLength > ArticleResourceLimits.MaxArticleBytes);
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.ArticleTooLarge, result.FailureCode);
         Assert.Null(result.ArticleBytes);
@@ -467,7 +467,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
         Assert.True(parse.IsAccepted);
         Assert.True(FormatCanonicalPath(parse).Length + "Path: ".Length > ArticleResourceLimits.MaxArticleLineBytes);
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.PathRewriteLineTooLong, result.FailureCode);
         Assert.Null(result.ArticleBytes);
@@ -516,7 +516,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
         var parse = parser.Parse(article);
         Assert.True(parse.IsAccepted);
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.PathRewriteLineTooLong, result.FailureCode);
         Assert.Equal((byte)'D', article[0]);
@@ -558,7 +558,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
         }
         else
         {
-            var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+            var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
             Assert.False(result.IsAccepted);
             Assert.Equal(NntpArticleCanonicalFailureCode.PathInsertionLineTooLong, result.FailureCode);
         }
@@ -603,7 +603,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
         var rejectedParse = parser.Parse(rejectedArticle);
         Assert.True(rejectedParse.IsAccepted);
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(rejectedParse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(rejectedParse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.PathRewriteLineTooLong, result.FailureCode);
     }
@@ -651,14 +651,14 @@ public sealed class NntpArticleCanonicalMaterializerTests
         Assert.True(rejectedParse.IsAccepted);
         Assert.Equal(canonicalDate, FormatCanonicalUtc(rejectedParse));
 
-        var result = NntpArticleCanonicalMaterializer.Materialize(rejectedParse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(rejectedParse, ArticlePathMode.Traverse);
         Assert.False(result.IsAccepted);
         Assert.Equal(NntpArticleCanonicalFailureCode.DateLineTooLong, result.FailureCode);
     }
 
     private static byte[] MaterializeAccepted(in NntpArticleParseResult parse)
     {
-        var result = NntpArticleCanonicalMaterializer.Materialize(parse);
+        var result = NntpArticleCanonicalMaterializer.Materialize(parse, ArticlePathMode.Traverse);
         Assert.True(result.IsAccepted, result.FailureCode.ToString());
         Assert.NotNull(result.ArticleBytes);
         return result.ArticleBytes;
@@ -674,7 +674,7 @@ public sealed class NntpArticleCanonicalMaterializerTests
     private static string FormatCanonicalPath(in NntpArticleParseResult parse)
     {
         Span<byte> destination = stackalloc byte[ArticlePathCanonicalizer.MaxPathLength + 256];
-        Assert.True(parse.TryWriteCanonicalPath(destination, out var written));
+        Assert.True(parse.TryWriteCanonicalPath(ArticlePathMode.Traverse, destination, out var written));
         return Encoding.ASCII.GetString(destination[..written]);
     }
 

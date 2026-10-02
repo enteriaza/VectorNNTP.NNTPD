@@ -1,5 +1,6 @@
 using System.Text;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
@@ -22,7 +23,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// results stay on that path. A validated CanonicalV1
 /// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
 /// reply. A StorageServer success is served without ingestion. A BackFiller success
-/// still admits the article; an admission failure does not change the reply.
+/// admits a Path traversal whose current hop is this NNTPD, and the reply sends
+/// that record. A StorageServer success traverses once on ingress and the reply
+/// sends that record. A failed traversal still sends the fetched bytes.
 /// </para>
 /// <para>
 /// Numeric article lookup and omitted current-article forms are unchanged:
@@ -122,9 +125,15 @@ internal static class Article
         }
 
         var record = resolved.Record;
-        if (resolved.Source == RetrievalSource.BackFiller)
+        if (resolved.Source == RetrievalSource.BackFiller
+            && TryAdmitBackFiller(context, in record, out var admitted))
         {
-            TryAdmitBackFiller(context, in record);
+            record = admitted;
+        }
+        else if (resolved.Source == RetrievalSource.StorageServer
+            && TryTraverseStorageIngress(context, in record, out var entered))
+        {
+            record = entered;
         }
 
         var messageIdText = Encoding.ASCII.GetString(record.MessageId);
@@ -534,14 +543,62 @@ internal static class Article
             ? ResolveResult.Success(result.Record, source)
             : result;
 
-    private static void TryAdmitBackFiller(NntpCommandContext context, in ArticleRecord record)
+    /// <summary>
+    /// Records this NNTPD as the receiving hop for a StorageServer article.
+    /// </summary>
+    /// <returns><see langword="false"/> when traversal fails. The caller keeps the fetched record.</returns>
+    private static bool TryTraverseStorageIngress(
+        NntpCommandContext context,
+        in ArticleRecord record,
+        out ArticleRecord entered)
     {
+        entered = default;
+        var created = ArticleRecordFactory.TryCreate(
+            context.Session.ArticleParser,
+            record.ArtData,
+            ArticlePathMode.Traverse);
+        if (!created.IsAccepted || created.Record.ArtId != record.ArtId)
+        {
+            return false;
+        }
+
+        entered = created.Record;
+        return true;
+    }
+
+    /// <summary>
+    /// Queues the Path-canonical copy and returns that same record for the current reply.
+    /// </summary>
+    /// <returns><see langword="false"/> when canonicalization or queue admission fails.</returns>
+    private static bool TryAdmitBackFiller(
+        NntpCommandContext context,
+        in ArticleRecord record,
+        out ArticleRecord admitted)
+    {
+        admitted = default;
         try
         {
-            var messageIdText = Encoding.ASCII.GetString(record.MessageId);
+            var created = ArticleRecordFactory.TryCreate(
+                context.Session.ArticleParser,
+                record.ArtData,
+                ArticlePathMode.Traverse);
+            if (!created.IsAccepted || created.Record.ArtId != record.ArtId)
+            {
+                var reason = created.ParseFailure != NntpArticleParseFailureCode.None
+                    ? created.ParseFailure.ToString()
+                    : created.MaterializeFailure.ToString();
+                ArticleRetrievalLogMessages.IngestNotAdmitted(
+                    Logger,
+                    reason,
+                    Encoding.ASCII.GetString(record.MessageId));
+                return false;
+            }
+
+            admitted = created.Record;
+            var messageIdText = Encoding.ASCII.GetString(admitted.MessageId);
             var inbound = ArticleRecordIngress.CreateQueued(
                 messageIdText,
-                in record,
+                in admitted,
                 context.Session.ClientIdentity,
                 DateTimeOffset.UtcNow,
                 InboundArticleProducer.BackFiller);
@@ -552,14 +609,18 @@ internal static class Article
                 // Copy Message-ID octets once for History; do not invent a second History path.
                 var midBytes = record.MessageId.ToArray();
                 context.Session.HistoryDb?.Remember(midBytes);
-                return;
+                return true;
             }
 
+            admitted = default;
             ArticleRetrievalLogMessages.IngestNotAdmitted(Logger, enqueue.ToString(), messageIdText);
+            return false;
         }
         catch (Exception ex)
         {
+            admitted = default;
             ArticleRetrievalLogMessages.IngestFailed(Logger, ex);
+            return false;
         }
     }
 

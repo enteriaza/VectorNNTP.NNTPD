@@ -278,10 +278,10 @@ namespace VectorNNTP.Common.Tests.Articles.Parsing
         }
 
         /// <summary>
-        /// Verifies Path normalization avoids double-inserting configured local host.
+        /// Verifies a traverse prepends the local host again when it is already leftmost.
         /// </summary>
         [Fact]
-        public void Parse_WhenPathAlreadyContainsLocalHost_DoesNotDuplicate()
+        public void Parse_WhenPathAlreadyContainsLocalHost_PrependsAgain()
         {
             NntpArticleParser parser = new(LocalFqdn);
             byte[] article = BuildArticle(
@@ -298,7 +298,7 @@ namespace VectorNNTP.Common.Tests.Articles.Parsing
             NntpArticleParseResult result = parser.Parse(article);
 
             Assert.True(result.IsAccepted);
-            Assert.Equal("news.usenet.ninja!bf01.usenet.ninja!news.example.org", FormatCanonicalPath(result));
+            Assert.Equal("news.usenet.ninja!bf01.usenet.ninja!bf01.usenet.ninja!news.example.org", FormatCanonicalPath(result));
             Assert.False(result.ContainsOrganizationalTracker);
         }
 
@@ -2089,7 +2089,7 @@ namespace VectorNNTP.Common.Tests.Articles.Parsing
         private static string FormatCanonicalPath(NntpArticleParseResult result)
         {
             Span<byte> destination = stackalloc byte[1024];
-            if (!result.TryWriteCanonicalPath(destination, out int written))
+            if (!result.TryWriteCanonicalPath(ArticlePathMode.Traverse, destination, out int written))
             {
                 return string.Empty;
             }

@@ -107,10 +107,9 @@ public sealed partial class StorageVatpArticleServingTests
     {
         await using var hosted = await CreateHosted().StartAsync();
         var built = BuildArticle("<mismatch@seg.test>", "body\r\n");
-        await AcceptAsync(hosted, built.Record);
-        var boundary = new StorageArticleOpenBoundary(
-            hosted.Service,
-            new NntpArticleParser("not-a-stored-hop.example"));
+        var nonCanonical = WithDuplicateTracker(built.Record);
+        await AcceptAsync(hosted, nonCanonical);
+        var boundary = new StorageArticleOpenBoundary(hosted.Service);
         var rejected = boundary.TryOpen(Guid.NewGuid(), built.Record.ArtId);
         Assert.False(rejected.Accepted);
         Assert.True(hosted.Service.Engine.Index.TryGet(built.Record.ArtId, out var meta));
@@ -297,6 +296,35 @@ public sealed partial class StorageVatpArticleServingTests
         var fail = frames.Last(frame =>
             frame.Header.Type == VatpFrameType.Fail && (streamId is null || frame.Header.StreamId == streamId));
         return DecodeFail(fail);
+    }
+
+    private static ArticleRecord WithDuplicateTracker(ArticleRecord canonical)
+    {
+        var source = canonical.ArtData.Span;
+        var pathHeader = "Path: "u8;
+        var at = source.IndexOf(pathHeader);
+        Assert.True(at >= 0);
+        var insertAt = at + pathHeader.Length;
+        var extra = "news.usenet.ninja!"u8;
+        var mutated = new byte[source.Length + extra.Length];
+        source[..insertAt].CopyTo(mutated);
+        extra.CopyTo(mutated.AsSpan(insertAt));
+        source[insertAt..].CopyTo(mutated.AsSpan(insertAt + extra.Length));
+
+        var separator = mutated.AsSpan().IndexOf("\r\n\r\n"u8);
+        Assert.True(separator >= 0);
+        var headers = mutated.AsSpan(0, separator + 4);
+        var body = mutated.AsSpan(separator + 4);
+        var fields = ArticleFieldTable.Locate(mutated, NntpArticleHeaderName.Date);
+        return new ArticleRecord(
+            canonical.ArtId,
+            System.IO.Hashing.XxHash3.HashToUInt64(mutated),
+            ArticleTypeClassifier.Classify(headers, body),
+            canonical.ArtLines,
+            canonical.CanonicalUtc,
+            ArticleParseStatus.CanonicalV1,
+            mutated,
+            fields);
     }
 
     private static async Task AcceptAsync(HostedEngine hosted, ArticleRecord record)

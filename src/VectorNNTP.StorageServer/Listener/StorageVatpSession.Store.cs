@@ -1,5 +1,6 @@
 using System.Buffers;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Storage.Engine;
 
@@ -165,6 +166,15 @@ public sealed partial class StorageVatpSession
             return true;
         }
 
+        if (!TryCanonicalizeForStore(record, out var stored, out var canonicalizeError))
+        {
+            RemoveStore(streamId);
+            await WriteFailAsync(streamId, canonicalizeError, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        record = stored;
+
         if (_placementEngine is null)
         {
             RemoveStore(streamId);
@@ -196,6 +206,32 @@ public sealed partial class StorageVatpSession
                 VatpFrameEncoder.EncodeResult(streamId, (byte)accepted.Outcome),
                 cancellationToken)
             .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Records this StorageServer as a receiving hop by traversing Path with its FQDN.
+    /// The inbound META hash is not recomputed; <paramref name="stored"/> carries the rewritten ArtHash.
+    /// </summary>
+    private bool TryCanonicalizeForStore(in ArticleRecord inbound, out ArticleRecord stored, out VatpErrorCode error)
+    {
+        if (_storePathParser is null)
+        {
+            stored = inbound;
+            error = VatpErrorCode.None;
+            return true;
+        }
+
+        var created = ArticleRecordFactory.TryCreate(_storePathParser, inbound.ArtData, ArticlePathMode.Traverse);
+        if (!created.IsAccepted || created.Record.ArtId != inbound.ArtId)
+        {
+            stored = default;
+            error = VatpErrorCode.CanonicalTransferRejected;
+            return false;
+        }
+
+        stored = created.Record;
+        error = VatpErrorCode.None;
         return true;
     }
 

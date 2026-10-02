@@ -430,15 +430,17 @@ public readonly struct NntpArticleParseResult
     /// <summary>
     /// Writes the canonical Path bytes that a later materializer would produce.
     /// </summary>
+    /// <param name="mode">Normalize leaves application hops unchanged. Traverse always prepends the parser FQDN.</param>
     /// <param name="destination">Destination receiving ASCII Path bytes.</param>
     /// <param name="bytesWritten">Bytes written on success.</param>
     /// <returns><see langword="true"/> when Path analysis succeeded and <paramref name="destination"/> was large enough.</returns>
-    public bool TryWriteCanonicalPath(Span<byte> destination, out int bytesWritten)
+    public bool TryWriteCanonicalPath(ArticlePathMode mode, Span<byte> destination, out int bytesWritten)
         => ArticlePathCanonicalizer.TryWriteCanonicalPath(
             OriginalPathValue.Span,
             _localIdentity.Span,
             PathKind,
             ContainsOrganizationalTracker,
+            mode,
             destination,
             out bytesWritten);
 
