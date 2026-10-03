@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.Common.Configuration
