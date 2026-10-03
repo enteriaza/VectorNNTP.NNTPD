@@ -28,10 +28,10 @@ namespace VectorNNTP.Common.Core
         /// Services whose <see cref="IApplicationService.StartAsync"/> succeeded and whose stop attempt has not yet finished.
         /// Guarded by <see cref="_startedSync"/>.
         /// </summary>
-        private readonly List<IApplicationService> _started = new();
+        private readonly List<IApplicationService> _started = [];
 
         /// <summary>Guards <see cref="_started"/>.</summary>
-        private readonly object _startedSync = new();
+        private readonly Lock _startedSync = new();
 
         /// <summary>
         /// Non-zero while <see cref="StartAsync"/> or <see cref="StopAsync"/> is in progress.
@@ -65,7 +65,7 @@ namespace VectorNNTP.Common.Core
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(logger);
 
-            _services = services as IReadOnlyList<IApplicationService> ?? services.ToList();
+            _services = services as IReadOnlyList<IApplicationService> ?? (List<IApplicationService>)[.. services];
             _options = options;
             _logger = logger;
         }
@@ -85,7 +85,7 @@ namespace VectorNNTP.Common.Core
             {
                 lock (_startedSync)
                 {
-                    return _started.ToArray();
+                    return (IApplicationService[])[.. _started];
                 }
             }
         }
@@ -222,7 +222,7 @@ namespace VectorNNTP.Common.Core
                 IApplicationService[] toStop;
                 lock (_startedSync)
                 {
-                    toStop = _started.ToArray();
+                    toStop = [.. _started];
                 }
 
                 if (toStop.Length == 0)
@@ -418,7 +418,7 @@ namespace VectorNNTP.Common.Core
             IApplicationService[] toStop;
             lock (_startedSync)
             {
-                toStop = _started.ToArray();
+                toStop = [.. _started];
             }
 
             if (toStop.Length == 0)

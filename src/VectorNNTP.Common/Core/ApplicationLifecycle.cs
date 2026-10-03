@@ -52,7 +52,7 @@ namespace VectorNNTP.Common.Core
         private readonly SemaphoreSlim _gate = new(1, 1);
 
         /// <summary>Guards <see cref="_state"/> reads and writes.</summary>
-        private readonly object _stateSync = new();
+        private readonly Lock _stateSync = new();
 
         /// <summary>
         /// Completes when the lifecycle reaches <see cref="ApplicationState.Stopped"/>,
