@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.WindowsServices;
+using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
@@ -47,9 +48,24 @@ public sealed class BackFillerPlatformHostingTests
         Assert.False(
             WindowsServiceHelpers.IsWindowsService(),
             "This testhost is not a Windows Service; AddWindowsService activates the lifetime only under SCM.");
-        Assert.DoesNotContain(
-            builder.Services,
-            BackFillerServiceCollectionExtensions.IsMicrosoftConsoleLoggerOptionsConfiguration);
+        Assert.DoesNotContain(builder.Services, static descriptor =>
+        {
+            var serviceType = descriptor.ServiceType;
+            if (!serviceType.IsGenericType)
+            {
+                return false;
+            }
+
+            var definition = serviceType.GetGenericTypeDefinition();
+            if (definition != typeof(IConfigureOptions<>)
+                && definition != typeof(IPostConfigureOptions<>)
+                && definition != typeof(IValidateOptions<>))
+            {
+                return false;
+            }
+
+            return serviceType.GenericTypeArguments[0] == typeof(ConsoleLoggerOptions);
+        });
     }
 
     private static string FindPlatformHostingSource() =>

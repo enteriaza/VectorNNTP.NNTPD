@@ -165,12 +165,13 @@ public sealed class ProviderAccountMapperTests
     }
 
     [Fact]
-    public void TryCanonicalizeBackbone_rejects_blank_and_unknown_tokens()
+    public void Map_rejects_a_blank_backbone()
     {
-        Assert.False(ProviderAccountMapper.TryCanonicalizeBackbone(" ", out _));
-        Assert.False(ProviderAccountMapper.TryCanonicalizeBackbone("NotABackbone", out var unknown));
-        Assert.Equal("NotABackbone", unknown);
-        Assert.True(ProviderAccountMapper.TryCanonicalizeBackbone("altopia", out var canonical));
-        Assert.Equal("Altopia", canonical);
+        var mapped = ProviderAccountMapper.Map([ProviderAccountTestRows.Create(backbone: " ")]);
+
+        Assert.Empty(mapped.Providers);
+        var rejected = Assert.Single(mapped.Rejected);
+        Assert.Equal(" ", rejected.Backbone);
+        Assert.Equal("Unknown or unsupported backbone.", rejected.Reason);
     }
 }

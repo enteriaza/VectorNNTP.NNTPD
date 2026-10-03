@@ -3,14 +3,14 @@ using VectorNNTP.BackFiller.ArticleWork;
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>Retrieves one article through a backbone-scoped session lease.</summary>
-public interface INntpArticleRetriever
+internal interface INntpArticleRetriever
 {
     /// <summary>Acquires a provider session, issues ARTICLE, and releases or retires the lease.</summary>
     Task<ArticleRetrievalResult> RetrieveAsync(ArticleWorkItem item, CancellationToken cancellationToken);
 }
 
 /// <summary>Default retriever. Does not expose pooled session ownership to Article Work.</summary>
-public sealed class NntpArticleRetriever : INntpArticleRetriever
+internal sealed class NntpArticleRetriever : INntpArticleRetriever
 {
     private readonly NntpProviderRegistry _registry;
     private readonly ILogger<NntpArticleRetriever> _logger;

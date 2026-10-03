@@ -20,13 +20,13 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// Missing or malformed values disable watchdog behaviour rather than inventing an interval.
 /// </para>
 /// </remarks>
-public sealed class SystemdRuntime : ISystemdRuntime
+internal sealed class SystemdRuntime : ISystemdRuntime
 {
     /// <summary>Environment variable containing the watchdog timeout in microseconds.</summary>
-    public const string WatchdogUsecVariable = "WATCHDOG_USEC";
+    internal const string WatchdogUsecVariable = "WATCHDOG_USEC";
 
     /// <summary>Environment variable containing the PID expected to send watchdog keep-alives.</summary>
-    public const string WatchdogPidVariable = "WATCHDOG_PID";
+    internal const string WatchdogPidVariable = "WATCHDOG_PID";
 
     private readonly ILogger<SystemdRuntime> _logger;
 

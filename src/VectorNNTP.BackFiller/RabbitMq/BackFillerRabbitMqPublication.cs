@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.RabbitMq;
 /// <param name="RequestIdHeader">Logical request UUID when known. Not the CorrelationId.</param>
 /// <param name="ExpirationMilliseconds">AMQP expiration, currently <c>1000</c>.</param>
 /// <param name="Body">UTF-8 JSON response. Never article bytes.</param>
-public sealed record BackFillerRabbitMqPublication(
+internal sealed record BackFillerRabbitMqPublication(
     string ReplyTo,
     string CorrelationId,
     string ContentType,

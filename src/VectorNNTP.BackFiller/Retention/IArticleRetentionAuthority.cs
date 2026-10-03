@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.Retention;
 /// unindex an entry while <c>OpenableRequestIdCount &gt; 0</c>. TTL expiry, explicit cancel,
 /// successful OPEN consumption, and process dispose remain the ways a capability ends.
 /// </remarks>
-public interface IArticleRetentionAuthority
+internal interface IArticleRetentionAuthority
 {
     /// <summary>Gets configured sweep interval.</summary>
     TimeSpan SweepInterval { get; }

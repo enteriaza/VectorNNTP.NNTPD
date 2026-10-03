@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// BackFiller. Watchdog keep-alives remain best-effort; missing keep-alives still trip systemd
 /// when <c>WatchdogSec=</c> is configured.
 /// </remarks>
-public sealed class SystemdNotifyBridge : ISystemdNotifyBridge
+internal sealed class SystemdNotifyBridge : ISystemdNotifyBridge
 {
     private static readonly ServiceState Ready = ServiceState.Ready;
     private static readonly ServiceState Stopping = ServiceState.Stopping;

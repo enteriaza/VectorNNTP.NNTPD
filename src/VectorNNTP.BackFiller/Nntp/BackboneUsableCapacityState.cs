@@ -5,7 +5,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// Read-only view of per-backbone usable NNTP capacity used to gate Article Work consume.
 /// </summary>
-public interface IBackboneUsableCapacityProvider
+internal interface IBackboneUsableCapacityProvider
 {
     /// <summary>Raised after a snapshot is published.</summary>
     event EventHandler? SnapshotPublished;
@@ -20,7 +20,7 @@ public interface IBackboneUsableCapacityProvider
 }
 
 /// <summary>Publishes authoritative backbone usable-capacity snapshots.</summary>
-public interface IBackboneUsableCapacityStateWriter
+internal interface IBackboneUsableCapacityStateWriter
 {
     /// <summary>
     /// Replaces the current snapshot. Non-positive counts and blank names are excluded,
@@ -33,7 +33,7 @@ public interface IBackboneUsableCapacityStateWriter
 /// Holds the latest backbone-to-ACTIVE-session-count snapshot.
 /// Usable capacity is a positive ACTIVE count for that backbone.
 /// </summary>
-public sealed class BackboneUsableCapacityState : IBackboneUsableCapacityProvider, IBackboneUsableCapacityStateWriter
+internal sealed class BackboneUsableCapacityState : IBackboneUsableCapacityProvider, IBackboneUsableCapacityStateWriter
 {
     private ImmutableDictionary<string, int> _capacityByBackbone =
         ImmutableDictionary<string, int>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);

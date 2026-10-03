@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// Owns one <see cref="NntpSessionPool"/> per configured provider with MaxSessions &gt; 0.
 /// Eagerly establishes MaxSessions NNTP slots and publishes usable capacity.
 /// </summary>
-public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
+internal sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
 {
     private readonly IBackFillerProviderCatalog _catalog;
     private readonly INntpTransportFactory _transport;
@@ -35,7 +35,7 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
     /// Host service provider used to resolve consumers after construction.
     /// Avoids a constructor cycle with <see cref="IArticleWorkConsumerReconciliation"/>.
     /// </param>
-    public NntpProviderRegistry(
+    internal NntpProviderRegistry(
         IBackFillerProviderCatalog catalog,
         INntpTransportFactory transport,
         BackFillerRuntimeOptions runtime,
@@ -55,7 +55,7 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
     /// <param name="capacity">Usable-capacity publisher. Created when omitted.</param>
     /// <param name="consumers">Optional consumer reconciler for tests.</param>
     /// <param name="services">Optional host service provider for deferred consumer resolve.</param>
-    public NntpProviderRegistry(
+    internal NntpProviderRegistry(
         IBackFillerProviderCatalog catalog,
         INntpTransportFactory transport,
         NntpSessionOptions options,
@@ -86,7 +86,7 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
     internal BackboneUsableCapacityState Capacity => _capacity;
 
     /// <summary>Attempts to get the pool for <paramref name="backbone"/>.</summary>
-    public bool TryGetPool(string backbone, out NntpSessionPool pool)
+    internal bool TryGetPool(string backbone, out NntpSessionPool pool)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
         lock (_gate)
@@ -125,7 +125,7 @@ public sealed class NntpProviderRegistry : IHostedService, IAsyncDisposable
     /// A MaxSessions-only shrink keeps the pool and retires consumers above the new limit first.
     /// Consumers for removed or replaced providers are retired before NNTP teardown.
     /// </summary>
-    public async Task ApplySnapshotAsync(
+    internal async Task ApplySnapshotAsync(
         IReadOnlyList<BackFillerProviderDefinition> providers,
         CancellationToken cancellationToken)
     {

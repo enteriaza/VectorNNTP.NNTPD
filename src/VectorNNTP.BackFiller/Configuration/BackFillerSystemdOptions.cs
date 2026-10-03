@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// systemd has configured a watchdog, the process is the intended watchdog target, and
 /// <see cref="EnableWatchdog"/> is <see langword="true"/>.
 /// </remarks>
-public sealed class BackFillerSystemdOptions
+internal sealed class BackFillerSystemdOptions
 {
     /// <summary>
     /// Gets or sets a value indicating whether watchdog keep-alives may be sent when systemd

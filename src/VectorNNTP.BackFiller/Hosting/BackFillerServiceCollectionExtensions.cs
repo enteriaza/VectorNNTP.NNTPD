@@ -26,7 +26,7 @@ namespace VectorNNTP.BackFiller.Hosting;
 /// <summary>
 /// Extension methods for registering VectorNNTP.BackFiller hosting services.
 /// </summary>
-public static class BackFillerServiceCollectionExtensions
+internal static class BackFillerServiceCollectionExtensions
 {
     /// <summary>
     /// Adds BackFiller host services: configuration, validation, system time, and RabbitMQ connection ownership.
@@ -49,7 +49,7 @@ public static class BackFillerServiceCollectionExtensions
     /// backbone, BackFiller declares that backbone's quorum <c>backfiller.*</c> topology.
     /// RabbitMQ is not registered into BackFiller <see cref="VectorNNTP.BackFiller.Core.ApplicationServiceManager"/>.
     /// </remarks>
-    public static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
+    internal static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -226,7 +226,7 @@ public static class BackFillerServiceCollectionExtensions
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
-    public static HostApplicationBuilder ConfigureBackFillerPlatformHosting(this HostApplicationBuilder builder)
+    internal static HostApplicationBuilder ConfigureBackFillerPlatformHosting(this HostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -252,7 +252,7 @@ public static class BackFillerServiceCollectionExtensions
     /// Removes Microsoft console formatter options that <c>AddSystemd()</c> may register.
     /// </summary>
     /// <param name="services">The service collection to inspect.</param>
-    public static void RemoveObsoleteMicrosoftConsoleFormatterConfiguration(IServiceCollection services)
+    private static void RemoveObsoleteMicrosoftConsoleFormatterConfiguration(IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -270,7 +270,7 @@ public static class BackFillerServiceCollectionExtensions
     /// </summary>
     /// <param name="descriptor">The descriptor to inspect.</param>
     /// <returns><see langword="true"/> when the descriptor configures <see cref="ConsoleLoggerOptions"/>.</returns>
-    public static bool IsMicrosoftConsoleLoggerOptionsConfiguration(ServiceDescriptor descriptor)
+    private static bool IsMicrosoftConsoleLoggerOptionsConfiguration(ServiceDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 

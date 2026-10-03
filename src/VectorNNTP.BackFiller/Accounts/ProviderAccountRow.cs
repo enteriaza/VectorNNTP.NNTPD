@@ -4,7 +4,7 @@ namespace VectorNNTP.BackFiller.Accounts;
 /// One <c>nntpbackfilleraccounts</c> row after column parsing and before backbone/session validation.
 /// Passwords must not be logged.
 /// </summary>
-public sealed record ProviderAccountRow(
+internal sealed record ProviderAccountRow(
     Guid EntryId,
     string Backbone,
     string Hostname,
@@ -17,9 +17,9 @@ public sealed record ProviderAccountRow(
     string UseSslRaw);
 
 /// <summary>A row that was not published into the provider snapshot.</summary>
-public sealed record RejectedProviderAccountRow(string Backbone, string Reason);
+internal sealed record RejectedProviderAccountRow(string Backbone, string Reason);
 
 /// <summary>Validated snapshot plus rejected rows from one query.</summary>
-public sealed record ProviderAccountMapResult(
-    IReadOnlyList<BackFiller.Nntp.BackFillerProviderDefinition> Providers,
+internal sealed record ProviderAccountMapResult(
+    IReadOnlyList<Nntp.BackFillerProviderDefinition> Providers,
     IReadOnlyList<RejectedProviderAccountRow> Rejected);

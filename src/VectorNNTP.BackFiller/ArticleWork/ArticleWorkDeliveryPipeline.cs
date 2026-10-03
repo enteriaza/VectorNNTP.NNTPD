@@ -1,5 +1,3 @@
-using VectorNNTP.BackFiller.RabbitMq;
-
 using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
@@ -7,7 +5,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <summary>
 /// Parses, classifies, publishes a confirmed terminal response when required, and settles one delivery.
 /// </summary>
-public sealed class ArticleWorkDeliveryPipeline
+internal sealed class ArticleWorkDeliveryPipeline
 {
     private readonly IArticleWorkHandler _handler;
     private readonly IArticleWorkResponsePublisher _publisher;
@@ -19,7 +17,7 @@ public sealed class ArticleWorkDeliveryPipeline
     /// <param name="handler">Admitted-work handler.</param>
     /// <param name="publisher">Response-publish seam.</param>
     /// <param name="maxPayloadBytes">Maximum accepted JSON body size.</param>
-    public ArticleWorkDeliveryPipeline(
+    internal ArticleWorkDeliveryPipeline(
         IArticleWorkHandler handler,
         IArticleWorkResponsePublisher publisher,
         int maxPayloadBytes)
@@ -44,7 +42,7 @@ public sealed class ArticleWorkDeliveryPipeline
     /// </param>
     /// <param name="cancellationToken">Processing cancellation.</param>
     /// <returns>The outcome that was settled (or attempted).</returns>
-    public async Task<ArticleWorkOutcome> ProcessAsync(
+    internal async Task<ArticleWorkOutcome> ProcessAsync(
         RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
         IRabbitMqManualAckChannel channel,
@@ -203,8 +201,8 @@ public sealed class ArticleWorkDeliveryPipeline
     }
 
     // Execution disposition wins after a publication failure. Cancellation of the
-    // publish attempt (shutdown or confirm timeout) keeps the existing retryable
-    // settlement so in-flight stop is unchanged.
+    // publishing attempt (shutdown or confirm timeout) keeps the existing retryable
+    // settlement so the in-flight stop is unchanged.
     private async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
         ArticleWorkPublishAttempt published,
         ArticleWorkDisposition disposition,

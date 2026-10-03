@@ -9,20 +9,20 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// NNTPD article-work envelope (<c>IsWellFormed</c>) capped at the NNTP command
 /// maximum of 250. Old BackFiller's stricter INN/dot-atom grammar is not imported.
 /// </remarks>
-public static class ArticleWorkMessageId
+internal static class ArticleWorkMessageId
 {
     /// <summary>Minimum accepted length (<c>&lt;a@b&gt;</c>).</summary>
-    public const int MinimumLength = 5;
+    private const int MinimumLength = 5;
 
     /// <summary>Maximum accepted length (NNTP command Message-ID envelope).</summary>
-    public const int MaximumLength = 250;
+    private const int MaximumLength = 250;
 
     /// <summary>
     /// Returns whether <paramref name="messageId"/> is a usable Article Work Message-ID.
     /// </summary>
     /// <param name="messageId">Candidate including angle brackets. Must not be trimmed by the caller after acceptance.</param>
     /// <returns><see langword="true"/> when the exact token is acceptable.</returns>
-    public static bool IsWellFormed(string? messageId)
+    internal static bool IsWellFormed(string? messageId)
     {
         if (string.IsNullOrEmpty(messageId)
             || messageId.Length < MinimumLength
@@ -37,11 +37,6 @@ public static class ArticleWorkMessageId
         }
 
         var at = messageId.IndexOf('@');
-        if (at <= 1 || at >= messageId.Length - 2)
-        {
-            return false;
-        }
-
-        return true;
+        return at > 1 && at < messageId.Length - 2;
     }
 }

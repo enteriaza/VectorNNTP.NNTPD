@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Retention;
 
 /// <summary>Outcome of one retention admission attempt.</summary>
-public enum ArticleRetentionKind
+internal enum ArticleRetentionKind
 {
     /// <summary>Ownership transferred; a new entry is retained.</summary>
     Retained = 0,

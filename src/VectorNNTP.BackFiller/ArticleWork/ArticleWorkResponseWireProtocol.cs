@@ -10,27 +10,27 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// Compact UTF-8 JSON contract for Article Work v1 responses.
 /// Property names are exact: version, requestId, messageId, backbone, outcome, fqdn, vatpPort, articleId, error.
 /// </summary>
-public static class ArticleWorkResponseWireProtocol
+internal static class ArticleWorkResponseWireProtocol
 {
     /// <summary>Application protocol version.</summary>
-    public const int CurrentVersion = 1;
+    private const int CurrentVersion = 1;
 
     /// <summary>AMQP content type.</summary>
-    public const string JsonContentType = "application/json";
+    internal const string JsonContentType = "application/json";
 
     /// <summary>AMQP header carrying the logical request UUID.</summary>
-    public const string RequestIdHeaderName = "RequestId";
+    internal const string RequestIdHeaderName = "RequestId";
 
     /// <summary>
     /// Worker response TTL in milliseconds. Locked NNTPD architecture uses the same value
     /// on requests and accepted responses. Old BackFiller publisher did not set Expiration.
     /// </summary>
-    public const string ExpirationMilliseconds = "1000";
+    internal const string ExpirationMilliseconds = "1000";
 
     /// <summary>Serializes one validated v1 response. Does not embed article bytes.</summary>
     /// <param name="intent">Pipeline intent, including the retention URI for Success.</param>
     /// <returns>Compact UTF-8 JSON.</returns>
-    public static byte[] SerializeV1(ArticleWorkResponseIntent intent)
+    internal static byte[] SerializeV1(ArticleWorkResponseIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
         Validate(intent);
@@ -90,7 +90,7 @@ public static class ArticleWorkResponseWireProtocol
     }
 
     /// <summary>Returns the protocol outcome name.</summary>
-    public static string OutcomeName(ArticleWorkOutcome outcome) =>
+    internal static string OutcomeName(ArticleWorkOutcome outcome) =>
         outcome switch
         {
             ArticleWorkOutcome.Success => "Success",

@@ -1,12 +1,12 @@
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>Local lifecycle of the Article Work response publisher.</summary>
-public enum ArticleWorkResponsePublisherState
+internal enum ArticleWorkResponsePublisherState
 {
     /// <summary>Constructed and not yet started.</summary>
     Created = 0,
 
-    /// <summary>Opening the confirm-enabled publish channel.</summary>
+    /// <summary>Opening the confirm-enabled publishing channel.</summary>
     Starting = 1,
 
     /// <summary>Publications may be admitted.</summary>

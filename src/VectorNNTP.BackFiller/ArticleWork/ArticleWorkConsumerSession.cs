@@ -6,7 +6,7 @@ using VectorNNTP.Common.Messaging.RabbitMq;
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>
-/// One backbone-scoped consumer session that owns a single consume channel.
+/// One backbone-scoped consumer session that owns a single consumer channel.
 /// </summary>
 /// <remarks>
 /// Delivery states:
@@ -18,7 +18,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </list>
 /// RabbitMQ prefetch is not admission. Prefetched deliveries that arrive after retirement are not admitted and are not settled here; channel dispose lets the broker redeliver.
 /// </remarks>
-public sealed class ArticleWorkConsumerSession : IAsyncDisposable
+internal sealed class ArticleWorkConsumerSession : IAsyncDisposable
 {
     private static readonly BackFillerShutdownRuntimeOptions DefaultShutdown = new(
         TimeSpan.FromSeconds(30),
@@ -56,7 +56,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     /// <param name="pipeline">Parse/classify/settle pipeline.</param>
     /// <param name="connections">Process connection owner. Must not be used to open a second connection.</param>
     /// <param name="logger">Session logger.</param>
-    public ArticleWorkConsumerSession(
+    internal ArticleWorkConsumerSession(
         string backbone,
         ushort prefetch,
         ArticleWorkDeliveryPipeline pipeline,
@@ -77,7 +77,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     /// <param name="shutdown">Immutable runtime shutdown policy. Must not be re-read from options.</param>
     /// <param name="connectionNumber">One-based consume slot (old NNTP connection number).</param>
     /// <param name="connectionLimit">Desired NNTP slot count for this backbone.</param>
-    public ArticleWorkConsumerSession(
+    internal ArticleWorkConsumerSession(
         string backbone,
         ushort prefetch,
         ArticleWorkDeliveryPipeline pipeline,
@@ -113,23 +113,23 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     }
 
     /// <summary>Gets the backbone context for this session.</summary>
-    public string Backbone => _backbone;
+    internal string Backbone => _backbone;
 
     /// <summary>Gets the one-based consume slot matching the old NNTP connection number.</summary>
-    public int ConnectionNumber => _connectionNumber;
+    internal int ConnectionNumber => _connectionNumber;
 
     /// <summary>Gets the desired NNTP slot count used as the consume-session limit.</summary>
-    public int ConnectionLimit => _connectionLimit;
+    internal int ConnectionLimit => _connectionLimit;
 
     /// <summary>Gets the reconcile key <c>backbone/connectionNumber</c>.</summary>
-    public string SessionKey => ComposeSessionKey(_backbone, _connectionNumber);
+    internal string SessionKey => ComposeSessionKey(_backbone, _connectionNumber);
 
-    /// <summary>Composes the reconcile key for one consume slot.</summary>
-    public static string ComposeSessionKey(string backbone, int connectionNumber) =>
+    /// <summary>Composes the reconciled key for one consume slot.</summary>
+    internal static string ComposeSessionKey(string backbone, int connectionNumber) =>
         $"{backbone}/{connectionNumber.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
-    /// <summary>Gets the consume queue name.</summary>
-    public string Queue => _queue;
+    /// <summary>Gets the consumer queue name.</summary>
+    internal string Queue => _queue;
 
     /// <summary>Gets the captured shutdown snapshot used by retirement.</summary>
     internal BackFillerShutdownRuntimeOptions Shutdown => _shutdown;
@@ -156,7 +156,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     internal CancellationToken WorkCancellationToken => _workCts.Token;
 
     /// <summary>Gets the current local lifecycle state.</summary>
-    public ArticleWorkConsumerState State
+    internal ArticleWorkConsumerState State
     {
         get
         {
@@ -167,10 +167,10 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets the channel generation, or zero before start.</summary>
-    public long Generation { get; private set; }
+    /// <summary>Gets the channel generation or zero before start.</summary>
+    internal long Generation { get; private set; }
 
-    /// <summary>Gets the caller-owned consume channel while the session is live.</summary>
+    /// <summary>Gets the caller-owned consumer channel while the session is live.</summary>
     internal IRabbitMqManualAckChannel? Channel
     {
         get
@@ -183,7 +183,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Optional test seam signaled after the dispatch lock is acquired and before the
+    /// Optional test seam signalled after the dispatch lock is acquired and before the
     /// delivery is classified as active.
     /// </summary>
     internal TaskCompletionSource? DispatchAcquired { get; set; }
@@ -195,10 +195,10 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     internal TaskCompletionSource? DispatchAcquireHold { get; set; }
 
     /// <summary>
-    /// Opens a caller-owned consume channel on the current connection generation.
+    /// Opens a caller-owned consumer channel on the current connection generation.
     /// </summary>
     /// <param name="cancellationToken">Startup cancellation.</param>
-    public async Task StartAsync(CancellationToken cancellationToken)
+    internal async Task StartAsync(CancellationToken cancellationToken)
     {
         lock (_gate)
         {
@@ -263,7 +263,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     /// Cancels the consumer, applies the captured shutdown policy, waits for admitted work
     /// inside the supplied budget, and disposes the channel.
     /// </summary>
-    public Task RetireAsync() => RetireAsync(CancellationToken.None);
+    internal Task RetireAsync() => RetireAsync(CancellationToken.None);
 
     /// <summary>
     /// Cancels the consumer, applies the captured shutdown policy, and waits for admitted
@@ -273,7 +273,7 @@ public sealed class ArticleWorkConsumerSession : IAsyncDisposable
     /// Host shutdown budget. When cancelled, remaining owned work is forced toward
     /// cancellation and the channel is released. This is not a second Article Work timeout.
     /// </param>
-    public Task RetireAsync(CancellationToken shutdownToken)
+    internal Task RetireAsync(CancellationToken shutdownToken)
     {
         lock (_gate)
         {

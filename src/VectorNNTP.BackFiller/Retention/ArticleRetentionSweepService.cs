@@ -3,14 +3,14 @@ namespace VectorNNTP.BackFiller.Retention;
 /// <summary>
 /// Periodic TTL sweep. Isolated maintenance; not a generic lifecycle framework.
 /// </summary>
-public sealed class ArticleRetentionSweepService : BackgroundService
+internal sealed class ArticleRetentionSweepService : BackgroundService
 {
     private readonly IArticleRetentionAuthority _authority;
     private readonly ILogger<ArticleRetentionSweepService> _logger;
     private int _sweeping;
 
     /// <summary>Initializes the sweep hosted service.</summary>
-    public ArticleRetentionSweepService(
+    internal ArticleRetentionSweepService(
         IArticleRetentionAuthority authority,
         ILogger<ArticleRetentionSweepService> logger)
     {
@@ -74,5 +74,5 @@ internal static partial class ArticleRetentionSweepLogMessages
         EventId = 5503,
         Level = LogLevel.Error,
         Message = "Article retention sweep failed.")]
-    public static partial void SweepFailed(ILogger logger, Exception exception);
+    internal static partial void SweepFailed(ILogger logger, Exception exception);
 }

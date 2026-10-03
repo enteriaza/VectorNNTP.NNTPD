@@ -5,7 +5,7 @@ namespace VectorNNTP.BackFiller.Accounts;
 /// <summary>
 /// Atomically published provider snapshot. Readers see the previous complete set or the new complete set.
 /// </summary>
-public sealed class ProviderConfigurationCatalog : IBackFillerProviderCatalog
+internal sealed class ProviderConfigurationCatalog : IBackFillerProviderCatalog
 {
     private volatile IReadOnlyList<BackFillerProviderDefinition> _providers = [];
 
@@ -13,7 +13,7 @@ public sealed class ProviderConfigurationCatalog : IBackFillerProviderCatalog
     public IReadOnlyList<BackFillerProviderDefinition> Providers => _providers;
 
     /// <summary>Publishes a complete snapshot. The list is treated as immutable after publication.</summary>
-    public void Publish(IReadOnlyList<BackFillerProviderDefinition> providers)
+    internal void Publish(IReadOnlyList<BackFillerProviderDefinition> providers)
     {
         ArgumentNullException.ThrowIfNull(providers);
         _providers = providers;
@@ -25,11 +25,9 @@ public sealed class ProviderConfigurationCatalog : IBackFillerProviderCatalog
         ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
         foreach (var candidate in _providers)
         {
-            if (string.Equals(candidate.Backbone, backbone, StringComparison.OrdinalIgnoreCase))
-            {
-                provider = candidate;
-                return true;
-            }
+            if (!string.Equals(candidate.Backbone, backbone, StringComparison.OrdinalIgnoreCase)) continue;
+            provider = candidate;
+            return true;
         }
 
         provider = null!;

@@ -12,7 +12,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <see cref="BackFillerSystemdOptions.EnableWatchdog"/> is <see langword="true"/>. Heartbeats
 /// stop when shutdown begins or the application becomes unhealthy.
 /// </remarks>
-public sealed class SystemdWatchdogService : BackgroundService
+internal sealed class SystemdWatchdogService : BackgroundService
 {
     private readonly ISystemdRuntime _runtime;
     private readonly ISystemdNotifyBridge _notify;
@@ -50,10 +50,10 @@ public sealed class SystemdWatchdogService : BackgroundService
     }
 
     /// <summary>Gets a value indicating whether the watchdog loop is active.</summary>
-    public bool IsActive => Volatile.Read(ref _active) != 0;
+    internal bool IsActive => Volatile.Read(ref _active) != 0;
 
     /// <summary>Gets the heartbeat interval when active; otherwise <see cref="TimeSpan.Zero"/>.</summary>
-    public TimeSpan HeartbeatInterval => _interval;
+    internal TimeSpan HeartbeatInterval => _interval;
 
     /// <inheritdoc />
     public override Task StartAsync(CancellationToken cancellationToken)

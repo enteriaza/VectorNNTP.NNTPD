@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <summary>
 /// Reconciles Article Work consume sessions from the provider snapshot and usable NNTP capacity.
 /// </summary>
-public interface IArticleWorkConsumerReconciliation
+internal interface IArticleWorkConsumerReconciliation
 {
     /// <summary>Gets whether the consumer host has started and is not shutting down.</summary>
     bool IsRunning { get; }

@@ -6,7 +6,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// One upstream NNTP session. ARTICLE and DATE share one exclusive busy lock.
 /// </summary>
-public sealed class NntpProviderSession : IAsyncDisposable
+internal sealed class NntpProviderSession : IAsyncDisposable
 {
     private static readonly byte[] QuitCommand = "QUIT\r\n"u8.ToArray();
 
@@ -28,7 +28,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
     /// One-based slot in <see cref="BackFillerProviderDefinition.MaxSessions"/>.
     /// Stable for this session's lifetime.
     /// </param>
-    public NntpProviderSession(
+    internal NntpProviderSession(
         BackFillerProviderDefinition provider,
         NntpSessionOptions options,
         ILogger logger,
@@ -47,29 +47,29 @@ public sealed class NntpProviderSession : IAsyncDisposable
     }
 
     /// <summary>Gets the one-based pool slot captured at construction.</summary>
-    public int ConnectionNumber { get; }
+    internal int ConnectionNumber { get; }
 
     /// <summary>
     /// Gets the stable Debug wire-log prefix
     /// <c>{Backbone}/{Account}[{ConnectionNumber:000}/{MaxSessions}]</c>.
     /// </summary>
-    public string WireLogIdentity => _wireIdentity;
+    internal string WireLogIdentity => _wireIdentity;
 
     /// <summary>Gets the current local state.</summary>
-    public NntpSessionState State { get; private set; }
+    internal NntpSessionState State { get; private set; }
 
     /// <summary>Gets a value indicating whether the session may return to the idle pool.</summary>
-    public bool IsReusable => !_unhealthy && State == NntpSessionState.Ready && _stream is not null;
+    internal bool IsReusable => !_unhealthy && State == NntpSessionState.Ready && _stream is not null;
 
     /// <summary>Gets the MySQL <c>keepalive</c> interval this session was constructed with.</summary>
-    public byte KeepAliveSeconds => _provider.KeepAliveSeconds;
+    internal byte KeepAliveSeconds => _provider.KeepAliveSeconds;
 
     /// <summary>
     /// Connects, validates the greeting, issues CAPABILITIES, upgrades via STARTTLS
     /// when advertised, and authenticates when configured.
     /// </summary>
     /// <returns><see langword="null"/> when the session is <see cref="NntpSessionState.Ready"/>.</returns>
-    public async Task<ArticleRetrievalResult?> ConnectAsync(
+    internal async Task<ArticleRetrievalResult?> ConnectAsync(
         INntpTransportFactory transport,
         CancellationToken cancellationToken)
     {
@@ -137,7 +137,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
     }
 
     /// <summary>Issues ARTICLE with the exact Message-ID bytes.</summary>
-    public async Task<ArticleRetrievalResult> DownloadArticleAsync(string messageId, CancellationToken cancellationToken)
+    internal async Task<ArticleRetrievalResult> DownloadArticleAsync(string messageId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         if (_reader is null || _stream is null || State is NntpSessionState.Closed or NntpSessionState.Retiring)
@@ -691,7 +691,7 @@ public sealed class NntpProviderSession : IAsyncDisposable
         return ArticleRetrievalResult.Failed(kind, code, reason, reusable);
     }
 
-    internal static string FormatWireIdentity(BackFillerProviderDefinition provider, int connectionNumber)
+    private static string FormatWireIdentity(BackFillerProviderDefinition provider, int connectionNumber)
     {
         ArgumentNullException.ThrowIfNull(provider);
         var account = string.IsNullOrWhiteSpace(provider.Username) ? "-" : provider.Username.Trim();

@@ -8,7 +8,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="ReplyTo">AMQP reply destination.</param>
 /// <param name="ConsumingBackbone">Queue/session backbone context.</param>
 /// <param name="Settlement">Exactly-once lease bound to the original consumer channel.</param>
-public sealed record ArticleWorkItem(
+internal sealed record ArticleWorkItem(
     ArticleWorkRequest Request,
     string CorrelationId,
     string ReplyTo,

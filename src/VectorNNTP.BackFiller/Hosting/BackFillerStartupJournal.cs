@@ -1,20 +1,20 @@
 namespace VectorNNTP.BackFiller.Hosting;
 
 /// <summary>Named BackFiller startup stages used by the journal and tests.</summary>
-public static class BackFillerStartupStages
+internal static class BackFillerStartupStages
 {
     /// <summary>Shared and application configuration has been bound and validated.</summary>
-    public const string Configuration = "configuration";
+    internal const string Configuration = "configuration";
 
     /// <summary>A usable ACME certificate has been loaded or issued.</summary>
-    public const string AcmeCertificateReady = "acme-certificate-ready";
+    internal const string AcmeCertificateReady = "acme-certificate-ready";
 
     /// <summary>The TLS listener has bound and is accepting.</summary>
-    public const string ListenerStarted = "listener-started";
+    internal const string ListenerStarted = "listener-started";
 }
 
 /// <summary>Records BackFiller startup stages for deterministic tests.</summary>
-public interface IBackFillerStartupJournal
+internal interface IBackFillerStartupJournal
 {
     /// <summary>Appends a stage name in call order.</summary>
     /// <param name="stage">Stage identifier.</param>
@@ -25,7 +25,7 @@ public interface IBackFillerStartupJournal
 }
 
 /// <summary>Thread-safe in-process startup journal.</summary>
-public sealed class BackFillerStartupJournal : IBackFillerStartupJournal
+internal sealed class BackFillerStartupJournal : IBackFillerStartupJournal
 {
     private readonly List<string> _stages = [];
     private readonly object _gate = new();

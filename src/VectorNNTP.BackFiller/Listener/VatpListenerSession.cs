@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.Listener;
 /// <summary>
 /// One VATP server session over an established cache listener transport.
 /// </summary>
-public sealed class VatpListenerSession : IAsyncDisposable
+internal sealed class VatpListenerSession : IAsyncDisposable
 {
     private const int MaxWriteProgressChunkBytes = 32 * 1024;
 
@@ -47,7 +47,7 @@ public sealed class VatpListenerSession : IAsyncDisposable
     internal long ReservedFoundPayloadBytes => Volatile.Read(ref _reservedFoundPayloadBytes);
 
     /// <summary>Initializes a VATP session over an established transport.</summary>
-    public VatpListenerSession(
+    internal VatpListenerSession(
         ICacheListenerTransport transport,
         IArticleRetentionAuthority retention,
         BackFillerListenerRuntimeOptions listener,
@@ -73,7 +73,7 @@ public sealed class VatpListenerSession : IAsyncDisposable
     }
 
     /// <summary>Runs until peer close, cancellation, or fatal protocol error.</summary>
-    public async Task RunAsync(CancellationToken cancellationToken)
+    internal async Task RunAsync(CancellationToken cancellationToken)
     {
         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _runCts = linked;
@@ -771,7 +771,7 @@ public sealed class VatpListenerSession : IAsyncDisposable
 
     private sealed class SendStream
     {
-        public SendStream(
+        internal SendStream(
             uint streamId,
             VatpTransferLease lease,
             byte[] metaPayload,
@@ -789,25 +789,25 @@ public sealed class VatpListenerSession : IAsyncDisposable
             ReservedBytes = reservedBytes;
         }
 
-        public uint StreamId { get; }
+        internal uint StreamId { get; }
 
-        public VatpTransferLease Lease { get; }
+        internal VatpTransferLease Lease { get; }
 
-        public byte[] MetaPayload { get; }
+        internal byte[] MetaPayload { get; }
 
-        public ReadOnlyMemory<byte> ArtData { get; }
+        internal ReadOnlyMemory<byte> ArtData { get; }
 
-        public int ArtSize { get; }
+        internal int ArtSize { get; }
 
-        public int SentBytes { get; set; }
+        internal int SentBytes { get; set; }
 
-        public ArticleTransferWindow SendWindow { get; }
+        internal ArticleTransferWindow SendWindow { get; }
 
-        public int ReservedBytes { get; }
+        internal int ReservedBytes { get; }
 
-        public SendStreamPhase Phase { get; set; } = SendStreamPhase.PendingMeta;
+        internal SendStreamPhase Phase { get; set; } = SendStreamPhase.PendingMeta;
 
-        public bool IsTerminal =>
+        internal bool IsTerminal =>
             Phase is SendStreamPhase.Completed or SendStreamPhase.Cancelled or SendStreamPhase.Failed;
     }
 }

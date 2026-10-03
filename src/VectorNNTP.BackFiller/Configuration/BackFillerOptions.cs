@@ -40,46 +40,46 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <see cref="AcmeStateDir"/>.
 /// </para>
 /// </remarks>
-public sealed class BackFillerOptions
+internal sealed class BackFillerOptions
 {
     /// <summary>Configuration section name.</summary>
-    public const string SectionName = "BackFiller";
+    internal const string SectionName = "BackFiller";
 
     /// <summary>Canonical VectorNNTP environment-variable prefix.</summary>
-    public const string EnvironmentVariablePrefix = VectorEnvironment.Prefix;
+    internal const string EnvironmentVariablePrefix = VectorEnvironment.Prefix;
 
     /// <summary>Fixed FQDN host-label prefix. Not configuration.</summary>
-    public const string ApplicationPrefix = "backfiller";
+    internal const string ApplicationPrefix = "backfiller";
 
     /// <summary>Canonical environment variable that supplies RabbitMQ username.</summary>
-    public const string RabbitMqUsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
+    internal const string RabbitMqUsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
 
     /// <summary>Canonical environment variable that supplies RabbitMQ password.</summary>
-    public const string RabbitMqPasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
+    internal const string RabbitMqPasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
 
     /// <summary>Default DNS suffix when the key is omitted.</summary>
-    public const string DefaultDnsSuffix = "usenet.ninja";
+    internal const string DefaultDnsSuffix = "usenet.ninja";
 
     /// <summary>Default relative certificate directory.</summary>
-    public const string DefaultCertificateDirectory = "certs";
+    internal const string DefaultCertificateDirectory = "certs";
 
     /// <summary>Default Let's Encrypt staging ACME directory URL.</summary>
-    public const string DefaultAcmeDirectoryUrl = AcmeCloudflareOptions.DefaultAcmeDirectoryUrl;
+    internal const string DefaultAcmeDirectoryUrl = AcmeCloudflareOptions.DefaultAcmeDirectoryUrl;
 
     /// <summary>Default relative ACME state directory.</summary>
-    public const string DefaultAcmeStateDir = AcmeCloudflareOptions.DefaultAcmeStateDir;
+    internal const string DefaultAcmeStateDir = AcmeCloudflareOptions.DefaultAcmeStateDir;
 
     /// <summary>Default certificate renewal lead time in days.</summary>
-    public const int DefaultAcmeRenewalThresholdDays = AcmeCloudflareOptions.DefaultAcmeRenewalThresholdDays;
+    internal const int DefaultAcmeRenewalThresholdDays = AcmeCloudflareOptions.DefaultAcmeRenewalThresholdDays;
 
     /// <summary>Default MySQL account-refresh poll interval in seconds.</summary>
-    public const int DefaultAccountRefreshIntervalSeconds = 60;
+    internal const int DefaultAccountRefreshIntervalSeconds = 60;
 
     /// <summary>Minimum MySQL account-refresh poll interval in seconds.</summary>
-    public const int MinimumAccountRefreshIntervalSeconds = 5;
+    internal const int MinimumAccountRefreshIntervalSeconds = 5;
 
     /// <summary>Maximum MySQL account-refresh poll interval in seconds.</summary>
-    public const int MaximumAccountRefreshIntervalSeconds = 3600;
+    internal const int MaximumAccountRefreshIntervalSeconds = 3600;
 
     /// <summary>
     /// Gets or sets the BackFiller server identifier.
@@ -111,7 +111,7 @@ public sealed class BackFillerOptions
     /// Gets the generated FQDN <c>backfiller{ServerId:00}.{DnsSuffix}</c>.
     /// </summary>
     /// <remarks>Not independently configurable. The <c>backfiller</c> prefix is fixed.</remarks>
-    public string Fqdn =>
+    internal string Fqdn =>
         ServerId is { } serverId
         && ServerIdRules.IsInRange(serverId)
         && !string.IsNullOrWhiteSpace(DnsSuffix)
@@ -207,18 +207,18 @@ public sealed class BackFillerOptions
     /// </summary>
     /// <param name="entry">Configured token.</param>
     /// <returns><see langword="true"/> for all-interface wildcards.</returns>
-    public static bool IsBindAddressWildcard(string entry) =>
+    internal static bool IsBindAddressWildcard(string entry) =>
         AcmeCloudflareOptions.IsBindAddressWildcard(entry);
 }
 
 /// <summary>Graceful shutdown policy.</summary>
-public sealed class BackFillerShutdownOptions
+internal sealed class BackFillerShutdownOptions
 {
     /// <summary>Minimum grace period in seconds.</summary>
-    public const int MinimumGracePeriodSeconds = 5;
+    internal const int MinimumGracePeriodSeconds = 5;
 
     /// <summary>Maximum grace period in seconds.</summary>
-    public const int MaximumGracePeriodSeconds = 600;
+    internal const int MaximumGracePeriodSeconds = 600;
 
     /// <summary>
     /// Gets or sets the complete application shutdown budget in seconds.
@@ -251,7 +251,7 @@ public sealed class BackFillerShutdownOptions
 }
 
 /// <summary>Listener resource-safety bounds.</summary>
-public sealed class BackFillerListenerOptions
+internal sealed class BackFillerListenerOptions
 {
     /// <summary>Maximum incomplete inbound protocol bytes per connection.</summary>
     public int ParserAccumulationMaxBytes { get; set; } = 262144;
@@ -273,13 +273,13 @@ public sealed class BackFillerListenerOptions
 }
 
 /// <summary>In-memory article retention policy.</summary>
-public sealed class BackFillerArticleRetentionOptions
+internal sealed class BackFillerArticleRetentionOptions
 {
     /// <summary>Bytes in one gibibyte.</summary>
-    public const long BytesPerGibibyte = 1024L * 1024L * 1024L;
+    internal const long BytesPerGibibyte = 1024L * 1024L * 1024L;
 
     /// <summary>Fraction of physical memory allowed for retained payloads.</summary>
-    public const double PhysicalMemoryCeilingRatio = 0.80;
+    internal const double PhysicalMemoryCeilingRatio = 0.80;
 
     /// <summary>
     /// Maximum retained payload capacity in GiB.

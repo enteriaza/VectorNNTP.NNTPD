@@ -12,7 +12,7 @@ namespace VectorNNTP.BackFiller.Acme;
 /// <see cref="AcmeCertificateService"/>. BackFiller-specific fail-fast readiness
 /// and startup-journal recording stay on this adapter.
 /// </remarks>
-public sealed class AcmeCertificateApplicationService : IApplicationService, IAsyncDisposable
+internal sealed class AcmeCertificateApplicationService : IApplicationService, IAsyncDisposable
 {
     private readonly AcmeCertificateService _inner;
     private readonly IAcmeCertificateReadiness _readiness;

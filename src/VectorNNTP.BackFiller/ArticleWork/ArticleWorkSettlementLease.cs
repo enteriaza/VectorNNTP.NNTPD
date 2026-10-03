@@ -1,5 +1,3 @@
-using VectorNNTP.BackFiller.RabbitMq;
-
 using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
@@ -7,7 +5,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <summary>
 /// Exactly-once settlement token bound to one channel generation and delivery tag.
 /// </summary>
-public sealed class ArticleWorkSettlementLease
+internal sealed class ArticleWorkSettlementLease
 {
     private readonly IRabbitMqManualAckChannel _channel;
     private readonly ulong _deliveryTag;
@@ -20,7 +18,7 @@ public sealed class ArticleWorkSettlementLease
     /// <param name="channel">Original consumer channel. Must not be a replacement channel.</param>
     /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
     /// <param name="generation">Connection generation captured at admission.</param>
-    public ArticleWorkSettlementLease(IRabbitMqManualAckChannel channel, ulong deliveryTag, long generation)
+    internal ArticleWorkSettlementLease(IRabbitMqManualAckChannel channel, ulong deliveryTag, long generation)
     {
         ArgumentNullException.ThrowIfNull(channel);
         _channel = channel;
@@ -29,13 +27,13 @@ public sealed class ArticleWorkSettlementLease
     }
 
     /// <summary>Gets the delivery tag this lease may settle.</summary>
-    public ulong DeliveryTag => _deliveryTag;
+    internal ulong DeliveryTag => _deliveryTag;
 
     /// <summary>Gets the connection generation captured at admission.</summary>
-    public long Generation => _generation;
+    internal long Generation => _generation;
 
     /// <summary>Gets a value indicating whether this lease has already settled.</summary>
-    public bool IsSettled => Volatile.Read(ref _settled) == 1;
+    internal bool IsSettled => Volatile.Read(ref _settled) == 1;
 
     /// <summary>
     /// Attempts ACK or NACK on the original channel only.
@@ -51,7 +49,7 @@ public sealed class ArticleWorkSettlementLease
     /// <see langword="false"/> when the lease was already settled, the channel is stale,
     /// or the broker RPC failed.
     /// </returns>
-    public async Task<bool> TrySettleAsync(
+    internal async Task<bool> TrySettleAsync(
         ArticleWorkDisposition disposition,
         bool channelStillCurrent,
         CancellationToken cancellationToken)
@@ -92,7 +90,7 @@ public sealed class ArticleWorkSettlementLease
     /// </summary>
     /// <param name="channel">Candidate channel.</param>
     /// <returns><see langword="true"/> when settlement may use this channel.</returns>
-    public bool IsOriginalChannel(IRabbitMqManualAckChannel? channel) =>
+    internal bool IsOriginalChannel(IRabbitMqManualAckChannel? channel) =>
         channel is not null
         && ReferenceEquals(channel, _channel)
         && channel.Generation == _generation;

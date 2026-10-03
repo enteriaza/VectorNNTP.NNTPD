@@ -15,7 +15,7 @@ internal sealed class RabbitMqServiceHostedAdapter : IHostedService
     private readonly RabbitMqService _service;
 
     /// <summary>Initializes a new adapter around the shared RabbitMQ connection service.</summary>
-    public RabbitMqServiceHostedAdapter(RabbitMqService service)
+    internal RabbitMqServiceHostedAdapter(RabbitMqService service)
     {
         ArgumentNullException.ThrowIfNull(service);
         _service = service;

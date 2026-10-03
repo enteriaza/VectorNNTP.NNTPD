@@ -126,12 +126,13 @@ public sealed class ArticleWorkResponseWireProtocolTests
     }
 
     [Theory]
-    [InlineData(ArticleWorkOutcome.ProviderFailure)]
-    [InlineData(ArticleWorkOutcome.Cancelled)]
-    [InlineData(ArticleWorkOutcome.UnexpectedFailure)]
-    [InlineData(ArticleWorkOutcome.RetentionRejected)]
-    public void Retryable_outcomes_are_not_serializable_terminal_responses(ArticleWorkOutcome outcome)
+    [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
+    [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
+    [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
+    [InlineData(nameof(ArticleWorkOutcome.RetentionRejected))]
+    public void Retryable_outcomes_are_not_serializable_terminal_responses(string outcomeName)
     {
+        var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
         var intent = new ArticleWorkResponseIntent(
             outcome,
             Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),

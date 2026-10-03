@@ -10,7 +10,7 @@ internal readonly record struct BackFillerLoggingCommandLine(bool Console, bool 
     /// <summary>Reads logging switches from <paramref name="args"/> without changing other arguments.</summary>
     /// <param name="args">The process arguments, or <see langword="null"/>.</param>
     /// <returns>The switches that were present.</returns>
-    public static BackFillerLoggingCommandLine FromArguments(IReadOnlyList<string>? args)
+    internal static BackFillerLoggingCommandLine FromArguments(IReadOnlyList<string>? args)
     {
         var console = false;
         var enrichFromLogContext = false;

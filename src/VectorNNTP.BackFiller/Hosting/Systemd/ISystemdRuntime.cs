@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <summary>
 /// Snapshot of systemd environment detection for this process.
 /// </summary>
-public interface ISystemdRuntime
+internal interface ISystemdRuntime
 {
     /// <summary>Gets a value indicating whether the process is running on Linux.</summary>
     bool IsLinux { get; }

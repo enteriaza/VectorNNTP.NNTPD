@@ -11,9 +11,9 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// Does not own the RabbitMQ connection. Declares per-backbone ArticleWork topology only for
 /// backbones that currently have usable capacity, immediately before consumers start.
 /// </summary>
-public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposable, IArticleWorkConsumerReconciliation
+internal sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposable, IArticleWorkConsumerReconciliation
 {
-    /// <summary>Old-worker consumer reconcile cadence.</summary>
+    /// <summary>Old-worker consumers reconcile cadence.</summary>
     internal static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(15);
 
     private readonly IRabbitMqService _connections;
@@ -44,7 +44,7 @@ public sealed class ArticleWorkConsumerService : IHostedService, IAsyncDisposabl
     /// <param name="logger">Consumer logger.</param>
     /// <param name="catalog">Current provider snapshot. Empty when omitted.</param>
     /// <param name="capacity">Published usable NNTP capacity. Empty when omitted.</param>
-    public ArticleWorkConsumerService(
+    internal ArticleWorkConsumerService(
         IRabbitMqService connections,
         BackFillerRuntimeOptions runtime,
         IArticleWorkHandler handler,

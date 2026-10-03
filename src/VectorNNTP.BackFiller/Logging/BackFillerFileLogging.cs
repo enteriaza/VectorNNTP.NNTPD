@@ -27,40 +27,34 @@ namespace VectorNNTP.BackFiller.Logging;
 internal static class BackFillerFileLogging
 {
     /// <summary>Serilog rolling path token: <c>{entry assembly name}-yyyyMMdd.log</c>.</summary>
-    public const string RollingPathSuffix = "-.log";
-
-    /// <summary>
-    /// Suffix appended by <see cref="BackFillerSerilogHooks.DailyGzipFastest"/> when the archive
-    /// target directory is null: <c>{original-file-name}.gz</c>.
-    /// </summary>
-    public const string GzipArchiveSuffix = ".gz";
+    internal const string RollingPathSuffix = "-.log";
 
     /// <summary>
     /// Text output template used when <see cref="BackFillerLoggingOptions.Json"/> is false.
     /// </summary>
-    public const string SinkOutputTemplate =
+    internal const string SinkOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
     /// <summary>Restricted minimum level for sinks when the configured level is at least Debug.</summary>
-    public const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
+    internal const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
 
     /// <summary>Serilog.Sinks.Async buffer size.</summary>
-    public const int AsyncBufferSize = 50000;
+    internal const int AsyncBufferSize = 50000;
 
     /// <summary>Serilog.Sinks.Async <c>blockWhenFull</c>.</summary>
-    public const bool AsyncBlockWhenFull = true;
+    internal const bool AsyncBlockWhenFull = true;
 
     /// <summary>File sink buffering.</summary>
-    public const bool FileBuffered = true;
+    internal const bool FileBuffered = true;
 
     /// <summary>
     /// Serilog File <c>flushToDiskInterval</c> of one second. The host logger is built here,
     /// not by <c>ReadFrom.Configuration</c>.
     /// </summary>
-    public static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>File sink size-based rolling.</summary>
-    public const bool RollOnFileSizeLimit = false;
+    internal const bool RollOnFileSizeLimit = false;
 
     /// <summary>
     /// Resolves <paramref name="logDirectory"/> through Common
@@ -68,7 +62,7 @@ internal static class BackFillerFileLogging
     /// <paramref name="applicationBaseDirectory"/> (default
     /// <see cref="AppContext.BaseDirectory"/>). Absolute paths stay absolute.
     /// </summary>
-    public static string ResolveDirectory(string logDirectory, string? applicationBaseDirectory = null)
+    private static string ResolveDirectory(string logDirectory, string? applicationBaseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
         return ApplicationLocalPath.ResolveApplicationLocalPath(
@@ -79,7 +73,7 @@ internal static class BackFillerFileLogging
     /// <summary>
     /// Builds the Serilog rolling path <c>{logDirectory}/{applicationName}-.log</c>.
     /// </summary>
-    public static string RollingFilePath(string logDirectory, string applicationName)
+    private static string RollingFilePath(string logDirectory, string applicationName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationName);
@@ -87,15 +81,9 @@ internal static class BackFillerFileLogging
     }
 
     /// <summary>
-    /// Archive file name produced by <see cref="BackFillerSerilogHooks.DailyGzipFastest"/>.
-    /// </summary>
-    public static string GzipArchiveFileName(string rolledLogPath) =>
-        Path.GetFileName(rolledLogPath) + GzipArchiveSuffix;
-
-    /// <summary>
     /// Creates the log directory and returns the rolling File sink path for the current configuration.
     /// </summary>
-    public static string EnsureRollingFilePath(
+    private static string EnsureRollingFilePath(
         IConfiguration configuration,
         string? applicationBaseDirectory = null)
     {
@@ -127,7 +115,7 @@ internal static class BackFillerFileLogging
     /// ambient context enrichment. Those switches are not configuration settings.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Logging configuration is invalid.</exception>
-    public static void ConfigureLogger(
+    internal static void ConfigureLogger(
         LoggerConfiguration loggerConfiguration,
         IConfiguration configuration,
         string? applicationBaseDirectory = null,
@@ -196,7 +184,7 @@ internal static class BackFillerFileLogging
     }
 
     /// <summary>Binds <c>BackFiller:Logging</c>. Missing keys keep the option defaults.</summary>
-    public static BackFillerLoggingOptions BindLogging(IConfiguration configuration)
+    private static BackFillerLoggingOptions BindLogging(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var logging = new BackFillerLoggingOptions();
@@ -211,7 +199,7 @@ internal static class BackFillerFileLogging
     /// Reads retention from a bound logging section, or the default when the object uses the default.
     /// </summary>
     /// <exception cref="InvalidOperationException">The value is outside the accepted range.</exception>
-    public static int ReadLogRetentionDays(BackFillerLoggingOptions logging)
+    private static int ReadLogRetentionDays(BackFillerLoggingOptions logging)
     {
         ArgumentNullException.ThrowIfNull(logging);
         var days = logging.LogRetentionDays;

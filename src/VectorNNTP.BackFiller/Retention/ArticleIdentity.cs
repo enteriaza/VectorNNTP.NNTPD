@@ -9,16 +9,16 @@ namespace VectorNNTP.BackFiller.Retention;
 /// </summary>
 /// <param name="MessageId">Exact Message-ID string. Not normalized.</param>
 /// <param name="ArticleIdHex">64-character lowercase hexadecimal <see cref="ArticleId"/>.</param>
-public readonly record struct ArticleIdentity(string MessageId, string ArticleIdHex)
+internal readonly record struct ArticleIdentity(string MessageId, string ArticleIdHex)
 {
     /// <summary>Canonical ArticleId hex length.</summary>
-    public const int ArticleIdHexLength = ArticleId.HexLength;
+    internal const int ArticleIdHexLength = ArticleId.HexLength;
 
     /// <summary>
     /// Creates an identity from the exact Message-ID and an already-computed <see cref="ArticleId"/>.
     /// Does not hash the Message-ID.
     /// </summary>
-    public static ArticleIdentity From(string messageId, ArticleId artId)
+    internal static ArticleIdentity From(string messageId, ArticleId artId)
     {
         ArgumentNullException.ThrowIfNull(messageId);
         return new ArticleIdentity(messageId, artId.ToLowerHexString());

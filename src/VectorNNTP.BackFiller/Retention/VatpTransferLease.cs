@@ -6,7 +6,7 @@ namespace VectorNNTP.BackFiller.Retention;
 /// <summary>
 /// Outcome of a VATP OPEN against a pending RequestId.
 /// </summary>
-public enum VatpOpenKind : byte
+internal enum VatpOpenKind : byte
 {
     /// <summary>RequestId+ArticleId matched; lease acquired; that RequestId consumed.</summary>
     Opened = 0,
@@ -19,7 +19,7 @@ public enum VatpOpenKind : byte
 }
 
 /// <summary>Result of <see cref="IArticleRetentionAuthority.TryOpenTransfer"/>.</summary>
-public readonly struct VatpOpenResult : IDisposable
+internal readonly struct VatpOpenResult : IDisposable
 {
     private VatpOpenResult(VatpOpenKind kind, VatpTransferLease? lease)
     {
@@ -28,16 +28,16 @@ public readonly struct VatpOpenResult : IDisposable
     }
 
     /// <summary>Gets the OPEN classification.</summary>
-    public VatpOpenKind Kind { get; }
+    internal VatpOpenKind Kind { get; }
 
     /// <summary>Gets the transfer lease when <see cref="Kind"/> is <see cref="VatpOpenKind.Opened"/>.</summary>
-    public VatpTransferLease? Lease { get; }
+    internal VatpTransferLease? Lease { get; }
 
     /// <summary>Creates an opened result.</summary>
-    public static VatpOpenResult Opened(VatpTransferLease lease) => new(VatpOpenKind.Opened, lease);
+    internal static VatpOpenResult Opened(VatpTransferLease lease) => new(VatpOpenKind.Opened, lease);
 
     /// <summary>Creates a rejected result (no lease).</summary>
-    public static VatpOpenResult Rejected() => new(VatpOpenKind.Rejected, null);
+    internal static VatpOpenResult Rejected() => new(VatpOpenKind.Rejected, null);
 
     /// <inheritdoc />
     public void Dispose() => Lease?.Dispose();
@@ -47,7 +47,7 @@ public readonly struct VatpOpenResult : IDisposable
 /// Lease over a CanonicalV1 <see cref="ArticleRecord"/> for one VATP transfer.
 /// Dispose releases the retention reader lease; it does not delete the Message-ID entry.
 /// </summary>
-public sealed class VatpTransferLease : IDisposable
+internal sealed class VatpTransferLease : IDisposable
 {
     private readonly Action? _release;
     private int _disposed;
@@ -65,13 +65,13 @@ public sealed class VatpTransferLease : IDisposable
     }
 
     /// <summary>Gets the retained CanonicalV1 record (ArtData owned by retention until release).</summary>
-    public ArticleRecord Record { get; }
+    internal ArticleRecord Record { get; }
 
     /// <summary>Gets the Date-family header name required for VATP META.</summary>
-    public NntpArticleHeaderName SelectedDateHeaderName { get; }
+    internal NntpArticleHeaderName SelectedDateHeaderName { get; }
 
     /// <summary>Gets the Message-ID / ArticleId identity.</summary>
-    public ArticleIdentity Identity { get; }
+    internal ArticleIdentity Identity { get; }
 
     /// <inheritdoc />
     public void Dispose()

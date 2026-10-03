@@ -8,7 +8,7 @@ namespace VectorNNTP.BackFiller.Logging;
 /// <summary>
 /// Configures Serilog as the exclusive logging implementation for VectorNNTP.BackFiller.
 /// </summary>
-public static partial class BackFillerLoggingExtensions
+internal static partial class BackFillerLoggingExtensions
 {
     /// <summary>
     /// Single-line console template suitable for interactive terminals and journald collection.
@@ -17,7 +17,7 @@ public static partial class BackFillerLoggingExtensions
     /// Used by the bootstrap logger. Host Console/File sinks use
     /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/>.
     /// </remarks>
-    public const string ConsoleOutputTemplate =
+    internal const string ConsoleOutputTemplate =
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
     /// <summary>
@@ -53,7 +53,7 @@ public static partial class BackFillerLoggingExtensions
     /// again or the process exits. Serilog's Console sink writes to <see cref="Console.Out"/>
     /// and does not Flush. This must run before the first Serilog Console sink is created.
     /// </remarks>
-    public static void UseAutoFlushConsoleOutput()
+    internal static void UseAutoFlushConsoleOutput()
     {
         var writer = new StreamWriter(Console.OpenStandardOutput(), Console.OutputEncoding)
         {
@@ -131,7 +131,7 @@ public static partial class BackFillerLoggingExtensions
     /// <param name="services">The built host service provider.</param>
     /// <param name="environmentName">Host environment name (no secrets).</param>
     /// <param name="contentRootPath">Resolved content root used for <c>VectorNNTP.BackFiller.json</c>.</param>
-    public static void WriteLoggingInitialized(
+    internal static void WriteLoggingInitialized(
         IServiceProvider services,
         string environmentName,
         string contentRootPath)
@@ -149,20 +149,6 @@ public static partial class BackFillerLoggingExtensions
             BackFillerLogCategories.Hosting,
             environmentName,
             contentRootPath);
-    }
-
-    /// <summary>
-    /// Returns registered <see cref="ILoggerProvider"/> implementations for diagnostics and tests.
-    /// </summary>
-    /// <remarks>
-    /// When Serilog is configured via <c>AddSerilog</c>, logging is provided by replacing
-    /// <see cref="ILoggerFactory"/> with <c>SerilogLoggerFactory</c>. In that mode the provider
-    /// list is typically empty, which confirms Microsoft default providers were not retained.
-    /// </remarks>
-    public static IReadOnlyList<ILoggerProvider> GetLoggerProviders(this IServiceProvider services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        return services.GetServices<ILoggerProvider>().ToArray();
     }
 
     [LoggerMessage(

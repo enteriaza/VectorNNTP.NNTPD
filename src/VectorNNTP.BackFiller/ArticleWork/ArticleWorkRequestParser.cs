@@ -1,6 +1,4 @@
 using System.Text.Json;
-using VectorNNTP.BackFiller.RabbitMq;
-
 using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.BackFiller.ArticleWork;
@@ -10,17 +8,17 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 /// <remarks>
 /// Property names are case-sensitive. Unknown JSON fields are ignored. Identities are
-/// never synthesized. AMQP <c>RequestId</c> is not a JSON field: when present it must
-/// match JSON <c>requestId</c>; when absent the protocol still accepts the delivery
+/// never synthesized. AMQP <c>RequestId</c> is not a JSON field: when present, it must
+/// match JSON <c>requestId</c>; when absent, the protocol still accepts the delivery
 /// (required AMQP fields are only <c>CorrelationId</c> and <c>ReplyTo</c>).
 /// </remarks>
-public static class ArticleWorkRequestParser
+internal static class ArticleWorkRequestParser
 {
-    /// <summary>Supported application protocol version.</summary>
-    public const int CurrentVersion = 1;
+    /// <summary>Supported application protocol versions.</summary>
+    private const int CurrentVersion = 1;
 
     /// <summary>Required AMQP content type when the property is present.</summary>
-    public const string JsonContentType = "application/json";
+    internal const string JsonContentType = "application/json";
 
     /// <summary>
     /// Parses <paramref name="delivery"/> against the consuming backbone context.
@@ -29,16 +27,13 @@ public static class ArticleWorkRequestParser
     /// <param name="consumingBackbone">Queue/session backbone context.</param>
     /// <param name="maxPayloadBytes">Maximum accepted application body size.</param>
     /// <returns>A valid request or an <see cref="ArticleWorkOutcome.InvalidRequest"/> failure.</returns>
-    public static ArticleWorkParseResult Parse(
+    internal static ArticleWorkParseResult Parse(
         in RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
         int maxPayloadBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumingBackbone);
-        if (maxPayloadBytes < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maxPayloadBytes));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxPayloadBytes, 1);
 
         if (delivery.Body.Length > maxPayloadBytes)
         {
@@ -151,16 +146,19 @@ public static class ArticleWorkRequestParser
                     identities);
             }
 
-            if (!string.IsNullOrWhiteSpace(delivery.RequestIdHeader))
+            if (string.IsNullOrWhiteSpace(delivery.RequestIdHeader))
+                return ArticleWorkParseResult.Valid(new ArticleWorkRequest(
+                    CurrentVersion,
+                    requestId.Value,
+                    messageId,
+                    backbone));
+            if (!Guid.TryParse(delivery.RequestIdHeader, out var headerId)
+                || headerId == Guid.Empty
+                || headerId != requestId.Value)
             {
-                if (!Guid.TryParse(delivery.RequestIdHeader, out var headerId)
-                    || headerId == Guid.Empty
-                    || headerId != requestId.Value)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ AMQP RequestId header does not match JSON requestId.",
-                        identities);
-                }
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ AMQP RequestId header does not match JSON requestId.",
+                    identities);
             }
 
             return ArticleWorkParseResult.Valid(new ArticleWorkRequest(
@@ -173,7 +171,7 @@ public static class ArticleWorkRequestParser
 
     private static bool TryReadInt32(JsonElement root, string name, out int value)
     {
-        value = default;
+        value = 0;
         return root.TryGetProperty(name, out var property)
                && property.ValueKind == JsonValueKind.Number
                && property.TryGetInt32(out value);

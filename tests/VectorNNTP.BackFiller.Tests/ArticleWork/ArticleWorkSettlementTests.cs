@@ -12,20 +12,21 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork;
 public sealed class ArticleWorkSettlementTests
 {
     [Theory]
-    [InlineData(ArticleWorkOutcome.Success, true, false, true)]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, true, false, true)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, true, false, true)]
-    [InlineData(ArticleWorkOutcome.InvalidRequest, true, false, true)]
-    [InlineData(ArticleWorkOutcome.ProviderFailure, false, true, false)]
-    [InlineData(ArticleWorkOutcome.Cancelled, false, true, false)]
-    [InlineData(ArticleWorkOutcome.UnexpectedFailure, false, true, false)]
-    [InlineData(ArticleWorkOutcome.RetentionRejected, false, true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.Success), true, false, true)]
+    [InlineData(nameof(ArticleWorkOutcome.ArticleNotFound), true, false, true)]
+    [InlineData(nameof(ArticleWorkOutcome.InvalidArticle), true, false, true)]
+    [InlineData(nameof(ArticleWorkOutcome.InvalidRequest), true, false, true)]
+    [InlineData(nameof(ArticleWorkOutcome.ProviderFailure), false, true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.Cancelled), false, true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure), false, true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.RetentionRejected), false, true, false)]
     public void Planner_maps_terminal_and_retryable_outcomes(
-        ArticleWorkOutcome outcome,
+        string outcomeName,
         bool acknowledge,
         bool requeue,
         bool publish)
     {
+        var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
         var disposition = ArticleWorkDispositionPlanner.Create(outcome, replyable: true, cancellationRequested: false);
         Assert.Equal(acknowledge, disposition.Acknowledge);
         Assert.Equal(requeue, disposition.Requeue);
@@ -110,14 +111,15 @@ public sealed class ArticleWorkSettlementTests
     }
 
     [Theory]
-    [InlineData(ArticleWorkOutcome.Success, true, false)]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, true, false)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.Success), true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.ArticleNotFound), true, false)]
+    [InlineData(nameof(ArticleWorkOutcome.InvalidArticle), true, false)]
     public async Task Terminal_handler_outcomes_publish_and_settle_exactly_once(
-        ArticleWorkOutcome handlerOutcome,
+        string handlerOutcomeName,
         bool acknowledge,
         bool requeue)
     {
+        var handlerOutcome = Enum.Parse<ArticleWorkOutcome>(handlerOutcomeName);
         var channel = new FakeBackFillerRabbitMqChannel(1);
         var publisher = new RecordingArticleWorkResponsePublisher { CompletesSuccessPublication = true };
         var handler = new ControllableArticleWorkHandler { Outcome = handlerOutcome, Error = "test" };

@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Listener;
 
 /// <summary>Local lifecycle of the cache Listener service.</summary>
-public enum CacheListenerState
+internal enum CacheListenerState
 {
     /// <summary>Constructed and not yet started.</summary>
     Created = 0,

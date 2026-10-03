@@ -4,7 +4,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
-using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
@@ -147,9 +146,6 @@ public sealed class BackFillerApplicationLocalPathTests
             "ApplicationLocalPath.ResolveApplicationLocalPath",
             File.ReadAllText(FindRepoFile(Path.Combine("src", "VectorNNTP.BackFiller", "Logging", "BackFillerFileLogging.cs"))),
             StringComparison.Ordinal);
-        Assert.Equal(
-            ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory),
-            BackFillerFileLogging.ResolveDirectory("logs"));
     }
 
     [Fact]

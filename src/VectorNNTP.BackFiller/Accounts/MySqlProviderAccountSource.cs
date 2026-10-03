@@ -6,13 +6,13 @@ namespace VectorNNTP.BackFiller.Accounts;
 /// <summary>
 /// Reads <c>nntpbackfilleraccounts</c> for the configured server id. Opens a connection only while querying.
 /// </summary>
-public sealed class MySqlProviderAccountSource : IProviderAccountSource
+internal sealed class MySqlProviderAccountSource : IProviderAccountSource
 {
     /// <summary>Authoritative table name from the old BackFiller.</summary>
-    public const string AccountsTableName = "nntpbackfilleraccounts";
+    internal const string AccountsTableName = "nntpbackfilleraccounts";
 
     /// <summary>Parameterized query used by the old worker, filtered by <c>serverid</c>.</summary>
-    public const string AccountsQuery =
+    internal const string AccountsQuery =
         "SELECT " +
         "entryid, " +
         "backbone, " +

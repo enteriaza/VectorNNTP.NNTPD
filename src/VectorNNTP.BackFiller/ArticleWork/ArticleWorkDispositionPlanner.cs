@@ -3,12 +3,12 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <summary>
 /// Maps an Article Work outcome to ACK/NACK and response-publication policy.
 /// </summary>
-public static class ArticleWorkDispositionPlanner
+internal static class ArticleWorkDispositionPlanner
 {
     /// <summary>
     /// Creates the settlement plan for one classified result.
     /// </summary>
-    /// <param name="outcome">Processing or parse outcome.</param>
+    /// <param name="outcome">Processing or parse an outcome.</param>
     /// <param name="replyable">
     /// Whether AMQP <c>CorrelationId</c> and <c>ReplyTo</c> are both present.
     /// Only <see cref="ArticleWorkOutcome.InvalidRequest"/> uses this to decide publication.
@@ -18,7 +18,7 @@ public static class ArticleWorkDispositionPlanner
     /// (NACK requeue, no terminal response).
     /// </param>
     /// <returns>The disposition to apply.</returns>
-    public static ArticleWorkDisposition Create(
+    internal static ArticleWorkDisposition Create(
         ArticleWorkOutcome outcome,
         bool replyable,
         bool cancellationRequested)

@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <summary>
 /// Testable wrapper around the official systemd notifier.
 /// </summary>
-public interface ISystemdNotifyBridge
+internal interface ISystemdNotifyBridge
 {
     /// <summary>Gets a value indicating whether notifications are delivered to systemd.</summary>
     bool IsEnabled { get; }

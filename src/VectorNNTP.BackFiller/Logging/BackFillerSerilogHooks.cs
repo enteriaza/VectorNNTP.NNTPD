@@ -12,11 +12,11 @@ namespace VectorNNTP.BackFiller.Logging;
 /// <see cref="CompressionLevel.Fastest"/> with no archive count limit so historical
 /// <c>.gz</c> files are not deleted by this hook.
 /// </remarks>
-public static class BackFillerSerilogHooks
+internal static class BackFillerSerilogHooks
 {
     /// <summary>
     /// Gzip completed rolling files beside the active log. The File sink still deletes the
     /// uncompressed original after this hook returns.
     /// </summary>
-    public static ArchiveHooks DailyGzipFastest { get; } = new(CompressionLevel.Fastest);
+    internal static ArchiveHooks DailyGzipFastest { get; } = new(CompressionLevel.Fastest);
 }

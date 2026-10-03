@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.Retention;
 /// The sole retained byte representation is <see cref="ArticleRecord.ArtData"/>.
 /// Openable RequestIds pin an entry against FIFO capacity reclaim until OPEN, cancel, TTL, or dispose.
 /// </summary>
-public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsyncDisposable
+internal sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, RetainedEntry> _byMessageId = new(StringComparer.Ordinal);
@@ -31,7 +31,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     private bool _disposed;
 
     /// <summary>Creates the authority from validated runtime options.</summary>
-    public ArticleRetentionAuthority(
+    internal ArticleRetentionAuthority(
         BackFillerRuntimeOptions runtime,
         TimeProvider time,
         ILogger<ArticleRetentionAuthority> logger)
@@ -45,7 +45,7 @@ public sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsy
     }
 
     /// <summary>Creates the authority with an explicit retention policy (tests and host).</summary>
-    public ArticleRetentionAuthority(
+    internal ArticleRetentionAuthority(
         BackFillerArticleRetentionRuntimeOptions retention,
         string fqdn,
         int bindPort,

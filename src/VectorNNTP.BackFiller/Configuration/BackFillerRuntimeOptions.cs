@@ -12,7 +12,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// RabbitMQ broker connectivity settings live on Common <c>RabbitMqOptions</c> /
 /// <c>RabbitMqService</c>; this snapshot only carries Article Work application knobs.
 /// </remarks>
-public sealed record BackFillerRuntimeOptions(
+internal sealed record BackFillerRuntimeOptions(
     int ServerId,
     string DnsSuffix,
     string Fqdn,
@@ -42,13 +42,13 @@ public sealed record BackFillerRuntimeOptions(
 /// inside <paramref name="GracePeriod"/>. When <see langword="false"/>, that work is
 /// cooperatively cancelled through the existing pipeline.
 /// </param>
-public sealed record BackFillerShutdownRuntimeOptions(
+internal sealed record BackFillerShutdownRuntimeOptions(
     TimeSpan GracePeriod,
     bool DrainQueuedWork,
     bool FinishActiveArticles);
 
 /// <summary>Validated listener bounds.</summary>
-public sealed record BackFillerListenerRuntimeOptions(
+internal sealed record BackFillerListenerRuntimeOptions(
     int ParserAccumulationMaxBytes,
     TimeSpan TlsHandshakeTimeout,
     TimeSpan IoProgressTimeout,
@@ -57,7 +57,7 @@ public sealed record BackFillerListenerRuntimeOptions(
     int MaxActiveConnections);
 
 /// <summary>Validated retention policy.</summary>
-public sealed record BackFillerArticleRetentionRuntimeOptions(
+internal sealed record BackFillerArticleRetentionRuntimeOptions(
     long MaximumRetainedPayloadBytes,
     TimeSpan RetentionTtl,
     TimeSpan SweepInterval,
@@ -68,7 +68,7 @@ public sealed record BackFillerArticleRetentionRuntimeOptions(
 /// <param name="Server">Server host.</param>
 /// <param name="Database">Database name.</param>
 /// <param name="UserId">User id.</param>
-public sealed record NntpDbRuntimeOptions(
+internal sealed record NntpDbRuntimeOptions(
     string ConnectionString,
     string Server,
     string Database,
@@ -80,7 +80,7 @@ public sealed record NntpDbRuntimeOptions(
 /// <param name="WorkRequestMaxPayloadBytes">Maximum admitted work-request envelope size.</param>
 /// <param name="PublishConfirmTimeoutSeconds">Publisher-confirm wait for response publications.</param>
 /// <param name="ConsumerPrefetchCount">Optional Basic.Qos prefetch for Article Work consumers.</param>
-public sealed record BackFillerRabbitMqRuntimeOptions(
+internal sealed record BackFillerRabbitMqRuntimeOptions(
     int WorkRequestMaxPayloadBytes,
     int PublishConfirmTimeoutSeconds,
     ushort? ConsumerPrefetchCount);

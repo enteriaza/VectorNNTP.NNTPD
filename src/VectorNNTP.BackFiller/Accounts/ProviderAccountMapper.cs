@@ -7,15 +7,15 @@ namespace VectorNNTP.BackFiller.Accounts;
 /// Maps <c>nntpbackfilleraccounts</c> rows onto Phase 4 <see cref="BackFillerProviderDefinition"/> values.
 /// Unknown, duplicate, and invalid rows are rejected instead of published.
 /// </summary>
-public static class ProviderAccountMapper
+internal static class ProviderAccountMapper
 {
     /// <summary>
-    /// Maps a query result. First valid row for a canonical backbone wins.
+    /// Maps a query result. The first valid row for a canonical backbone wins.
     /// <c>maxconnections</c> becomes <see cref="BackFillerProviderDefinition.MaxSessions"/>.
     /// <c>keepalive</c> becomes <see cref="BackFillerProviderDefinition.KeepAliveSeconds"/>.
     /// <c>MinSessions</c> is unused leftover (table has no min column). <c>MaxSessions</c> is the eager desired count.
     /// </summary>
-    public static ProviderAccountMapResult Map(IReadOnlyList<ProviderAccountRow> rows)
+    internal static ProviderAccountMapResult Map(IReadOnlyList<ProviderAccountRow> rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
         var providers = new List<BackFillerProviderDefinition>();
@@ -43,7 +43,7 @@ public static class ProviderAccountMapper
     }
 
     /// <summary>Resolves a backbone token to the canonical Phase 2/3 label.</summary>
-    public static bool TryCanonicalizeBackbone(string? backbone, out string canonical)
+    private static bool TryCanonicalizeBackbone(string? backbone, out string canonical)
     {
         if (string.IsNullOrWhiteSpace(backbone))
         {
@@ -66,7 +66,7 @@ public static class ProviderAccountMapper
     }
 
     /// <summary>Parses the persisted <c>usessl</c> enum.</summary>
-    public static bool TryParseUseSsl(string? raw, out bool useSsl)
+    private static bool TryParseUseSsl(string? raw, out bool useSsl)
     {
         switch (raw?.Trim())
         {
@@ -115,7 +115,7 @@ public static class ProviderAccountMapper
             return false;
         }
 
-        if (row.Password is null)
+        if (string.IsNullOrWhiteSpace(row.Password))
         {
             reason = "Password is required.";
             return false;

@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// outcomes are <see cref="ProviderFailure"/>, <see cref="Cancelled"/>,
 /// <see cref="UnexpectedFailure"/>, and <see cref="RetentionRejected"/>.
 /// </remarks>
-public enum ArticleWorkOutcome
+internal enum ArticleWorkOutcome
 {
     /// <summary>Article recovered and retained for cache/VATP transfer.</summary>
     Success = 0,
@@ -36,7 +36,7 @@ public enum ArticleWorkOutcome
     UnexpectedFailure = 6,
 
     /// <summary>
-    /// Retrieval succeeded but retention could not admit the payload.
+    /// Retrieval succeeded, but retention could not admit the payload.
     /// Distinct from <see cref="ArticleNotFound"/> and <see cref="ProviderFailure"/>.
     /// Settled as NACK requeue without a terminal RPC response.
     /// </summary>

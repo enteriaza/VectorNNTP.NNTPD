@@ -7,7 +7,7 @@ namespace VectorNNTP.BackFiller.Retention;
 /// <param name="VatpPort">TLS VATP listen port when the article is or remains available.</param>
 /// <param name="RetainedPayloadBytes">Authority-owned payload bytes after the attempt.</param>
 /// <param name="ReleasedPayloadBytes">Bytes released by expiry/eviction during this attempt.</param>
-public readonly record struct ArticleRetentionResult(
+internal readonly record struct ArticleRetentionResult(
     ArticleRetentionKind Kind,
     ArticleIdentity? Identity,
     string? Fqdn,
@@ -16,11 +16,11 @@ public readonly record struct ArticleRetentionResult(
     long ReleasedPayloadBytes)
 {
     /// <summary>Returns whether the article is available under the existing or new identity.</summary>
-    public bool IsAvailable =>
+    internal bool IsAvailable =>
         Kind is ArticleRetentionKind.Retained or ArticleRetentionKind.AlreadyPresent;
 
     /// <summary>Returns whether admission failed because of capacity.</summary>
-    public bool IsCapacityRejected =>
+    internal bool IsCapacityRejected =>
         Kind is ArticleRetentionKind.PayloadExceedsCapacity
             or ArticleRetentionKind.CapacityUnavailable
             or ArticleRetentionKind.OpenableRequestIdLimitExceeded;

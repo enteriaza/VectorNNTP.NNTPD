@@ -9,13 +9,13 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// Hosts the confirm-enabled Article Work response publisher. Does not own the RabbitMQ connection.
 /// </summary>
 /// <remarks>
-/// Startup fails if a publish channel cannot be opened on the current generation.
+/// Startup fails if a publishing channel cannot be opened on the current generation.
 /// After start, connection replacement rebuilds the publisher channel. This type
 /// does not implement a second connection-recovery loop and never ACK/NACKs deliveries.
 /// Completing <see cref="PublishAsync"/> means the broker confirmed. Confirmation is
 /// not permission to ACK the original delivery.
 /// </remarks>
-public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher, IHostedService, IAsyncDisposable
+internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher, IHostedService, IAsyncDisposable
 {
     private readonly IRabbitMqService _connections;
     private readonly BackFillerRuntimeOptions _runtime;
@@ -38,7 +38,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     /// <param name="connections">Sole connection owner.</param>
     /// <param name="runtime">Validated runtime snapshot.</param>
     /// <param name="logger">Publisher logger.</param>
-    public ArticleWorkResponsePublisher(
+    internal ArticleWorkResponsePublisher(
         IRabbitMqService connections,
         BackFillerRuntimeOptions runtime,
         ILogger<ArticleWorkResponsePublisher> logger)
@@ -55,7 +55,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     public bool CompletesSuccessPublication => true;
 
     /// <summary>Gets the current local lifecycle state.</summary>
-    public ArticleWorkResponsePublisherState State
+    internal ArticleWorkResponsePublisherState State
     {
         get
         {
@@ -66,8 +66,8 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
         }
     }
 
-    /// <summary>Gets the publish-channel generation, or zero before start.</summary>
-    public long Generation
+    /// <summary>Gets the publish-channel generation or zero before start.</summary>
+    internal long Generation
     {
         get
         {
@@ -78,7 +78,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
         }
     }
 
-    /// <summary>Gets the caller-owned publish channel while the publisher is live (tests).</summary>
+    /// <summary>Gets the caller-owned publishing channel while the publisher is live (tests).</summary>
     internal IRabbitMqPublishChannel? Channel
     {
         get
@@ -276,7 +276,7 @@ public sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher
 
     /// <summary>
     /// Installs <paramref name="candidate"/> only when it is not older than the current channel.
-    /// A stale candidate is disposed and cannot replace or dispose a newer channel.
+    /// A stale candidate is disposed and cannot replace or dispose of a newer channel.
     /// </summary>
     internal async Task InstallPublishChannelAsync(IRabbitMqPublishChannel candidate)
     {

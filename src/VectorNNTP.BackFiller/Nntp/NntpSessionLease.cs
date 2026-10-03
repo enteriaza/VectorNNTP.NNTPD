@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// Exclusive ownership of one pooled NNTP session. Dispose releases or retires exactly once.
 /// </summary>
-public sealed class NntpSessionLease : IAsyncDisposable
+internal sealed class NntpSessionLease : IAsyncDisposable
 {
     private readonly NntpSessionPool _pool;
     private NntpProviderSession? _session;
@@ -16,11 +16,11 @@ public sealed class NntpSessionLease : IAsyncDisposable
     }
 
     /// <summary>Gets the leased session. Null after dispose.</summary>
-    public NntpProviderSession Session =>
+    internal NntpProviderSession Session =>
         _session ?? throw new ObjectDisposedException(nameof(NntpSessionLease));
 
     /// <summary>Marks the session to be retired instead of returned to the idle pool.</summary>
-    public void Retire()
+    internal void Retire()
     {
         _retire = true;
     }

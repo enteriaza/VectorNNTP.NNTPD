@@ -17,7 +17,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// When greater than zero, an idle pooled session issues RFC 3977 DATE on that cadence.
 /// Zero disables DATE keepalive.
 /// </param>
-public sealed record BackFillerProviderDefinition(
+internal sealed record BackFillerProviderDefinition(
     string Backbone,
     string Host,
     int Port,
@@ -29,11 +29,11 @@ public sealed record BackFillerProviderDefinition(
     byte KeepAliveSeconds = 0)
 {
     /// <summary>Returns whether AUTHINFO should be attempted.</summary>
-    public bool RequiresAuthentication =>
+    internal bool RequiresAuthentication =>
         !string.IsNullOrWhiteSpace(Username) || !string.IsNullOrWhiteSpace(Password);
 
     /// <summary>Returns whether idle DATE keepalive is enabled for this provider.</summary>
-    public bool DateKeepAliveEnabled => KeepAliveSeconds > 0;
+    internal bool DateKeepAliveEnabled => KeepAliveSeconds > 0;
 
     /// <summary>
     /// Returns whether <paramref name="previous"/> differs only by a lower <see cref="MaxSessions"/>.

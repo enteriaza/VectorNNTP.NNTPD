@@ -26,7 +26,9 @@ public sealed class BackFillerLoggingTargetTests
     [Fact]
     public void Defaults_EnableFile_AndDisableRabbitMq_Syslog_AndJson()
     {
-        var logging = BackFillerFileLogging.BindLogging(new ConfigurationManager());
+        var configuration = new ConfigurationManager();
+        var logging = new BackFillerLoggingOptions();
+        configuration.GetSection($"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}").Bind(logging);
         Assert.True(logging.File.Enabled);
         Assert.Equal(BackFillerFileLoggingTargetOptions.DefaultLogDir, logging.File.LogDir);
         Assert.False(logging.RabbitMq.Enabled);

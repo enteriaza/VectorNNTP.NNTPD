@@ -11,7 +11,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// VATP OPEN by RequestId. Article Work Success publishes this BackFiller's FQDN, VATP port, and the
 /// lowercase hexadecimal <see cref="ArticleId"/>. Those fields are routing metadata, not a transfer protocol.
 /// </summary>
-public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
+internal sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {
     private readonly INntpArticleRetriever _retriever;
     private readonly IArticleRetentionAuthority _retention;
@@ -38,22 +38,22 @@ public sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     }
 
     /// <summary>Gets the last retrieval classification (tests).</summary>
-    public ArticleRetrievalKind? LastKind { get; private set; }
+    internal ArticleRetrievalKind? LastKind { get; private set; }
 
     /// <summary>Gets the last canonical retained ArtData (tests). The same buffer is transferred into retention.</summary>
-    public byte[]? LastPayload { get; private set; }
+    internal byte[]? LastPayload { get; private set; }
 
     /// <summary>Gets the last retained CanonicalV1 record (tests).</summary>
-    public ArticleRecord? LastRecord { get; private set; }
+    internal ArticleRecord? LastRecord { get; private set; }
 
     /// <summary>Gets the last retention classification (tests).</summary>
-    public ArticleRetentionKind? LastRetentionKind { get; private set; }
+    internal ArticleRetentionKind? LastRetentionKind { get; private set; }
 
     /// <summary>Gets the last retained BackFiller FQDN (tests).</summary>
-    public string? LastFqdn { get; private set; }
+    internal string? LastFqdn { get; private set; }
 
     /// <summary>Gets the last retained VATP listen port (tests).</summary>
-    public int? LastVatpPort { get; private set; }
+    internal int? LastVatpPort { get; private set; }
 
     /// <inheritdoc />
     public async ValueTask<ArticleWorkHandlerResult> HandleAsync(

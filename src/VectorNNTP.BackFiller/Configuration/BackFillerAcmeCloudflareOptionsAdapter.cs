@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.BackFiller.Configuration;
@@ -17,7 +16,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <c>CloudFlareZoneId</c>, <c>DnsSuffix</c>, and ACME directory keys are ignored.
 /// Cleartext <c>BindPort</c> is not a BackFiller setting and is not copied.
 /// </remarks>
-public static class BackFillerAcmeCloudflareOptionsAdapter
+internal static class BackFillerAcmeCloudflareOptionsAdapter
 {
     /// <summary>
     /// Applies nested BackFiller settings and root secrets onto
@@ -26,7 +25,7 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
     /// <param name="destination">Common options instance to populate.</param>
     /// <param name="source">Validated BackFiller application options.</param>
     /// <param name="configuration">Full configuration root (secrets only).</param>
-    public static void Apply(
+    internal static void Apply(
         AcmeCloudflareOptions destination,
         BackFillerOptions source,
         IConfiguration configuration)
@@ -57,7 +56,7 @@ public static class BackFillerAcmeCloudflareOptionsAdapter
     /// </summary>
     /// <param name="destination">Common options instance to update.</param>
     /// <param name="configuration">Full configuration root.</param>
-    public static void OverlaySecretsFromRoot(AcmeCloudflareOptions destination, IConfiguration configuration)
+    private static void OverlaySecretsFromRoot(AcmeCloudflareOptions destination, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(configuration);

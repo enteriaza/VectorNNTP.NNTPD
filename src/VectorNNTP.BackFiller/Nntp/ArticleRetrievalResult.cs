@@ -6,7 +6,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <param name="Reason">Diagnostic text. Never a secret.</param>
 /// <param name="Article">Owned payload when retrieval succeeded.</param>
 /// <param name="SessionReusable">Whether the leased session may return to the idle pool.</param>
-public sealed record ArticleRetrievalResult(
+internal sealed record ArticleRetrievalResult(
     ArticleRetrievalKind Kind,
     int? StatusCode,
     string Reason,
@@ -20,11 +20,11 @@ public sealed record ArticleRetrievalResult(
     }
 
     /// <summary>Creates a successful retrieval that owns <paramref name="article"/>.</summary>
-    public static ArticleRetrievalResult Retrieved(int statusCode, string reason, RetrievedArticle article) =>
+    internal static ArticleRetrievalResult Retrieved(int statusCode, string reason, RetrievedArticle article) =>
         new(ArticleRetrievalKind.ArticleRetrieved, statusCode, reason, article, SessionReusable: true);
 
     /// <summary>Creates a non-payload result.</summary>
-    public static ArticleRetrievalResult Failed(
+    internal static ArticleRetrievalResult Failed(
         ArticleRetrievalKind kind,
         int? statusCode,
         string reason,

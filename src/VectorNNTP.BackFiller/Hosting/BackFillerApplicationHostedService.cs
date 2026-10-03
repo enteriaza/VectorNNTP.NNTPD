@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.Hosting;
 /// Startup runs during <see cref="StartAsync"/> so a failed application-service
 /// initialization prevents the host from reporting successful start.
 /// </remarks>
-public sealed class BackFillerApplicationHostedService : IHostedService
+internal sealed class BackFillerApplicationHostedService : IHostedService
 {
     private readonly ApplicationServiceManager _manager;
     private readonly IHostApplicationLifetime _lifetime;

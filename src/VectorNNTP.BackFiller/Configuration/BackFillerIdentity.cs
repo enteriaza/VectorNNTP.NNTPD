@@ -9,20 +9,20 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// FQDN construction lives in <see cref="ApplicationFqdn"/>. BackFiller supplies
 /// the fixed prefix <see cref="BackFillerOptions.ApplicationPrefix"/>.
 /// </remarks>
-public static class BackFillerIdentity
+internal static class BackFillerIdentity
 {
     /// <summary>Minimum accepted <see cref="BackFillerOptions.ServerId"/> (shared <see cref="ServerIdRules"/>).</summary>
-    public const int MinimumServerId = ServerIdRules.MinimumInclusive;
+    internal const int MinimumServerId = ServerIdRules.MinimumInclusive;
 
     /// <summary>Maximum accepted <see cref="BackFillerOptions.ServerId"/> (shared <see cref="ServerIdRules"/>).</summary>
-    public const int MaximumServerId = ServerIdRules.MaximumInclusive;
+    internal const int MaximumServerId = ServerIdRules.MaximumInclusive;
 
     /// <summary>
     /// Returns whether <paramref name="label"/> is a valid DNS label.
     /// </summary>
     /// <param name="label">Candidate label.</param>
     /// <returns><see langword="true"/> when the label is valid.</returns>
-    public static bool IsValidDnsLabel(string label)
+    internal static bool IsValidDnsLabel(string label)
     {
         if (string.IsNullOrWhiteSpace(label) || label.Length > 63)
         {
@@ -50,7 +50,7 @@ public static class BackFillerIdentity
     /// </summary>
     /// <param name="suffix">Canonical (already trimmed/lowercased) suffix.</param>
     /// <returns><see langword="true"/> when the suffix is valid.</returns>
-    public static bool IsValidDnsSuffix(string suffix)
+    internal static bool IsValidDnsSuffix(string suffix)
     {
         if (string.IsNullOrWhiteSpace(suffix)
             || suffix.Contains(' ', StringComparison.Ordinal)

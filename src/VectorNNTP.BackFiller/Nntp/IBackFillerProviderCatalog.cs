@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>Resolves a provider definition for a consuming backbone.</summary>
-public interface IBackFillerProviderCatalog
+internal interface IBackFillerProviderCatalog
 {
     /// <summary>Gets the configured providers.</summary>
     IReadOnlyList<BackFillerProviderDefinition> Providers { get; }
@@ -16,19 +16,19 @@ public interface IBackFillerProviderCatalog
 }
 
 /// <summary>Fixed in-memory catalog used by tests. Production uses the MySQL-backed live catalog.</summary>
-public sealed class StaticBackFillerProviderCatalog : IBackFillerProviderCatalog
+internal sealed class StaticBackFillerProviderCatalog : IBackFillerProviderCatalog
 {
     private readonly IReadOnlyList<BackFillerProviderDefinition> _providers;
 
     /// <summary>Creates an empty catalog.</summary>
-    public StaticBackFillerProviderCatalog()
+    internal StaticBackFillerProviderCatalog()
         : this([])
     {
     }
 
     /// <summary>Creates a catalog from <paramref name="providers"/>.</summary>
     /// <param name="providers">Explicit provider definitions. Must not contain secrets in logs.</param>
-    public StaticBackFillerProviderCatalog(IReadOnlyList<BackFillerProviderDefinition> providers)
+    internal StaticBackFillerProviderCatalog(IReadOnlyList<BackFillerProviderDefinition> providers)
     {
         ArgumentNullException.ThrowIfNull(providers);
         _providers = providers;

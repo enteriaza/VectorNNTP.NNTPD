@@ -6,7 +6,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="RequestId">Parsed non-empty GUID when present and valid; otherwise <see langword="null"/>.</param>
 /// <param name="MessageId">Exact Message-ID when it passed validation; otherwise <see langword="null"/>.</param>
 /// <param name="Backbone">JSON backbone string when present and non-empty; otherwise <see langword="null"/>.</param>
-public readonly record struct ArticleWorkParsedIdentities(
+internal readonly record struct ArticleWorkParsedIdentities(
     Guid? RequestId,
     string? MessageId,
     string? Backbone);
@@ -16,7 +16,7 @@ public readonly record struct ArticleWorkParsedIdentities(
 /// </summary>
 /// <param name="Reason">Validation reason. Must not contain the raw payload.</param>
 /// <param name="Identities">Recovered identities. Missing fields stay null.</param>
-public sealed record ArticleWorkParseFailure(
+internal sealed record ArticleWorkParseFailure(
     string Reason,
     ArticleWorkParsedIdentities Identities);
 
@@ -25,17 +25,17 @@ public sealed record ArticleWorkParseFailure(
 /// </summary>
 /// <param name="Request">Validated request when parsing succeeds.</param>
 /// <param name="Failure">Failure when the delivery is <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
-public sealed record ArticleWorkParseResult(
+internal sealed record ArticleWorkParseResult(
     ArticleWorkRequest? Request,
     ArticleWorkParseFailure? Failure)
 {
     /// <summary>Gets a value indicating whether a validated request was produced.</summary>
-    public bool IsValid => Request is not null && Failure is null;
+    internal bool IsValid => Request is not null && Failure is null;
 
     /// <summary>Creates a successful parse result.</summary>
     /// <param name="request">Validated request.</param>
     /// <returns>A valid parse result.</returns>
-    public static ArticleWorkParseResult Valid(ArticleWorkRequest request)
+    internal static ArticleWorkParseResult Valid(ArticleWorkRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         return new ArticleWorkParseResult(request, null);
@@ -45,7 +45,7 @@ public sealed record ArticleWorkParseResult(
     /// <param name="reason">Rejection reason.</param>
     /// <param name="identities">Recovered identities only.</param>
     /// <returns>An invalid parse result.</returns>
-    public static ArticleWorkParseResult Invalid(string reason, ArticleWorkParsedIdentities identities)
+    internal static ArticleWorkParseResult Invalid(string reason, ArticleWorkParsedIdentities identities)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         return new ArticleWorkParseResult(null, new ArticleWorkParseFailure(reason, identities));

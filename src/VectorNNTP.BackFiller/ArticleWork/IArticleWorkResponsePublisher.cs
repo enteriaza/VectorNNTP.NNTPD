@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// The publisher must not encode them into a URI.
 /// </remarks>
 /// <param name="Outcome">Terminal protocol outcome.</param>
-/// <param name="RequestId">Logical request identity when recovered.</param>
+/// <param name="RequestId">Logically request identity when recovered.</param>
 /// <param name="MessageId">Exact Message-ID when recovered.</param>
 /// <param name="Backbone">JSON backbone when recovered.</param>
 /// <param name="CorrelationId">AMQP correlation to echo on the response.</param>
@@ -18,7 +18,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="Fqdn">BackFiller FQDN for Success. Must be absent otherwise.</param>
 /// <param name="VatpPort">TLS VATP listen port for Success. Must be absent otherwise.</param>
 /// <param name="ArticleIdHex">64-char lowercase BLAKE3 ArtId hex for Success. Must be absent otherwise.</param>
-public sealed record ArticleWorkResponseIntent(
+internal sealed record ArticleWorkResponseIntent(
     ArticleWorkOutcome Outcome,
     Guid? RequestId,
     string? MessageId,
@@ -33,12 +33,12 @@ public sealed record ArticleWorkResponseIntent(
 /// <summary>
 /// Response-publish seam. Does not own the consumer channel or connection.
 /// </summary>
-public interface IArticleWorkResponsePublisher
+internal interface IArticleWorkResponsePublisher
 {
     /// <summary>
-    /// Gets whether a Success publish is a real RPC publication that may be followed by ACK.
-    /// The recording seam returns <see langword="false"/> so tests can leave Success pending.
+    /// Gets whether Success publishing is a real RPC publication that may be followed by ACK.
     /// The hosted publisher returns <see langword="true"/>.
+    /// A test double may return <see langword="false"/> so Success can remain pending.
     /// </summary>
     bool CompletesSuccessPublication { get; }
 
@@ -50,48 +50,4 @@ public interface IArticleWorkResponsePublisher
     /// <param name="cancellationToken">Token used to cancel the attempt.</param>
     /// <returns>A task that completes when publication is confirmed or the seam has recorded the intent.</returns>
     Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken);
-}
-
-/// <summary>
-/// In-process recorder used by tests that do not exercise broker publication.
-/// </summary>
-public sealed class RecordingArticleWorkResponsePublisher : IArticleWorkResponsePublisher
-{
-    private readonly List<ArticleWorkResponseIntent> _published = [];
-
-    /// <summary>Gets recorded publish intents in admission order.</summary>
-    public IReadOnlyList<ArticleWorkResponseIntent> Published
-    {
-        get
-        {
-            lock (_published)
-            {
-                return [.. _published];
-            }
-        }
-    }
-
-    /// <inheritdoc />
-    public bool CompletesSuccessPublication { get; set; }
-
-    /// <summary>When set, the next publish throws this exception.</summary>
-    public Exception? PublishException { get; set; }
-
-    /// <inheritdoc />
-    public Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(intent);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (PublishException is not null)
-        {
-            throw PublishException;
-        }
-
-        lock (_published)
-        {
-            _published.Add(intent);
-        }
-
-        return Task.CompletedTask;
-    }
 }

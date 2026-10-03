@@ -34,7 +34,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 2,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(1));
         Assert.False(dateStarted.Task.IsCompleted);
@@ -58,7 +58,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 3,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(3));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -85,7 +85,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 2,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(2));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -139,7 +139,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 1,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(1));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -193,7 +193,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 30,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         await pool.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
         Assert.False(dateStarted.Task.IsCompleted);
@@ -218,7 +218,7 @@ public sealed class NntpDateKeepAliveTests
             keepAliveSeconds: 1,
             time: time,
             commandTimeout: TimeSpan.FromSeconds(2));
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(1));
         await dateStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -292,7 +292,7 @@ public sealed class NntpDateKeepAliveTests
             min: 1,
             keepAliveSeconds: 0,
             time: time);
-        await pool.WarmupAsync(CancellationToken.None);
+        await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
 
         time.Advance(TimeSpan.FromSeconds(30));
         Assert.DoesNotContain(server.Commands, static command => command.Equals("DATE", StringComparison.OrdinalIgnoreCase));

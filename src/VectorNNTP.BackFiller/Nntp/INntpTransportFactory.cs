@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>Opens the byte transport for one provider session. Does not speak NNTP.</summary>
-public interface INntpTransportFactory
+internal interface INntpTransportFactory
 {
     /// <summary>
     /// Connects to <paramref name="provider"/> and returns an owned stream.

@@ -18,7 +18,7 @@ namespace VectorNNTP.BackFiller.Listener;
 /// Process-wide VATP TLS listener: binds configured endpoints, authenticates TLS, and serves retained
 /// CanonicalV1 articles over VATP only. Does not own retention, RabbitMQ, or Article Work settlement.
 /// </summary>
-public sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
+internal sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
 {
     private readonly BackFillerRuntimeOptions _runtime;
     private readonly ITlsCertificateContextProvider _certificates;
@@ -38,7 +38,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     private int _activeConnections;
 
     /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
-    public CacheListenerService(
+    internal CacheListenerService(
         BackFillerRuntimeOptions runtime,
         ITlsCertificateContextProvider certificates,
         IArticleRetentionAuthority retention,
@@ -48,7 +48,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     }
 
     /// <summary>Initializes the Listener service.</summary>
-    public CacheListenerService(
+    internal CacheListenerService(
         BackFillerRuntimeOptions runtime,
         ITlsCertificateContextProvider certificates,
         IArticleRetentionAuthority retention,
@@ -84,7 +84,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     public Task? Execution => _acceptTask;
 
     /// <summary>Gets the local lifecycle state.</summary>
-    public CacheListenerState State
+    internal CacheListenerState State
     {
         get
         {
@@ -96,7 +96,7 @@ public sealed class CacheListenerService : IHostedService, IApplicationService, 
     }
 
     /// <summary>Gets currently admitted connections.</summary>
-    public int ActiveConnections => Volatile.Read(ref _activeConnections);
+    internal int ActiveConnections => Volatile.Read(ref _activeConnections);
 
     /// <summary>Gets bound listen endpoints (tests).</summary>
     internal IReadOnlyList<EndPoint?> LocalEndPoints

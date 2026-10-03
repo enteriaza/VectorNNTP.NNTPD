@@ -7,7 +7,7 @@ namespace VectorNNTP.BackFiller.Accounts;
 /// MySQL provider-account control plane. Polls NntpDB, publishes immutable snapshots,
 /// and reconciles Phase 4 session pools. Does not own RabbitMQ, retention, or the Cache Listener.
 /// </summary>
-public sealed class ProviderAccountConfigurationService : IHostedService, IAsyncDisposable
+internal sealed class ProviderAccountConfigurationService : IHostedService, IAsyncDisposable
 {
     private readonly IProviderAccountSource _source;
     private readonly ProviderConfigurationCatalog _catalog;
@@ -26,7 +26,7 @@ public sealed class ProviderAccountConfigurationService : IHostedService, IAsync
     private bool _lastRefreshFailed;
 
     /// <summary>Initializes the control-plane service.</summary>
-    public ProviderAccountConfigurationService(
+    internal ProviderAccountConfigurationService(
         IProviderAccountSource source,
         ProviderConfigurationCatalog catalog,
         NntpProviderRegistry registry,
@@ -45,7 +45,7 @@ public sealed class ProviderAccountConfigurationService : IHostedService, IAsync
         _logger = logger;
     }
 
-    /// <summary>Gets the live catalog this service publishes (tests).</summary>
+    /// <summary>Gets the live catalogue this service publishes (tests).</summary>
     internal ProviderConfigurationCatalog Catalog => _catalog;
 
     /// <summary>Gets the last successfully published provider snapshot (tests).</summary>

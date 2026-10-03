@@ -10,9 +10,9 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// <param name="Requeue">NACK requeue flag. Ignored when <see cref="Acknowledge"/> is <see langword="true"/>.</param>
 /// <param name="PublishResponse">
 /// Whether a terminal RPC response should be attempted before settlement.
-/// Retryable outcomes never publish.
+/// Retryable outcomes never published.
 /// </param>
-public readonly record struct ArticleWorkDisposition(
+internal readonly record struct ArticleWorkDisposition(
     bool Acknowledge,
     bool Requeue,
     bool PublishResponse);

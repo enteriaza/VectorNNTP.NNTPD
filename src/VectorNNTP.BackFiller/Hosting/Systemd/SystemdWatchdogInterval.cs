@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <summary>
 /// Calculates systemd watchdog heartbeat intervals from the systemd-provided deadline.
 /// </summary>
-public static class SystemdWatchdogInterval
+internal static class SystemdWatchdogInterval
 {
     /// <summary>
     /// Derives a heartbeat interval that leaves margin before the systemd watchdog deadline.
@@ -12,7 +12,7 @@ public static class SystemdWatchdogInterval
     /// <param name="fraction">Fraction of the deadline between heartbeats; must be in (0, 1).</param>
     /// <returns>The heartbeat interval.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when inputs are invalid.</exception>
-    public static TimeSpan Calculate(TimeSpan watchdogTimeout, double fraction = 0.5)
+    internal static TimeSpan Calculate(TimeSpan watchdogTimeout, double fraction = 0.5)
     {
         if (watchdogTimeout <= TimeSpan.Zero)
         {

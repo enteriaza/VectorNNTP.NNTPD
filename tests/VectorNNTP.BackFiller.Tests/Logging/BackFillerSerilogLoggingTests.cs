@@ -29,7 +29,7 @@ public sealed class BackFillerSerilogLoggingTests
         Assert.Single(factories);
         Assert.Equal("SerilogLoggerFactory", factories[0].GetType().Name);
 
-        var providers = host.Services.GetLoggerProviders();
+        var providers = host.Services.GetServices<ILoggerProvider>().ToArray();
         Assert.Empty(providers);
         Assert.DoesNotContain(providers, static p => p is ConsoleLoggerProvider);
         Assert.DoesNotContain(providers, static p => p is DebugLoggerProvider);
@@ -62,7 +62,6 @@ public sealed class BackFillerSerilogLoggingTests
             Log.CloseAndFlush();
 
             var expectedDir = ApplicationLocalPath.ResolveApplicationLocalPath(logDir, AppContext.BaseDirectory);
-            Assert.Equal(expectedDir, BackFillerFileLogging.ResolveDirectory(logDir));
             Assert.True(Directory.Exists(expectedDir));
             Assert.Contains(
                 Directory.GetFiles(expectedDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
@@ -76,49 +75,71 @@ public sealed class BackFillerSerilogLoggingTests
     }
 
     [Fact]
-    public void ResolveDirectory_UsesCommonHelper_NotCurrentWorkingDirectory()
+    public void FileLog_ResolvesRelativeDirectory_FromApplicationBase_NotWorkingDirectory()
     {
         var previous = Environment.CurrentDirectory;
         var cwd = Directory.CreateTempSubdirectory("bf-serilog-cwd-").FullName;
+        var relative = "bf-rel-" + Guid.NewGuid().ToString("N");
+        var expected = ApplicationLocalPath.ResolveApplicationLocalPath(relative, AppContext.BaseDirectory);
+        IHost? host = null;
         try
         {
             Environment.CurrentDirectory = cwd;
-            var resolved = BackFillerFileLogging.ResolveDirectory("logs");
-            Assert.Equal(
-                ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory),
-                resolved);
+            host = CreateLoggingHost(relative);
+            var logger = host.Services.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("VectorNNTP.BackFiller");
+            logger.LogInformation("backfiller-relative-log-marker");
+            host.Dispose();
+            host = null;
+            Log.CloseAndFlush();
+
+            Assert.True(Directory.Exists(expected));
+            Assert.False(Directory.Exists(Path.Combine(cwd, relative)));
             Assert.StartsWith(
                 Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                resolved,
+                expected,
                 StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(Path.GetFullPath(cwd), resolved, StringComparison.OrdinalIgnoreCase);
-            Assert.NotEqual(Path.GetFullPath("logs"), resolved);
+            Assert.Contains(
+                Directory.GetFiles(expected, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log"),
+                path => File.ReadAllText(path).Contains("backfiller-relative-log-marker", StringComparison.Ordinal));
         }
         finally
         {
+            host?.Dispose();
             Environment.CurrentDirectory = previous;
             TryDelete(cwd);
+            TryDelete(expected);
         }
     }
 
     [Fact]
-    public void EnsureRollingFilePath_CreatesDirectory_FromLogDirectory()
+    public void FileLog_CreatesDirectory_FromConfiguredLogDirectory()
     {
-        var logDir = CreateTempLogDir();
+        var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-bf-roll-" + Guid.NewGuid().ToString("N"));
+        IHost? host = null;
         try
         {
-            var configuration = new ConfigurationManager();
-            configuration[$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:File:{nameof(BackFillerFileLoggingTargetOptions.LogDir)}"] = logDir;
+            Assert.False(Directory.Exists(logDir));
+            host = CreateLoggingHost(logDir);
+            var logger = host.Services.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("VectorNNTP.BackFiller");
+            logger.LogInformation("backfiller-created-dir-marker");
+            host.Dispose();
+            host = null;
+            Log.CloseAndFlush();
 
-            var applicationName = ApplicationJsonConfiguration.EntryAssemblyName;
-            var expected = BackFillerFileLogging.RollingFilePath(logDir, applicationName);
-            Assert.Equal(expected, BackFillerFileLogging.EnsureRollingFilePath(configuration));
             Assert.True(Directory.Exists(logDir));
-            Assert.DoesNotContain("logs/VectorNNTP.BackFiller-.log", expected, StringComparison.Ordinal);
-            Assert.Contains(ApplicationJsonConfiguration.EntryAssemblyName, expected, StringComparison.Ordinal);
+            var files = Directory.GetFiles(logDir, ApplicationJsonConfiguration.EntryAssemblyName + "-*.log");
+            Assert.Contains(
+                files,
+                path => File.ReadAllText(path).Contains("backfiller-created-dir-marker", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                files,
+                path => path.Contains("logs/VectorNNTP.BackFiller-.log", StringComparison.Ordinal));
         }
         finally
         {
+            host?.Dispose();
             TryDelete(logDir);
         }
     }

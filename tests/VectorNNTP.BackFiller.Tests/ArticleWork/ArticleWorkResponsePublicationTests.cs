@@ -183,12 +183,13 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Theory]
-    [InlineData(ArticleWorkOutcome.ArticleNotFound, true)]
-    [InlineData(ArticleWorkOutcome.InvalidArticle, true)]
+    [InlineData(nameof(ArticleWorkOutcome.ArticleNotFound), true)]
+    [InlineData(nameof(ArticleWorkOutcome.InvalidArticle), true)]
     public async Task Terminal_failure_confirms_then_acks_without_requeue(
-        ArticleWorkOutcome handlerOutcome,
+        string handlerOutcomeName,
         bool acknowledge)
     {
+        var handlerOutcome = Enum.Parse<ArticleWorkOutcome>(handlerOutcomeName);
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
         var handler = new ControllableArticleWorkHandler { Outcome = handlerOutcome, Error = "missing" };
         var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -275,11 +276,12 @@ public sealed class ArticleWorkResponsePublicationTests
     }
 
     [Theory]
-    [InlineData(ArticleWorkOutcome.ProviderFailure)]
-    [InlineData(ArticleWorkOutcome.Cancelled)]
-    [InlineData(ArticleWorkOutcome.UnexpectedFailure)]
-    public async Task Retryable_outcomes_do_not_publish(ArticleWorkOutcome handlerOutcome)
+    [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
+    [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
+    [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
+    public async Task Retryable_outcomes_do_not_publish(string handlerOutcomeName)
     {
+        var handlerOutcome = Enum.Parse<ArticleWorkOutcome>(handlerOutcomeName);
         await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
         var handler = new ControllableArticleWorkHandler
         {

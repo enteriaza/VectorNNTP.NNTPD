@@ -7,7 +7,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Implementations must return total physical system memory, not available memory,
 /// process memory, GC heap limits, or container/cgroup limits.
 /// </remarks>
-public interface IPhysicalMemoryProvider
+internal interface IPhysicalMemoryProvider
 {
     /// <summary>
     /// Returns total physical memory in bytes.

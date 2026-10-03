@@ -12,7 +12,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Windows uses <c>GlobalMemoryStatusEx</c> <c>ullTotalPhys</c>.
 /// There is no GC, available-memory, or cgroup fallback.
 /// </remarks>
-public sealed class OsPhysicalMemoryProvider : IPhysicalMemoryProvider
+internal sealed class OsPhysicalMemoryProvider : IPhysicalMemoryProvider
 {
     internal const string LinuxMemInfoPath = "/proc/meminfo";
 
@@ -166,15 +166,15 @@ public sealed class OsPhysicalMemoryProvider : IPhysicalMemoryProvider
     [StructLayout(LayoutKind.Sequential)]
     private struct MemoryStatusEx
     {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
+        internal uint dwLength;
+        internal uint dwMemoryLoad;
+        internal ulong ullTotalPhys;
+        internal ulong ullAvailPhys;
+        internal ulong ullTotalPageFile;
+        internal ulong ullAvailPageFile;
+        internal ulong ullTotalVirtual;
+        internal ulong ullAvailVirtual;
+        internal ulong ullAvailExtendedVirtual;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

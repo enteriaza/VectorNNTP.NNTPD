@@ -13,7 +13,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// Common <see cref="RabbitMqOptionsValidator"/>; this type only cross-checks shutdown
 /// grace against <see cref="RabbitMqOptions.MaximumShutdownDrainTimeoutSeconds"/>.
 /// </remarks>
-public sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOptions>
+internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOptions>
 {
     private readonly IPhysicalMemoryProvider _physicalMemoryProvider;
     private readonly IOptions<RabbitMqOptions> _rabbitMqOptions;

@@ -5,7 +5,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// Production transport: TCP plus optional implicit TLS using platform certificate validation.
 /// </summary>
-public sealed class TcpNntpTransportFactory : INntpTransportFactory
+internal sealed class TcpNntpTransportFactory : INntpTransportFactory
 {
     /// <inheritdoc />
     public async Task<Stream> ConnectAsync(

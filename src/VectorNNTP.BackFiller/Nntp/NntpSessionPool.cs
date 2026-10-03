@@ -5,7 +5,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// Bounded per-provider NNTP session pool. One lease owns one session.
 /// </summary>
-public sealed class NntpSessionPool : IAsyncDisposable
+internal sealed class NntpSessionPool : IAsyncDisposable
 {
     private BackFillerProviderDefinition _provider;
     private readonly int _leaseCeiling;
@@ -33,7 +33,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
     internal static readonly TimeSpan ReplenishInterval = TimeSpan.FromSeconds(15);
 
     /// <summary>Creates a pool for <paramref name="provider"/>.</summary>
-    public NntpSessionPool(
+    internal NntpSessionPool(
         BackFillerProviderDefinition provider,
         NntpSessionOptions options,
         INntpTransportFactory transport,
@@ -67,20 +67,20 @@ public sealed class NntpSessionPool : IAsyncDisposable
     }
 
     /// <summary>Gets the provider backbone.</summary>
-    public string Backbone => _provider.Backbone;
+    internal string Backbone => _provider.Backbone;
 
     /// <summary>Gets the provider definition this pool was created for.</summary>
     internal BackFillerProviderDefinition Provider => _provider;
 
     /// <summary>Gets the number of live session objects.</summary>
-    public int LiveSessionCount => _live.Count;
+    internal int LiveSessionCount => _live.Count;
 
     /// <summary>
     /// Gets the number of ACTIVE sessions: attached sessions that have completed connect
     /// (<see cref="NntpSessionState.Ready"/> or <see cref="NntpSessionState.Busy"/>).
     /// Connecting, failed, and retired sessions are not counted.
     /// </summary>
-    public int ActiveSessionCount
+    internal int ActiveSessionCount
     {
         get
         {
@@ -99,23 +99,16 @@ public sealed class NntpSessionPool : IAsyncDisposable
     }
 
     /// <summary>Gets the number of outstanding leases.</summary>
-    public int ActiveLeaseCount => Volatile.Read(ref _activeLeases);
+    internal int ActiveLeaseCount => Volatile.Read(ref _activeLeases);
 
     /// <summary>Raised after ACTIVE session count may have changed.</summary>
-    public event Action? ActiveSessionCountChanged;
-
-    /// <summary>
-    /// Eagerly establishes <see cref="BackFillerProviderDefinition.MaxSessions"/> NNTP sessions.
-    /// Partial connect failure is tolerated; a background loop restores the deficit.
-    /// </summary>
-    public Task WarmupAsync(CancellationToken cancellationToken) =>
-        EnsureDesiredSessionsAsync(cancellationToken);
+    internal event Action? ActiveSessionCountChanged;
 
     /// <summary>
     /// Connects the desired <see cref="BackFillerProviderDefinition.MaxSessions"/> slots.
     /// Does not require Article Work. Failed attempts do not fail the call.
     /// </summary>
-    public async Task EnsureDesiredSessionsAsync(CancellationToken cancellationToken)
+    internal async Task EnsureDesiredSessionsAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         StartPeriodicReplenish();
@@ -137,7 +130,7 @@ public sealed class NntpSessionPool : IAsyncDisposable
     }
 
     /// <summary>Acquires an exclusive session lease.</summary>
-    public async Task<NntpSessionLease> AcquireAsync(CancellationToken cancellationToken)
+    internal async Task<NntpSessionLease> AcquireAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
@@ -667,17 +660,17 @@ public sealed class NntpSessionPool : IAsyncDisposable
 
     private sealed class KeepAliveRegistration(CancellationTokenSource cts)
     {
-        public CancellationTokenSource Cts { get; } = cts;
+        internal CancellationTokenSource Cts { get; } = cts;
 
-        public Task Task { get; set; } = Task.CompletedTask;
+        internal Task Task { get; set; } = Task.CompletedTask;
     }
 }
 
 /// <summary>Connect-time failure that preserves retrieval classification.</summary>
-public sealed class NntpProviderConnectException : InvalidOperationException
+internal sealed class NntpProviderConnectException : InvalidOperationException
 {
     /// <summary>Initializes a connect failure.</summary>
-    public NntpProviderConnectException(ArticleRetrievalKind kind, int? statusCode, string reason)
+    internal NntpProviderConnectException(ArticleRetrievalKind kind, int? statusCode, string reason)
         : base(reason)
     {
         Kind = kind;
@@ -685,8 +678,8 @@ public sealed class NntpProviderConnectException : InvalidOperationException
     }
 
     /// <summary>Gets the retrieval classification.</summary>
-    public ArticleRetrievalKind Kind { get; }
+    internal ArticleRetrievalKind Kind { get; }
 
     /// <summary>Gets the NNTP status when present.</summary>
-    public int? StatusCode { get; }
+    internal int? StatusCode { get; }
 }

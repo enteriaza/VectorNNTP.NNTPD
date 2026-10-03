@@ -15,7 +15,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// further readiness notifications are suppressed.
 /// </para>
 /// </remarks>
-public sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
+internal sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
 {
     private readonly IHostApplicationLifetime _hostLifetime;
     private readonly BackFillerApplicationHealth _health;

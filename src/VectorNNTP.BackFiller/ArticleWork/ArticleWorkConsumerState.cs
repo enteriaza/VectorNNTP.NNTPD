@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.ArticleWork;
 
 /// <summary>Local lifecycle of one backbone consumer session.</summary>
-public enum ArticleWorkConsumerState
+internal enum ArticleWorkConsumerState
 {
     /// <summary>Constructed and not yet started.</summary>
     Created = 0,

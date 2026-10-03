@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <summary>
 /// Application health used for systemd watchdog keep-alive decisions.
 /// </summary>
-public interface IApplicationHealth
+internal interface IApplicationHealth
 {
     /// <summary>
     /// Gets a value indicating whether watchdog keep-alives may be sent.

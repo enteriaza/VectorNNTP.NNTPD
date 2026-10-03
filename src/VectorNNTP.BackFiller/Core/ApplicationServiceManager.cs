@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.Core;
 /// Services start in registration order and stop in reverse order. On startup failure,
 /// already-started services are stopped (rollback). Concurrent lifecycle execution is rejected.
 /// </remarks>
-public sealed class ApplicationServiceManager
+internal sealed class ApplicationServiceManager
 {
     private readonly IReadOnlyList<IApplicationService> _services;
     private readonly TimeSpan _shutdownBudget;
@@ -25,7 +25,7 @@ public sealed class ApplicationServiceManager
     /// <summary>
     /// Occurs when a started service's <see cref="IApplicationService.Execution"/> faulted or completed unexpectedly.
     /// </summary>
-    public event EventHandler<UnexpectedServiceTerminationEventArgs>? UnexpectedServiceTermination;
+    internal event EventHandler<UnexpectedServiceTerminationEventArgs>? UnexpectedServiceTermination;
 
     /// <summary>Initializes a new instance of the <see cref="ApplicationServiceManager"/> class.</summary>
     /// <param name="services">Registered application services in startup order.</param>
@@ -45,7 +45,7 @@ public sealed class ApplicationServiceManager
     }
 
     /// <summary>Gets the services that completed start and have not finished stop.</summary>
-    public IReadOnlyList<IApplicationService> StartedServices
+    internal IReadOnlyList<IApplicationService> StartedServices
     {
         get
         {
@@ -58,7 +58,7 @@ public sealed class ApplicationServiceManager
 
     /// <summary>Starts registered services in registration order.</summary>
     /// <param name="cancellationToken">Cancels startup.</param>
-    public async Task StartAsync(CancellationToken cancellationToken)
+    internal async Task StartAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.CompareExchange(ref _lifecycleBusy, 1, 0) != 0)
         {
@@ -128,7 +128,7 @@ public sealed class ApplicationServiceManager
 
     /// <summary>Stops started services in reverse order.</summary>
     /// <param name="cancellationToken">External cancellation cooperating with the shutdown budget.</param>
-    public async Task StopAsync(CancellationToken cancellationToken)
+    internal async Task StopAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.CompareExchange(ref _lifecycleBusy, 1, 0) != 0)
         {
@@ -323,12 +323,12 @@ public sealed class ApplicationServiceManager
 }
 
 /// <summary>Provides data for unexpected application-service termination.</summary>
-public sealed class UnexpectedServiceTerminationEventArgs : EventArgs
+internal sealed class UnexpectedServiceTerminationEventArgs : EventArgs
 {
     /// <summary>Initializes a new instance of the <see cref="UnexpectedServiceTerminationEventArgs"/> class.</summary>
     /// <param name="serviceName">Terminated service name.</param>
     /// <param name="exception">Fault, if any.</param>
-    public UnexpectedServiceTerminationEventArgs(string serviceName, Exception? exception)
+    internal UnexpectedServiceTerminationEventArgs(string serviceName, Exception? exception)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceName);
         ServiceName = serviceName;
@@ -336,8 +336,8 @@ public sealed class UnexpectedServiceTerminationEventArgs : EventArgs
     }
 
     /// <summary>Gets the terminated service name.</summary>
-    public string ServiceName { get; }
+    internal string ServiceName { get; }
 
     /// <summary>Gets the fault, if the execution faulted.</summary>
-    public Exception? Exception { get; }
+    internal Exception? Exception { get; }
 }

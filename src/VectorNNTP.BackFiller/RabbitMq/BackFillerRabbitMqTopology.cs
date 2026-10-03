@@ -10,20 +10,15 @@ namespace VectorNNTP.BackFiller.RabbitMq;
 /// (not a BackFiller consume target and not a shared work queue).
 /// Legacy <c>grabbers.*</c> names are out of scope.
 /// </remarks>
-public static class BackFillerRabbitMqTopology
+internal static class BackFillerRabbitMqTopology
 {
     /// <summary>Topology namespace prefix.</summary>
-    public const string Prefix = "backfiller";
-
-    /// <summary>
-    /// NNTPD StorageServer lookup fanout exchange name. Not consumed by BackFiller.
-    /// </summary>
-    public const string StorageEntity = "cache.requests";
+    internal const string Prefix = "backfiller";
 
     /// <summary>
     /// Provider backbone labels used to compose <c>backfiller.&lt;backbone&gt;</c> entity names.
     /// </summary>
-    public static readonly IReadOnlyList<string> ProviderBackbones =
+    internal static readonly IReadOnlyList<string> ProviderBackbones =
     [
         "Abavia",
         "Altopia",
@@ -44,7 +39,7 @@ public static class BackFillerRabbitMqTopology
     /// </summary>
     /// <param name="entityName">Exchange, queue, routing-key, or backbone label.</param>
     /// <returns>The trimmed invariant-lowercase name.</returns>
-    public static string Normalize(string entityName)
+    private static string Normalize(string entityName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(entityName);
         return entityName.Trim().ToLowerInvariant();
@@ -55,7 +50,7 @@ public static class BackFillerRabbitMqTopology
     /// </summary>
     /// <param name="backbone">Unqualified provider backbone label.</param>
     /// <returns>The composed entity name.</returns>
-    public static string ComposeProviderEntity(string backbone)
+    internal static string ComposeProviderEntity(string backbone)
     {
         var normalized = Normalize(backbone);
         return $"{Prefix}.{normalized}";

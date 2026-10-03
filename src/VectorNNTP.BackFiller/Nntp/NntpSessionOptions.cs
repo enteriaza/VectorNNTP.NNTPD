@@ -13,7 +13,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// Optional TLS certificate callback. <see langword="null"/> uses platform validation
 /// (production default). Tests may supply a callback; this is not a configuration setting.
 /// </param>
-public sealed record NntpSessionOptions(
+internal sealed record NntpSessionOptions(
     int ReceiveBufferBytes,
     int MaxStatusLineBytes,
     int MaxArticleBytes,
@@ -25,7 +25,7 @@ public sealed record NntpSessionOptions(
     /// <summary>
     /// Old-worker defaults: 64 KiB buffers, 16 KiB status lines, 5 MiB articles, 30 s connect/command, 2 min receive.
     /// </summary>
-    public static NntpSessionOptions Default { get; } = new(
+    internal static NntpSessionOptions Default { get; } = new(
         ReceiveBufferBytes: 64 * 1024,
         MaxStatusLineBytes: ArticleResourceLimits.MaxStatusLineBytes,
         MaxArticleBytes: ArticleResourceLimits.MaxArticleBytes,

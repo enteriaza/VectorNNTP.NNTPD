@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>Local lifecycle of one upstream NNTP provider session.</summary>
-public enum NntpSessionState
+internal enum NntpSessionState
 {
     /// <summary>Constructed, no socket.</summary>
     Created = 0,

@@ -18,7 +18,7 @@ internal static class BackFillerLogLevelParser
     /// <param name="text">Configured level text.</param>
     /// <param name="level">The parsed level when this method returns <see langword="true"/>.</param>
     /// <returns><see langword="true"/> when <paramref name="text"/> is a supported level.</returns>
-    public static bool TryParse(string? text, out LogEventLevel level)
+    internal static bool TryParse(string? text, out LogEventLevel level)
     {
         level = default;
         if (string.IsNullOrWhiteSpace(text))
@@ -41,7 +41,7 @@ internal static class BackFillerLogLevelParser
     /// <param name="text">Configured level text, or <see langword="null"/> when the key is absent.</param>
     /// <returns>The Serilog minimum level.</returns>
     /// <exception cref="InvalidOperationException"><paramref name="text"/> is present and not a Serilog level.</exception>
-    public static LogEventLevel ParseOrDefault(string? text)
+    internal static LogEventLevel ParseOrDefault(string? text)
     {
         if (text is null)
         {

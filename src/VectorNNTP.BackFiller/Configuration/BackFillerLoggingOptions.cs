@@ -7,22 +7,22 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// This is the only logging configuration surface. A <c>Serilog</c> section is not read.
 /// File logs use <see cref="BackFillerFileLoggingTargetOptions.LogDir"/>.
 /// </remarks>
-public sealed class BackFillerLoggingOptions
+internal sealed class BackFillerLoggingOptions
 {
     /// <summary>Configuration section name under <see cref="BackFillerOptions.SectionName"/>.</summary>
-    public const string SectionName = "Logging";
+    internal const string SectionName = "Logging";
 
     /// <summary>Default Serilog minimum level when <see cref="LogLevel"/> is omitted.</summary>
-    public const string DefaultLogLevel = "Debug";
+    internal const string DefaultLogLevel = "Debug";
 
     /// <summary>Default daily file retention when <see cref="LogRetentionDays"/> is omitted.</summary>
-    public const int DefaultLogRetentionDays = 1;
+    internal const int DefaultLogRetentionDays = 1;
 
     /// <summary>Minimum accepted <see cref="LogRetentionDays"/>.</summary>
-    public const int MinimumLogRetentionDays = 1;
+    internal const int MinimumLogRetentionDays = 1;
 
     /// <summary>Maximum accepted <see cref="LogRetentionDays"/>.</summary>
-    public const int MaximumLogRetentionDays = 3650;
+    internal const int MaximumLogRetentionDays = 3650;
 
     /// <summary>Gets or sets the Serilog minimum level applied to every enabled target.</summary>
     /// <remarks>
@@ -58,10 +58,10 @@ public sealed class BackFillerLoggingOptions
 }
 
 /// <summary>File logging target under <c>BackFiller:Logging:File</c>.</summary>
-public sealed class BackFillerFileLoggingTargetOptions
+internal sealed class BackFillerFileLoggingTargetOptions
 {
     /// <summary>Default relative log directory.</summary>
-    public const string DefaultLogDir = "logs";
+    internal const string DefaultLogDir = "logs";
 
     /// <summary>Gets or sets whether the rolling file sink is created. Default is enabled.</summary>
     public bool Enabled { get; set; } = true;
@@ -79,13 +79,13 @@ public sealed class BackFillerFileLoggingTargetOptions
 }
 
 /// <summary>RabbitMQ logging target under <c>BackFiller:Logging:RabbitMQ</c>.</summary>
-public sealed class BackFillerRabbitMqLoggingTargetOptions
+internal sealed class BackFillerRabbitMqLoggingTargetOptions
 {
     /// <summary>Default exchange name.</summary>
-    public const string DefaultExchange = "logs";
+    internal const string DefaultExchange = "logs";
 
     /// <summary>Default routing key.</summary>
-    public const string DefaultRoutingKey = "backfiller";
+    internal const string DefaultRoutingKey = "backfiller";
 
     /// <summary>Gets or sets whether RabbitMQ logging is requested. Default is disabled.</summary>
     public bool Enabled { get; set; }
@@ -98,16 +98,16 @@ public sealed class BackFillerRabbitMqLoggingTargetOptions
 }
 
 /// <summary>Syslog logging target under <c>BackFiller:Logging:Syslog</c>.</summary>
-public sealed class BackFillerSyslogLoggingTargetOptions
+internal sealed class BackFillerSyslogLoggingTargetOptions
 {
     /// <summary>Default syslog port.</summary>
-    public const int DefaultPort = 514;
+    internal const int DefaultPort = 514;
 
     /// <summary>UDP protocol name.</summary>
-    public const string UdpProtocol = "Udp";
+    internal const string UdpProtocol = "Udp";
 
     /// <summary>TCP protocol name.</summary>
-    public const string TcpProtocol = "Tcp";
+    internal const string TcpProtocol = "Tcp";
 
     /// <summary>Gets or sets whether the syslog sink is created. Default is disabled.</summary>
     public bool Enabled { get; set; }

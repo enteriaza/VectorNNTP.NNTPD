@@ -9,16 +9,16 @@ namespace VectorNNTP.BackFiller.RabbitMq;
 /// Topology is created when a backbone becomes usable (before Article Work consumers start)
 /// and is retained when the backbone later becomes inactive.
 /// </remarks>
-public static class BackFillerArticleWorkTopology
+internal static class BackFillerArticleWorkTopology
 {
     /// <summary>Broker argument that selects the RabbitMQ queue type.</summary>
-    public const string QueueTypeArgumentName = "x-queue-type";
+    internal const string QueueTypeArgumentName = "x-queue-type";
 
     /// <summary>Required queue type for durable BackFiller ArticleWork provider queues.</summary>
-    public const string QuorumQueueType = "quorum";
+    internal const string QuorumQueueType = "quorum";
 
     /// <summary>Fanout exchange type used for provider endpoints.</summary>
-    public const string FanoutExchangeType = "fanout";
+    internal const string FanoutExchangeType = "fanout";
 
     /// <summary>
     /// Declares the fanout exchange, durable quorum queue, and binding for
@@ -27,7 +27,7 @@ public static class BackFillerArticleWorkTopology
     /// <param name="channel">Caller-owned manual-ack channel on the current connection generation.</param>
     /// <param name="backbone">Provider backbone label (for example <c>Giganews</c>).</param>
     /// <param name="cancellationToken">Token used to cancel declaration.</param>
-    public static async Task DeclareProviderEndpointAsync(
+    internal static async Task DeclareProviderEndpointAsync(
         VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqManualAckChannel channel,
         string backbone,
         CancellationToken cancellationToken)

@@ -10,7 +10,7 @@ namespace VectorNNTP.BackFiller.Nntp;
 internal static class NntpTlsClient
 {
     /// <summary>Builds the production client TLS options for <paramref name="host"/>.</summary>
-    internal static SslClientAuthenticationOptions CreateClientOptions(
+    private static SslClientAuthenticationOptions CreateClientOptions(
         string host,
         RemoteCertificateValidationCallback? serverCertificateValidationCallback)
     {

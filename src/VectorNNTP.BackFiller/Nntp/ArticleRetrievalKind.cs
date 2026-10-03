@@ -1,7 +1,7 @@
 namespace VectorNNTP.BackFiller.Nntp;
 
 /// <summary>Classification of one upstream retrieval attempt.</summary>
-public enum ArticleRetrievalKind
+internal enum ArticleRetrievalKind
 {
     /// <summary>ARTICLE succeeded and produced an owned destuffed payload.</summary>
     ArticleRetrieved = 0,

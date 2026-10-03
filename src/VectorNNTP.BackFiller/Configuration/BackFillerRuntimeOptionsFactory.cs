@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// <summary>
 /// Builds <see cref="BackFillerRuntimeOptions"/> from already-validated bindable options.
 /// </summary>
-public static class BackFillerRuntimeOptionsFactory
+internal static class BackFillerRuntimeOptionsFactory
 {
     /// <summary>
     /// Projects validated options into the immutable runtime snapshot.
@@ -30,7 +30,7 @@ public static class BackFillerRuntimeOptionsFactory
     /// a shared <see cref="AcmeCloudflareOptions"/> instance is not supplied (tests).
     /// RabbitMQ defaults are used when <see cref="RabbitMqOptions"/> is omitted.
     /// </remarks>
-    public static BackFillerRuntimeOptions Create(
+    internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         NntpDbOptions nntpDb,
         string? contentRootPath = null)
@@ -56,7 +56,7 @@ public static class BackFillerRuntimeOptionsFactory
     }
 
     /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
-    public static BackFillerRuntimeOptions Create(
+    internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         NntpDbOptions nntpDb,
         AcmeCloudflareOptions acme,
@@ -64,7 +64,7 @@ public static class BackFillerRuntimeOptionsFactory
         Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
 
     /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
-    public static BackFillerRuntimeOptions Create(
+    internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         NntpDbOptions nntpDb,
         AcmeCloudflareOptions acme,

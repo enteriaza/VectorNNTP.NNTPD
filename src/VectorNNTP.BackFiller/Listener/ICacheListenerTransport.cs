@@ -3,7 +3,7 @@ namespace VectorNNTP.BackFiller.Listener;
 /// <summary>
 /// One established connected transport owned by a cache Listener session.
 /// </summary>
-public interface ICacheListenerTransport : IAsyncDisposable
+internal interface ICacheListenerTransport : IAsyncDisposable
 {
     /// <summary>Reads bytes. Zero means the peer closed.</summary>
     ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken);
@@ -13,7 +13,7 @@ public interface ICacheListenerTransport : IAsyncDisposable
 }
 
 /// <summary>Stream adapter that applies the configured I/O no-progress timeout to each read or write.</summary>
-public sealed class StreamCacheListenerTransport : ICacheListenerTransport
+internal sealed class StreamCacheListenerTransport : ICacheListenerTransport
 {
     private readonly Stream _stream;
     private readonly TimeSpan _ioProgressTimeout;
@@ -21,7 +21,7 @@ public sealed class StreamCacheListenerTransport : ICacheListenerTransport
     private int _disposed;
 
     /// <summary>Initializes a stream-backed transport.</summary>
-    public StreamCacheListenerTransport(Stream stream, TimeSpan ioProgressTimeout, bool leaveInnerStreamOpen = false)
+    internal StreamCacheListenerTransport(Stream stream, TimeSpan ioProgressTimeout, bool leaveInnerStreamOpen = false)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ioProgressTimeout, TimeSpan.Zero);
