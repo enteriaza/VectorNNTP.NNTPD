@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Networking
     /// intentionally. This resolver describes the intended listen/DNS address set; NNTP sockets are not
     /// bound by this type.
     /// </remarks>
-    public sealed class BindAddressResolver : IBindAddressResolver
+    internal sealed class BindAddressResolver : IBindAddressResolver
     {
         private readonly ILocalIpAddressAssignee _localIpAddressAssignee;
         private readonly ILogger<BindAddressResolver> _logger;

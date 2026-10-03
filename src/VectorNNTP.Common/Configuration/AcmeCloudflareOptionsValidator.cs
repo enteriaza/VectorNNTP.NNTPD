@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Configuration
     /// <remarks>
     /// Does not bind sockets or call Cloudflare. Failure messages never include secret values.
     /// </remarks>
-    public sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudflareOptions>
+    internal sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudflareOptions>
     {
         private readonly ILocalIpAddressAssignee _localIpAddressAssignee;
 
@@ -35,7 +35,7 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>
         /// Collects shared validation failures without constructing an options result.
         /// </summary>
-        public static void CollectFailures(
+        private static void CollectFailures(
             AcmeCloudflareOptions options,
             ILocalIpAddressAssignee localIpAddressAssignee,
             List<string> failures,
@@ -54,7 +54,7 @@ namespace VectorNNTP.Common.Configuration
         }
 
         /// <summary>Normalizes empty bind lists to a single wildcard and trims entries.</summary>
-        public static void NormalizeBindAddresses(AcmeCloudflareOptions options)
+        internal static void NormalizeBindAddresses(AcmeCloudflareOptions options)
         {
             ArgumentNullException.ThrowIfNull(options);
             if (options.BindAddress is null || options.BindAddress.Length == 0)
@@ -78,7 +78,7 @@ namespace VectorNNTP.Common.Configuration
         /// Application binary directory. Production callers must pass
         /// <see cref="AppContext.BaseDirectory"/>.
         /// </param>
-        public static string ResolveAcmeStateDir(string acmeStateDir, string? applicationBaseDirectory) =>
+        internal static string ResolveAcmeStateDir(string acmeStateDir, string? applicationBaseDirectory) =>
             ApplicationLocalPath.ResolveApplicationLocalPath(acmeStateDir, applicationBaseDirectory);
 
         private static void ValidateCloudFlareTimeout(AcmeCloudflareOptions options, List<string> failures)
@@ -97,7 +97,7 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>
         /// Validates bind-address tokens: wildcards, IPv4/IPv6 literals, and NIC assignment.
         /// </summary>
-        public static void CollectBindAddressFailures(
+        internal static void CollectBindAddressFailures(
             AcmeCloudflareOptions options,
             ILocalIpAddressAssignee localIpAddressAssignee,
             List<string> failures)
@@ -262,10 +262,10 @@ namespace VectorNNTP.Common.Configuration
     }
 
     /// <summary>Shared DNS name syntax used by ACME/Cloudflare configuration validation.</summary>
-    public static class NntpdDnsName
+    internal static class NntpdDnsName
     {
         /// <summary>Validates DNS suffix / name syntax (labels, length, allowed characters).</summary>
-        public static bool IsValidSuffix(string suffix)
+        internal static bool IsValidSuffix(string suffix)
         {
             if (string.IsNullOrWhiteSpace(suffix))
             {

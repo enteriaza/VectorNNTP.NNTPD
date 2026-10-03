@@ -4,7 +4,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// Bounded unfolding of folded header values for semantic validation.
     /// Raw article slices are not modified.
     /// </summary>
-    public static class NntpArticleHeaderValueUnfolder
+    internal static class NntpArticleHeaderValueUnfolder
     {
         /// <summary>
         /// Unfolds one raw header-value slice into a semantic byte view.
@@ -19,7 +19,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <remarks>
         /// Ordinary bytes are copied exactly. Each valid fold boundary becomes one ASCII space.
         /// </remarks>
-        public static bool TryUnfold(ReadOnlySpan<byte> rawValue, Span<byte> destination, out int bytesWritten)
+        internal static bool TryUnfold(ReadOnlySpan<byte> rawValue, Span<byte> destination, out int bytesWritten)
         {
             bytesWritten = 0;
 

@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Core
     /// Services start in registration order and stop in reverse order. On startup failure, already-started
     /// services are stopped (rollback). Concurrent lifecycle execution is rejected.
     /// </remarks>
-    public sealed class ApplicationServiceManager
+    internal sealed class ApplicationServiceManager
     {
         private readonly IReadOnlyList<IApplicationService> _services;
         private readonly IApplicationLifecycleOptions _options;
@@ -25,7 +25,7 @@ namespace VectorNNTP.Common.Core
         /// <summary>
         /// Occurs when a started service's <see cref="IApplicationService.Execution"/> faulted or completed unexpectedly.
         /// </summary>
-        public event EventHandler<UnexpectedServiceTerminationEventArgs>? UnexpectedServiceTermination;
+        internal event EventHandler<UnexpectedServiceTerminationEventArgs>? UnexpectedServiceTermination;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ApplicationServiceManager"/> class.
@@ -56,7 +56,7 @@ namespace VectorNNTP.Common.Core
         /// <see cref="IApplicationService.StopAsync"/> call for the current shutdown. It does not imply
         /// that a non-cooperative service released all resources if the process is later killed by the host.
         /// </remarks>
-        public IReadOnlyList<IApplicationService> StartedServices
+        internal IReadOnlyList<IApplicationService> StartedServices
         {
             get
             {
@@ -74,7 +74,7 @@ namespace VectorNNTP.Common.Core
         /// <returns>A task that completes when all services have started.</returns>
         /// <exception cref="InvalidOperationException">Thrown when a lifecycle operation is already in progress.</exception>
         /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is cancelled.</exception>
-        public async Task StartAsync(CancellationToken cancellationToken)
+        internal async Task StartAsync(CancellationToken cancellationToken)
         {
             if (Interlocked.CompareExchange(ref _lifecycleBusy, 1, 0) != 0)
             {
@@ -181,7 +181,7 @@ namespace VectorNNTP.Common.Core
         /// manager are rejected; <see cref="ApplicationLifecycle"/> provides single-flight stop for host paths.
         /// </para>
         /// </remarks>
-        public async Task StopAsync(CancellationToken cancellationToken)
+        internal async Task StopAsync(CancellationToken cancellationToken)
         {
             if (Interlocked.CompareExchange(ref _lifecycleBusy, 1, 0) != 0)
             {
@@ -555,7 +555,7 @@ namespace VectorNNTP.Common.Core
     /// <summary>
     /// Provides data for the <see cref="ApplicationServiceManager.UnexpectedServiceTermination"/> event.
     /// </summary>
-    public sealed class UnexpectedServiceTerminationEventArgs : EventArgs
+    internal sealed class UnexpectedServiceTerminationEventArgs : EventArgs
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="UnexpectedServiceTerminationEventArgs"/> class.
@@ -563,7 +563,7 @@ namespace VectorNNTP.Common.Core
         /// <param name="serviceName">Name of the service that terminated.</param>
         /// <param name="exception">Fault exception, if any.</param>
         /// <param name="completedNormally">Whether the execution task completed without fault or cancellation.</param>
-        public UnexpectedServiceTerminationEventArgs(string serviceName, Exception? exception, bool completedNormally)
+        internal UnexpectedServiceTerminationEventArgs(string serviceName, Exception? exception, bool completedNormally)
         {
             ServiceName = serviceName;
             Exception = exception;
@@ -571,12 +571,12 @@ namespace VectorNNTP.Common.Core
         }
 
         /// <summary>Gets the service name.</summary>
-        public string ServiceName { get; }
+        internal string ServiceName { get; }
 
         /// <summary>Gets the fault exception, if the execution faulted.</summary>
-        public Exception? Exception { get; }
+        internal Exception? Exception { get; }
 
         /// <summary>Gets a value indicating whether execution completed without fault or cancellation.</summary>
-        public bool CompletedNormally { get; }
+        internal bool CompletedNormally { get; }
     }
 }

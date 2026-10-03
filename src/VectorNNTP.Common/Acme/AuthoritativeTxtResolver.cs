@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Acme
     /// <see cref="AuthoritativeTxtClient"/> (UDP then TCP, RD=0).
     /// </para>
     /// </remarks>
-    public sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
+    internal sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
     {
         private readonly string _zoneApex;
         private readonly ILogger<AuthoritativeTxtResolver> _logger;
@@ -31,7 +31,7 @@ namespace VectorNNTP.Common.Acme
         private readonly Func<IPAddress, string, CancellationToken, Task<IReadOnlyList<string>>>? _txtQuery;
 
         /// <summary>Initializes a new instance of the <see cref="AuthoritativeTxtResolver"/> class.</summary>
-        public AuthoritativeTxtResolver(string zoneApex, ILogger<AuthoritativeTxtResolver> logger)
+        internal AuthoritativeTxtResolver(string zoneApex, ILogger<AuthoritativeTxtResolver> logger)
             : this(zoneApex, logger, nameserverProvider: null, txtQuery: null)
         {
         }

@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// The resolver keeps scanning later candidate headers when an earlier candidate is present but
     /// malformed, allowing fallback values such as <c>Injection-Date</c> to recover otherwise acceptable articles.
     /// </remarks>
-    public static class ArticleDateHeaderResolver
+    internal static class ArticleDateHeaderResolver
     {
         private static readonly NntpArticleHeaderName[] CandidateHeaderNames =
         [
@@ -31,7 +31,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="selectedHeaderName">Known-name identity of the winning date header when resolution succeeds.</param>
         /// <param name="failure">Failure reason reported when no candidate succeeds.</param>
         /// <returns><see langword="true"/> when a candidate header produced a canonical instant.</returns>
-        public static bool TryResolve(
+        internal static bool TryResolve(
             ReadOnlyMemory<byte> articleBytes,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
             out DateTime utc,

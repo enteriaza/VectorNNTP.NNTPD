@@ -11,13 +11,13 @@ namespace VectorNNTP.Common.Dns
     /// TXT RDATA segments are skipped without failing the overall parse when the header and question
     /// section are well-formed. Multi-segment TXT RDATA is concatenated per RR.
     /// </remarks>
-    public static class DnsTxtParser
+    internal static class DnsTxtParser
     {
         /// <summary>
         /// Parses TXT answers from a DNS response and returns concatenated character-string bytes per RR.
         /// </summary>
         /// <returns><see langword="true"/> when the header and question section were well-formed.</returns>
-        public static bool TryParseTxtRecords(ReadOnlySpan<byte> buffer, ushort expectedId, List<byte[]> results)
+        internal static bool TryParseTxtRecords(ReadOnlySpan<byte> buffer, ushort expectedId, List<byte[]> results)
         {
             ArgumentNullException.ThrowIfNull(results);
             results.Clear();
@@ -81,7 +81,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Returns <see langword="true"/> when any TXT RR payload equals <paramref name="expectedTxt"/>.
         /// </summary>
-        public static bool ResponseContainsTxt(
+        internal static bool ResponseContainsTxt(
             ReadOnlySpan<byte> buffer,
             ushort expectedId,
             ReadOnlySpan<byte> expectedTxt)
@@ -144,7 +144,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Parses TXT answers as ASCII strings (lossy for non-ASCII wire data).
         /// </summary>
-        public static List<string> ParseTxtStrings(byte[] buffer, ushort expectedId)
+        internal static List<string> ParseTxtStrings(byte[] buffer, ushort expectedId)
         {
             List<string> results = [];
             List<byte[]> raw = [];

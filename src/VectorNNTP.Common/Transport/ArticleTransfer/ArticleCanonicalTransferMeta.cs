@@ -15,7 +15,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     public readonly struct ArticleCanonicalTransferMeta : IEquatable<ArticleCanonicalTransferMeta>
     {
         /// <summary>Initializes META fields.</summary>
-        public ArticleCanonicalTransferMeta(
+        internal ArticleCanonicalTransferMeta(
             ulong artHash,
             int artLines,
             int artSize,
@@ -30,22 +30,22 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Gets XXH3-64 of ArtData.</summary>
-        public ulong ArtHash { get; }
+        internal ulong ArtHash { get; }
 
         /// <summary>Gets body line count for overview <c>:lines</c>.</summary>
-        public int ArtLines { get; }
+        internal int ArtLines { get; }
 
         /// <summary>Gets advertised ArtData length.</summary>
-        public int ArtSize { get; }
+        internal int ArtSize { get; }
 
         /// <summary>Gets the Date-family header name used by <see cref="ArticleFieldTable.Locate"/>.</summary>
-        public NntpArticleHeaderName SelectedDateHeaderName { get; }
+        internal NntpArticleHeaderName SelectedDateHeaderName { get; }
 
         /// <summary>Gets the seven header-value ranges into ArtData.</summary>
-        public ArticleFieldTable Fields { get; }
+        internal ArticleFieldTable Fields { get; }
 
         /// <summary>Builds META from a live CanonicalV1 record and its selected Date header name.</summary>
-        public static ArticleCanonicalTransferMeta FromRecord(
+        internal static ArticleCanonicalTransferMeta FromRecord(
             in ArticleRecord record,
             NntpArticleHeaderName selectedDateHeaderName)
         {
@@ -89,13 +89,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// Big-endian codec for the frozen 76-byte META payload.
     /// </summary>
-    public static class VatpMetaCodec
+    internal static class VatpMetaCodec
     {
         private const int FieldTableOffset = 20;
         private const int RangePairBytes = 8;
 
         /// <summary>Encodes <paramref name="meta"/> into <paramref name="destination"/> (exactly 76 bytes).</summary>
-        public static void Encode(in ArticleCanonicalTransferMeta meta, Span<byte> destination)
+        private static void Encode(in ArticleCanonicalTransferMeta meta, Span<byte> destination)
         {
             if (destination.Length < VatpProtocol.MetaPayloadLength)
             {
@@ -119,7 +119,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Allocates an exact 76-byte META buffer.</summary>
-        public static byte[] Encode(in ArticleCanonicalTransferMeta meta)
+        internal static byte[] Encode(in ArticleCanonicalTransferMeta meta)
         {
             var buffer = new byte[VatpProtocol.MetaPayloadLength];
             Encode(in meta, buffer);
@@ -127,7 +127,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Attempts to decode a contiguous META payload.</summary>
-        public static bool TryDecode(ReadOnlySpan<byte> payload, out ArticleCanonicalTransferMeta meta, out VatpErrorCode error)
+        internal static bool TryDecode(ReadOnlySpan<byte> payload, out ArticleCanonicalTransferMeta meta, out VatpErrorCode error)
         {
             meta = default;
             error = VatpErrorCode.None;

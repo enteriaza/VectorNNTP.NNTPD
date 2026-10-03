@@ -5,10 +5,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// FAIL and WINDOW payload helpers.
     /// </summary>
-    public static class VatpControlPayload
+    internal static class VatpControlPayload
     {
         /// <summary>Decodes a FAIL payload into error code and optional reason bytes.</summary>
-        public static bool TryDecodeFail(
+        internal static bool TryDecodeFail(
             ReadOnlySpan<byte> payload,
             out VatpErrorCode errorCode,
             out ReadOnlySpan<byte> reason)
@@ -27,7 +27,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Decodes a WINDOW credit-add payload.</summary>
-        public static bool TryDecodeWindow(ReadOnlySpan<byte> payload, out uint addCredit)
+        internal static bool TryDecodeWindow(ReadOnlySpan<byte> payload, out uint addCredit)
         {
             addCredit = 0;
             if (payload.Length != VatpProtocol.WindowPayloadLength)

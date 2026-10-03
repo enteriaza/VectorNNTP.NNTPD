@@ -21,7 +21,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Returns <see langword="true"/> when the buffer has a header, matching ID, and sane response flags.
         /// </summary>
-        public static bool TryReadCounts(
+        internal static bool TryReadCounts(
             ReadOnlySpan<byte> buffer,
             ushort expectedId,
             out ushort questionCount,
@@ -60,7 +60,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Returns <see langword="true"/> when the UDP response header indicates truncation (TC).
         /// </summary>
-        public static bool IsTruncated(ReadOnlySpan<byte> buffer)
+        internal static bool IsTruncated(ReadOnlySpan<byte> buffer)
         {
             if (buffer.Length < DnsWireFormat.HeaderSize)
             {
@@ -74,7 +74,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Advances past the question section.
         /// </summary>
-        public static bool TrySkipQuestions(ReadOnlySpan<byte> span, ref int offset, ushort questionCount)
+        internal static bool TrySkipQuestions(ReadOnlySpan<byte> span, ref int offset, ushort questionCount)
         {
             for (int q = 0; q < questionCount; q++)
             {

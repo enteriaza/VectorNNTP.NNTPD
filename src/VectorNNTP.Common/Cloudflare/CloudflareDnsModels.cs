@@ -1,9 +1,9 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace VectorNNTP.Common.Cloudflare
 {
     /// <summary>Cloudflare DNS record type names used by this host.</summary>
-    public static class CloudflareDnsRecordTypes
+    internal static class CloudflareDnsRecordTypes
     {
         /// <summary>IPv4 address record.</summary>
         public const string A = "A";
@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Cloudflare
     }
 
     /// <summary>A DNS record returned by the Cloudflare API.</summary>
-    public sealed class CloudflareDnsRecord
+    internal sealed class CloudflareDnsRecord
     {
         /// <summary>Gets or sets the Cloudflare record identifier.</summary>
         [JsonPropertyName("id")]
@@ -66,7 +66,7 @@ namespace VectorNNTP.Common.Cloudflare
     }
 
     /// <summary>Request body for creating or updating an A/AAAA record.</summary>
-    public sealed class CloudflareDnsRecordWriteRequest
+    internal sealed class CloudflareDnsRecordWriteRequest
     {
         /// <summary>Gets or sets the record type.</summary>
         [JsonPropertyName("type")]

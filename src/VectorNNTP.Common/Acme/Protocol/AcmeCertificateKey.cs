@@ -11,7 +11,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         private AcmeCertificateKey(RSA rsa) => _rsa = rsa;
 
         /// <summary>Creates a new RSA leaf key (minimum 2048 bits; VectorNNTP issuance uses 2048).</summary>
-        public static AcmeCertificateKey CreateRsa(int keySize = 2048)
+        internal static AcmeCertificateKey CreateRsa(int keySize = 2048)
         {
             if (keySize < 2048)
             {
@@ -22,10 +22,10 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Exports PKCS#8 PEM for pairing with a PEM certificate chain (BCL <c>CreateFromPem</c>).</summary>
-        public string ExportPem() => _rsa.ExportPkcs8PrivateKeyPem();
+        internal string ExportPem() => _rsa.ExportPkcs8PrivateKeyPem();
 
         /// <summary>Creates a PKCS#10 certificate request for <paramref name="subject"/>.</summary>
-        public CertificateRequest CreateRequest(X500DistinguishedName subject) =>
+        internal CertificateRequest CreateRequest(X500DistinguishedName subject) =>
             new(subject, _rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 
         /// <inheritdoc />

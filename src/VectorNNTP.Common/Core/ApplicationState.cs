@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Core
     /// <summary>
     /// Explicit application lifecycle states for VectorNNTP.NNTPD.
     /// </summary>
-    public enum ApplicationState
+    internal enum ApplicationState
     {
         /// <summary>The application has been constructed but has not begun startup.</summary>
         Created = 0,

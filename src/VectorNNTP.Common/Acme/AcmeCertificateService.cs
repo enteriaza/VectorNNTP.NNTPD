@@ -15,7 +15,7 @@ namespace VectorNNTP.Common.Acme
     public sealed class AcmeCertificateService : IAsyncDisposable
     {
         /// <summary>Background renewal check interval (default 6 hours).</summary>
-        public static readonly TimeSpan RenewalCheckInterval = TimeSpan.FromHours(6);
+        private static readonly TimeSpan RenewalCheckInterval = TimeSpan.FromHours(6);
 
         private readonly IOptions<AcmeCloudflareOptions> _options;
         private readonly AcmeComponentFactory _factory;
@@ -29,7 +29,7 @@ namespace VectorNNTP.Common.Acme
         private int _disposed;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeCertificateService"/> class.</summary>
-        public AcmeCertificateService(
+        internal AcmeCertificateService(
             IOptions<AcmeCloudflareOptions> options,
             AcmeComponentFactory factory,
             IAcmeCertificatePublisher certificatePublisher,
@@ -49,16 +49,16 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <inheritdoc />
-        public string Name => "AcmeCertificate";
+        internal string Name => "AcmeCertificate";
 
         /// <inheritdoc />
-        public Task? Execution => _execution;
+        internal Task? Execution => _execution;
 
         /// <summary>Gets whether the service initialized ACME components (for tests).</summary>
         internal bool AcmeInitialized => _manager is not null;
 
         /// <inheritdoc />
-        public async Task StartAsync(CancellationToken cancellationToken)
+        internal async Task StartAsync(CancellationToken cancellationToken)
         {
             if (Interlocked.Exchange(ref _started, 1) == 1)
             {
@@ -99,7 +99,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <inheritdoc />
-        public async Task StopAsync(CancellationToken cancellationToken)
+        internal async Task StopAsync(CancellationToken cancellationToken)
         {
             await _runCts.CancelAsync().ConfigureAwait(false);
             if (_execution is null)

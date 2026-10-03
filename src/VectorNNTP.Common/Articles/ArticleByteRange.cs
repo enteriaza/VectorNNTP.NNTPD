@@ -6,24 +6,24 @@ namespace VectorNNTP.Common.Articles
     public readonly struct ArticleByteRange : IEquatable<ArticleByteRange>
     {
         /// <summary>Gets a range that does not refer to any ArtData bytes.</summary>
-        public static ArticleByteRange Absent { get; } = new(-1, 0);
+        internal static ArticleByteRange Absent { get; } = new(-1, 0);
 
         /// <summary>
         /// Initializes a range.
         /// </summary>
         /// <param name="offset">Byte offset into ArtData, or -1 when absent.</param>
         /// <param name="length">Byte length of the field value.</param>
-        public ArticleByteRange(int offset, int length)
+        internal ArticleByteRange(int offset, int length)
         {
             Offset = offset;
             Length = length;
         }
 
         /// <summary>Gets the byte offset into ArtData, or -1 when the field is absent.</summary>
-        public int Offset { get; }
+        internal int Offset { get; }
 
         /// <summary>Gets the value length in bytes.</summary>
-        public int Length { get; }
+        internal int Length { get; }
 
         /// <summary>Gets a value indicating whether this range refers to ArtData.</summary>
         public bool IsPresent => Offset >= 0;
@@ -33,7 +33,7 @@ namespace VectorNNTP.Common.Articles
         /// </summary>
         /// <param name="artData">Canonical article bytes that own this range.</param>
         /// <returns>The field bytes, or empty when the field is absent or zero-length.</returns>
-        public ReadOnlySpan<byte> Slice(ReadOnlySpan<byte> artData)
+        internal ReadOnlySpan<byte> Slice(ReadOnlySpan<byte> artData)
         {
             if (!IsPresent || Length == 0)
             {

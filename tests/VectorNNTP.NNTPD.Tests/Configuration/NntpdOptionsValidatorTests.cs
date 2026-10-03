@@ -1491,21 +1491,21 @@ public sealed class NntpdConfigurationTests
     }
 
     [Theory]
-    [InlineData(null, ServerIdValidationStatus.Missing, false)]
-    [InlineData(-1, ServerIdValidationStatus.OutOfRange, false)]
-    [InlineData(0, ServerIdValidationStatus.OutOfRange, false)]
-    [InlineData(1, ServerIdValidationStatus.Valid, true)]
-    [InlineData(8, ServerIdValidationStatus.Valid, true)]
-    [InlineData(99, ServerIdValidationStatus.Valid, true)]
-    [InlineData(100, ServerIdValidationStatus.Valid, true)]
-    [InlineData(255, ServerIdValidationStatus.Valid, true)]
-    [InlineData(256, ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(null, (int)ServerIdValidationStatus.Missing, false)]
+    [InlineData(-1, (int)ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(0, (int)ServerIdValidationStatus.OutOfRange, false)]
+    [InlineData(1, (int)ServerIdValidationStatus.Valid, true)]
+    [InlineData(8, (int)ServerIdValidationStatus.Valid, true)]
+    [InlineData(99, (int)ServerIdValidationStatus.Valid, true)]
+    [InlineData(100, (int)ServerIdValidationStatus.Valid, true)]
+    [InlineData(255, (int)ServerIdValidationStatus.Valid, true)]
+    [InlineData(256, (int)ServerIdValidationStatus.OutOfRange, false)]
     public void ServerId_DelegatesNumericRulesToCommon(
         int? serverId,
-        ServerIdValidationStatus expectedStatus,
+        int expectedStatus,
         bool expectedValid)
     {
-        Assert.Equal(expectedStatus, ServerIdRules.Classify(serverId));
+        Assert.Equal((ServerIdValidationStatus)expectedStatus, ServerIdRules.Classify(serverId));
 
         var options = TestHostFactory.CreateValidOptions();
         options.ServerId = serverId;

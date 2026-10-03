@@ -13,7 +13,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// remain single-threaded from the caller; callbacks are invoked by the client I/O path
     /// and must stay lightweight.
     /// </remarks>
-    public interface IRabbitMqAsyncConfirmPublishChannel : IAsyncDisposable
+    internal interface IRabbitMqAsyncConfirmPublishChannel : IAsyncDisposable
     {
         /// <summary>Gets the connection generation this channel was opened against.</summary>
         long Generation { get; }

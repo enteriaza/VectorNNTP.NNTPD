@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// The configured exchange is assumed to exist. This sink does not declare topology.
     /// </para>
     /// </remarks>
-    public sealed class RabbitMqLogEventSink : ILogEventSink, IDisposable
+    internal sealed class RabbitMqLogEventSink : ILogEventSink, IDisposable
     {
         /// <summary>AMQP content type used for plain-text log payloads.</summary>
         public const string TextContentType = "text/plain";
@@ -54,7 +54,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <param name="appId">AMQP AppId. Callers pass the entry-assembly application identity.</param>
         /// <param name="formatter">Payload formatter selected by the application.</param>
         /// <param name="contentType">AMQP content type for the formatted payload.</param>
-        public RabbitMqLogEventSink(
+        internal RabbitMqLogEventSink(
             IRabbitMqService rabbitMq,
             string exchange,
             string routingKey,
@@ -78,19 +78,19 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         }
 
         /// <summary>Gets the destination exchange.</summary>
-        public string Exchange { get; }
+        private string Exchange { get; }
 
         /// <summary>Gets the routing key.</summary>
-        public string RoutingKey { get; }
+        private string RoutingKey { get; }
 
         /// <summary>Gets the AMQP AppId.</summary>
-        public string AppId { get; }
+        private string AppId { get; }
 
         /// <summary>Gets the payload formatter.</summary>
-        public ITextFormatter Formatter { get; }
+        internal ITextFormatter Formatter { get; }
 
         /// <summary>Gets the AMQP content type.</summary>
-        public string ContentType { get; }
+        internal string ContentType { get; }
 
         /// <summary>
         /// Formats <paramref name="logEvent"/> and publishes it on the current RabbitMQ connection.

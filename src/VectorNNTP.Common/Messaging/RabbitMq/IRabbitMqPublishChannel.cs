@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <see cref="PublishConfirmedAsync(RabbitMqConfirmedPublication, CancellationToken)"/> means the
     /// broker confirmed. The channel does not retry onto another generation.
     /// </remarks>
-    public interface IRabbitMqPublishChannel : IAsyncDisposable
+    internal interface IRabbitMqPublishChannel : IAsyncDisposable
     {
         /// <summary>Gets the connection generation this channel was opened against.</summary>
         long Generation { get; }

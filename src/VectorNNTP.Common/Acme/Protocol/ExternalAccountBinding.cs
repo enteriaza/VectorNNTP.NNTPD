@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         private readonly byte[] _hmacKey;
 
         /// <summary>Initializes a new instance with a base64url-encoded HMAC key.</summary>
-        public ExternalAccountBinding(string keyId, string hmacKey)
+        private ExternalAccountBinding(string keyId, string hmacKey)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
             ArgumentException.ThrowIfNullOrWhiteSpace(hmacKey);
@@ -19,7 +19,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Initializes a new instance with a raw HMAC key.</summary>
-        public ExternalAccountBinding(string keyId, byte[] hmacKey)
+        private ExternalAccountBinding(string keyId, byte[] hmacKey)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
             ArgumentNullException.ThrowIfNull(hmacKey);
@@ -29,7 +29,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Gets the key identifier issued by the certificate authority.</summary>
-        public string KeyId { get; }
+        internal string KeyId { get; }
 
         /// <summary>Returns the HMAC key bytes for JWS signing.</summary>
         internal byte[] GetHmacKey() => _hmacKey;

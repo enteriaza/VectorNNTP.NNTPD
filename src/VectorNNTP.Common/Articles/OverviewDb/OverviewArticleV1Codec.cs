@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
     /// range only (comma-separated, SP/HTAB/CR/LF skipped). RabbitMQ transport is
     /// not this type's responsibility.
     /// </remarks>
-    public static class OverviewArticleV1Codec
+    internal static class OverviewArticleV1Codec
     {
         private const int WireVarint = 0;
         private const int WireLengthDelimited = 2;
@@ -36,7 +36,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         /// </summary>
         /// <param name="record">Canonical article whose overview fields will be encoded.</param>
         /// <returns>A rent size large enough for <see cref="Encode(in ArticleRecord, Span{byte})"/>.</returns>
-        public static int GetMaxEncodedSize(in ArticleRecord record)
+        internal static int GetMaxEncodedSize(in ArticleRecord record)
         {
             var newsgroups = record.Newsgroups;
             var groupTagOverhead = 0;
@@ -66,7 +66,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         /// <param name="destination">Caller-provided buffer; see <see cref="GetMaxEncodedSize"/>.</param>
         /// <returns>The number of bytes written.</returns>
         /// <exception cref="ArgumentException">Thrown when the destination is too small.</exception>
-        public static int Encode(in ArticleRecord record, Span<byte> destination)
+        internal static int Encode(in ArticleRecord record, Span<byte> destination)
         {
             var written = 0;
             written += WriteVarintField(destination[written..], FieldSchemaVersion, OverviewArticleV1.CurrentSchemaVersion);
@@ -91,7 +91,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         /// </summary>
         /// <param name="record">Canonical article to encode.</param>
         /// <returns>The protobuf bytes, sized exactly to the encoded length.</returns>
-        public static byte[] Encode(in ArticleRecord record)
+        internal static byte[] Encode(in ArticleRecord record)
         {
             var buffer = new byte[GetMaxEncodedSize(record)];
             var written = Encode(record, buffer);
@@ -111,7 +111,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         /// <param name="payload">OverviewDB handoff bytes.</param>
         /// <returns>The decoded message.</returns>
         /// <exception cref="InvalidOperationException">Thrown when the payload is truncated or uses an unknown wire type.</exception>
-        public static OverviewArticleV1 Decode(ReadOnlySpan<byte> payload)
+        internal static OverviewArticleV1 Decode(ReadOnlySpan<byte> payload)
         {
             var message = new OverviewArticleV1();
             var remaining = payload;
@@ -187,7 +187,7 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         /// <param name="payload">Encoded overview message.</param>
         /// <param name="artData">Canonical article bytes.</param>
         /// <returns><see langword="true"/> when the full article is present as a contiguous span.</returns>
-        public static bool ContainsCompleteArticle(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> artData)
+        internal static bool ContainsCompleteArticle(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> artData)
             => artData.Length > 0 && payload.IndexOf(artData) >= 0;
 
         private static int WriteNewsgroups(Span<byte> destination, ReadOnlySpan<byte> newsgroups)

@@ -6,7 +6,7 @@ namespace VectorNNTP.Common.Acme.Protocol
     internal static class Base64Url
     {
         /// <summary>Encodes <paramref name="bytes"/> as unpadded base64url.</summary>
-        public static string Encode(ReadOnlySpan<byte> bytes)
+        internal static string Encode(ReadOnlySpan<byte> bytes)
         {
             if (bytes.IsEmpty)
             {
@@ -54,7 +54,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Decodes unpadded or padded base64url into bytes.</summary>
-        public static byte[] Decode(string value)
+        internal static byte[] Decode(string value)
         {
             ArgumentNullException.ThrowIfNull(value);
 

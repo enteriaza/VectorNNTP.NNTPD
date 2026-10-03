@@ -23,16 +23,16 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Gets the JWS <c>alg</c> value (<c>RS256</c>).</summary>
-        public string SignatureAlgorithm { get; }
+        internal string SignatureAlgorithm { get; }
 
         /// <summary>Gets the canonical JWK JSON object used for thumbprints and newAccount.</summary>
-        public string Jwk { get; }
+        internal string Jwk { get; }
 
         /// <summary>Gets the JWK thumbprint (base64url SHA-256 of <see cref="Jwk"/>).</summary>
-        public string Thumbprint { get; }
+        internal string Thumbprint { get; }
 
         /// <summary>Creates a new RSA account key (minimum 2048 bits).</summary>
-        public static AcmeAccountKey CreateRsa(int keySize = 2048)
+        private static AcmeAccountKey CreateRsa(int keySize = 2048)
         {
             if (keySize < 2048)
             {
@@ -45,7 +45,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Imports a PKCS#8 DER RSA private key. Consumes the entire buffer; preserves key material losslessly.
         /// </summary>
-        public static AcmeAccountKey ImportPkcs8Der(ReadOnlySpan<byte> pkcs8Der)
+        internal static AcmeAccountKey ImportPkcs8Der(ReadOnlySpan<byte> pkcs8Der)
         {
             if (pkcs8Der.IsEmpty)
             {
@@ -74,7 +74,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Proves DER → <see cref="AcmeAccountKey"/> → DER preserves RSA private key material (modulus and D).
         /// </summary>
-        public static void AssertPkcs8DerRoundTripPreservesRsaMaterial(ReadOnlySpan<byte> pkcs8Der)
+        internal static void AssertPkcs8DerRoundTripPreservesRsaMaterial(ReadOnlySpan<byte> pkcs8Der)
         {
             using var original = RSA.Create();
             original.ImportPkcs8PrivateKey(pkcs8Der, out _);
@@ -93,17 +93,17 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Exports the private key as PKCS#8 DER.</summary>
-        public byte[] ExportPkcs8Der() => _rsa.ExportPkcs8PrivateKey();
+        private byte[] ExportPkcs8Der() => _rsa.ExportPkcs8PrivateKey();
 
         /// <summary>Signs <paramref name="data"/> for JWS (RSA PKCS#1 v1.5 / SHA-256).</summary>
-        public byte[] Sign(ReadOnlySpan<byte> data) =>
+        internal byte[] Sign(ReadOnlySpan<byte> data) =>
             _rsa.SignData(data.ToArray(), _hash, RSASignaturePadding.Pkcs1);
 
         /// <summary>Builds the ACME key authorization string for <paramref name="token"/>.</summary>
-        public string GetKeyAuthorization(string token) => token + "." + Thumbprint;
+        internal string GetKeyAuthorization(string token) => token + "." + Thumbprint;
 
         /// <summary>Computes the DNS-01 TXT value (base64url SHA-256 of the key authorization).</summary>
-        public string GetDnsRecordValue(string token)
+        internal string GetDnsRecordValue(string token)
         {
             byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(GetKeyAuthorization(token)));
             return Base64Url.Encode(digest);

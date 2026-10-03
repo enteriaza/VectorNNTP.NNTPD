@@ -11,7 +11,7 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// <remarks>
     /// Control lines are recognized on CRLF and standalone LF only. A lone CR is payload.
     /// </remarks>
-    public static class ArticleLineScanner
+    internal static class ArticleLineScanner
     {
         private const byte CR = (byte)'\r';
         private const byte LF = (byte)'\n';
@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// Index of the CR in a CRLF pair or the LF in a standalone LF terminator, or -1 when none is found.
         /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int IndexOfCrLf(ReadOnlySpan<byte> span, int startOffset)
+        internal static int IndexOfCrLf(ReadOnlySpan<byte> span, int startOffset)
         {
             if ((uint)startOffset >= (uint)span.Length)
             {
@@ -93,7 +93,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// Index immediately after a CRLF pair or standalone LF, or <c>span.Length</c> when out of range.
         /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int AdvancePastLineTerminator(ReadOnlySpan<byte> span, int lineEndIndex) =>
+        internal static int AdvancePastLineTerminator(ReadOnlySpan<byte> span, int lineEndIndex) =>
             (uint)lineEndIndex >= (uint)span.Length
                 ? span.Length
                 : span[lineEndIndex] == CR && lineEndIndex + 1 < span.Length && span[lineEndIndex + 1] == LF
@@ -107,7 +107,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// <param name="startOffset">Search start offset.</param>
         /// <param name="prefix">Byte prefix matched only at line start.</param>
         /// <returns>Line start offset, or -1 when no matching line exists.</returns>
-        public static int FindLineStartingWith(ReadOnlySpan<byte> span, int startOffset, ReadOnlySpan<byte> prefix)
+        internal static int FindLineStartingWith(ReadOnlySpan<byte> span, int startOffset, ReadOnlySpan<byte> prefix)
         {
             if ((uint)startOffset >= (uint)span.Length)
             {

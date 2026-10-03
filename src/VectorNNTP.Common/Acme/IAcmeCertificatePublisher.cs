@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Receives a newly ensured or renewed PKCS#12 credential for application TLS use.
     /// </summary>
-    public interface IAcmeCertificatePublisher
+    internal interface IAcmeCertificatePublisher
     {
         /// <summary>
         /// Publishes TLS material from validated PFX bytes.

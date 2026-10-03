@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// VATP v1 frame types. Numeric values are stable wire assignments.
     /// </summary>
-    public enum VatpFrameType : byte
+    internal enum VatpFrameType : byte
     {
         /// <summary>Connection HELLO after TLS. StreamId must be 0.</summary>
         Hello = 0x00,

@@ -79,7 +79,7 @@ namespace VectorNNTP.Common.Articles.Processing
     /// On success, <see cref="ArticleBytes"/> is a newly allocated exact-size buffer owned by the caller.
     /// The source parse slices are not mutated.
     /// </remarks>
-    public readonly struct NntpArticleCanonicalMaterializeResult
+    internal readonly struct NntpArticleCanonicalMaterializeResult
     {
         /// <summary>
         /// Initializes a materialization result.
@@ -87,7 +87,7 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <param name="isAccepted">Whether a canonical article was produced.</param>
         /// <param name="failureCode">Failure classification when not accepted.</param>
         /// <param name="articleBytes">Exact-size canonical article when accepted; otherwise <see langword="null"/>.</param>
-        public NntpArticleCanonicalMaterializeResult(
+        private NntpArticleCanonicalMaterializeResult(
             bool isAccepted,
             NntpArticleCanonicalFailureCode failureCode,
             byte[]? articleBytes)
@@ -98,24 +98,24 @@ namespace VectorNNTP.Common.Articles.Processing
         }
 
         /// <summary>Gets a value indicating whether materialization produced a canonical article.</summary>
-        public bool IsAccepted { get; }
+        internal bool IsAccepted { get; }
 
         /// <summary>Gets the failure classification when <see cref="IsAccepted"/> is false.</summary>
-        public NntpArticleCanonicalFailureCode FailureCode { get; }
+        internal NntpArticleCanonicalFailureCode FailureCode { get; }
 
         /// <summary>Gets the exact-size canonical article bytes when accepted.</summary>
-        public byte[]? ArticleBytes { get; }
+        internal byte[]? ArticleBytes { get; }
 
         /// <summary>Creates a rejected result with no output buffer.</summary>
         /// <param name="failureCode">Failure classification.</param>
         /// <returns>Rejected result.</returns>
-        public static NntpArticleCanonicalMaterializeResult Rejected(NntpArticleCanonicalFailureCode failureCode)
+        internal static NntpArticleCanonicalMaterializeResult Rejected(NntpArticleCanonicalFailureCode failureCode)
             => new(false, failureCode, null);
 
         /// <summary>Creates a successful result that transfers <paramref name="articleBytes"/> to the caller.</summary>
         /// <param name="articleBytes">Exact-size canonical article.</param>
         /// <returns>Accepted result.</returns>
-        public static NntpArticleCanonicalMaterializeResult Accepted(byte[] articleBytes)
+        internal static NntpArticleCanonicalMaterializeResult Accepted(byte[] articleBytes)
             => new(true, NntpArticleCanonicalFailureCode.None, articleBytes);
     }
 
@@ -126,7 +126,7 @@ namespace VectorNNTP.Common.Articles.Processing
     /// Rewrites only the selected date-header value and the Path header (or inserts Path).
     /// All other header bytes and the entire destuffed body are copied exactly. yEnc is not decoded.
     /// </remarks>
-    public static class NntpArticleCanonicalMaterializer
+    internal static class NntpArticleCanonicalMaterializer
     {
         private static ReadOnlySpan<byte> PathHeaderPrefix => "Path: "u8;
 
@@ -138,7 +138,7 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <returns>
         /// A result that owns one exact-size canonical buffer on success, or a failure classification without an output buffer.
         /// </returns>
-        public static NntpArticleCanonicalMaterializeResult Materialize(
+        internal static NntpArticleCanonicalMaterializeResult Materialize(
             in NntpArticleParseResult parseResult,
             ArticlePathMode pathMode)
         {

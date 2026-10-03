@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// <summary>
     /// Parses strict one-to-eight digit hexadecimal ASCII values for yEnc CRC metadata.
     /// </summary>
-    public static class HexUInt32Parser
+    internal static class HexUInt32Parser
     {
         /// <summary>
         /// Parses hexadecimal ASCII bytes into a <see cref="uint"/>.
@@ -13,7 +13,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// <param name="hexBytes">One to eight ASCII hex digits with no prefix, sign, separator, or whitespace.</param>
         /// <param name="value">Parsed value when the method returns <see langword="true"/>; otherwise zero.</param>
         /// <returns><see langword="true"/> when the span is consumed as one to eight hex digits.</returns>
-        public static bool TryParseHexUInt32(ReadOnlySpan<byte> hexBytes, out uint value)
+        internal static bool TryParseHexUInt32(ReadOnlySpan<byte> hexBytes, out uint value)
         {
             value = 0;
 

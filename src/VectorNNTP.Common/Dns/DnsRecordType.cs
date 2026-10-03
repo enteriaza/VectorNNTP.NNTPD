@@ -6,7 +6,7 @@ namespace VectorNNTP.Common.Dns
     /// <remarks>
     /// Only A, AAAA, NS, and TXT are implemented. EDNS, DNSSEC, MX, CNAME, SRV, and PTR are intentionally absent.
     /// </remarks>
-    public static class DnsRecordType
+    internal static class DnsRecordType
     {
         /// <summary>A (IPv4 address).</summary>
         public const ushort A = 1;

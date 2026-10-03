@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Articles
         /// <param name="date">Winning Date-family header value range.</param>
         /// <param name="references">References header value range.</param>
         /// <param name="path">Path header value range.</param>
-        public ArticleFieldTable(
+        internal ArticleFieldTable(
             ArticleByteRange messageId,
             ArticleByteRange newsgroups,
             ArticleByteRange subject,
@@ -48,19 +48,19 @@ namespace VectorNNTP.Common.Articles
         public ArticleByteRange Newsgroups { get; }
 
         /// <summary>Gets the Subject header value range.</summary>
-        public ArticleByteRange Subject { get; }
+        internal ArticleByteRange Subject { get; }
 
         /// <summary>Gets the From header value range.</summary>
-        public ArticleByteRange From { get; }
+        internal ArticleByteRange From { get; }
 
         /// <summary>Gets the winning Date-family header value range.</summary>
         public ArticleByteRange Date { get; }
 
         /// <summary>Gets the References header value range.</summary>
-        public ArticleByteRange References { get; }
+        internal ArticleByteRange References { get; }
 
         /// <summary>Gets the Path header value range.</summary>
-        public ArticleByteRange Path { get; }
+        internal ArticleByteRange Path { get; }
 
         /// <inheritdoc />
         public bool Equals(ArticleFieldTable other) =>
@@ -91,7 +91,7 @@ namespace VectorNNTP.Common.Articles
         /// <param name="artData">Canonical unstuffed article bytes.</param>
         /// <param name="selectedDateHeaderName">Winning Date-family header from the parser.</param>
         /// <returns>Ranges into <paramref name="artData"/>.</returns>
-        public static ArticleFieldTable Locate(
+        internal static ArticleFieldTable Locate(
             ReadOnlySpan<byte> artData,
             NntpArticleHeaderName selectedDateHeaderName)
         {

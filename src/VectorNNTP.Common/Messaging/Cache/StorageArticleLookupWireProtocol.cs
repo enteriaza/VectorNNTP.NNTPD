@@ -15,7 +15,7 @@ namespace VectorNNTP.Common.Messaging.Cache
     /// AMQP <c>CorrelationId</c>, <c>ReplyTo</c>, and
     /// <c>Expiration</c> are never JSON fields.
     /// </remarks>
-    public static class StorageArticleLookupWireProtocol
+    internal static class StorageArticleLookupWireProtocol
     {
         /// <summary>Current application protocol version.</summary>
         public const int CurrentVersion = 1;
@@ -24,7 +24,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         public const string JsonContentType = "application/json";
 
         /// <summary>Serializes a version-1 lookup request.</summary>
-        public static byte[] SerializeRequestV1(StorageArticleLookupRequest request)
+        internal static byte[] SerializeRequestV1(StorageArticleLookupRequest request)
         {
             ArgumentNullException.ThrowIfNull(request);
             if (request.Version != CurrentVersion)
@@ -49,7 +49,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         }
 
         /// <summary>Attempts to parse a version-1 lookup request.</summary>
-        public static bool TryParseRequestV1(
+        internal static bool TryParseRequestV1(
             ReadOnlySpan<byte> payload,
             out StorageArticleLookupRequest? request,
             out string reason)
@@ -93,7 +93,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         }
 
         /// <summary>Serializes a version-1 positive lookup response.</summary>
-        public static byte[] SerializeResponseV1(StorageArticleLookupResponse response)
+        internal static byte[] SerializeResponseV1(StorageArticleLookupResponse response)
         {
             ArgumentNullException.ThrowIfNull(response);
             if (response.Version != CurrentVersion)
@@ -141,7 +141,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         }
 
         /// <summary>Attempts to parse a version-1 positive lookup response.</summary>
-        public static bool TryParseResponseV1(
+        internal static bool TryParseResponseV1(
             ReadOnlySpan<byte> payload,
             out StorageArticleLookupResponse? response,
             out string reason)

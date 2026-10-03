@@ -7,13 +7,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// Credit cannot underflow. Adds saturate at a configured maximum.
     /// Zero credit pauses only that stream; other streams remain eligible.
     /// </remarks>
-    public struct ArticleTransferWindow
+    internal struct ArticleTransferWindow
     {
         private long _credit;
         private readonly long _maxCredit;
 
         /// <summary>Initializes credit to <paramref name="initialCredit"/> capped by <paramref name="maxCredit"/>.</summary>
-        public ArticleTransferWindow(long initialCredit, long maxCredit)
+        internal ArticleTransferWindow(long initialCredit, long maxCredit)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(initialCredit);
             ArgumentOutOfRangeException.ThrowIfLessThan(maxCredit, 1);
@@ -27,16 +27,16 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Gets the current available credit in bytes.</summary>
-        public readonly long Credit => _credit;
+        internal readonly long Credit => _credit;
 
         /// <summary>Gets a value indicating whether any credit remains.</summary>
-        public readonly bool HasCredit => _credit > 0;
+        internal readonly bool HasCredit => _credit > 0;
 
         /// <summary>
         /// Attempts to consume <paramref name="bytes"/> of credit.
         /// </summary>
         /// <returns><see langword="false"/> when insufficient credit (credit unchanged).</returns>
-        public bool TryConsume(long bytes)
+        internal bool TryConsume(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(bytes);
             if (bytes > _credit)
@@ -52,7 +52,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// Adds WINDOW credit, saturating at the configured maximum.
         /// </summary>
         /// <returns>The actual amount added (may be less than <paramref name="bytes"/> when saturated).</returns>
-        public long Add(long bytes)
+        internal long Add(long bytes)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(bytes);
             if (bytes == 0)

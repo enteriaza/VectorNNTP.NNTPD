@@ -18,16 +18,16 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </list>
     /// WINDOW for an unknown stream is a protocol error (<see cref="VatpErrorCode.UnknownStream"/>).
     /// </remarks>
-    public sealed class ArticleTransferReadyRing
+    internal sealed class ArticleTransferReadyRing
     {
         private readonly List<uint> _ring = [];
         private int _next;
 
         /// <summary>Gets the number of write-ready stream ids.</summary>
-        public int Count => _ring.Count;
+        internal int Count => _ring.Count;
 
         /// <summary>Adds a stream to the ring tail when not already present.</summary>
-        public void Enqueue(uint streamId)
+        internal void Enqueue(uint streamId)
         {
             if (streamId == VatpProtocol.ConnectionStreamId)
             {
@@ -43,7 +43,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Removes a stream from the ring.</summary>
-        public bool Remove(uint streamId)
+        internal bool Remove(uint streamId)
         {
             var index = _ring.IndexOf(streamId);
             if (index < 0)
@@ -67,7 +67,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>
         /// Takes the next ready stream id and advances the ring. Returns false when empty.
         /// </summary>
-        public bool TryTakeNext(out uint streamId)
+        internal bool TryTakeNext(out uint streamId)
         {
             if (_ring.Count == 0)
             {
@@ -88,7 +88,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>
         /// Computes the DATA payload length for one scheduling turn.
         /// </summary>
-        public static int ComputeDataPayloadLength(int remainingBytes, long credit, uint maxFramePayload)
+        internal static int ComputeDataPayloadLength(int remainingBytes, long credit, uint maxFramePayload)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(remainingBytes);
             ArgumentOutOfRangeException.ThrowIfNegative(credit);
@@ -117,7 +117,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Clears the ring.</summary>
-        public void Clear()
+        internal void Clear()
         {
             _ring.Clear();
             _next = 0;

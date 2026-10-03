@@ -44,7 +44,7 @@ namespace VectorNNTP.Common.Articles
         /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
         /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN. <see cref="ArticlePathMode.Normalize"/> does not.</param>
         /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
-        public static ArticleRecordCreateResult TryCreate(
+        internal static ArticleRecordCreateResult TryCreate(
             NntpArticleParser parser,
             ReadOnlyMemory<byte> destuffedArticle,
             ArticlePathMode pathMode)
@@ -97,7 +97,7 @@ namespace VectorNNTP.Common.Articles
         /// via <see cref="ArticleTypeClassifier"/> (header + ≤8 KiB body prefix). Does not
         /// recount body lines.
         /// </remarks>
-        public static ArticleRecordCreateResult TryCreateFromCanonicalTransfer(
+        internal static ArticleRecordCreateResult TryCreateFromCanonicalTransfer(
             byte[] artData,
             in ArticleCanonicalTransferMeta meta,
             in ArticleId expectedArtId)
@@ -278,20 +278,20 @@ namespace VectorNNTP.Common.Articles
         /// Gets the Date-family header name selected during parse (for VATP META).
         /// <see cref="NntpArticleHeaderName.Unknown"/> when not accepted.
         /// </summary>
-        public NntpArticleHeaderName SelectedDateHeaderName { get; }
+        internal NntpArticleHeaderName SelectedDateHeaderName { get; }
 
         /// <summary>Creates an accepted result that carries <paramref name="record"/> (no ArtData copy).</summary>
-        public static ArticleRecordCreateResult Accepted(
+        internal static ArticleRecordCreateResult Accepted(
             ArticleRecord record,
             NntpArticleHeaderName selectedDateHeaderName = NntpArticleHeaderName.Unknown)
             => new(true, record, NntpArticleParseFailureCode.None, NntpArticleCanonicalFailureCode.None, selectedDateHeaderName);
 
         /// <summary>Creates a parse-rejected result with no ArtData.</summary>
-        public static ArticleRecordCreateResult RejectedParse(NntpArticleParseFailureCode parseFailure)
+        internal static ArticleRecordCreateResult RejectedParse(NntpArticleParseFailureCode parseFailure)
             => new(false, default, parseFailure, NntpArticleCanonicalFailureCode.None, NntpArticleHeaderName.Unknown);
 
         /// <summary>Creates a materialize-rejected result with no ArtData.</summary>
-        public static ArticleRecordCreateResult RejectedMaterialize(NntpArticleCanonicalFailureCode materializeFailure)
+        internal static ArticleRecordCreateResult RejectedMaterialize(NntpArticleCanonicalFailureCode materializeFailure)
             => new(false, default, NntpArticleParseFailureCode.None, materializeFailure, NntpArticleHeaderName.Unknown);
     }
 }

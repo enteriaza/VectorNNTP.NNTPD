@@ -12,7 +12,7 @@ namespace VectorNNTP.Common.Articles
     public static class ArticleTypeClassifier
     {
         /// <summary>Maximum destuffed body prefix examined for markers (8 KiB).</summary>
-        public const int MaxPrefixBytes = 8 * 1024;
+        private const int MaxPrefixBytes = 8 * 1024;
 
         /// <summary>Classifies from destuffed headers and an optional destuffed body prefix.</summary>
         public static ArticleType Classify(ReadOnlySpan<byte> headers, ReadOnlySpan<byte> bodyPrefix)
@@ -30,7 +30,7 @@ namespace VectorNNTP.Common.Articles
         }
 
         /// <summary>Applies one destuffed line (no CRLF) to <paramref name="type"/>.</summary>
-        public static void ObserveLine(ReadOnlySpan<byte> line, bool inHeader, ref ArticleType type)
+        internal static void ObserveLine(ReadOnlySpan<byte> line, bool inHeader, ref ArticleType type)
         {
             if (line.IsEmpty)
             {

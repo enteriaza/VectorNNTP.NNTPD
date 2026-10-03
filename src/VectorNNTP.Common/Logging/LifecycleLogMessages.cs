@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Logging
     /// <summary>
     /// Reserved logger category names for VectorNNTP.NNTPD lifecycle diagnostics.
     /// </summary>
-    public static class NntpdLogCategories
+    internal static class NntpdLogCategories
     {
         /// <summary>Category for application lifecycle transitions.</summary>
         public const string Lifecycle = "VectorNNTP.NNTPD.Lifecycle";
@@ -26,7 +26,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1000,
             Level = LogLevel.Information,
             Message = "Application lifecycle state transition: {FromState} -> {ToState}")]
-        public static partial void LifecycleTransition(
+        internal static partial void LifecycleTransition(
             ILogger logger,
             ApplicationStateLog FromState,
             ApplicationStateLog ToState);
@@ -39,7 +39,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1001,
             Level = LogLevel.Information,
             Message = "Application startup initiated for {ApplicationName}")]
-        public static partial void StartupInitiated(ILogger logger, string ApplicationName);
+        private static partial void StartupInitiated(ILogger logger, string ApplicationName);
 
         /// <summary>
         /// Reserved unused template. Operational running uses
@@ -49,7 +49,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1002,
             Level = LogLevel.Information,
             Message = "Application entered Running state for {ApplicationName} in {ElapsedMs} ms")]
-        public static partial void EnteredRunning(ILogger logger, string ApplicationName, long ElapsedMs);
+        private static partial void EnteredRunning(ILogger logger, string ApplicationName, long ElapsedMs);
 
         /// <summary>
         /// Reserved unused template. Operational shutdown uses
@@ -59,7 +59,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1003,
             Level = LogLevel.Information,
             Message = "Application shutdown initiated for {ApplicationName}")]
-        public static partial void ShutdownInitiated(ILogger logger, string ApplicationName);
+        private static partial void ShutdownInitiated(ILogger logger, string ApplicationName);
 
         /// <summary>
         /// Reserved unused template. Operational shutdown completion uses
@@ -69,7 +69,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1004,
             Level = LogLevel.Information,
             Message = "Application shutdown completed for {ApplicationName} in {ElapsedMs} ms")]
-        public static partial void ShutdownCompleted(ILogger logger, string ApplicationName, long ElapsedMs);
+        private static partial void ShutdownCompleted(ILogger logger, string ApplicationName, long ElapsedMs);
 
         /// <summary>
         /// Reserved unused template. Operational timeout uses
@@ -79,13 +79,13 @@ namespace VectorNNTP.Common.Logging
             EventId = 1005,
             Level = LogLevel.Error,
             Message = "Application shutdown timed out for {ApplicationName} after {Timeout}")]
-        public static partial void ShutdownTimedOut(ILogger logger, string ApplicationName, TimeSpan Timeout);
+        private static partial void ShutdownTimedOut(ILogger logger, string ApplicationName, TimeSpan Timeout);
 
         [LoggerMessage(
             EventId = 1010,
             Level = LogLevel.Information,
             Message = "Application startup initiated for {ApplicationName}. Current state: {State}")]
-        public static partial void StartupInitiatedWithState(
+        internal static partial void StartupInitiatedWithState(
             ILogger logger,
             string ApplicationName,
             ApplicationState State);
@@ -94,25 +94,25 @@ namespace VectorNNTP.Common.Logging
             EventId = 1011,
             Level = LogLevel.Warning,
             Message = "Application startup canceled after {ElapsedMs} ms. Transitioning to shutdown")]
-        public static partial void StartupCanceled(ILogger logger, long ElapsedMs);
+        internal static partial void StartupCanceled(ILogger logger, long ElapsedMs);
 
         [LoggerMessage(
             EventId = 1012,
             Level = LogLevel.Error,
             Message = "Application startup timed out after {Timeout} ({ElapsedMs} ms)")]
-        public static partial void StartupTimedOut(ILogger logger, TimeSpan? Timeout, long ElapsedMs);
+        internal static partial void StartupTimedOut(ILogger logger, TimeSpan? Timeout, long ElapsedMs);
 
         [LoggerMessage(
             EventId = 1013,
             Level = LogLevel.Error,
             Message = "Application startup failed after {ElapsedMs} ms. Rolling back and transitioning to Stopped")]
-        public static partial void StartupFailed(ILogger logger, Exception exception, long ElapsedMs);
+        internal static partial void StartupFailed(ILogger logger, Exception exception, long ElapsedMs);
 
         [LoggerMessage(
             EventId = 1014,
             Level = LogLevel.Information,
             Message = "Application initialization completed for {ApplicationName} in {ElapsedMs} ms. State: {State}")]
-        public static partial void InitializationCompleted(
+        internal static partial void InitializationCompleted(
             ILogger logger,
             string ApplicationName,
             long ElapsedMs,
@@ -122,7 +122,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1015,
             Level = LogLevel.Information,
             Message = "Application stop requested before startup. State transition: {From} -> {To}")]
-        public static partial void StopRequestedBeforeStartup(
+        internal static partial void StopRequestedBeforeStartup(
             ILogger logger,
             ApplicationState From,
             ApplicationState To);
@@ -131,13 +131,13 @@ namespace VectorNNTP.Common.Logging
             EventId = 1016,
             Level = LogLevel.Error,
             Message = "ApplicationLifecycle disposal encountered a shutdown failure")]
-        public static partial void DisposalShutdownFailure(ILogger logger, Exception exception);
+        internal static partial void DisposalShutdownFailure(ILogger logger, Exception exception);
 
         [LoggerMessage(
             EventId = 1017,
             Level = LogLevel.Information,
             Message = "Application shutdown initiated for {ApplicationName}. State: {State}. Timeout: {Timeout}")]
-        public static partial void ShutdownInitiatedWithDetails(
+        internal static partial void ShutdownInitiatedWithDetails(
             ILogger logger,
             string ApplicationName,
             ApplicationState State,
@@ -147,19 +147,19 @@ namespace VectorNNTP.Common.Logging
             EventId = 1018,
             Level = LogLevel.Error,
             Message = "Application shutdown timed out after {ElapsedMs} ms")]
-        public static partial void ShutdownTimedOutElapsed(ILogger logger, Exception exception, long ElapsedMs);
+        internal static partial void ShutdownTimedOutElapsed(ILogger logger, Exception exception, long ElapsedMs);
 
         [LoggerMessage(
             EventId = 1019,
             Level = LogLevel.Error,
             Message = "Application shutdown failed after {ElapsedMs} ms. Forcing Stopped state")]
-        public static partial void ShutdownFailed(ILogger logger, Exception exception, long ElapsedMs);
+        internal static partial void ShutdownFailed(ILogger logger, Exception exception, long ElapsedMs);
 
         [LoggerMessage(
             EventId = 1020,
             Level = LogLevel.Information,
             Message = "Application shutdown completed for {ApplicationName} in {ElapsedMs} ms. State: {State}")]
-        public static partial void ShutdownCompletedWithState(
+        internal static partial void ShutdownCompletedWithState(
             ILogger logger,
             string ApplicationName,
             long ElapsedMs,
@@ -169,13 +169,13 @@ namespace VectorNNTP.Common.Logging
             EventId = 1021,
             Level = LogLevel.Error,
             Message = "Additional cleanup after startup failure encountered an error")]
-        public static partial void StartupFailureCleanupError(ILogger logger, Exception exception);
+        internal static partial void StartupFailureCleanupError(ILogger logger, Exception exception);
 
         [LoggerMessage(
             EventId = 1022,
             Level = LogLevel.Error,
             Message = "An ApplicationLifecycle.StateChanged handler failed for transition {FromState} -> {ToState}")]
-        public static partial void StateChangedHandlerFailed(
+        internal static partial void StateChangedHandlerFailed(
             ILogger logger,
             Exception exception,
             ApplicationState FromState,
@@ -185,7 +185,7 @@ namespace VectorNNTP.Common.Logging
             EventId = 1023,
             Level = LogLevel.Critical,
             Message = "Unexpected termination of application service {ServiceName} while Running (completedNormally={CompletedNormally})")]
-        public static partial void UnexpectedServiceTerminationWhileRunning(
+        internal static partial void UnexpectedServiceTerminationWhileRunning(
             ILogger logger,
             Exception? exception,
             string ServiceName,

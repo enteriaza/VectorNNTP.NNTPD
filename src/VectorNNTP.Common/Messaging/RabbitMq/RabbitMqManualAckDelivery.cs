@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <param name="Exchange">Exchange, when present.</param>
     /// <param name="ConsumerTag">Consumer tag, when present.</param>
     /// <param name="Generation">Connection generation of the consuming channel.</param>
-    public readonly record struct RabbitMqManualAckDelivery(
+    internal readonly record struct RabbitMqManualAckDelivery(
         ulong DeliveryTag,
         ReadOnlyMemory<byte> Body,
         string? CorrelationId,

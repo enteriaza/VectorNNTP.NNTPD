@@ -94,7 +94,7 @@ internal static class TestHostFactory
         return ((IPEndPoint)socket.LocalEndPoint!).Port;
     }
 
-    public static ApplicationServiceManager CreateServiceManager(
+    internal static ApplicationServiceManager CreateServiceManager(
         IEnumerable<IApplicationService> services,
         NntpdOptions? options = null)
     {

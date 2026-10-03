@@ -2,7 +2,7 @@
 namespace VectorNNTP.Common.Messaging.RabbitMq
 {
     /// <summary>Creates one RabbitMQ broker connection from validated configuration.</summary>
-    public interface IRabbitMqConnectionFactory
+    internal interface IRabbitMqConnectionFactory
     {
         /// <summary>
         /// Opens a broker connection. The caller owns the returned instance.

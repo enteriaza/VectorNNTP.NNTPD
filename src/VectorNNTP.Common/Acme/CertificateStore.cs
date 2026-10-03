@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Acme
     /// and a <c>current</c> pointer.
     /// Persists the TLS credential as PKCS#12/PFX (<c>certificate.pfx</c>).
     /// </summary>
-    public sealed class CertificateStore
+    internal sealed class CertificateStore
     {
         private static readonly Regex GenerationIdRegex = new("^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="pfxPassword">PKCS#12 password (never logged).</param>
         /// <param name="requiredDomains">Required DNS SANs for round-trip validation.</param>
         /// <param name="renewalThreshold">Renewal threshold used when assessing reloaded material.</param>
-        public CertificateStore(
+        internal CertificateStore(
             string stateDir,
             string fqdn,
             string pfxPassword,
@@ -48,10 +48,10 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Gets the FQDN this store is scoped to.</summary>
-        public string Fqdn => _fqdn;
+        private string Fqdn => _fqdn;
 
         /// <summary>Returns paths for the active generation (after recovery).</summary>
-        public CertificatePaths Paths()
+        internal CertificatePaths Paths()
         {
             Recover();
             var active = ReadCurrentId();
@@ -64,7 +64,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Returns the active generation id, or <see langword="null"/> when none is current.</summary>
-        public string? CurrentGenerationId()
+        internal string? CurrentGenerationId()
         {
             Recover();
             var active = ReadCurrentId();
@@ -74,7 +74,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Loads and validates the active PFX, or <see langword="null"/> when no complete generation exists.
         /// </summary>
-        public CertificateMaterial? Load()
+        internal CertificateMaterial? Load()
         {
             Recover();
             var active = ReadCurrentId();
@@ -115,7 +115,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Persists a new generation after a serialize → reload → validate round trip, then commits <c>current</c>.
         /// </summary>
-        public CertificatePaths Save(CertificateMaterial material)
+        internal CertificatePaths Save(CertificateMaterial material)
         {
             ArgumentNullException.ThrowIfNull(material);
             AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
@@ -178,7 +178,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Idempotent recovery for interrupted promotions inside this FQDN only.</summary>
-        public void Recover()
+        internal void Recover()
         {
             AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
             var pointer = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);

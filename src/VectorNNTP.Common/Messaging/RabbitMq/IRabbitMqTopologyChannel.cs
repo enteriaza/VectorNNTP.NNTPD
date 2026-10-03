@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// The channel must not publish, consume, delete, purge, or mutate existing
     /// entities beyond RabbitMQ's normal idempotent declare/bind operations.
     /// </remarks>
-    public interface IRabbitMqTopologyChannel : IAsyncDisposable
+    internal interface IRabbitMqTopologyChannel : IAsyncDisposable
     {
         /// <summary>Declares an exchange using RabbitMQ's idempotent declare semantics.</summary>
         /// <param name="exchange">Exchange name to declare.</param>

@@ -17,7 +17,7 @@ namespace VectorNNTP.Common.Acme
         public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(2);
 
         /// <summary>Outcome of evaluating one poll snapshot.</summary>
-        public enum Decision
+        internal enum Decision
         {
             /// <summary>Still pending; keep polling.</summary>
             Continue,
@@ -35,7 +35,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="ErrorType">ACME problem type from a failed challenge, when present.</param>
         /// <param name="ErrorDetail">ACME problem detail from a failed challenge, when present.</param>
         /// <param name="ErrorStatus">HTTP status from the ACME problem, when present.</param>
-        public sealed record AuthorizationView(
+        internal sealed record AuthorizationView(
             string? Domain,
             string Status,
             string? ErrorType,
@@ -45,7 +45,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>Order plus authorization snapshots for one poll.</summary>
         /// <param name="Status">Order status string.</param>
         /// <param name="Authorizations">Authorization snapshots for the order.</param>
-        public sealed record OrderView(
+        internal sealed record OrderView(
             string Status,
             IReadOnlyList<AuthorizationView> Authorizations);
 
@@ -53,7 +53,7 @@ namespace VectorNNTP.Common.Acme
         /// Evaluates a poll snapshot. When <see cref="Decision.Invalid"/>, <paramref name="invalidDiagnostic"/>
         /// is set to a sanitized explanation.
         /// </summary>
-        public static Decision Evaluate(OrderView view, out string? invalidDiagnostic)
+        internal static Decision Evaluate(OrderView view, out string? invalidDiagnostic)
         {
             ArgumentNullException.ThrowIfNull(view);
             ArgumentNullException.ThrowIfNull(view.Authorizations);
@@ -91,7 +91,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="interval">Delay between polls.</param>
         /// <param name="cancellationToken">Caller cancellation.</param>
         /// <param name="delayAsync">Injectable delay (tests); defaults to <see cref="Task.Delay(TimeSpan, CancellationToken)"/>.</param>
-        public static async Task WaitUntilReadyAsync(
+        internal static async Task WaitUntilReadyAsync(
             Func<CancellationToken, Task<OrderView>> pollAsync,
             TimeSpan timeout,
             TimeSpan interval,

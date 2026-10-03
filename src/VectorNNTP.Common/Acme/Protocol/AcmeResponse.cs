@@ -6,7 +6,7 @@ namespace VectorNNTP.Common.Acme.Protocol
     internal sealed class AcmeResponse<T>
     {
         /// <summary>Initializes a new instance of the <see cref="AcmeResponse{T}"/> class.</summary>
-        public AcmeResponse(
+        internal AcmeResponse(
             HttpStatusCode statusCode,
             T? content,
             Uri? location,
@@ -23,22 +23,22 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Gets the HTTP status code.</summary>
-        public HttpStatusCode StatusCode { get; }
+        private HttpStatusCode StatusCode { get; }
 
         /// <summary>Gets the deserialized body when present.</summary>
-        public T? Content { get; }
+        internal T? Content { get; }
 
         /// <summary>Gets the Location header when present.</summary>
-        public Uri? Location { get; }
+        internal Uri? Location { get; }
 
         /// <summary>Gets parsed Link headers.</summary>
-        public IReadOnlyList<AcmeLink> Links { get; }
+        internal IReadOnlyList<AcmeLink> Links { get; }
 
         /// <summary>Gets the raw response body.</summary>
-        public string RawBody { get; }
+        internal string RawBody { get; }
 
         /// <summary>Gets Retry-After as an absolute UTC time when the authority supplied one.</summary>
-        public DateTimeOffset? RetryAfter { get; }
+        internal DateTimeOffset? RetryAfter { get; }
     }
 
     /// <summary>One RFC 8288 Link entry from an ACME response.</summary>

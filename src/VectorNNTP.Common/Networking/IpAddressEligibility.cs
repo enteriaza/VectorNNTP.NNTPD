@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 
 namespace VectorNNTP.Common.Networking
@@ -11,14 +11,14 @@ namespace VectorNNTP.Common.Networking
     /// loopback, and link-local addresses are excluded. <see cref="IPAddress.IsIPv6UniqueLocal"/> /
     /// site-local uniqueness is not used as a rejection criterion; private routable addresses remain eligible.
     /// </remarks>
-    public static class IpAddressEligibility
+    internal static class IpAddressEligibility
     {
         /// <summary>
         /// Returns whether <paramref name="address"/> may be published in authoritative DNS for this host.
         /// </summary>
         /// <param name="address">The address to evaluate.</param>
         /// <returns><see langword="true"/> when the address is eligible for DNS publication.</returns>
-        public static bool IsEligibleForDns(IPAddress address)
+        internal static bool IsEligibleForDns(IPAddress address)
         {
             ArgumentNullException.ThrowIfNull(address);
 
@@ -79,7 +79,7 @@ namespace VectorNNTP.Common.Networking
         /// </summary>
         /// <param name="address">The address to format.</param>
         /// <returns>Canonical IP string without zone/scope identifiers.</returns>
-        public static string ToDnsContent(IPAddress address)
+        internal static string ToDnsContent(IPAddress address)
         {
             ArgumentNullException.ThrowIfNull(address);
 
@@ -95,7 +95,7 @@ namespace VectorNNTP.Common.Networking
         /// <summary>
         /// Attempts to parse Cloudflare DNS record content as an IP address.
         /// </summary>
-        public static bool TryParseDnsContent(string? content, out IPAddress address)
+        internal static bool TryParseDnsContent(string? content, out IPAddress address)
         {
             address = IPAddress.None;
             if (string.IsNullOrWhiteSpace(content))

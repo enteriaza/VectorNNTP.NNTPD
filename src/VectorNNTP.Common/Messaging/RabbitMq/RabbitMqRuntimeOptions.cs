@@ -72,7 +72,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <exception cref="ArgumentException">
         /// <paramref name="applicationPrefix"/> or <paramref name="fqdn"/> is <see langword="null"/>, empty, or whitespace.
         /// </exception>
-        public static string GetDefaultConnectionName(string applicationPrefix, string fqdn)
+        internal static string GetDefaultConnectionName(string applicationPrefix, string fqdn)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(applicationPrefix);
             ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);

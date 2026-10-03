@@ -3,10 +3,10 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Ensures every certificate identity falls under the configured DNS apex (<c>DnsSuffix</c>).
     /// </summary>
-    public static class DnsZoneCoverage
+    internal static class DnsZoneCoverage
     {
         /// <summary>Normalizes a DNS hostname (lowercase, no trailing dots).</summary>
-        public static string NormalizeDnsHostname(string name, string settingName = "dns_name")
+        internal static string NormalizeDnsHostname(string name, string settingName = "dns_name")
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
@@ -34,7 +34,7 @@ namespace VectorNNTP.Common.Acme
         /// Returns whether <paramref name="hostname"/> is <paramref name="zoneApex"/> or a subdomain thereof
         /// (label-boundary aware).
         /// </summary>
-        public static bool ZoneCoversHostname(string zoneApex, string hostname)
+        private static bool ZoneCoversHostname(string zoneApex, string hostname)
         {
             var zone = NormalizeDnsHostname(zoneApex, "zone_apex");
             var host = NormalizeDnsHostname(hostname, "hostname");
@@ -42,7 +42,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Fails closed unless every identity is inside <paramref name="zoneApex"/>.</summary>
-        public static void RequireIdentitiesInDnsZone(IReadOnlyList<string> identities, string zoneApex)
+        internal static void RequireIdentitiesInDnsZone(IReadOnlyList<string> identities, string zoneApex)
         {
             ArgumentNullException.ThrowIfNull(identities);
 

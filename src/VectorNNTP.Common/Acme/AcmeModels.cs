@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Acme
     /// <param name="DirectoryUrl">Directory URL used when the account was registered.</param>
     /// <param name="PrivateKeyDer">PKCS#8 DER encoding of the account private key.</param>
     /// <param name="RegistrationBody">Optional opaque registration body retained for diagnostics.</param>
-    public sealed record AcmeAccountState(
+    internal sealed record AcmeAccountState(
         string AccountUri,
         string DirectoryUrl,
         byte[] PrivateKeyDer,
@@ -17,14 +17,14 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Filesystem location for the active server certificate PKCS#12/PFX.</summary>
     /// <param name="PfxPath">Path to <c>certificate.pfx</c>.</param>
     /// <param name="GenerationId">GUID-based generation directory name (32 hex characters).</param>
-    public sealed record CertificatePaths(string PfxPath, string GenerationId);
+    internal sealed record CertificatePaths(string PfxPath, string GenerationId);
 
     /// <summary>Validated PKCS#12/PFX server certificate material (leaf + key + chain).</summary>
     /// <param name="PfxBytes">Binary PKCS#12/PFX bytes (password-protected).</param>
     /// <param name="Domains">DNS SANs present on the leaf.</param>
     /// <param name="NotBefore">Leaf not-before (UTC).</param>
     /// <param name="NotAfter">Leaf not-after (UTC).</param>
-    public sealed record CertificateMaterial(
+    internal sealed record CertificateMaterial(
         byte[] PfxBytes,
         IReadOnlyList<string> Domains,
         DateTimeOffset NotBefore,
@@ -35,7 +35,7 @@ namespace VectorNNTP.Common.Acme
     /// <param name="DueForRenewal">Whether renewal should be attempted.</param>
     /// <param name="Material">Validated material when usable.</param>
     /// <param name="Reason">Short Reason code.</param>
-    public sealed record CertificateStatus(
+    internal sealed record CertificateStatus(
         bool Usable,
         bool DueForRenewal,
         CertificateMaterial? Material,

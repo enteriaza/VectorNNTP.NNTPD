@@ -24,53 +24,53 @@ namespace VectorNNTP.Common.Configuration
         /// Shared ACME/Cloudflare secrets bind from the configuration root. There is no
         /// application section name for those secrets.
         /// </summary>
-        public const string SectionName = "";
+        internal const string SectionName = "";
 
         /// <summary>Configuration key for the Cloudflare API key secret.</summary>
-        public const string CloudFlareApiKeyConfigurationKey = "CloudFlareApiKey";
+        internal const string CloudFlareApiKeyConfigurationKey = "CloudFlareApiKey";
 
         /// <summary>Configuration key for the ACME PKCS#12 password secret.</summary>
-        public const string AcmeCertificatePasswordConfigurationKey = "AcmeCertificatePassword";
+        internal const string AcmeCertificatePasswordConfigurationKey = "AcmeCertificatePassword";
 
         /// <summary>Configuration key for the shared ACME account contact email.</summary>
-        public const string AcmeAccountConfigurationKey = "ACMEACCOUNT";
+        internal const string AcmeAccountConfigurationKey = "ACMEACCOUNT";
 
         /// <summary>Configuration key for the Cloudflare zone id.</summary>
-        public const string CloudFlareZoneIdConfigurationKey = "CloudFlareZoneId";
+        internal const string CloudFlareZoneIdConfigurationKey = "CloudFlareZoneId";
 
         /// <summary>
         /// Environment variable that supplies <see cref="CloudFlareApiKey"/>
         /// (<c>VECTOR__CLOUDFLAREAPIKEY</c>).
         /// </summary>
-        public const string CloudFlareApiKeyEnvironmentVariable = "VECTOR__CLOUDFLAREAPIKEY";
+        internal const string CloudFlareApiKeyEnvironmentVariable = "VECTOR__CLOUDFLAREAPIKEY";
 
         /// <summary>
         /// Environment variable that supplies <see cref="AcmeCertificatePassword"/>
         /// (<c>VECTOR__ACMECERTIFICATEPASSWORD</c>).
         /// </summary>
-        public const string AcmeCertificatePasswordEnvironmentVariable = "VECTOR__ACMECERTIFICATEPASSWORD";
+        internal const string AcmeCertificatePasswordEnvironmentVariable = "VECTOR__ACMECERTIFICATEPASSWORD";
 
         /// <summary>
         /// Environment variable that supplies <see cref="CloudFlareZoneId"/>
         /// (<c>VECTOR__CLOUDFLAREZONEID</c>).
         /// </summary>
-        public const string CloudFlareZoneIdEnvironmentVariable = "VECTOR__CLOUDFLAREZONEID";
+        internal const string CloudFlareZoneIdEnvironmentVariable = "VECTOR__CLOUDFLAREZONEID";
 
         /// <summary>
         /// Environment variable that supplies <see cref="AcmeEmail"/>
         /// (<c>VECTOR__ACMEACCOUNT</c>). Shared by every application using Common ACME.
         /// </summary>
-        public const string AcmeAccountEnvironmentVariable = "VECTOR__ACMEACCOUNT";
+        internal const string AcmeAccountEnvironmentVariable = "VECTOR__ACMEACCOUNT";
 
         /// <summary>Default Let's Encrypt staging ACME directory URL.</summary>
-        public const string DefaultAcmeDirectoryUrl =
+        internal const string DefaultAcmeDirectoryUrl =
             "https://acme-staging-v02.api.letsencrypt.org/directory";
 
         /// <summary>Default relative ACME state directory.</summary>
-        public const string DefaultAcmeStateDir = "certs/";
+        internal const string DefaultAcmeStateDir = "certs/";
 
         /// <summary>Default certificate renewal lead time in days.</summary>
-        public const int DefaultAcmeRenewalThresholdDays = 30;
+        internal const int DefaultAcmeRenewalThresholdDays = 30;
 
         /// <summary>
         /// Gets or sets the maximum wall-clock duration for a single Cloudflare reconcile or clean-up operation.
@@ -148,7 +148,7 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>
         /// Returns whether a bind-address entry is a wildcard (all interfaces / any-address).
         /// </summary>
-        public static bool IsBindAddressWildcard(string entry)
+        internal static bool IsBindAddressWildcard(string entry)
         {
             if (string.IsNullOrWhiteSpace(entry))
             {
@@ -204,7 +204,7 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="options">The options instance to update.</param>
         /// <param name="configuration">The full configuration root.</param>
-        public static void OverlayAcmeAccountEmail(AcmeCloudflareOptions options, IConfiguration configuration)
+        internal static void OverlayAcmeAccountEmail(AcmeCloudflareOptions options, IConfiguration configuration)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(configuration);

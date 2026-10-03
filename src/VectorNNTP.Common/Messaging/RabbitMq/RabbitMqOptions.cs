@@ -15,25 +15,25 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     public sealed class RabbitMqOptions
     {
         /// <summary>Configuration section name.</summary>
-        public const string SectionName = "RabbitMQ";
+        internal const string SectionName = "RabbitMQ";
 
         /// <summary>Configuration key for the broker username.</summary>
-        public const string UsernameConfigurationKey = "Username";
+        internal const string UsernameConfigurationKey = "Username";
 
         /// <summary>Configuration key for the broker password secret.</summary>
-        public const string PasswordConfigurationKey = "Password";
+        internal const string PasswordConfigurationKey = "Password";
 
         /// <summary>
         /// Environment variable that supplies <see cref="Username"/>
         /// (<c>VECTOR__RABBITMQ__USERNAME</c>).
         /// </summary>
-        public const string UsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
+        internal const string UsernameEnvironmentVariable = "VECTOR__RABBITMQ__USERNAME";
 
         /// <summary>
         /// Environment variable that supplies <see cref="Password"/>
         /// (<c>VECTOR__RABBITMQ__PASSWORD</c>).
         /// </summary>
-        public const string PasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
+        internal const string PasswordEnvironmentVariable = "VECTOR__RABBITMQ__PASSWORD";
 
         /// <summary>
         /// Maximum RabbitMQ work-request envelope size, in bytes, admitted before a future

@@ -21,7 +21,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// <see cref="CloudflareOperationBudget"/>, whichever is shorter. Caller cancellation is honoured immediately
     /// and is not converted into success.
     /// </remarks>
-    public sealed class CloudflareDnsClient : ICloudflareDnsClient
+    internal sealed class CloudflareDnsClient : ICloudflareDnsClient
     {
         internal const string HttpClientName = "CloudflareDns";
         private const int DefaultPerPage = 100;
@@ -53,7 +53,7 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudflareDnsClient"/> class.
         /// </summary>
-        public CloudflareDnsClient(
+        internal CloudflareDnsClient(
             HttpClient httpClient,
             IOptions<AcmeCloudflareOptions> options,
             ILogger<CloudflareDnsClient> logger)

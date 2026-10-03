@@ -4,10 +4,10 @@ using VectorNNTP.Common.Articles;
 namespace VectorNNTP.Common.Transport.ArticleTransfer
 {
     /// <summary>STORE payload: 32-byte <see cref="ArticleId"/>.</summary>
-    public static class VatpStorePayload
+    internal static class VatpStorePayload
     {
         /// <summary>Attempts to decode a STORE payload sequence.</summary>
-        public static bool TryDecode(in ReadOnlySequence<byte> payload, out ArticleId articleId, out VatpErrorCode error)
+        internal static bool TryDecode(in ReadOnlySequence<byte> payload, out ArticleId articleId, out VatpErrorCode error)
         {
             articleId = default;
             error = VatpErrorCode.None;
@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Attempts to decode a contiguous STORE payload.</summary>
-        public static bool TryDecode(ReadOnlySpan<byte> payload, out ArticleId articleId, out VatpErrorCode error)
+        private static bool TryDecode(ReadOnlySpan<byte> payload, out ArticleId articleId, out VatpErrorCode error)
         {
             articleId = default;
             error = VatpErrorCode.None;
@@ -48,10 +48,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     }
 
     /// <summary>RESULT payload: one outcome byte.</summary>
-    public static class VatpResultPayload
+    internal static class VatpResultPayload
     {
         /// <summary>Attempts to decode a RESULT payload sequence.</summary>
-        public static bool TryDecode(in ReadOnlySequence<byte> payload, out byte outcome, out VatpErrorCode error)
+        internal static bool TryDecode(in ReadOnlySequence<byte> payload, out byte outcome, out VatpErrorCode error)
         {
             outcome = 0;
             error = VatpErrorCode.None;

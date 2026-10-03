@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <summary>
     /// Classifies how a Path header would be rewritten without mutating the article buffer.
     /// </summary>
-    public enum ArticlePathKind
+    internal enum ArticlePathKind
     {
         /// <summary>No Path header was present.</summary>
         Missing = 0,
@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <summary>
     /// Selects whether a Path rewrite records a receiving-system traversal.
     /// </summary>
-    public enum ArticlePathMode
+    internal enum ArticlePathMode
     {
         /// <summary>
         /// Validate and normalize Path without adding an application hop.
@@ -45,7 +45,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// Common owns the organizational tracker hostname <c>news.usenet.ninja</c> and application-hop
     /// prepend rules. Callers supply only their own application FQDN.
     /// </remarks>
-    public static class ArticlePathCanonicalizer
+    internal static class ArticlePathCanonicalizer
     {
         /// <summary>Maximum accepted Path value length.</summary>
         public const int MaxPathLength = 8192;
@@ -53,7 +53,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <summary>
         /// Organizational Vector tracker hostname. Present exactly once after any Vector application has seen the article.
         /// </summary>
-        public static ReadOnlySpan<byte> OrganizationalTrackerHost => "news.usenet.ninja"u8;
+        internal static ReadOnlySpan<byte> OrganizationalTrackerHost => "news.usenet.ninja"u8;
 
         /// <summary>
         /// Validates a raw Path value and classifies the rewrite that a later materializer would apply.
@@ -67,7 +67,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// </param>
         /// <param name="failureCode">Failure code when the Path value is invalid.</param>
         /// <returns><see langword="true"/> when the Path is usable (including a missing header).</returns>
-        public static bool TryAnalyze(
+        internal static bool TryAnalyze(
             ReadOnlySpan<byte> rawPath,
             ReadOnlySpan<byte> localIdentity,
             bool pathPresent,
@@ -165,7 +165,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <c>news.usenet.ninja</c> is inserted when absent and reduced to the first occurrence.
         /// Empty Path tokens from repeated <c>!</c> separators are dropped.
         /// </remarks>
-        public static bool TryWriteCanonicalPath(
+        internal static bool TryWriteCanonicalPath(
             ReadOnlySpan<byte> rawPath,
             ReadOnlySpan<byte> localIdentity,
             ArticlePathKind kind,
@@ -199,7 +199,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// </summary>
         /// <param name="component">Path component bytes after trimming.</param>
         /// <returns><see langword="true"/> when the component is valid.</returns>
-        public static bool IsValidPathComponent(ReadOnlySpan<byte> component)
+        private static bool IsValidPathComponent(ReadOnlySpan<byte> component)
         {
             for (var i = 0; i < component.Length; i++)
             {

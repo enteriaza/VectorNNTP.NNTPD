@@ -12,7 +12,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     public sealed class RabbitMqManagementOptions
     {
         /// <summary>Configuration key for this nested section relative to <see cref="RabbitMqOptions.SectionName"/>.</summary>
-        public const string SectionRelativeName = "Management";
+        internal const string SectionRelativeName = "Management";
 
         /// <summary>
         /// Absolute base URL of the RabbitMQ Management HTTP API root

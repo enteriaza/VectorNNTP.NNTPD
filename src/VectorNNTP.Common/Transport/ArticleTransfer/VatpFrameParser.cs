@@ -12,14 +12,14 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// before HELLO completes). The parser never allocates based on an attacker-controlled
     /// length beyond rejecting oversized frames.
     /// </remarks>
-    public static class VatpFrameParser
+    internal static class VatpFrameParser
     {
         /// <summary>Attempts to parse exactly one frame from contiguous bytes.</summary>
-        public static VatpFrameParseResult ParseOneFrame(byte[] input, uint maxFramePayload) =>
+        internal static VatpFrameParseResult ParseOneFrame(byte[] input, uint maxFramePayload) =>
             ParseOneFrame(new ReadOnlySequence<byte>(input), maxFramePayload);
 
         /// <summary>Attempts to parse exactly one frame from a possibly fragmented sequence.</summary>
-        public static VatpFrameParseResult ParseOneFrame(in ReadOnlySequence<byte> input, uint maxFramePayload)
+        internal static VatpFrameParseResult ParseOneFrame(in ReadOnlySequence<byte> input, uint maxFramePayload)
         {
             if (maxFramePayload == 0)
             {
@@ -73,7 +73,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Returns whether <paramref name="type"/> is a defined v1 frame type.</summary>
-        public static bool IsSupportedFrameType(byte type) =>
+        private static bool IsSupportedFrameType(byte type) =>
             type is (byte)VatpFrameType.Hello
                 or (byte)VatpFrameType.Open
                 or (byte)VatpFrameType.Meta

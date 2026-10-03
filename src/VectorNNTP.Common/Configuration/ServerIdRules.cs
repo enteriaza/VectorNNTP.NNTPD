@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Configuration
     /// distinguishable from an explicit <c>0</c>; both fail validation.
     /// This type does not know about applications, configuration sections, or environment variables.
     /// </remarks>
-    public static class ServerIdRules
+    internal static class ServerIdRules
     {
         /// <summary>Inclusive lower bound.</summary>
         public const int MinimumInclusive = 1;
@@ -22,14 +22,14 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="serverId">Bound server id, or <see langword="null"/> when omitted.</param>
         /// <returns><see langword="true"/> when the value was not configured.</returns>
-        public static bool IsMissing(int? serverId) => serverId is null;
+        internal static bool IsMissing(int? serverId) => serverId is null;
 
         /// <summary>
         /// Returns whether a configured <paramref name="serverId"/> is inside the accepted range.
         /// </summary>
         /// <param name="serverId">Configured server id.</param>
         /// <returns><see langword="true"/> when <paramref name="serverId"/> is 1–255 inclusive.</returns>
-        public static bool IsInRange(int serverId) =>
+        internal static bool IsInRange(int serverId) =>
             serverId is >= MinimumInclusive and <= MaximumInclusive;
 
         /// <summary>
@@ -37,7 +37,7 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="serverId">Bound server id, or <see langword="null"/> when omitted.</param>
         /// <returns>Validation classification.</returns>
-        public static ServerIdValidationStatus Classify(int? serverId)
+        internal static ServerIdValidationStatus Classify(int? serverId)
         {
             if (serverId is not { } value)
             {
@@ -58,7 +58,7 @@ namespace VectorNNTP.Common.Configuration
         /// <see langword="null"/> when valid; otherwise a missing or out-of-range failure.
         /// The missing message does not mention an environment variable.
         /// </returns>
-        public static string? Validate(int? serverId, string configurationKey)
+        internal static string? Validate(int? serverId, string configurationKey)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(configurationKey);
 
@@ -76,7 +76,7 @@ namespace VectorNNTP.Common.Configuration
     /// <summary>
     /// Result of <see cref="ServerIdRules.Classify"/>.
     /// </summary>
-    public enum ServerIdValidationStatus
+    internal enum ServerIdValidationStatus
     {
         /// <summary>Configured and inside 1–255.</summary>
         Valid = 0,

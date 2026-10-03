@@ -7,7 +7,7 @@
     /// Implementations must not log API keys or authenticated request headers.
     /// Unsuccessful API responses must surface as failures (never as empty success).
     /// </remarks>
-    public interface ICloudflareDnsClient
+    internal interface ICloudflareDnsClient
     {
         /// <summary>
         /// Lists all DNS records for the exact hostname and type, following pagination.

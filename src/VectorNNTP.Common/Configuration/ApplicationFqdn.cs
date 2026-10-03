@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Configuration
     /// The prefix is application identity supplied by the caller; this type does not
     /// know about configuration sections or operator-configurable names.
     /// </remarks>
-    public static class ApplicationFqdn
+    internal static class ApplicationFqdn
     {
         /// <summary>Maximum DNS FQDN length.</summary>
         public const int MaximumLength = 253;
@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Configuration
         /// <returns>Lowercase host label with a two-digit id.</returns>
         /// <exception cref="ArgumentException">Thrown when <paramref name="prefix"/> is empty.</exception>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="serverId"/> is outside 1–255.</exception>
-        public static string FormatHostLabel(string prefix, int serverId)
+        internal static string FormatHostLabel(string prefix, int serverId)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
             if (!ServerIdRules.IsInRange(serverId))
@@ -44,7 +44,7 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="dnsSuffix">Configured DNS suffix.</param>
         /// <returns>Canonical suffix.</returns>
-        public static string CanonicalizeDnsSuffix(string dnsSuffix)
+        internal static string CanonicalizeDnsSuffix(string dnsSuffix)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(dnsSuffix);
             return dnsSuffix.Trim().TrimEnd('.').ToLowerInvariant();
@@ -57,7 +57,7 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="serverId">Validated server id in the shared ServerId range.</param>
         /// <param name="dnsSuffix">DNS suffix.</param>
         /// <returns>Canonical lowercase FQDN.</returns>
-        public static string Build(string prefix, int serverId, string dnsSuffix)
+        internal static string Build(string prefix, int serverId, string dnsSuffix)
         {
             return $"{FormatHostLabel(prefix, serverId)}.{CanonicalizeDnsSuffix(dnsSuffix)}";
         }

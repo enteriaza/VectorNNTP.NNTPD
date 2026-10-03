@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Articles.Checksum
     /// final XOR <c>0xFFFFFFFF</c>. Coverage is exactly the bytes supplied to
     /// <see cref="Compute"/> or <see cref="Update"/> — callers choose the slice.
     /// </remarks>
-    public static class IeeeCrc32
+    internal static class IeeeCrc32
     {
         /// <summary>Reflected IEEE CRC-32 polynomial.</summary>
         public const uint Polynomial = 0xEDB88320u;
@@ -27,7 +27,7 @@ namespace VectorNNTP.Common.Articles.Checksum
         /// <param name="data">Bytes to fold into the accumulator.</param>
         /// <returns>Updated accumulator.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static uint Update(uint crc, ReadOnlySpan<byte> data)
+        internal static uint Update(uint crc, ReadOnlySpan<byte> data)
         {
             ReadOnlySpan<uint> table = Table;
             for (var i = 0; i < data.Length; i++)
@@ -42,12 +42,12 @@ namespace VectorNNTP.Common.Articles.Checksum
         /// <param name="crc">Accumulator after the last <see cref="Update"/>.</param>
         /// <returns>The finalized CRC-32 value.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static uint Finalize(uint crc) => crc ^ 0xFFFFFFFFu;
+        internal static uint Finalize(uint crc) => crc ^ 0xFFFFFFFFu;
 
         /// <summary>Computes the finalized IEEE CRC-32 of <paramref name="data"/>.</summary>
         /// <param name="data">Input bytes.</param>
         /// <returns>Finalized CRC-32.</returns>
-        public static uint Compute(ReadOnlySpan<byte> data) =>
+        internal static uint Compute(ReadOnlySpan<byte> data) =>
             Finalize(Update(InitialAccumulator, data));
 
         private static uint[] CreateTable()

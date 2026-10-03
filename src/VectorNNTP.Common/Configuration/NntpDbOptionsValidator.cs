@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Configuration
 {
     /// <summary>Validates <see cref="NntpDbOptions"/> at bind / startup time.</summary>
     /// <remarks>Never includes the connection string or credentials in failure messages.</remarks>
-    public sealed class NntpDbOptionsValidator : IValidateOptions<NntpDbOptions>
+    internal sealed class NntpDbOptionsValidator : IValidateOptions<NntpDbOptions>
     {
         /// <inheritdoc />
         public ValidateOptionsResult Validate(string? name, NntpDbOptions options)

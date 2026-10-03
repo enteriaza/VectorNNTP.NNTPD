@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 
 namespace VectorNNTP.Common.Networking
@@ -12,7 +12,7 @@ namespace VectorNNTP.Common.Networking
         /// Initializes a new instance of the <see cref="ResolvedBindAddresses"/> class.
         /// </summary>
         /// <param name="addresses">Eligible addresses (already filtered and deduplicated).</param>
-        public ResolvedBindAddresses(IEnumerable<IPAddress> addresses)
+        internal ResolvedBindAddresses(IEnumerable<IPAddress> addresses)
         {
             ArgumentNullException.ThrowIfNull(addresses);
 
@@ -47,15 +47,15 @@ namespace VectorNNTP.Common.Networking
         }
 
         /// <summary>Gets all eligible addresses in discovery order (deduplicated).</summary>
-        public IReadOnlyList<IPAddress> All { get; }
+        internal IReadOnlyList<IPAddress> All { get; }
 
         /// <summary>Gets eligible IPv4 addresses.</summary>
-        public IReadOnlyList<IPAddress> IPv4 { get; }
+        internal IReadOnlyList<IPAddress> IPv4 { get; }
 
         /// <summary>Gets eligible IPv6 addresses.</summary>
-        public IReadOnlyList<IPAddress> IPv6 { get; }
+        internal IReadOnlyList<IPAddress> IPv6 { get; }
 
         /// <summary>Gets a value indicating whether at least one eligible address is present.</summary>
-        public bool HasAny => All.Count > 0;
+        internal bool HasAny => All.Count > 0;
     }
 }

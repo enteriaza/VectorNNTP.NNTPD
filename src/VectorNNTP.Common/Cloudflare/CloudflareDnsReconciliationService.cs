@@ -19,7 +19,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// by the application host; reconcile and clean-up share the reconciler gate.
     /// </para>
     /// </remarks>
-    public sealed class CloudflareDnsReconciliationService
+    internal sealed class CloudflareDnsReconciliationService
     {
         /// <summary>Maximum wall-clock budget for best-effort clean-up after a failed or cancelled startup reconcile.</summary>
         public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
@@ -51,13 +51,13 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <inheritdoc />
-        public string Name => "CloudflareDnsReconciliation";
+        internal string Name => "CloudflareDnsReconciliation";
 
         /// <inheritdoc />
-        public Task? Execution => null;
+        internal Task? Execution => null;
 
         /// <inheritdoc />
-        public async Task StartAsync(CancellationToken cancellationToken)
+        internal async Task StartAsync(CancellationToken cancellationToken)
         {
             var options = _options.Value;
             var fqdn = options.Fqdn;
@@ -112,7 +112,7 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <inheritdoc />
-        public async Task StopAsync(CancellationToken cancellationToken)
+        internal async Task StopAsync(CancellationToken cancellationToken)
         {
             // Runs during normal shutdown and startup rollback while lifecycle may already be Stopping.
             // Do not skip clean-up merely because ownership tracking or lifecycle state changed.

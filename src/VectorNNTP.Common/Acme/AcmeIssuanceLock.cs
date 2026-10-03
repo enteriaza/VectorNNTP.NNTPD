@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Acme
     /// The lock file is <c>live/{fqdn}/.issuance.lock</c>. Distinct FQDNs use distinct files
     /// and can issue concurrently. The same FQDN is mutually exclusive across processes.
     /// </remarks>
-    public sealed class AcmeIssuanceLock : IAsyncDisposable, IDisposable
+    internal sealed class AcmeIssuanceLock : IAsyncDisposable, IDisposable
     {
         private const int RetryDelayMilliseconds = 50;
 
@@ -26,7 +26,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="fqdn">Certificate FQDN that owns the lock.</param>
         /// <param name="cancellationToken">Cancels the wait.</param>
         /// <returns>A held lock that must be disposed to release.</returns>
-        public static async Task<AcmeIssuanceLock> AcquireAsync(
+        internal static async Task<AcmeIssuanceLock> AcquireAsync(
             string stateDir,
             string fqdn,
             CancellationToken cancellationToken)

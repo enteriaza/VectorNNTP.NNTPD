@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Dns
             EventId = 1950,
             Level = LogLevel.Debug,
             Message = "OS recursive resolver discovery failed ({ExceptionType}); using public fallback resolvers")]
-        public static partial void RecursiveResolverDiscoveryFallback(
+        internal static partial void RecursiveResolverDiscoveryFallback(
             ILogger logger,
             string ExceptionType,
             Exception exception);
@@ -16,13 +16,13 @@ namespace VectorNNTP.Common.Dns
             EventId = 1951,
             Level = LogLevel.Debug,
             Message = "Zone-apex NS discovery found no nameservers for {ZoneApex}")]
-        public static partial void ZoneApexNsDiscoveryFailed(ILogger logger, string ZoneApex);
+        internal static partial void ZoneApexNsDiscoveryFailed(ILogger logger, string ZoneApex);
 
         [LoggerMessage(
             EventId = 1952,
             Level = LogLevel.Debug,
             Message = "OS stub resolver failed for NS hostname {Host} ({ExceptionType})")]
-        public static partial void NsHostnameOsResolveFailed(
+        internal static partial void NsHostnameOsResolveFailed(
             ILogger logger,
             string Host,
             string ExceptionType,
@@ -32,12 +32,12 @@ namespace VectorNNTP.Common.Dns
             EventId = 1953,
             Level = LogLevel.Debug,
             Message = "Authoritative DNS UDP query timed out for {RecordName} at {Nameserver}")]
-        public static partial void AuthoritativeUdpTimeout(ILogger logger, string Nameserver, string RecordName);
+        internal static partial void AuthoritativeUdpTimeout(ILogger logger, string Nameserver, string RecordName);
 
         [LoggerMessage(
             EventId = 1954,
             Level = LogLevel.Debug,
             Message = "Authoritative DNS TCP query timed out for {RecordName} at {Nameserver}")]
-        public static partial void AuthoritativeTcpTimeout(ILogger logger, string Nameserver, string RecordName);
+        internal static partial void AuthoritativeTcpTimeout(ILogger logger, string Nameserver, string RecordName);
     }
 }

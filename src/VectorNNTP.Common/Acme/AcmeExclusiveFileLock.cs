@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Acme
     /// processes and AppDomains. Callers wait until the lock is available or cancelled;
     /// sharing violations are not ignored.
     /// </remarks>
-    public sealed class AcmeExclusiveFileLock : IDisposable
+    internal sealed class AcmeExclusiveFileLock : IDisposable
     {
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
 
@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="path">Lock file path. The parent directory is created when missing.</param>
         /// <param name="cancellationToken">Cancels the wait.</param>
         /// <returns>A held lock that must be disposed to release.</returns>
-        public static AcmeExclusiveFileLock Acquire(string path, CancellationToken cancellationToken = default)
+        internal static AcmeExclusiveFileLock Acquire(string path, CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
 

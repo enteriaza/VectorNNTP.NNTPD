@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Dns
     /// Compression traversal is bounded by <see cref="MaxPointerHops"/>. Reserved label types (bits <c>10</c>/<c>01</c>)
     /// are rejected. Skip advances past a pointer without following it (offset arithmetic only).
     /// </remarks>
-    public static class DnsNameCodec
+    internal static class DnsNameCodec
     {
         /// <summary>Maximum compression-pointer hops before treating a name as malformed.</summary>
         public const int MaxPointerHops = 128;
@@ -22,7 +22,7 @@ namespace VectorNNTP.Common.Dns
         /// on-wire encoding (after the root label, or past a compression pointer that ends the name).
         /// </summary>
         /// <returns><see langword="true"/> on success; <see langword="false"/> on malformed encoding.</returns>
-        public static bool TryReadDomainName(ReadOnlySpan<byte> packet, ref int offset, out string name)
+        internal static bool TryReadDomainName(ReadOnlySpan<byte> packet, ref int offset, out string name)
         {
             name = string.Empty;
 
@@ -103,7 +103,7 @@ namespace VectorNNTP.Common.Dns
         /// Compression pointers advance by two bytes without following the target (sufficient when skipping
         /// owner names and questions before parsing typed RDATA).
         /// </remarks>
-        public static bool TrySkipName(ReadOnlySpan<byte> packet, ref int offset)
+        internal static bool TrySkipName(ReadOnlySpan<byte> packet, ref int offset)
         {
             int hops = 0;
             while (offset < packet.Length)

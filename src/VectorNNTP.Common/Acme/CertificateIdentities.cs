@@ -1,7 +1,7 @@
 namespace VectorNNTP.Common.Acme
 {
     /// <summary>Deterministic certificate SAN set for NNTPD TLS certificates.</summary>
-    public static class CertificateIdentities
+    internal static class CertificateIdentities
     {
         /// <summary>Shared public news hostname required on every server certificate.</summary>
         public const string NewsHostname = "news.usenet.ninja";
@@ -12,7 +12,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
         /// <returns>Trimmed, trailing-dot-stripped, lowercased FQDN.</returns>
         /// <exception cref="ArgumentException">Thrown when the value is empty, a wildcard, or not a safe path segment.</exception>
-        public static string NormalizeFqdn(string fqdn)
+        internal static string NormalizeFqdn(string fqdn)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
 
@@ -45,7 +45,7 @@ namespace VectorNNTP.Common.Acme
         /// When <see langword="false"/> (BackFiller), request only <paramref name="fqdn"/>.
         /// </param>
         /// <returns>Lowercased, deduplicated identities.</returns>
-        public static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
+        internal static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
         {
             var cleanedFqdn = NormalizeFqdn(fqdn);
 

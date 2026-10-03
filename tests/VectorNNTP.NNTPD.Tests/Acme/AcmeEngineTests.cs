@@ -719,7 +719,7 @@ public sealed class AcmeLifecycleServiceTests
             _manager = manager;
         }
 
-        public override CertificateManager? GetOrCreateManager() => _manager;
+        internal override CertificateManager? GetOrCreateManager() => _manager;
     }
 }
 

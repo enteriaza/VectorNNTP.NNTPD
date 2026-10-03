@@ -7,13 +7,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// Result of applying one protocol event to a receive stream.
     /// </summary>
-    public readonly record struct ArticleTransferApplyResult(bool Success, VatpErrorCode Error)
+    internal readonly record struct ArticleTransferApplyResult(bool Success, VatpErrorCode Error)
     {
         /// <summary>Creates a success result.</summary>
-        public static ArticleTransferApplyResult Ok() => new(true, VatpErrorCode.None);
+        internal static ArticleTransferApplyResult Ok() => new(true, VatpErrorCode.None);
 
         /// <summary>Creates a failure result.</summary>
-        public static ArticleTransferApplyResult Fail(VatpErrorCode error) => new(false, error);
+        internal static ArticleTransferApplyResult Fail(VatpErrorCode error) => new(false, error);
     }
 
     /// <summary>
@@ -32,7 +32,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// stream is <see cref="VatpErrorCode.UnknownStream"/>.
     /// </para>
     /// </remarks>
-    public sealed class ArticleTransferReceiveStream
+    internal sealed class ArticleTransferReceiveStream
     {
         private readonly ArticleTransferLimits _limits;
         private ArticleTransferWindow _receiveWindow;
@@ -44,7 +44,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         private bool _hasRecord;
 
         /// <summary>Creates a stream after a successful OPEN.</summary>
-        public ArticleTransferReceiveStream(
+        internal ArticleTransferReceiveStream(
             uint streamId,
             Guid requestId,
             ArticleId expectedArtId,
@@ -71,19 +71,19 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Gets the connection-local stream identifier.</summary>
-        public uint StreamId { get; }
+        internal uint StreamId { get; }
 
         /// <summary>Gets the OPEN RequestId.</summary>
-        public Guid RequestId { get; }
+        internal Guid RequestId { get; }
 
         /// <summary>Gets the OPEN ArticleId used for canonical binding.</summary>
-        public ArticleId ExpectedArtId { get; }
+        internal ArticleId ExpectedArtId { get; }
 
         /// <summary>Gets the current phase.</summary>
-        public ArticleTransferPhase Phase { get; private set; }
+        internal ArticleTransferPhase Phase { get; private set; }
 
         /// <summary>Gets the failure code when <see cref="Phase"/> is <see cref="ArticleTransferPhase.Failed"/>.</summary>
-        public VatpErrorCode Failure { get; private set; }
+        internal VatpErrorCode Failure { get; private set; }
 
         /// <summary>
         /// Gets the number of DATA payload bytes copied into this stream.
@@ -92,19 +92,19 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// Releasing the article buffer on failure or cancellation does not erase this count.
         /// A failed or cancelled stream is terminal and is not reused for another article.
         /// </remarks>
-        public int ReceivedBytes => _received;
+        internal int ReceivedBytes => _received;
 
         /// <summary>Gets META ArtSize after META is accepted; otherwise 0.</summary>
-        public int ArtSize => Phase >= ArticleTransferPhase.ReceivingData && Phase != ArticleTransferPhase.Failed
+        private int ArtSize => Phase >= ArticleTransferPhase.ReceivingData && Phase != ArticleTransferPhase.Failed
             && Phase != ArticleTransferPhase.Cancelled
             ? _meta.ArtSize
             : 0;
 
         /// <summary>Gets a value indicating whether a consumable CanonicalV1 record is available.</summary>
-        public bool HasConsumableRecord => Phase == ArticleTransferPhase.Completed && _hasRecord;
+        internal bool HasConsumableRecord => Phase == ArticleTransferPhase.Completed && _hasRecord;
 
         /// <summary>Gets the validated record. Throws when not consumable.</summary>
-        public ArticleRecord ConsumableRecord
+        internal ArticleRecord ConsumableRecord
         {
             get
             {
@@ -118,16 +118,16 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Gets remaining receive WINDOW credit.</summary>
-        public long ReceiveCredit => _receiveWindow.Credit;
+        internal long ReceiveCredit => _receiveWindow.Credit;
 
         /// <summary>Gets a value indicating whether the phase is terminal.</summary>
-        public bool IsTerminal =>
+        internal bool IsTerminal =>
             Phase is ArticleTransferPhase.Completed
                 or ArticleTransferPhase.Failed
                 or ArticleTransferPhase.Cancelled;
 
         /// <summary>Applies a decoded META payload.</summary>
-        public ArticleTransferApplyResult TryAcceptMeta(ReadOnlySpan<byte> metaPayload)
+        internal ArticleTransferApplyResult TryAcceptMeta(ReadOnlySpan<byte> metaPayload)
         {
             if (Phase != ArticleTransferPhase.AwaitingMeta)
             {
@@ -153,7 +153,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Applies a META payload sequence.</summary>
-        public ArticleTransferApplyResult TryAcceptMeta(in ReadOnlySequence<byte> metaPayload)
+        internal ArticleTransferApplyResult TryAcceptMeta(in ReadOnlySequence<byte> metaPayload)
         {
             if (metaPayload.Length != VatpProtocol.MetaPayloadLength)
             {
@@ -166,7 +166,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Applies a DATA chunk. Does not expose a record.</summary>
-        public ArticleTransferApplyResult TryAcceptData(ReadOnlySpan<byte> payload, bool fin)
+        internal ArticleTransferApplyResult TryAcceptData(ReadOnlySpan<byte> payload, bool fin)
         {
             if (Phase != ArticleTransferPhase.ReceivingData)
             {
@@ -222,7 +222,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Applies a DATA payload sequence.</summary>
-        public ArticleTransferApplyResult TryAcceptData(in ReadOnlySequence<byte> payload, bool fin)
+        internal ArticleTransferApplyResult TryAcceptData(in ReadOnlySequence<byte> payload, bool fin)
         {
             if (payload.IsSingleSegment)
             {
@@ -250,7 +250,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// Applies END. Requires exact ArtSize bytes and FIN already observed, then runs
         /// canonical validation.
         /// </summary>
-        public ArticleTransferApplyResult TryAcceptEnd()
+        internal ArticleTransferApplyResult TryAcceptEnd()
         {
             if (Phase == ArticleTransferPhase.Completed)
             {
@@ -276,7 +276,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// Does not double-count: DATA acceptance consumes credit; this restores it
         /// once those bytes are buffered in the stream. Unknown/terminal streams fail.
         /// </remarks>
-        public ArticleTransferApplyResult TryAcceptWindow(uint addCredit)
+        internal ArticleTransferApplyResult TryAcceptWindow(uint addCredit)
         {
             if (IsTerminal || Phase == ArticleTransferPhase.AwaitingMeta)
             {
@@ -288,7 +288,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Fails the stream.</summary>
-        public ArticleTransferApplyResult TryFail(VatpErrorCode error)
+        private ArticleTransferApplyResult TryFail(VatpErrorCode error)
         {
             if (IsTerminal)
             {
@@ -299,7 +299,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Cancels the stream.</summary>
-        public ArticleTransferApplyResult TryCancel()
+        internal ArticleTransferApplyResult TryCancel()
         {
             if (IsTerminal)
             {
@@ -315,7 +315,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>
         /// Attempts to take the consumable record exactly once. Returns false when not completed.
         /// </summary>
-        public bool TryTakeRecord(out ArticleRecord record)
+        internal bool TryTakeRecord(out ArticleRecord record)
         {
             if (!HasConsumableRecord)
             {

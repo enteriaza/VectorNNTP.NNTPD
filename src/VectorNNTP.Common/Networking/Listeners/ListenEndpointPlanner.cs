@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Networking.Listeners
     public readonly record struct ListenBinding(IPAddress Address, int Port, bool DualMode)
     {
         /// <summary>Gets the endpoint for bind/listen.</summary>
-        public IPEndPoint EndPoint => new(Address, Port);
+        internal IPEndPoint EndPoint => new(Address, Port);
     }
 
     /// <summary>
@@ -29,12 +29,12 @@ namespace VectorNNTP.Common.Networking.Listeners
     /// remain meaningful without overlap.
     /// </para>
     /// </remarks>
-    public static class ListenEndpointPlanner
+    internal static class ListenEndpointPlanner
     {
         /// <summary>
         /// Builds a deduplicated set of listen bindings for <paramref name="port"/>.
         /// </summary>
-        public static IReadOnlyList<ListenBinding> Plan(IReadOnlyList<string> bindAddressEntries, int port)
+        internal static IReadOnlyList<ListenBinding> Plan(IReadOnlyList<string> bindAddressEntries, int port)
         {
             ArgumentNullException.ThrowIfNull(bindAddressEntries);
             if (port is < 1 or > 65535)

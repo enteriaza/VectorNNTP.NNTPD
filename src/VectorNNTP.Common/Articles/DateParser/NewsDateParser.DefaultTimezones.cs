@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// <content>
     /// Built-in trailing timezone-abbreviation table used during date canonicalization.
     /// </content>
-    public static partial class NewsDateParser
+    internal static partial class NewsDateParser
     {
         private readonly record struct TimezoneMapping(byte[] Abbreviation, byte[] Offset);
 

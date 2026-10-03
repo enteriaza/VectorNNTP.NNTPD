@@ -488,7 +488,10 @@ public static class NntpdServiceCollectionExtensions
         services.AddSingleton<IApplicationLifecycleOptions>(static sp =>
             sp.GetRequiredService<IOptions<NntpdOptions>>().Value);
         services.AddSingleton<ApplicationServiceManager>();
-        services.AddSingleton<ApplicationLifecycle>();
+        services.AddSingleton<ApplicationLifecycle>(static sp => new ApplicationLifecycle(
+            sp.GetRequiredService<ApplicationServiceManager>(),
+            sp.GetRequiredService<IApplicationLifecycleOptions>(),
+            sp.GetRequiredService<ILogger<ApplicationLifecycle>>()));
         services.AddSingleton<NntpdHostLifetime>();
         services.AddSingleton<IApplicationHealth, ApplicationHealth>();
 

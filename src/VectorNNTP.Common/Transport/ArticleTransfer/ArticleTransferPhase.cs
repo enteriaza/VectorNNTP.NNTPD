@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <see cref="AwaitingEnd"/> requires exact ArtSize bytes and FIN on the final DATA frame.
     /// END then runs canonical validation. A stream is consumable only in <see cref="Completed"/>.
     /// </remarks>
-    public enum ArticleTransferPhase : byte
+    internal enum ArticleTransferPhase : byte
     {
         /// <summary>Stream accepted after OPEN; waiting for META.</summary>
         AwaitingMeta = 0,

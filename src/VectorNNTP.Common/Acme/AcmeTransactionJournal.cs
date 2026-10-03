@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Acme
     /// <c>{journalPath}.lock</c>. Distinct FQDN files do not share a lock.
     /// Writes use <see cref="AtomicFile"/> so a crash cannot leave a partial journal.
     /// </remarks>
-    public sealed class AcmeTransactionJournal
+    internal sealed class AcmeTransactionJournal
     {
         /// <summary>Current journal schema version.</summary>
         public const int SchemaVersion = 1;
@@ -73,7 +73,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>Initializes a new instance of the <see cref="AcmeTransactionJournal"/> class.</summary>
         /// <param name="stateDir">Shared ACME state root.</param>
         /// <param name="fqdn">Certificate FQDN that owns this journal file.</param>
-        public AcmeTransactionJournal(string stateDir, string fqdn)
+        internal AcmeTransactionJournal(string stateDir, string fqdn)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
             _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
@@ -83,16 +83,16 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Gets the FQDN this journal is scoped to.</summary>
-        public string Fqdn => _fqdn;
+        private string Fqdn => _fqdn;
 
         /// <summary>Gets the persistent journal file path.</summary>
-        public string FilePath => _journalPath;
+        internal string FilePath => _journalPath;
 
         /// <summary>Gets the exclusive lock file used for same-FQDN journal writes.</summary>
-        public string LockPath => _journalLockPath;
+        internal string LockPath => _journalLockPath;
 
         /// <summary>Gets the transaction id that subsequent events attach to, if any.</summary>
-        public string? ActiveTransactionId => _activeTransactionId;
+        internal string? ActiveTransactionId => _activeTransactionId;
 
         /// <summary>Records a new certificate request and returns its transaction id.</summary>
         /// <param name="identifiers">Requested identifiers/SANs.</param>
@@ -100,7 +100,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="startedAt">Request timestamp.</param>
         /// <param name="cancellationToken">Cancels waiting for the journal write lock.</param>
         /// <returns>The new transaction id.</returns>
-        public string BeginTransaction(
+        internal string BeginTransaction(
             IReadOnlyList<string> identifiers,
             string directoryUrl,
             DateTimeOffset startedAt,
@@ -141,7 +141,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="zoneId">Cloudflare zone id.</param>
         /// <param name="recordId">Cloudflare record id.</param>
         /// <param name="txtContent">TXT RDATA.</param>
-        public void RecordDnsChallengeCreated(
+        internal void RecordDnsChallengeCreated(
             string recordName,
             string zoneId,
             string recordId,
@@ -158,7 +158,7 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>Records that a DNS-01 TXT value became visible.</summary>
         /// <param name="recordName">Challenge record name.</param>
-        public void RecordDnsChallengePropagated(string recordName) =>
+        internal void RecordDnsChallengePropagated(string recordName) =>
             AppendEvent(new AcmeJournalEvent
             {
                 Type = EventDnsChallengePropagated,
@@ -167,7 +167,7 @@ namespace VectorNNTP.Common.Acme
             });
 
         /// <summary>Records that ACME challenge validation was triggered.</summary>
-        public void RecordAcmeValidationStarted() =>
+        internal void RecordAcmeValidationStarted() =>
             AppendEvent(new AcmeJournalEvent
             {
                 Type = EventAcmeValidationStarted,
@@ -175,7 +175,7 @@ namespace VectorNNTP.Common.Acme
             });
 
         /// <summary>Records that the ACME order reached the ready state.</summary>
-        public void RecordAcmeValidationSucceeded() =>
+        internal void RecordAcmeValidationSucceeded() =>
             AppendEvent(new AcmeJournalEvent
             {
                 Type = EventAcmeValidationSucceeded,
@@ -187,7 +187,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="zoneId">Cloudflare zone id.</param>
         /// <param name="recordId">Cloudflare record id.</param>
         /// <param name="txtContent">TXT RDATA.</param>
-        public void RecordDnsChallengeRemoved(
+        internal void RecordDnsChallengeRemoved(
             string recordName,
             string zoneId,
             string recordId,
@@ -216,7 +216,7 @@ namespace VectorNNTP.Common.Acme
         /// unknown, the event is stored as unattributed history and is not attached to
         /// the active transaction.
         /// </param>
-        public void RecordDnsChallengeRecoveredAndRemoved(
+        internal void RecordDnsChallengeRecoveredAndRemoved(
             string recoveryEntryId,
             string recordName,
             string zoneId,
@@ -257,7 +257,7 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>Records that the issuer returned certificate material.</summary>
         /// <param name="material">Issued certificate material.</param>
-        public void RecordCertificateIssued(CertificateMaterial material)
+        internal void RecordCertificateIssued(CertificateMaterial material)
         {
             ArgumentNullException.ThrowIfNull(material);
             AppendEvent(new AcmeJournalEvent
@@ -272,7 +272,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>Records that certificate bytes were written to a generation directory.</summary>
         /// <param name="generationId">Live generation id.</param>
         /// <param name="material">Persisted certificate material.</param>
-        public void RecordCertificatePersisted(string generationId, CertificateMaterial material)
+        internal void RecordCertificatePersisted(string generationId, CertificateMaterial material)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(generationId);
             ArgumentNullException.ThrowIfNull(material);
@@ -288,7 +288,7 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>Records that the FQDN current pointer was updated.</summary>
         /// <param name="generationId">Promoted generation id.</param>
-        public void RecordCertificatePromoted(string generationId)
+        internal void RecordCertificatePromoted(string generationId)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(generationId);
             AppendEvent(new AcmeJournalEvent
@@ -305,7 +305,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="generationId">Live generation that contains the certificate.</param>
         /// <param name="pfxPassword">PKCS#12 password used to inspect serial and thumbprint.</param>
         /// <param name="completedAt">Completion timestamp.</param>
-        public void CompleteSuccess(
+        internal void CompleteSuccess(
             string transactionId,
             CertificateMaterial material,
             string generationId,
@@ -343,7 +343,7 @@ namespace VectorNNTP.Common.Acme
         /// <param name="failureCategory">Failure category.</param>
         /// <param name="failureDetail">Sanitized failure detail.</param>
         /// <param name="completedAt">Completion timestamp.</param>
-        public void CompleteFailure(
+        internal void CompleteFailure(
             string transactionId,
             string failureCategory,
             string failureDetail,
@@ -377,7 +377,7 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>Loads historical transactions for this FQDN only, oldest first.</summary>
         /// <returns>The persisted transactions, or an empty list when the file does not exist.</returns>
-        public IReadOnlyList<AcmeJournalTransaction> LoadHistory()
+        internal IReadOnlyList<AcmeJournalTransaction> LoadHistory()
         {
             return WithGate(() => LoadDocument().Transactions);
         }
@@ -386,7 +386,7 @@ namespace VectorNNTP.Common.Acme
         /// Loads recovery events that could not be attached to an original transaction.
         /// </summary>
         /// <returns>Unattributed events in write order.</returns>
-        public IReadOnlyList<AcmeJournalEvent> LoadUnattributedEvents()
+        internal IReadOnlyList<AcmeJournalEvent> LoadUnattributedEvents()
         {
             return WithGate(() => LoadDocument().UnattributedEvents);
         }
@@ -701,106 +701,106 @@ namespace VectorNNTP.Common.Acme
     }
 
     /// <summary>On-disk ACME journal document for one FQDN.</summary>
-    public sealed class AcmeJournalDocument
+    internal sealed class AcmeJournalDocument
     {
         /// <summary>Gets or sets the journal schema version.</summary>
-        public int Version { get; set; }
+        internal int Version { get; set; }
 
         /// <summary>Gets or sets the certificate FQDN.</summary>
-        public string Fqdn { get; set; } = string.Empty;
+        internal string Fqdn { get; set; } = string.Empty;
 
         /// <summary>Gets the historical transactions in write order.</summary>
-        public List<AcmeJournalTransaction> Transactions { get; } = [];
+        internal List<AcmeJournalTransaction> Transactions { get; } = [];
 
         /// <summary>
         /// Gets recovery events that could not be attached to an original transaction.
         /// </summary>
-        public List<AcmeJournalEvent> UnattributedEvents { get; } = [];
+        internal List<AcmeJournalEvent> UnattributedEvents { get; } = [];
     }
 
     /// <summary>One ACME request and its lifecycle events.</summary>
-    public sealed class AcmeJournalTransaction
+    internal sealed class AcmeJournalTransaction
     {
         /// <summary>Gets or sets the transaction id.</summary>
-        public string Id { get; set; } = string.Empty;
+        internal string Id { get; set; } = string.Empty;
 
         /// <summary>Gets or sets when the request started.</summary>
-        public DateTimeOffset StartedAt { get; set; }
+        internal DateTimeOffset StartedAt { get; set; }
 
         /// <summary>Gets or sets when the request finished, if finished.</summary>
-        public DateTimeOffset? CompletedAt { get; set; }
+        internal DateTimeOffset? CompletedAt { get; set; }
 
         /// <summary>Gets or sets the requested identifiers/SANs.</summary>
-        public IReadOnlyList<string> Identifiers { get; set; } = [];
+        internal IReadOnlyList<string> Identifiers { get; set; } = [];
 
         /// <summary>Gets or sets the ACME directory URL used for the request.</summary>
-        public string DirectoryUrl { get; set; } = string.Empty;
+        internal string DirectoryUrl { get; set; } = string.Empty;
 
         /// <summary>Gets or sets the request status.</summary>
-        public string Status { get; set; } = string.Empty;
+        internal string Status { get; set; } = string.Empty;
 
         /// <summary>Gets the lifecycle events in write order.</summary>
-        public List<AcmeJournalEvent> Events { get; set; } = [];
+        internal List<AcmeJournalEvent> Events { get; set; } = [];
 
         /// <summary>Gets or sets the issued certificate serial number when known.</summary>
-        public string? SerialNumber { get; set; }
+        internal string? SerialNumber { get; set; }
 
         /// <summary>Gets or sets the issued certificate thumbprint when known.</summary>
-        public string? Thumbprint { get; set; }
+        internal string? Thumbprint { get; set; }
 
         /// <summary>Gets or sets the issued certificate not-before when known.</summary>
-        public DateTimeOffset? NotBefore { get; set; }
+        internal DateTimeOffset? NotBefore { get; set; }
 
         /// <summary>Gets or sets the issued certificate not-after when known.</summary>
-        public DateTimeOffset? NotAfter { get; set; }
+        internal DateTimeOffset? NotAfter { get; set; }
 
         /// <summary>Gets or sets the live generation id that contains the certificate.</summary>
-        public string? GenerationId { get; set; }
+        internal string? GenerationId { get; set; }
 
         /// <summary>Gets or sets the failure category when issuance failed.</summary>
-        public string? FailureCategory { get; set; }
+        internal string? FailureCategory { get; set; }
 
         /// <summary>Gets or sets sanitized failure detail when issuance failed.</summary>
-        public string? FailureDetail { get; set; }
+        internal string? FailureDetail { get; set; }
     }
 
     /// <summary>One historical ACME lifecycle event.</summary>
-    public sealed class AcmeJournalEvent
+    internal sealed class AcmeJournalEvent
     {
         /// <summary>Gets or sets the event type.</summary>
-        public string Type { get; set; } = string.Empty;
+        internal string Type { get; set; } = string.Empty;
 
         /// <summary>Gets or sets when the event occurred.</summary>
-        public DateTimeOffset At { get; set; }
+        internal DateTimeOffset At { get; set; }
 
         /// <summary>Gets or sets the DNS-01 record name when applicable.</summary>
-        public string? RecordName { get; set; }
+        internal string? RecordName { get; set; }
 
         /// <summary>Gets or sets the Cloudflare zone id when applicable.</summary>
-        public string? ZoneId { get; set; }
+        internal string? ZoneId { get; set; }
 
         /// <summary>Gets or sets the Cloudflare record id when applicable.</summary>
-        public string? RecordId { get; set; }
+        internal string? RecordId { get; set; }
 
         /// <summary>Gets or sets the TXT RDATA when applicable.</summary>
-        public string? TxtContent { get; set; }
+        internal string? TxtContent { get; set; }
 
         /// <summary>Gets or sets the live generation id when applicable.</summary>
-        public string? GenerationId { get; set; }
+        internal string? GenerationId { get; set; }
 
         /// <summary>Gets or sets the certificate not-before when applicable.</summary>
-        public DateTimeOffset? NotBefore { get; set; }
+        internal DateTimeOffset? NotBefore { get; set; }
 
         /// <summary>Gets or sets the certificate not-after when applicable.</summary>
-        public DateTimeOffset? NotAfter { get; set; }
+        internal DateTimeOffset? NotAfter { get; set; }
 
         /// <summary>Gets or sets the failure category when applicable.</summary>
-        public string? FailureCategory { get; set; }
+        internal string? FailureCategory { get; set; }
 
         /// <summary>Gets or sets sanitized failure detail when applicable.</summary>
-        public string? FailureDetail { get; set; }
+        internal string? FailureDetail { get; set; }
 
         /// <summary>Gets or sets the DNS-01 recovery file id when applicable.</summary>
-        public string? RecoveryEntryId { get; set; }
+        internal string? RecoveryEntryId { get; set; }
     }
 }

@@ -11,7 +11,7 @@ namespace VectorNNTP.Common.Hosting
     /// <summary>
     /// Registers shared ACME, Cloudflare, and bind-address infrastructure.
     /// </summary>
-    public static class AcmeCloudflareServiceCollectionExtensions
+    internal static class AcmeCloudflareServiceCollectionExtensions
     {
         /// <summary>
         /// Adds bind-address resolution, Cloudflare DNS, and ACME component factories.
@@ -22,7 +22,7 @@ namespace VectorNNTP.Common.Hosting
         /// Requires <see cref="IOptions{TOptions}"/> of <see cref="AcmeCloudflareOptions"/> to be registered
         /// by the application. Does not register application lifecycle/hosted wrappers.
         /// </remarks>
-        public static IServiceCollection AddAcmeCloudflareInfrastructure(this IServiceCollection services)
+        internal static IServiceCollection AddAcmeCloudflareInfrastructure(this IServiceCollection services)
         {
             ArgumentNullException.ThrowIfNull(services);
 
@@ -59,11 +59,22 @@ namespace VectorNNTP.Common.Hosting
                 sp.GetRequiredService<TlsCertificateContextProvider>());
             services.TryAddSingleton<IAcmeCertificatePublisher>(static sp =>
                 sp.GetRequiredService<TlsCertificateContextProvider>());
-            services.TryAddSingleton<AcmeComponentFactory>();
+            services.TryAddSingleton<AcmeComponentFactory>(static sp =>
+                new AcmeComponentFactory(
+                    sp.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
+                    sp.GetRequiredService<ICloudflareDnsClient>(),
+                    sp.GetRequiredService<IHttpClientFactory>(),
+                    sp.GetRequiredService<ILoggerFactory>()));
             services.TryAddSingleton<IServerCertificateProvider>(static sp =>
                 sp.GetRequiredService<AcmeComponentFactory>().GetCertificateProvider());
             services.TryAddSingleton<CloudflareDnsReconciliationService>();
-            services.TryAddSingleton<AcmeCertificateService>();
+            services.TryAddSingleton<AcmeCertificateService>(static sp =>
+                new AcmeCertificateService(
+                    sp.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
+                    sp.GetRequiredService<AcmeComponentFactory>(),
+                    sp.GetRequiredService<IAcmeCertificatePublisher>(),
+                    sp.GetRequiredService<IAcmeCertificateReadiness>(),
+                    sp.GetRequiredService<ILogger<AcmeCertificateService>>()));
 
             return services;
         }

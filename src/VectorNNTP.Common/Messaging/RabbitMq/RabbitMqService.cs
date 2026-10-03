@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// This service does not declare topology, create channels, publish, consume, or process messages.
     /// </para>
     /// </remarks>
-    public sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAsyncDisposable
+    internal sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAsyncDisposable
     {
         private readonly IRabbitMqConnectionFactory _connectionFactory;
         private readonly IOptions<RabbitMqOptions> _options;
@@ -509,9 +509,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
 
         private sealed class LiveConnection(IRabbitMqConnection connection, long generation)
         {
-            public IRabbitMqConnection Connection { get; } = connection;
+            internal IRabbitMqConnection Connection { get; } = connection;
 
-            public long Generation { get; } = generation;
+            internal long Generation { get; } = generation;
         }
 
         private readonly record struct PublishedConnection(LiveConnection Current, LiveConnection? Replaced);

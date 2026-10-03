@@ -20,7 +20,7 @@ namespace VectorNNTP.Common.Articles
     public readonly struct ArticleId : IEquatable<ArticleId>
     {
         /// <summary>BLAKE3 output length in bytes.</summary>
-        public const int Length = 32;
+        internal const int Length = 32;
 
         private readonly ulong _w0;
         private readonly ulong _w1;
@@ -38,7 +38,7 @@ namespace VectorNNTP.Common.Articles
         /// <summary>Computes ArtId from exact Message-ID header value bytes.</summary>
         /// <param name="messageIdValue">Message-ID value octets only, including angle brackets. Not the field name.</param>
         /// <returns>32-byte BLAKE3 digest as a value type.</returns>
-        public static ArticleId FromMessageId(ReadOnlySpan<byte> messageIdValue)
+        internal static ArticleId FromMessageId(ReadOnlySpan<byte> messageIdValue)
         {
             var hash = Hasher.Hash(messageIdValue);
             return FromSpan(hash.AsSpan());
@@ -48,7 +48,7 @@ namespace VectorNNTP.Common.Articles
         /// <param name="digest">Exactly <see cref="Length"/> digest bytes.</param>
         /// <returns>The identity value.</returns>
         /// <exception cref="ArgumentException">Thrown when <paramref name="digest"/> is not 32 bytes.</exception>
-        public static ArticleId FromSpan(ReadOnlySpan<byte> digest)
+        internal static ArticleId FromSpan(ReadOnlySpan<byte> digest)
         {
             if (digest.Length != Length)
             {
@@ -63,13 +63,13 @@ namespace VectorNNTP.Common.Articles
         }
 
         /// <summary>Lowercase hexadecimal encoding length (<see cref="Length"/> × 2).</summary>
-        public const int HexLength = Length * 2;
+        internal const int HexLength = Length * 2;
 
         /// <summary>
         /// Formats the digest as 64 lowercase hexadecimal characters (no separators).
         /// Used by RabbitMQ ArticleWork Success <c>articleId</c>.
         /// </summary>
-        public string ToLowerHexString()
+        internal string ToLowerHexString()
         {
             Span<byte> digest = stackalloc byte[Length];
             CopyTo(digest);
@@ -82,7 +82,7 @@ namespace VectorNNTP.Common.Articles
         /// <param name="hex">Exactly <see cref="HexLength"/> lowercase hex digits.</param>
         /// <param name="articleId">Parsed identity when the method returns <see langword="true"/>.</param>
         /// <returns><see langword="true"/> when <paramref name="hex"/> is valid lowercase hex of length 64.</returns>
-        public static bool TryParseLowerHex(ReadOnlySpan<char> hex, out ArticleId articleId)
+        internal static bool TryParseLowerHex(ReadOnlySpan<char> hex, out ArticleId articleId)
         {
             articleId = default;
             if (hex.Length != HexLength)
@@ -120,7 +120,7 @@ namespace VectorNNTP.Common.Articles
 
         /// <summary>Parses a 64-character lowercase hexadecimal digest.</summary>
         /// <exception cref="FormatException">Thrown when the input is not valid lowercase hex of length 64.</exception>
-        public static ArticleId ParseLowerHex(ReadOnlySpan<char> hex)
+        internal static ArticleId ParseLowerHex(ReadOnlySpan<char> hex)
         {
             if (!TryParseLowerHex(hex, out var articleId))
             {
@@ -131,7 +131,7 @@ namespace VectorNNTP.Common.Articles
         }
 
         /// <summary>Copies the 32-byte digest into <paramref name="destination"/>.</summary>
-        public void CopyTo(Span<byte> destination)
+        internal void CopyTo(Span<byte> destination)
         {
             if (destination.Length < Length)
             {

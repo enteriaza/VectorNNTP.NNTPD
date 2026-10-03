@@ -18,7 +18,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <param name="Body">Application payload bytes.</param>
     /// <param name="ContentEncoding">Optional AMQP content encoding, such as <c>utf-8</c>.</param>
     /// <param name="Timestamp">Optional AMQP timestamp. Omitted from the frame when null.</param>
-    public sealed record RabbitMqConfirmedPublication(
+    internal sealed record RabbitMqConfirmedPublication(
         string Exchange,
         string RoutingKey,
         string MessageId,

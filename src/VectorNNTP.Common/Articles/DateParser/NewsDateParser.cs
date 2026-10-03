@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// so accepted printable-ASCII bytes are copied into a stackalloc char buffer. That copy is
     /// not <c>Encoding.GetString</c> and does not allocate.
     /// </remarks>
-    public static partial class NewsDateParser
+    internal static partial class NewsDateParser
     {
         private const DateTimeStyles ParseStyles =
             DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal;
@@ -76,7 +76,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="utc">Canonical UTC instant when parsing succeeds.</param>
         /// <param name="failure">Failure reason when parsing fails.</param>
         /// <returns><see langword="true"/> when <paramref name="input"/> produced a UTC instant.</returns>
-        public static bool TryGetCanonicalUtc(ReadOnlySpan<byte> input, out DateTime utc, out DateParseFailureReason failure)
+        internal static bool TryGetCanonicalUtc(ReadOnlySpan<byte> input, out DateTime utc, out DateParseFailureReason failure)
             => TryGetCanonicalUtc(input, DateParseOptions.Default, out utc, out failure);
 
         /// <summary>
@@ -87,7 +87,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="utc">Canonical UTC instant when parsing succeeds.</param>
         /// <param name="failure">Failure reason describing the stage that rejected <paramref name="input"/>.</param>
         /// <returns><see langword="true"/> when parsing succeeds.</returns>
-        public static bool TryGetCanonicalUtc(
+        internal static bool TryGetCanonicalUtc(
             ReadOnlySpan<byte> input,
             DateParseOptions options,
             out DateTime utc,
@@ -158,7 +158,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="destination">Destination receiving ASCII bytes.</param>
         /// <param name="bytesWritten">Bytes written on success.</param>
         /// <returns><see langword="true"/> when <paramref name="destination"/> was large enough.</returns>
-        public static bool TryFormatCanonicalRfc5322Utc(DateTime utc, Span<byte> destination, out int bytesWritten)
+        internal static bool TryFormatCanonicalRfc5322Utc(DateTime utc, Span<byte> destination, out int bytesWritten)
         {
             utc = NormalizeUtcKind(utc);
             Span<char> chars = stackalloc char[32];
@@ -195,7 +195,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// </summary>
         /// <param name="utc">Input instant.</param>
         /// <returns>UTC <see cref="DateTime"/>.</returns>
-        public static DateTime NormalizeUtcKind(DateTime utc)
+        private static DateTime NormalizeUtcKind(DateTime utc)
         {
             if (utc.Kind == DateTimeKind.Local)
             {

@@ -3,15 +3,15 @@ namespace VectorNNTP.Common.Acme
     /// <summary>One DNS-01 challenge to publish as a TXT record.</summary>
     /// <param name="Domain">Authorization DNS name.</param>
     /// <param name="Validation">TXT RDATA (key authorization digest).</param>
-    public sealed record Dns01ChallengeSpec(string Domain, string Validation)
+    internal sealed record Dns01ChallengeSpec(string Domain, string Validation)
     {
         /// <summary>Gets the <c>_acme-challenge.</c> record name.</summary>
-        public string RecordName =>
+        internal string RecordName =>
             "_acme-challenge." + Domain.Trim().TrimEnd('.').ToLowerInvariant();
     }
 
     /// <summary>Looks up TXT RDATA for authoritative visibility checks (injectable).</summary>
-    public interface IAuthoritativeTxtResolver
+    internal interface IAuthoritativeTxtResolver
     {
         /// <summary>Returns TXT strings for <paramref name="name"/> (maybe empty).</summary>
         Task<IReadOnlyList<string>> LookupTxtAsync(string name, CancellationToken cancellationToken);
@@ -20,7 +20,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Creates, awaits, and cleans up ACME DNS-01 TXT records via Cloudflare with FQDN-scoped recovery state.
     /// </summary>
-    public sealed class Dns01Solver
+    internal sealed class Dns01Solver
     {
         /// <summary>TTL used for challenge TXT records (matches pyNNTPD).</summary>
         public const int ChallengeTtlSeconds = 120;
@@ -48,7 +48,7 @@ namespace VectorNNTP.Common.Acme
         /// Optional persistent ACME journal. DNS create/remove events are recorded here
         /// only when a transaction is already active for this FQDN.
         /// </param>
-        public Dns01Solver(
+        internal Dns01Solver(
             Cloudflare.ICloudflareDnsClient client,
             string zoneId,
             IAuthoritativeTxtResolver resolver,
@@ -79,10 +79,10 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Gets the FQDN this solver is scoped to.</summary>
-        public string Fqdn => _fqdn;
+        private string Fqdn => _fqdn;
 
         /// <summary>Idempotent startup recovery of journalled TXT records.</summary>
-        public async Task RecoverAsync(CancellationToken cancellationToken)
+        internal async Task RecoverAsync(CancellationToken cancellationToken)
         {
             if (_recoveryDir is null)
             {
@@ -122,7 +122,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Creates TXT records for each challenge and journals ownership.</summary>
-        public async Task PlaceAsync(
+        internal async Task PlaceAsync(
             IReadOnlyList<Dns01ChallengeSpec> challenges,
             CancellationToken cancellationToken)
         {
@@ -159,7 +159,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Waits until authoritative resolvers report each challenge TXT value.</summary>
-        public async Task WaitPropagatedAsync(
+        internal async Task WaitPropagatedAsync(
             IReadOnlyList<Dns01ChallengeSpec> challenges,
             CancellationToken cancellationToken)
         {
@@ -224,7 +224,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Deletes only TXT records created by this solver (by record id).</summary>
-        public async Task CleanupAsync(CancellationToken cancellationToken)
+        internal async Task CleanupAsync(CancellationToken cancellationToken)
         {
             var remaining = new List<PlacedChallenge>();
             foreach (var item in _placed.ToArray())

@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// instance; a replacement channel must not ACK or NACK another channel's tags.
     /// Publisher confirms are not enabled on this channel.
     /// </remarks>
-    public interface IRabbitMqManualAckChannel : IAsyncDisposable
+    internal interface IRabbitMqManualAckChannel : IAsyncDisposable
     {
         /// <summary>Gets the connection generation this channel was opened against.</summary>
         long Generation { get; }

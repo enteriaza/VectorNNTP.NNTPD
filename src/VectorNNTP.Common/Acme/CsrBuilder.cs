@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Acme
     internal static class CsrBuilder
     {
         /// <summary>Creates a PKCS#10 CSR covering the given DNS names (first name is CN when ≤64 chars).</summary>
-        public static byte[] CreateDnsSigningRequest(IReadOnlyList<string> dnsNames, AcmeCertificateKey key)
+        internal static byte[] CreateDnsSigningRequest(IReadOnlyList<string> dnsNames, AcmeCertificateKey key)
         {
             ArgumentNullException.ThrowIfNull(dnsNames);
             ArgumentNullException.ThrowIfNull(key);

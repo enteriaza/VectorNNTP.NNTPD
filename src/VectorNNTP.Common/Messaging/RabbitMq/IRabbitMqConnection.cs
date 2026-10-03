@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// This surface is connection lifecycle plus caller-owned channel factories.
     /// <see cref="RabbitMqService"/> remains the sole TCP connection owner.
     /// </remarks>
-    public interface IRabbitMqConnection : IAsyncDisposable
+    internal interface IRabbitMqConnection : IAsyncDisposable
     {
         /// <summary>Gets a value indicating whether the broker connection is currently open.</summary>
         bool IsOpen { get; }

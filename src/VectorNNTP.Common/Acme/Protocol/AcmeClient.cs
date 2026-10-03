@@ -1,4 +1,3 @@
-using System.IO;
 using System.Text;
 using System.Text.Json;
 
@@ -21,7 +20,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         private string? _keyId;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeClient"/> class.</summary>
-        public AcmeClient(AcmeHttpTransport http, AcmeAccountKey accountKey, ILogger logger, TimeProvider time)
+        internal AcmeClient(AcmeHttpTransport http, AcmeAccountKey accountKey, ILogger logger, TimeProvider time)
         {
             _http = http;
             _accountKey = accountKey;
@@ -30,26 +29,26 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Gets the account key used for JWS.</summary>
-        public AcmeAccountKey AccountKey => _accountKey;
+        private AcmeAccountKey AccountKey => _accountKey;
 
         /// <summary>Gets the bound account URL (kid), or throws if not registered/bound.</summary>
-        public string KeyId => _keyId ?? throw new InvalidOperationException("The ACME account has not been registered yet.");
+        internal string KeyId => _keyId ?? throw new InvalidOperationException("The ACME account has not been registered yet.");
 
         /// <summary>
         /// Binds a previously persisted ACME account URL (kid) without calling newAccount.
         /// </summary>
-        public void BindExistingAccount(string accountUrl)
+        internal void BindExistingAccount(string accountUrl)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(accountUrl);
             _keyId = accountUrl.Trim();
         }
 
         /// <summary>Fetches the ACME directory.</summary>
-        public Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken) =>
+        private Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken) =>
             _http.GetDirectoryAsync(cancellationToken);
 
         /// <summary>POST-as-GET for an order resource.</summary>
-        public async Task<AcmeOrderResource> GetOrderAsync(Uri orderUrl, CancellationToken cancellationToken)
+        internal async Task<AcmeOrderResource> GetOrderAsync(Uri orderUrl, CancellationToken cancellationToken)
         {
             AcmeResponse<AcmeOrderResource> response = await _http.PostAsGetAsync(
                 _accountKey, KeyId, orderUrl, AcmeJsonContext.Default.AcmeOrderResource, cancellationToken)
@@ -61,7 +60,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Registers a new account (or reuses one for this key) and returns the account Location URL.
         /// </summary>
-        public async Task<string> RegisterAccountAsync(
+        internal async Task<string> RegisterAccountAsync(
             IReadOnlyList<string> contacts,
             bool termsOfServiceAgreed,
             ExternalAccountBinding? externalAccountBinding,
@@ -90,7 +89,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Creates a new order for the given identifiers.</summary>
-        public async Task<AcmeOrder> CreateOrderAsync(
+        internal async Task<AcmeOrder> CreateOrderAsync(
             IReadOnlyList<AcmeIdentifier> identifiers,
             CancellationToken cancellationToken)
         {
@@ -117,7 +116,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>POST-as-GET for an authorization resource.</summary>
-        public async Task<AcmeAuthorizationResource> GetAuthorizationAsync(Uri authorizationUrl, CancellationToken cancellationToken)
+        internal async Task<AcmeAuthorizationResource> GetAuthorizationAsync(Uri authorizationUrl, CancellationToken cancellationToken)
         {
             AcmeResponse<AcmeAuthorizationResource> response = await _http.PostAsGetAsync(
                 _accountKey, KeyId, authorizationUrl, AcmeJsonContext.Default.AcmeAuthorizationResource, cancellationToken)
@@ -127,13 +126,13 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Submits a challenge for validation (empty JSON object payload).</summary>
-        public async Task SubmitChallengeAsync(Uri challengeUrl, CancellationToken cancellationToken) =>
+        internal async Task SubmitChallengeAsync(Uri challengeUrl, CancellationToken cancellationToken) =>
             await _http.PostAsync(
                 _accountKey, KeyId, challengeUrl, "{}", AcmeJsonContext.Default.AcmeChallengeResource, cancellationToken)
                 .ConfigureAwait(false);
 
         /// <summary>Finalizes an order with a PKCS#10 CSR.</summary>
-        public async Task<AcmeOrderResource> FinalizeOrderAsync(
+        internal async Task<AcmeOrderResource> FinalizeOrderAsync(
             Uri finalizeUrl,
             byte[] certificateSigningRequest,
             CancellationToken cancellationToken)
@@ -148,7 +147,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Polls the order until status is <c>valid</c> or <c>invalid</c>.</summary>
-        public async Task<AcmeOrderResource> WaitForOrderAsync(
+        internal async Task<AcmeOrderResource> WaitForOrderAsync(
             Uri orderUrl,
             TimeSpan timeout,
             TimeSpan pollInterval,
@@ -189,7 +188,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Downloads the PEM certificate chain (RFC 8555 §7.4.2).</summary>
-        public async Task<AcmeCertificate> DownloadCertificateAsync(Uri certificateUrl, CancellationToken cancellationToken)
+        internal async Task<AcmeCertificate> DownloadCertificateAsync(Uri certificateUrl, CancellationToken cancellationToken)
         {
             AcmeRawResponse response = await _http.PostAsGetRawAsync(
                 _accountKey, KeyId, certificateUrl, PemChainContentType, cancellationToken)

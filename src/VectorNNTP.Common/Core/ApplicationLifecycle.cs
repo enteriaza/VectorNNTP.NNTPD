@@ -59,7 +59,7 @@ namespace VectorNNTP.Common.Core
         /// <param name="serviceManager">Service manager used for ordered start/stop.</param>
         /// <param name="options">Lifecycle options.</param>
         /// <param name="logger">Logger.</param>
-        public ApplicationLifecycle(
+        internal ApplicationLifecycle(
             ApplicationServiceManager serviceManager,
             IApplicationLifecycleOptions options,
             ILogger<ApplicationLifecycle> logger)
@@ -78,10 +78,10 @@ namespace VectorNNTP.Common.Core
         /// <summary>
         /// Occurs after a validated lifecycle state transition has been committed.
         /// </summary>
-        public event EventHandler<ApplicationStateChangedEventArgs>? StateChanged;
+        internal event EventHandler<ApplicationStateChangedEventArgs>? StateChanged;
 
         /// <summary>Gets the current lifecycle state (thread-safe).</summary>
-        public ApplicationState State
+        internal ApplicationState State
         {
             get
             {
@@ -96,12 +96,12 @@ namespace VectorNNTP.Common.Core
         /// Gets a value indicating whether shutdown has been requested or the lifecycle has left
         /// <see cref="ApplicationState.Running"/> toward stop.
         /// </summary>
-        public bool ShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
+        internal bool ShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
 
         /// <summary>
         /// Gets a task that completes when an unexpected application-service termination is observed while running.
         /// </summary>
-        public Task UnexpectedTermination => _unexpectedTerminationTcs.Task;
+        internal Task UnexpectedTermination => _unexpectedTerminationTcs.Task;
 
         /// <summary>
         /// Starts the application asynchronously.
@@ -110,7 +110,7 @@ namespace VectorNNTP.Common.Core
         /// <returns>A task that completes when the application enters <see cref="ApplicationState.Running"/>.</returns>
         /// <exception cref="InvalidOperationException">Thrown for invalid transitions or concurrent unsafe use.</exception>
         /// <exception cref="OperationCanceledException">Thrown when startup is cancelled.</exception>
-        public async Task StartAsync(CancellationToken cancellationToken)
+        internal async Task StartAsync(CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
@@ -178,7 +178,7 @@ namespace VectorNNTP.Common.Core
         /// </summary>
         /// <param name="cancellationToken">Token that cooperates with the configured graceful shutdown timeout.</param>
         /// <returns>A task that completes when the application enters <see cref="ApplicationState.Stopped"/>.</returns>
-        public Task StopAsync(CancellationToken cancellationToken)
+        internal Task StopAsync(CancellationToken cancellationToken)
         {
             lock (_stateSync)
             {
@@ -223,7 +223,7 @@ namespace VectorNNTP.Common.Core
         /// <exception cref="InvalidOperationException">
         /// Thrown when an application service terminates unexpectedly while <see cref="ApplicationState.Running"/>.
         /// </exception>
-        public async Task WaitAsync(CancellationToken cancellationToken)
+        internal async Task WaitAsync(CancellationToken cancellationToken)
         {
             var shutdown = Task.Delay(Timeout.Infinite, cancellationToken);
             var completed = await Task.WhenAny(UnexpectedTermination, _stoppedTcs.Task, shutdown)
@@ -486,21 +486,21 @@ namespace VectorNNTP.Common.Core
     /// <summary>
     /// Provides data for <see cref="ApplicationLifecycle.StateChanged"/>.
     /// </summary>
-    public sealed class ApplicationStateChangedEventArgs : EventArgs
+    internal sealed class ApplicationStateChangedEventArgs : EventArgs
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="ApplicationStateChangedEventArgs"/> class.
         /// </summary>
-        public ApplicationStateChangedEventArgs(ApplicationState fromState, ApplicationState toState)
+        internal ApplicationStateChangedEventArgs(ApplicationState fromState, ApplicationState toState)
         {
             FromState = fromState;
             ToState = toState;
         }
 
         /// <summary>Gets the previous lifecycle state.</summary>
-        public ApplicationState FromState { get; }
+        private ApplicationState FromState { get; }
 
         /// <summary>Gets the new lifecycle state.</summary>
-        public ApplicationState ToState { get; }
+        internal ApplicationState ToState { get; }
     }
 }

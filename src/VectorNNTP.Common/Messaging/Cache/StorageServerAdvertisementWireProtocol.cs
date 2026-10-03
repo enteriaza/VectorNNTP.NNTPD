@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Messaging.Cache
     /// AMQP <c>Expiration</c>, <c>AppId</c>, and <c>MessageId</c> are never JSON fields.
     /// Serialization writes compact UTF-8 with no indentation.
     /// </remarks>
-    public static class StorageServerAdvertisementWireProtocol
+    internal static class StorageServerAdvertisementWireProtocol
     {
         /// <summary>Current application protocol version.</summary>
         public const int CurrentVersion = 1;
@@ -27,7 +27,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         /// <summary>Serializes a version-1 advertisement into compact UTF-8 JSON.</summary>
         /// <param name="advertisement">Concrete valid v1 advertisement.</param>
         /// <returns>UTF-8 bytes containing only the seven canonical properties.</returns>
-        public static byte[] SerializeV1(StorageServerAdvertisement advertisement)
+        internal static byte[] SerializeV1(StorageServerAdvertisement advertisement)
         {
             ArgumentNullException.ThrowIfNull(advertisement);
             if (advertisement.Version != CurrentVersion)
@@ -89,7 +89,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         /// <param name="advertisement">Parsed advertisement when validation succeeds.</param>
         /// <param name="reason">Rejection reason when parsing fails.</param>
         /// <returns><see langword="true"/> when the payload is a valid v1 advertisement.</returns>
-        public static bool TryParseV1(
+        internal static bool TryParseV1(
             ReadOnlySpan<byte> payload,
             out StorageServerAdvertisement? advertisement,
             out string reason)

@@ -19,7 +19,7 @@ namespace VectorNNTP.Common.NntpDb
         /// <exception cref="NntpDbConfigurationException">
         /// The value is missing or rejected by MySqlConnector.
         /// </exception>
-        public static void Validate(string connectionString)
+        internal static void Validate(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
             {

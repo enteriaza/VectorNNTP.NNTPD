@@ -13,7 +13,7 @@ namespace VectorNNTP.Common.Messaging.Cache
     /// only; each StorageServer binds an ephemeral <c>cache.&lt;storage-fqdn&gt;</c> queue).
     /// </para>
     /// </remarks>
-    public static class CacheFleetTopology
+    internal static class CacheFleetTopology
     {
         /// <summary>Fanout exchange that carries StorageServer capacity advertisements.</summary>
         public const string BroadcastExchangeName = "cache.broadcast";
@@ -65,7 +65,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         /// <c>cache01.usenet.ninja</c>).
         /// </param>
         /// <returns>Trimmed invariant-lowercase queue name.</returns>
-        public static string BuildInstanceQueueName(string fqdn)
+        private static string BuildInstanceQueueName(string fqdn)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
             var normalizedFqdn = fqdn.Trim().ToLowerInvariant();
@@ -73,11 +73,11 @@ namespace VectorNNTP.Common.Messaging.Cache
         }
 
         /// <summary>Builds the ephemeral NNTPD <c>cache.broadcast</c> consumer queue name.</summary>
-        public static string BuildNntpdBroadcastQueueName(string nntpdFqdn) =>
+        internal static string BuildNntpdBroadcastQueueName(string nntpdFqdn) =>
             BuildInstanceQueueName(nntpdFqdn);
 
         /// <summary>Builds the ephemeral StorageServer <c>cache.requests</c> consumer queue name.</summary>
-        public static string BuildStorageServerRequestQueueName(string storageServerFqdn) =>
+        internal static string BuildStorageServerRequestQueueName(string storageServerFqdn) =>
             BuildInstanceQueueName(storageServerFqdn);
     }
 }

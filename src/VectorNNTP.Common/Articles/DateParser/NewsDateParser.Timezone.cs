@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// <content>
     /// Trailing timezone-abbreviation detection and numeric-offset substitution on byte buffers.
     /// </content>
-    public static partial class NewsDateParser
+    internal static partial class NewsDateParser
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsAsciiLetter(byte value) => (uint)((value | 0x20) - (byte)'a') <= 'z' - 'a';

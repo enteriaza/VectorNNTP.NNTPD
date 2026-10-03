@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// <summary>
     /// Classifies why a candidate article date value could not be normalized into canonical UTC.
     /// </summary>
-    public enum DateParseFailureReason
+    internal enum DateParseFailureReason
     {
         /// <summary>Parsing and canonicalization succeeded.</summary>
         None = 0,

@@ -11,7 +11,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// It does not construct hostnames, resolve bind addresses, or call Cloudflare.
     /// Those remain on <see cref="CloudflareDnsReconciliationService"/>.
     /// </remarks>
-    public sealed class CloudflareDnsReconciliationApplicationService : IApplicationService
+    internal sealed class CloudflareDnsReconciliationApplicationService : IApplicationService
     {
         private readonly CloudflareDnsReconciliationService _inner;
 

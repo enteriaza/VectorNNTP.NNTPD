@@ -5,12 +5,12 @@ namespace VectorNNTP.Common.Messaging.Cache
     /// <summary>
     /// Validates the structured VATP dial fields carried by Article Work and storage lookup.
     /// </summary>
-    public static class VatpEndpointFields
+    internal static class VatpEndpointFields
     {
         /// <summary>
         /// Returns whether <paramref name="fqdn"/> is a lowercase dotted DNS name.
         /// </summary>
-        public static bool IsCanonicalFqdn([NotNullWhen(true)] string? fqdn)
+        internal static bool IsCanonicalFqdn([NotNullWhen(true)] string? fqdn)
         {
             if (string.IsNullOrWhiteSpace(fqdn) || fqdn.Length > 253)
             {
@@ -40,7 +40,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         }
 
         /// <summary>Returns whether <paramref name="port"/> is a TCP port.</summary>
-        public static bool IsCanonicalPort(int port) => port is >= 1 and <= 65535;
+        internal static bool IsCanonicalPort(int port) => port is >= 1 and <= 65535;
 
         private static bool IsLabel(ReadOnlySpan<char> label)
         {

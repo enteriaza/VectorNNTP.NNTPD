@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Messaging.Cache
     /// <c>state</c> is not a lifecycle announcement. Unknown properties are ignored.
     /// AMQP expiration and persistence are not JSON fields.
     /// </remarks>
-    public static class StorageServerLifecycleWireProtocol
+    internal static class StorageServerLifecycleWireProtocol
     {
         /// <summary>Current application protocol version.</summary>
         public const int CurrentVersion = 1;
@@ -27,7 +27,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         /// <summary>Serializes a version-1 lifecycle announcement into compact UTF-8 JSON.</summary>
         /// <param name="announcement">Concrete valid v1 announcement.</param>
         /// <returns>UTF-8 bytes containing the canonical properties.</returns>
-        public static byte[] SerializeV1(StorageServerLifecycleAnnouncement announcement)
+        internal static byte[] SerializeV1(StorageServerLifecycleAnnouncement announcement)
         {
             ArgumentNullException.ThrowIfNull(announcement);
             if (announcement.Version != CurrentVersion)
@@ -89,7 +89,7 @@ namespace VectorNNTP.Common.Messaging.Cache
         /// capacity advertisement.
         /// </param>
         /// <returns><see langword="true"/> when the payload is a valid v1 lifecycle announcement.</returns>
-        public static bool TryParseV1(
+        internal static bool TryParseV1(
             ReadOnlySpan<byte> payload,
             out StorageServerLifecycleAnnouncement? announcement,
             out string reason,

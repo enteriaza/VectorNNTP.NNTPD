@@ -7,11 +7,11 @@ namespace VectorNNTP.Common.NntpDb
     /// Messages include the MySqlConnector parse reason and never include the
     /// connection string or credentials.
     /// </remarks>
-    public sealed class NntpDbConfigurationException : Exception
+    internal sealed class NntpDbConfigurationException : Exception
     {
         /// <summary>Initializes a new instance of the <see cref="NntpDbConfigurationException"/> class.</summary>
         /// <param name="reason">Parser or configuration reason without secrets.</param>
-        public NntpDbConfigurationException(string reason)
+        internal NntpDbConfigurationException(string reason)
             : this(reason, innerException: null)
         {
         }
@@ -19,14 +19,14 @@ namespace VectorNNTP.Common.NntpDb
         /// <summary>Initializes a new instance of the <see cref="NntpDbConfigurationException"/> class.</summary>
         /// <param name="reason">Parser or configuration reason without secrets.</param>
         /// <param name="innerException">Optional MySqlConnector parse exception.</param>
-        public NntpDbConfigurationException(string reason, Exception? innerException)
+        internal NntpDbConfigurationException(string reason, Exception? innerException)
             : base(CreateMessage(reason), innerException)
         {
             Reason = reason;
         }
 
         /// <summary>Gets the MySqlConnector parse or configuration reason without secrets.</summary>
-        public string Reason { get; }
+        internal string Reason { get; }
 
         private static string CreateMessage(string reason) =>
             string.IsNullOrWhiteSpace(reason)

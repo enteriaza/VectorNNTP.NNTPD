@@ -47,7 +47,7 @@ namespace VectorNNTP.Common.Articles
         }
 
         /// <summary>Gets the internal article identity BLAKE3(Message-ID value bytes).</summary>
-        public ArticleId ArtId { get; }
+        internal ArticleId ArtId { get; }
 
         /// <summary>
         /// Gets the XXH3-64 fingerprint of <see cref="ArtData"/>.
@@ -57,13 +57,13 @@ namespace VectorNNTP.Common.Articles
         /// Not cryptographic identity and not proof of byte equality. Distinct from
         /// <see cref="ArtId"/>, which is BLAKE3 of the Message-ID value only.
         /// </remarks>
-        public ulong ArtHash { get; }
+        internal ulong ArtHash { get; }
 
         /// <summary>Gets the canonical unstuffed article size; always <c>ArtData.Length</c>.</summary>
         public int ArtSize => _artData?.Length ?? 0;
 
         /// <summary>Gets the Diablo-derived article type flags. Not <c>NntpArticleType</c>.</summary>
-        public ArticleType ArtType { get; }
+        internal ArticleType ArtType { get; }
 
         /// <summary>
         /// Gets the body line count for overview <c>:lines</c>.
@@ -75,7 +75,7 @@ namespace VectorNNTP.Common.Articles
         public int ArtLines { get; }
 
         /// <summary>Gets the winning Date-family header resolved to UTC.</summary>
-        public DateTime CanonicalUtc { get; }
+        internal DateTime CanonicalUtc { get; }
 
         /// <summary>
         /// Gets the parse/validation state of this record.
@@ -90,24 +90,24 @@ namespace VectorNNTP.Common.Articles
         public ArticleFieldTable Fields { get; }
 
         /// <summary>Gets the Message-ID header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> MessageId => Fields.MessageId.Slice(_artData);
+        internal ReadOnlySpan<byte> MessageId => Fields.MessageId.Slice(_artData);
 
         /// <summary>Gets the Newsgroups header value bytes in ArtData (ArtGroups).</summary>
-        public ReadOnlySpan<byte> Newsgroups => Fields.Newsgroups.Slice(_artData);
+        internal ReadOnlySpan<byte> Newsgroups => Fields.Newsgroups.Slice(_artData);
 
         /// <summary>Gets the Subject header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> Subject => Fields.Subject.Slice(_artData);
+        internal ReadOnlySpan<byte> Subject => Fields.Subject.Slice(_artData);
 
         /// <summary>Gets the From header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> From => Fields.From.Slice(_artData);
+        internal ReadOnlySpan<byte> From => Fields.From.Slice(_artData);
 
         /// <summary>Gets the winning Date-family header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> Date => Fields.Date.Slice(_artData);
+        internal ReadOnlySpan<byte> Date => Fields.Date.Slice(_artData);
 
         /// <summary>Gets the References header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> References => Fields.References.Slice(_artData);
+        internal ReadOnlySpan<byte> References => Fields.References.Slice(_artData);
 
         /// <summary>Gets the Path header value bytes in ArtData.</summary>
-        public ReadOnlySpan<byte> Path => Fields.Path.Slice(_artData);
+        internal ReadOnlySpan<byte> Path => Fields.Path.Slice(_artData);
     }
 }

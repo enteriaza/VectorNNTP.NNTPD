@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Articles.Validation
     /// The article-path API operates on ASCII bytes. The character-span API is the
     /// original request-boundary implementation and does not allocate.
     /// </remarks>
-    public static class NntpMessageIdValidation
+    internal static class NntpMessageIdValidation
     {
         /// <summary>Maximum Message-ID length in octets.</summary>
         public const int MaxMessageIdLength = 250;
@@ -24,7 +24,7 @@ namespace VectorNNTP.Common.Articles.Validation
         /// <param name="stripSpaces">When <see langword="true"/>, leading and trailing whitespace is trimmed first.</param>
         /// <returns><see langword="true"/> when the token is ASCII, bracketed, and satisfies the grammar.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsValidMessageId(ReadOnlySpan<char> messageId, bool stripSpaces = false)
+        internal static bool IsValidMessageId(ReadOnlySpan<char> messageId, bool stripSpaces = false)
         {
             var length = messageId.Length;
             if (length is 0 or > MaxMessageIdLength)
@@ -74,7 +74,7 @@ namespace VectorNNTP.Common.Articles.Validation
         /// <param name="stripSpaces">When <see langword="true"/>, leading and trailing ASCII whitespace is trimmed first.</param>
         /// <returns><see langword="true"/> when the token is 7-bit ASCII, bracketed, and satisfies the grammar.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsValidMessageId(ReadOnlySpan<byte> messageId, bool stripSpaces = false)
+        internal static bool IsValidMessageId(ReadOnlySpan<byte> messageId, bool stripSpaces = false)
         {
             var length = messageId.Length;
             if (length is 0 or > MaxMessageIdLength)
@@ -124,7 +124,7 @@ namespace VectorNNTP.Common.Articles.Validation
         /// <param name="stripSpaces">When <see langword="true"/>, leading and trailing whitespace is trimmed first.</param>
         /// <returns><see langword="true"/> when valid.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsValidMessageId(string? messageId, bool stripSpaces = false) =>
+        internal static bool IsValidMessageId(string? messageId, bool stripSpaces = false) =>
             messageId is { Length: > 0 } && IsValidMessageId(messageId.AsSpan(), stripSpaces);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

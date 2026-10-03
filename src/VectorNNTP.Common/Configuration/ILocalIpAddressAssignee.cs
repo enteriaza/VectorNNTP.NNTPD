@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Configuration
     /// <summary>
     /// Enumerates local network interfaces via <see cref="NetworkInterface"/>.
     /// </summary>
-    public sealed class NetworkInterfaceLocalIpAddressAssignee : ILocalIpAddressAssignee
+    internal sealed class NetworkInterfaceLocalIpAddressAssignee : ILocalIpAddressAssignee
     {
         /// <inheritdoc />
         public bool IsLocallyAssigned(IPAddress address)

@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Acme;
@@ -121,7 +122,9 @@ namespace VectorNNTP.Common.Tests.Hosting
         [Fact]
         public void Shared_bind_validator_is_the_same_method_nntpd_and_backfiller_use()
         {
-            Assert.NotNull(typeof(AcmeCloudflareOptionsValidator).GetMethod(nameof(AcmeCloudflareOptionsValidator.CollectBindAddressFailures)));
+            Assert.NotNull(typeof(AcmeCloudflareOptionsValidator).GetMethod(
+                nameof(AcmeCloudflareOptionsValidator.CollectBindAddressFailures),
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static));
             Assert.Equal(
                 typeof(AcmeCloudflareOptionsValidator).Assembly,
                 typeof(CloudflareDnsReconciliationService).Assembly);

@@ -23,7 +23,7 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// instead of exceptions.
     /// </para>
     /// </remarks>
-    public static class YEncArticleValidator
+    internal static class YEncArticleValidator
     {
         private const int YEncOffset = 42;
         private const int YEncEscapedByteDelta = 64;
@@ -56,7 +56,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// <para>Decoded bytes are streamed directly into CRC computation without allocating a decoded payload buffer.</para>
         /// <para>Multipart success means each encountered section validated independently; it does not reconstruct the complete file across articles.</para>
         /// </remarks>
-        public static YEncArticleValidationResult Validate(ReadOnlySpan<byte> articleBody)
+        internal static YEncArticleValidationResult Validate(ReadOnlySpan<byte> articleBody)
         {
             var position = 0;
             var sectionsValidated = 0;

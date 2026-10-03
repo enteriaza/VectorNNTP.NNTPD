@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// should register a decorator that also requires BaseUrl and broker credentials.
     /// </para>
     /// </remarks>
-    public sealed class RabbitMqOptionsValidator : IValidateOptions<RabbitMqOptions>
+    internal sealed class RabbitMqOptionsValidator : IValidateOptions<RabbitMqOptions>
     {
         /// <inheritdoc />
         public ValidateOptionsResult Validate(string? name, RabbitMqOptions options)
@@ -37,7 +37,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// </summary>
         /// <param name="rabbitMq">Options instance to validate.</param>
         /// <param name="failures">Failure list to append to.</param>
-        public static void ValidateConnection(RabbitMqOptions rabbitMq, List<string> failures)
+        internal static void ValidateConnection(RabbitMqOptions rabbitMq, List<string> failures)
         {
             ArgumentNullException.ThrowIfNull(rabbitMq);
             ArgumentNullException.ThrowIfNull(failures);
@@ -553,7 +553,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>
         /// Validates nested Management settings when <see cref="RabbitMqManagementOptions.BaseUrl"/> is present.
         /// </summary>
-        public static void ValidateOptionalManagement(RabbitMqOptions rabbitMq, List<string> failures)
+        private static void ValidateOptionalManagement(RabbitMqOptions rabbitMq, List<string> failures)
         {
             ArgumentNullException.ThrowIfNull(rabbitMq);
             ArgumentNullException.ThrowIfNull(failures);
@@ -571,7 +571,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>
         /// Validates Management BaseUrl shape and request timeout (BaseUrl must already be non-empty).
         /// </summary>
-        public static void ValidateManagementShape(RabbitMqManagementOptions management, List<string> failures)
+        internal static void ValidateManagementShape(RabbitMqManagementOptions management, List<string> failures)
         {
             ArgumentNullException.ThrowIfNull(management);
             ArgumentNullException.ThrowIfNull(failures);

@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <summary>
     /// Detected article content classification produced by the parser.
     /// </summary>
-    public enum NntpArticleType
+    internal enum NntpArticleType
     {
         /// <summary>The parser could not confidently classify content type.</summary>
         Unknown = 0,
@@ -169,7 +169,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <param name="NameLength">Header-name byte length.</param>
     /// <param name="ValueOffset">Byte offset of first header-value byte within the original article buffer.</param>
     /// <param name="ValueLength">Header-value byte length spanning folded continuation bytes exactly as received.</param>
-    public readonly record struct NntpArticleHeaderEntry(
+    internal readonly record struct NntpArticleHeaderEntry(
         NntpArticleHeaderName KnownName,
         int NameOffset,
         int NameLength,
@@ -186,7 +186,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <param name="MaxHeaderNameBytes">Maximum bytes for one header name token.</param>
     /// <param name="MaxHeaderValueBytes">Maximum bytes for one unfolded header value.</param>
     /// <param name="YEncDetectionScanBytes">Maximum body bytes scanned for yEnc marker detection before full validation.</param>
-    public readonly record struct NntpArticleParserOptions(
+    internal readonly record struct NntpArticleParserOptions(
         int MaxArticleBytes,
         int MaxHeaderSectionBytes,
         int MaxHeaderCount,
@@ -198,7 +198,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <summary>
         /// Gets the default parser limits tuned for hostile-input safety and transit workloads.
         /// </summary>
-        public static NntpArticleParserOptions Default { get; } = new(
+        internal static NntpArticleParserOptions Default { get; } = new(
             MaxArticleBytes: ArticleResourceLimits.MaxArticleBytes,
             MaxHeaderSectionBytes: 256 * 1024,
             MaxHeaderCount: 1024,
@@ -228,7 +228,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// They do not copy payload data and inherit that buffer's lifetime.
     /// Canonical Date and Path are exposed as value writes into caller-supplied spans, not heap strings.
     /// </remarks>
-    public readonly struct NntpArticleParseResult
+    internal readonly struct NntpArticleParseResult
     {
         private readonly NntpArticleHeaderInlineStore _inlineHeaders;
         private readonly NntpArticleHeaderEntry[]? _overflowHeaders;
@@ -320,67 +320,67 @@ namespace VectorNNTP.Common.Articles.Parsing
         }
 
         /// <summary>Gets a value indicating whether the article passed parser validation.</summary>
-        public bool IsAccepted { get; }
+        internal bool IsAccepted { get; }
 
         /// <summary>Gets the machine-readable rejection classification when <see cref="IsAccepted"/> is false.</summary>
-        public NntpArticleParseFailureCode FailureCode { get; }
+        internal NntpArticleParseFailureCode FailureCode { get; }
 
         /// <summary>Gets the detected article type classification.</summary>
-        public NntpArticleType ArticleType { get; }
+        internal NntpArticleType ArticleType { get; }
 
         /// <summary>Gets the original article bytes supplied to the parser.</summary>
-        public ReadOnlyMemory<byte> ArticleBytes { get; }
+        internal ReadOnlyMemory<byte> ArticleBytes { get; }
 
         /// <summary>Gets the header section bytes as a slice of <see cref="ArticleBytes"/>.</summary>
-        public ReadOnlyMemory<byte> HeaderBytes { get; }
+        internal ReadOnlyMemory<byte> HeaderBytes { get; }
 
         /// <summary>Gets the body section bytes as a slice of <see cref="ArticleBytes"/>.</summary>
-        public ReadOnlyMemory<byte> BodyBytes { get; }
+        internal ReadOnlyMemory<byte> BodyBytes { get; }
 
         /// <summary>Gets the number of parsed header entries.</summary>
-        public int HeaderCount { get; }
+        internal int HeaderCount { get; }
 
         /// <summary>Gets parsed header entries in original wire order.</summary>
-        public NntpArticleHeaderList Headers => new(this);
+        internal NntpArticleHeaderList Headers => new(this);
 
         /// <summary>Gets the date parse classification when date canonicalization fails.</summary>
-        public DateParseFailureReason DateFailureReason { get; }
+        internal DateParseFailureReason DateFailureReason { get; }
 
         /// <summary>Gets the canonical UTC instant when date resolution succeeds.</summary>
-        public DateTime CanonicalUtc { get; }
+        internal DateTime CanonicalUtc { get; }
 
         /// <summary>Gets the original date-header value bytes used by the date resolver.</summary>
-        public ReadOnlyMemory<byte> OriginalDateValue { get; }
+        internal ReadOnlyMemory<byte> OriginalDateValue { get; }
 
         /// <summary>Gets the known header identity that produced <see cref="CanonicalUtc"/>.</summary>
-        public NntpArticleHeaderName SelectedDateHeaderName { get; }
+        internal NntpArticleHeaderName SelectedDateHeaderName { get; }
 
         /// <summary>Gets the Path rewrite classification for the application FQDN hop.</summary>
-        public ArticlePathKind PathKind { get; }
+        private ArticlePathKind PathKind { get; }
 
         /// <summary>
         /// Gets a value indicating whether a Path token equals the organizational tracker hostname
         /// <c>news.usenet.ninja</c> using existing case-insensitive token rules.
         /// </summary>
-        public bool ContainsOrganizationalTracker { get; }
+        internal bool ContainsOrganizationalTracker { get; }
 
         /// <summary>Gets the original Path-header bytes when present.</summary>
-        public ReadOnlyMemory<byte> OriginalPathValue { get; }
+        internal ReadOnlyMemory<byte> OriginalPathValue { get; }
 
         /// <summary>Gets the original Message-ID header value bytes.</summary>
-        public ReadOnlyMemory<byte> OriginalMessageIdValue { get; }
+        internal ReadOnlyMemory<byte> OriginalMessageIdValue { get; }
 
         /// <summary>Gets a value indicating whether yEnc markers were detected in the body scan window.</summary>
-        public bool YEncDetected { get; }
+        internal bool YEncDetected { get; }
 
         /// <summary>
         /// Gets the body line count from the parser's CRLF/CR/LF walk.
         /// Empty body is 0. A final unterminated fragment counts as one line.
         /// </summary>
-        public int BodyLineCount { get; }
+        internal int BodyLineCount { get; }
 
         /// <summary>Gets the yEnc validation result for the article body.</summary>
-        public YEncArticleValidationResult YEncValidation { get; }
+        internal YEncArticleValidationResult YEncValidation { get; }
 
         /// <summary>
         /// Returns the header entry at <paramref name="index"/>.
@@ -388,7 +388,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="index">Zero-based header index.</param>
         /// <returns>The stored header entry.</returns>
         /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="index"/> is outside <see cref="HeaderCount"/>.</exception>
-        public NntpArticleHeaderEntry GetHeader(int index)
+        internal NntpArticleHeaderEntry GetHeader(int index)
         {
             if ((uint)index >= (uint)HeaderCount)
             {
@@ -410,7 +410,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="destination">Destination receiving ASCII bytes.</param>
         /// <param name="bytesWritten">Bytes written on success.</param>
         /// <returns><see langword="true"/> when a date was resolved and <paramref name="destination"/> was large enough.</returns>
-        public bool TryFormatCanonicalUtc(Span<byte> destination, out int bytesWritten)
+        internal bool TryFormatCanonicalUtc(Span<byte> destination, out int bytesWritten)
         {
             if (CanonicalUtc == default && DateFailureReason != DateParseFailureReason.None)
             {
@@ -434,7 +434,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="destination">Destination receiving ASCII Path bytes.</param>
         /// <param name="bytesWritten">Bytes written on success.</param>
         /// <returns><see langword="true"/> when Path analysis succeeded and <paramref name="destination"/> was large enough.</returns>
-        public bool TryWriteCanonicalPath(ArticlePathMode mode, Span<byte> destination, out int bytesWritten)
+        internal bool TryWriteCanonicalPath(ArticlePathMode mode, Span<byte> destination, out int bytesWritten)
             => ArticlePathCanonicalizer.TryWriteCanonicalPath(
                 OriginalPathValue.Span,
                 _localIdentity.Span,
@@ -493,7 +493,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <summary>
     /// Allocation-free list view over parsed header entries stored on <see cref="NntpArticleParseResult"/>.
     /// </summary>
-    public readonly struct NntpArticleHeaderList : IReadOnlyList<NntpArticleHeaderEntry>
+    internal readonly struct NntpArticleHeaderList : IReadOnlyList<NntpArticleHeaderEntry>
     {
         private readonly NntpArticleParseResult _result;
 

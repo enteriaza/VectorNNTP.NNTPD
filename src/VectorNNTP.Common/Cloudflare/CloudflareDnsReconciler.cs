@@ -30,7 +30,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// linked with the caller token.
     /// </para>
     /// </remarks>
-    public sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
+    internal sealed class CloudflareDnsReconciler : ICloudflareDnsReconciler
     {
         /// <summary>Maximum reconcile attempts within a single <see cref="ReconcileAsync"/> call.</summary>
         internal const int MaxAttempts = 3;
@@ -370,7 +370,7 @@ namespace VectorNNTP.Common.Cloudflare
         /// Classifies whether a Cloudflare record name is exactly the expected FQDN.
         /// Returns <see langword="false"/> when the name cannot be classified safely.
         /// </summary>
-        public static bool TryClassifyExactFqdn(string? recordName, string normalizedExpected, out bool isExactMatch)
+        internal static bool TryClassifyExactFqdn(string? recordName, string normalizedExpected, out bool isExactMatch)
         {
             isExactMatch = false;
             if (string.IsNullOrWhiteSpace(recordName) || string.IsNullOrWhiteSpace(normalizedExpected))

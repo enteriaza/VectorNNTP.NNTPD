@@ -10,26 +10,26 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// removed before the identifier may be reused. This is Common state only; it does not
     /// own sockets.
     /// </remarks>
-    public sealed class ArticleTransferStreamTable
+    internal sealed class ArticleTransferStreamTable
     {
         private readonly Dictionary<uint, ArticleTransferReceiveStream> _streams;
         private readonly ArticleTransferLimits _limits;
 
         /// <summary>Creates a table with the given limits.</summary>
-        public ArticleTransferStreamTable(ArticleTransferLimits? limits = null)
+        internal ArticleTransferStreamTable(ArticleTransferLimits? limits = null)
         {
             _limits = limits ?? ArticleTransferLimits.Default;
             _streams = new Dictionary<uint, ArticleTransferReceiveStream>(_limits.MaxStreamsPerConnection);
         }
 
         /// <summary>Gets the number of active streams.</summary>
-        public int Count => _streams.Count;
+        internal int Count => _streams.Count;
 
         /// <summary>Gets the configured maximum.</summary>
-        public int MaxStreams => _limits.MaxStreamsPerConnection;
+        private int MaxStreams => _limits.MaxStreamsPerConnection;
 
         /// <summary>Attempts to open a new receive stream.</summary>
-        public ArticleTransferApplyResult TryOpen(
+        internal ArticleTransferApplyResult TryOpen(
             uint streamId,
             Guid requestId,
             ArticleId expectedArtId,
@@ -57,15 +57,15 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Looks up an active stream.</summary>
-        public bool TryGet(uint streamId, out ArticleTransferReceiveStream stream) =>
+        private bool TryGet(uint streamId, out ArticleTransferReceiveStream stream) =>
             _streams.TryGetValue(streamId, out stream!);
 
         /// <summary>
         /// Removes a stream. Required after terminalization before StreamId reuse.
         /// </summary>
-        public bool TryRemove(uint streamId) => _streams.Remove(streamId);
+        internal bool TryRemove(uint streamId) => _streams.Remove(streamId);
 
         /// <summary>Removes all streams.</summary>
-        public void Clear() => _streams.Clear();
+        private void Clear() => _streams.Clear();
     }
 }

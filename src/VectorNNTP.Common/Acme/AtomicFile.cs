@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Atomic filesystem helpers for ACME state (temp + replace).</summary>
     internal static class AtomicFile
     {
-        public static void WriteBytes(string path, ReadOnlySpan<byte> data)
+        internal static void WriteBytes(string path, ReadOnlySpan<byte> data)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -40,10 +40,10 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
-        public static void WriteText(string path, string text) =>
+        internal static void WriteText(string path, string text) =>
             WriteBytes(path, System.Text.Encoding.UTF8.GetBytes(text));
 
-        public static void TryDelete(string path)
+        internal static void TryDelete(string path)
         {
             try
             {

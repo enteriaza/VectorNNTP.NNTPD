@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// Resource limits such as concurrent streams and initial window size live in
     /// <see cref="ArticleTransferLimits"/> and are not wire invariants.
     /// </remarks>
-    public static class VatpProtocol
+    internal static class VatpProtocol
     {
         /// <summary>Supported protocol version byte.</summary>
         public const byte Version1 = 0x01;
@@ -61,7 +61,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>
         /// HELLO magic <c>VNATP01\0</c> (8 bytes).
         /// </summary>
-        public static ReadOnlySpan<byte> HelloMagic => "VNATP01\0"u8;
+        internal static ReadOnlySpan<byte> HelloMagic => "VNATP01\0"u8;
 
         /// <summary>DATA Flags bit 0: last DATA frame for the stream.</summary>
         public const uint FlagFin = 1u;

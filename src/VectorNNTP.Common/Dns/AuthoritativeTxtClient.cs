@@ -31,7 +31,7 @@ namespace VectorNNTP.Common.Dns
         /// if truncated or empty answers.
         /// </summary>
         /// <returns>Decoded TXT strings; empty when the nameserver returns no usable TXT.</returns>
-        public static async Task<List<string>> QueryTxtAsync(
+        internal static async Task<List<string>> QueryTxtAsync(
             IPAddress nameserver,
             string recordName,
             CancellationToken cancellationToken,

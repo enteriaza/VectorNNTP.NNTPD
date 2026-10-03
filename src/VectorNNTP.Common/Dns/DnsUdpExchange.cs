@@ -28,10 +28,10 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Outcome of a single UDP DNS exchange attempt.
         /// </summary>
-        public readonly struct Result
+        internal readonly struct Result
         {
             /// <summary>Initializes a successful exchange.</summary>
-            public Result(byte[] buffer)
+            internal Result(byte[] buffer)
             {
                 Buffer = buffer;
                 TimedOut = false;
@@ -46,26 +46,26 @@ namespace VectorNNTP.Common.Dns
             }
 
             /// <summary>Response bytes when the exchange succeeded; otherwise <see langword="null"/>.</summary>
-            public byte[]? Buffer { get; }
+            internal byte[]? Buffer { get; }
 
             /// <summary><see langword="true"/> when the receive window elapsed without a matching datagram.</summary>
-            public bool TimedOut { get; }
+            internal bool TimedOut { get; }
 
             /// <summary><see langword="true"/> when a socket error prevented a usable response.</summary>
-            public bool Failed { get; }
+            internal bool Failed { get; }
 
             /// <summary>Creates a timeout outcome.</summary>
-            public static Result Timeout() => new(timedOut: true, failed: false);
+            internal static Result Timeout() => new(timedOut: true, failed: false);
 
             /// <summary>Creates a hard-failure outcome.</summary>
-            public static Result Failure() => new(timedOut: false, failed: true);
+            internal static Result Failure() => new(timedOut: false, failed: true);
         }
 
         /// <summary>
         /// Sends <paramref name="query"/> to <paramref name="destination"/>:53 and returns the first
         /// response whose remote endpoint matches that destination.
         /// </summary>
-        public static async Task<Result> QueryAsync(
+        internal static async Task<Result> QueryAsync(
             IPAddress destination,
             byte[] query,
             int timeoutMilliseconds,

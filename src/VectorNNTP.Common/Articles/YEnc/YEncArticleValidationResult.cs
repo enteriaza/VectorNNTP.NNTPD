@@ -3,7 +3,7 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// <summary>
     /// Terminal yEnc validation classification for a raw NNTP article body.
     /// </summary>
-    public enum YEncArticleValidationStatus
+    internal enum YEncArticleValidationStatus
     {
         /// <summary>No yEnc section was found and no corruption was detected.</summary>
         ValidNonYEnc = 0,
@@ -43,33 +43,33 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// </summary>
     /// <param name="Status">Terminal validation status.</param>
     /// <param name="SectionsValidated">Number of independently validated yEnc sections encountered during the forward scan.</param>
-    public readonly record struct YEncArticleValidationResult(
+    internal readonly record struct YEncArticleValidationResult(
         YEncArticleValidationStatus Status,
         int SectionsValidated)
     {
         /// <summary>
         /// Gets a value indicating whether the article payload is valid for yEnc correctness purposes.
         /// </summary>
-        public bool IsValid => Status is YEncArticleValidationStatus.ValidNonYEnc
+        internal bool IsValid => Status is YEncArticleValidationStatus.ValidNonYEnc
             or YEncArticleValidationStatus.ValidSinglePart
             or YEncArticleValidationStatus.ValidMultiPart;
 
         /// <summary>
         /// Gets a value indicating whether at least one yEnc section was identified.
         /// </summary>
-        public bool IsYEnc => Status is not YEncArticleValidationStatus.ValidNonYEnc;
+        private bool IsYEnc => Status is not YEncArticleValidationStatus.ValidNonYEnc;
 
         /// <summary>
         /// Gets a value indicating whether the caller should report this result as yEnc decoding failed.
         /// </summary>
-        public bool ShouldTreatAsYEncDecodingFailed => Status is not YEncArticleValidationStatus.ValidNonYEnc
+        internal bool ShouldTreatAsYEncDecodingFailed => Status is not YEncArticleValidationStatus.ValidNonYEnc
             && !IsValid;
 
         /// <summary>
         /// Creates the canonical success result used when no <c>=ybegin</c> section was validated.
         /// </summary>
         /// <returns>A non-yEnc success result with zero validated sections.</returns>
-        public static YEncArticleValidationResult ValidNonYEnc()
+        internal static YEncArticleValidationResult ValidNonYEnc()
             => new(YEncArticleValidationStatus.ValidNonYEnc, 0);
     }
 }

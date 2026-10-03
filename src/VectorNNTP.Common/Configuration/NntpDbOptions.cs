@@ -22,19 +22,19 @@ namespace VectorNNTP.Common.Configuration
     public sealed class NntpDbOptions
     {
         /// <summary>Top-level NntpDB application-options section name.</summary>
-        public const string SectionName = "NntpDb";
+        internal const string SectionName = "NntpDb";
 
         /// <summary>Connection-string name under <c>ConnectionStrings</c>.</summary>
-        public const string ConnectionStringName = "NntpDB";
+        internal const string ConnectionStringName = "NntpDB";
 
         /// <summary>
         /// Existing Generic Host environment variable that supplies
         /// <c>ConnectionStrings:NntpDB</c>.
         /// </summary>
-        public const string ConnectionStringEnvironmentVariable = "ConnectionStrings__NntpDB";
+        internal const string ConnectionStringEnvironmentVariable = "ConnectionStrings__NntpDB";
 
         /// <summary>Default wall-clock budget for the NNTPD startup connectivity check.</summary>
-        public static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromSeconds(15);
 
         /// <summary>
         /// Gets or sets the MySQL connection string copied from

@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Dns
     /// Label splitting uses <c>stackalloc</c> <see cref="Range"/> buffers. Error strings allocate only on
     /// validation failure. All members are stateless and safe for concurrent use.
     /// </remarks>
-    public static class DnsWireFormat
+    internal static class DnsWireFormat
     {
         /// <summary>Maximum length of a single DNS label in bytes (RFC 1035 §2.3.4).</summary>
         public const int MaxLabelLength = 63;
@@ -38,7 +38,7 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Validates a DNS name and computes wire QNAME length in a single label split.
         /// </summary>
-        public static bool TryGetWireNameLayout(
+        internal static bool TryGetWireNameLayout(
             ReadOnlySpan<char> name,
             Span<Range> labelRanges,
             out int labelCount,
@@ -97,13 +97,13 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Validates a DNS name for wire-format encoding.
         /// </summary>
-        public static bool TryValidateDnsName(string name, out string? error)
+        internal static bool TryValidateDnsName(string name, out string? error)
             => TryValidateDnsName(name.AsSpan(), out error);
 
         /// <summary>
         /// Validates a DNS name for wire-format encoding.
         /// </summary>
-        public static bool TryValidateDnsName(ReadOnlySpan<char> name, out string? error)
+        private static bool TryValidateDnsName(ReadOnlySpan<char> name, out string? error)
         {
             Span<Range> labelRanges = stackalloc Range[MaxLabelCount];
             return TryGetWireNameLayout(name, labelRanges, out _, out _, out error);
@@ -113,7 +113,7 @@ namespace VectorNNTP.Common.Dns
         /// Computes the wire-format QNAME length for a dotted DNS name, including the trailing root label.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> is invalid.</exception>
-        public static int ComputeWireNameLength(string name)
+        internal static int ComputeWireNameLength(string name)
         {
             ReadOnlySpan<char> span = name.AsSpan();
             Span<Range> labelRanges = stackalloc Range[MaxLabelCount];
@@ -129,7 +129,7 @@ namespace VectorNNTP.Common.Dns
         /// Encodes a dotted DNS name into QNAME wire format.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when the name is invalid or <paramref name="destination"/> is too short.</exception>
-        public static int EncodeDnsName(string name, Span<byte> destination)
+        internal static int EncodeDnsName(string name, Span<byte> destination)
         {
             ReadOnlySpan<char> span = name.AsSpan();
             Span<Range> labelRanges = stackalloc Range[MaxLabelCount];
@@ -146,7 +146,7 @@ namespace VectorNNTP.Common.Dns
         /// Encodes a pre-split dotted DNS name into QNAME wire format without re-splitting labels.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when <paramref name="destination"/> is too short.</exception>
-        public static int EncodeDnsName(
+        internal static int EncodeDnsName(
             ReadOnlySpan<char> name,
             ReadOnlySpan<Range> labelRanges,
             int labelCount,

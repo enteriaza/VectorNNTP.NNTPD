@@ -10,7 +10,7 @@ namespace VectorNNTP.Common.Configuration
     /// Register this validator only in TLS-only hosts (BackFiller). NNTPD retains
     /// <c>BindPortTls = 0</c> as "TLS disabled".
     /// </remarks>
-    public sealed class TlsOnlyAcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudflareOptions>
+    internal sealed class TlsOnlyAcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudflareOptions>
     {
         /// <inheritdoc />
         public ValidateOptionsResult Validate(string? name, AcmeCloudflareOptions options)

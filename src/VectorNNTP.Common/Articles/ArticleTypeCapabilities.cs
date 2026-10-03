@@ -4,7 +4,7 @@ namespace VectorNNTP.Common.Articles
     /// Persistent <see cref="ArticleType"/> flag combinations used by account
     /// capability and enforcement. Distinct from one-type PostFilter policy ENUM rows.
     /// </summary>
-    public static class ArticleTypeCapabilities
+    internal static class ArticleTypeCapabilities
     {
         /// <summary>
         /// Every defined classifier flag. Database default for existing
@@ -40,7 +40,7 @@ namespace VectorNNTP.Common.Articles
         /// <see cref="ArticleType.None"/>. Otherwise every flag present on the article
         /// must be present on the capability.
         /// </summary>
-        public static bool Allows(ArticleType allowed, ArticleType articleType)
+        internal static bool Allows(ArticleType allowed, ArticleType articleType)
         {
             if (allowed == All)
             {

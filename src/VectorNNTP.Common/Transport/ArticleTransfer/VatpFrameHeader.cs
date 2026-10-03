@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// Fixed 16-byte VATP frame header: version, type, headerLength, streamId, payloadLength, flags.
     /// </summary>
-    public readonly record struct VatpFrameHeader(
+    internal readonly record struct VatpFrameHeader(
         byte Version,
         VatpFrameType Type,
         ushort HeaderLength,
@@ -14,11 +14,11 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         uint Flags)
     {
         /// <summary>Gets a value indicating whether Flags.FIN is set.</summary>
-        public bool HasFin => (Flags & VatpProtocol.FlagFin) != 0;
+        internal bool HasFin => (Flags & VatpProtocol.FlagFin) != 0;
 
         /// <summary>Writes this header in network byte order into <paramref name="destination"/>.</summary>
         /// <param name="destination">At least <see cref="VatpProtocol.HeaderLengthBytes"/> bytes.</param>
-        public void WriteTo(Span<byte> destination)
+        internal void WriteTo(Span<byte> destination)
         {
             if (destination.Length < VatpProtocol.HeaderLengthBytes)
             {
@@ -36,7 +36,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>Reads one header from network byte order.</summary>
         /// <param name="source">At least <see cref="VatpProtocol.HeaderLengthBytes"/> bytes.</param>
         /// <returns>The decoded header.</returns>
-        public static VatpFrameHeader ReadFrom(ReadOnlySpan<byte> source)
+        internal static VatpFrameHeader ReadFrom(ReadOnlySpan<byte> source)
         {
             if (source.Length < VatpProtocol.HeaderLengthBytes)
             {
@@ -53,7 +53,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Creates a Version-1 header with <see cref="VatpProtocol.HeaderLengthBytes"/>.</summary>
-        public static VatpFrameHeader Create(VatpFrameType type, uint streamId, uint payloadLength, uint flags = 0) =>
+        internal static VatpFrameHeader Create(VatpFrameType type, uint streamId, uint payloadLength, uint flags = 0) =>
             new(VatpProtocol.Version1, type, VatpProtocol.HeaderLengthBytes, streamId, payloadLength, flags);
     }
 }

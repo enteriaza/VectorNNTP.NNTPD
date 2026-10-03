@@ -22,14 +22,14 @@ namespace VectorNNTP.Common.Configuration
     public static class VectorEnvironment
     {
         /// <summary>Canonical environment-variable prefix, including the trailing separator.</summary>
-        public const string Prefix = "VECTOR__";
+        internal const string Prefix = "VECTOR__";
 
         /// <summary>
         /// Builds the canonical uppercase environment-variable name for a configuration key path.
         /// </summary>
         /// <param name="configurationKeys">Configuration key segments in declaration order (for example <c>RabbitMQ</c>, <c>Username</c>).</param>
         /// <returns>The <c>VECTOR__</c> name, for example <c>VECTOR__RABBITMQ__USERNAME</c>.</returns>
-        public static string Variable(params string[] configurationKeys)
+        internal static string Variable(params string[] configurationKeys)
         {
             ArgumentNullException.ThrowIfNull(configurationKeys);
             if (configurationKeys.Length == 0)
@@ -55,7 +55,7 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="environmentVariableName">Candidate environment-variable name.</param>
         /// <returns><see langword="true"/> when the name is uppercase and uses <see cref="Prefix"/>.</returns>
-        public static bool IsCanonicalName(string? environmentVariableName)
+        internal static bool IsCanonicalName(string? environmentVariableName)
         {
             if (string.IsNullOrWhiteSpace(environmentVariableName))
             {

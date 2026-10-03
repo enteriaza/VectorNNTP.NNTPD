@@ -240,7 +240,7 @@ namespace VectorNNTP.BackFiller.Tests.Acme
                 _manager = manager;
             }
 
-            public override CertificateManager? GetOrCreateManager() => _manager;
+            internal override CertificateManager? GetOrCreateManager() => _manager;
         }
 
         private sealed class UnusedCloudflareClient : ICloudflareDnsClient

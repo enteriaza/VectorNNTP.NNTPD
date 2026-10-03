@@ -192,7 +192,10 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddSingleton<IApplicationLifecycleOptions>(static sp =>
             sp.GetRequiredService<IOptions<StorageServerOptions>>().Value);
         builder.Services.AddSingleton<ApplicationServiceManager>();
-        builder.Services.AddSingleton<ApplicationLifecycle>();
+        builder.Services.AddSingleton<ApplicationLifecycle>(static sp => new ApplicationLifecycle(
+            sp.GetRequiredService<ApplicationServiceManager>(),
+            sp.GetRequiredService<IApplicationLifecycleOptions>(),
+            sp.GetRequiredService<ILogger<ApplicationLifecycle>>()));
         builder.Services.AddSingleton<StorageServerHostShutdown>();
         builder.Services.AddSingleton<IApplicationHealth, ApplicationHealth>();
 

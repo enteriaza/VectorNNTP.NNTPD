@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Hosting
     /// <summary>
     /// Registers the shared NntpDB options binding used by NNTPD and BackFiller.
     /// </summary>
-    public static class NntpDbServiceCollectionExtensions
+    internal static class NntpDbServiceCollectionExtensions
     {
         /// <summary>
         /// Binds <see cref="NntpDbOptions"/> from the <c>NntpDb</c> section and
@@ -21,7 +21,7 @@ namespace VectorNNTP.Common.Hosting
         /// This is configuration only. It does not open MySQL, create schema, or
         /// register <c>NntpDbService</c>.
         /// </remarks>
-        public static IServiceCollection AddNntpDbOptions(this IServiceCollection services)
+        internal static IServiceCollection AddNntpDbOptions(this IServiceCollection services)
         {
             ArgumentNullException.ThrowIfNull(services);
 

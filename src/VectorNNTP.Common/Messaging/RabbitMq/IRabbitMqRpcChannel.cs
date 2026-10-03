@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <see cref="RabbitMqService"/> remains the sole TCP connection owner. The RPC service
     /// owns this channel's lifetime and must not dispose the connection.
     /// </remarks>
-    public interface IRabbitMqRpcChannel : IAsyncDisposable
+    internal interface IRabbitMqRpcChannel : IAsyncDisposable
     {
         /// <summary>Gets the connection generation this channel was opened against.</summary>
         long Generation { get; }
@@ -69,7 +69,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <param name="Expiration">AMQP expiration in milliseconds, when present. Article-work responses use <c>1000</c>.</param>
     /// <param name="Body">Application payload bytes. The consumer may copy this before returning.</param>
     /// <param name="Generation">Connection generation of the consumer channel that received the delivery.</param>
-    public readonly record struct RabbitMqRpcDelivery(
+    internal readonly record struct RabbitMqRpcDelivery(
         string? CorrelationId,
         string? RequestId,
         string? ContentType,

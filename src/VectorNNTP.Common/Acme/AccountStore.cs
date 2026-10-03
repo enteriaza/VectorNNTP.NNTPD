@@ -9,12 +9,12 @@ namespace VectorNNTP.Common.Acme
     /// Terminology: the persisted credential is an <strong>ACME account private key</strong> (PKCS#8 DER),
     /// not an X.509 "account certificate". Metadata is stored beside the key in <c>registration.json</c>.
     /// </remarks>
-    public sealed class AccountStore
+    internal sealed class AccountStore
     {
         private readonly string _stateDir;
 
         /// <summary>Initializes a new instance of the <see cref="AccountStore"/> class.</summary>
-        public AccountStore(string stateDir)
+        internal AccountStore(string stateDir)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
             _stateDir = stateDir;
@@ -25,7 +25,7 @@ namespace VectorNNTP.Common.Acme
         /// Returns persisted account state, or <see langword="null"/> when absent.
         /// Malformed or incomplete state throws without deleting files.
         /// </summary>
-        public AcmeAccountState? Load()
+        internal AcmeAccountState? Load()
         {
             var keyPath = AcmePaths.AccountKeyPath(_stateDir);
             var metaPath = AcmePaths.AccountMetaPath(_stateDir);
@@ -75,7 +75,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Atomically persists account key and metadata; refuses to overwrite a different key.</summary>
-        public void Save(AcmeAccountState state)
+        internal void Save(AcmeAccountState state)
         {
             ArgumentNullException.ThrowIfNull(state);
             AcmePaths.EnsureStateLayout(_stateDir);
@@ -115,7 +115,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Create-or-load the local ACME account (pending-key crash recovery matching pyNNTPD).
         /// </summary>
-        public AcmeAccountState EnsureRegistered(
+        internal AcmeAccountState EnsureRegistered(
             string directoryUrl,
             Func<byte[]> generateKeyDer,
             Func<byte[], (string AccountUri, string RegistrationBody)> register,

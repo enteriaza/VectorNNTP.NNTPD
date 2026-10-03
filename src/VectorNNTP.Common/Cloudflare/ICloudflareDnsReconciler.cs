@@ -1,4 +1,4 @@
-﻿using VectorNNTP.Common.Networking;
+using VectorNNTP.Common.Networking;
 
 namespace VectorNNTP.Common.Cloudflare
 {
@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// Startup reconciliation publishes A/AAAA for resolved bind addresses.
     /// Shutdown clean-up removes every DNS record for the exact FQDN (all types).
     /// </remarks>
-    public interface ICloudflareDnsReconciler
+    internal interface ICloudflareDnsReconciler
     {
         /// <summary>
         /// Makes Cloudflare DNS for <paramref name="fqdn"/> match <paramref name="desired"/> exactly,

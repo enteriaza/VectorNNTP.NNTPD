@@ -4,13 +4,13 @@ using System.Security.Cryptography.X509Certificates;
 namespace VectorNNTP.Common.Acme
 {
     /// <summary>Validates PKCS#12/PFX certificate material before reuse or promotion.</summary>
-    public static class CertificateValidator
+    internal static class CertificateValidator
     {
         /// <summary>
         /// Validates a password-protected PFX and returns usability / renewal status.
         /// </summary>
         /// <remarks>Never includes the password in returned reasons.</remarks>
-        public static CertificateStatus ValidatePfx(
+        internal static CertificateStatus ValidatePfx(
             ReadOnlySpan<byte> pfxBytes,
             string password,
             IReadOnlyList<string> requiredDomains,
@@ -80,7 +80,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Validates and returns material, throwing on failure.</summary>
-        public static CertificateMaterial RequireValidPfx(
+        internal static CertificateMaterial RequireValidPfx(
             ReadOnlySpan<byte> pfxBytes,
             string password,
             IReadOnlyList<string> requiredDomains,

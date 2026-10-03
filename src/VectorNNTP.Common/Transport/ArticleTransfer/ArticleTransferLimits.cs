@@ -10,23 +10,23 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     public sealed class ArticleTransferLimits
     {
         /// <summary>Creates limits with production-sensible defaults.</summary>
-        public ArticleTransferLimits()
+        internal ArticleTransferLimits()
         {
         }
 
         /// <summary>Maximum concurrent transfer streams per connection (default 64).</summary>
-        public int MaxStreamsPerConnection { get; init; } = 64;
+        internal int MaxStreamsPerConnection { get; init; } = 64;
 
         /// <summary>Initial per-stream send/receive WINDOW credit in bytes (default 256 KiB).</summary>
-        public int InitialStreamWindowBytes { get; init; } = 256 * 1024;
+        internal int InitialStreamWindowBytes { get; init; } = 256 * 1024;
 
         /// <summary>Default HELLO-advertised max DATA payload (default 64 KiB).</summary>
-        public uint DefaultMaxFramePayload { get; init; } = VatpProtocol.DefaultMaxFramePayload;
+        internal uint DefaultMaxFramePayload { get; init; } = VatpProtocol.DefaultMaxFramePayload;
 
         /// <summary>Maximum credit a stream may hold after WINDOW adds (default 64 MiB).</summary>
-        public long MaxStreamCreditBytes { get; init; } = 64L * 1024 * 1024;
+        internal long MaxStreamCreditBytes { get; init; } = 64L * 1024 * 1024;
 
         /// <summary>Gets the shared default instance.</summary>
-        public static ArticleTransferLimits Default { get; } = new();
+        internal static ArticleTransferLimits Default { get; } = new();
     }
 }

@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Articles
     /// The line boundary is 1024 characters by contract and is enforced on ASCII
     /// wire bytes because article framing is byte-oriented.
     /// </remarks>
-    public static class ArticleResourceLimits
+    internal static class ArticleResourceLimits
     {
         /// <summary>Maximum accepted ARTICLE payload size in bytes.</summary>
         public const int MaxArticleBytes = 5 * 1024 * 1024;

@@ -3,12 +3,12 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Helpers for ACME account private-key DER (PKCS#8). Not used for the TLS server credential.
     /// </summary>
-    public static class DerCrypto
+    internal static class DerCrypto
     {
         private static readonly byte[] PemBeginMarker = "-----BEGIN"u8.ToArray();
 
         /// <summary>Returns whether <paramref name="data"/> looks like PEM text rather than DER.</summary>
-        public static bool LooksLikePem(ReadOnlySpan<byte> data)
+        internal static bool LooksLikePem(ReadOnlySpan<byte> data)
         {
             if (data.Length < PemBeginMarker.Length)
             {

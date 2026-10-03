@@ -5,7 +5,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Owns server certificate lifecycle: evaluate, issue, renew, and expose validated PFX material.
     /// </summary>
-    public sealed class CertificateManager
+    internal sealed class CertificateManager
     {
         private readonly string _fqdn;
         private readonly string _stateDir;
@@ -36,7 +36,7 @@ namespace VectorNNTP.Common.Acme
         /// for <paramref name="fqdn"/>. Production wiring shares the instance with
         /// <see cref="Dns01Solver"/> and <see cref="AcmeIssuer"/>.
         /// </param>
-        public CertificateManager(
+        internal CertificateManager(
             string fqdn,
             string stateDir,
             string acmeDirectoryUrl,
@@ -72,16 +72,16 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Gets the required certificate DNS identities.</summary>
-        public IReadOnlyList<string> Domains => _domains;
+        private IReadOnlyList<string> Domains => _domains;
 
         /// <summary>Gets the monotonic generation counter after successful persist.</summary>
-        public int Generation => _generation;
+        private int Generation => _generation;
 
         /// <summary>Gets the current in-memory material, if any.</summary>
-        public CertificateMaterial? CurrentMaterial => _current;
+        internal CertificateMaterial? CurrentMaterial => _current;
 
         /// <summary>Assesses on-disk certificate without contacting ACME.</summary>
-        public CertificateStatus EvaluateExisting(DateTimeOffset? now = null)
+        internal CertificateStatus EvaluateExisting(DateTimeOffset? now = null)
         {
             try
             {
@@ -109,7 +109,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Reuses a usable certificate or issues a new one (startup path).</summary>
-        public async Task<CertificateMaterial> EnsureCertificateAsync(CancellationToken cancellationToken)
+        internal async Task<CertificateMaterial> EnsureCertificateAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -146,7 +146,7 @@ namespace VectorNNTP.Common.Acme
         /// Renews when absent, invalid, or past the renewal threshold.
         /// Returns <see langword="true"/> when a new certificate was persisted.
         /// </summary>
-        public async Task<bool> RenewIfDueAsync(CancellationToken cancellationToken)
+        internal async Task<bool> RenewIfDueAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -184,7 +184,7 @@ namespace VectorNNTP.Common.Acme
         /// Loads an <see cref="X509Certificate2"/> with private key from the current live PFX.
         /// Caller owns disposal. The certificate remains usable after the file path is closed.
         /// </summary>
-        public X509Certificate2 CreateTlsCertificate()
+        internal X509Certificate2 CreateTlsCertificate()
         {
             var material = _current ?? EvaluateExisting().Material
                 ?? throw new AcmeCertificateException("no_certificate", "live material missing");

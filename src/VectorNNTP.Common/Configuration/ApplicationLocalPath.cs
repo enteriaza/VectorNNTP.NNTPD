@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Configuration
     /// application-base argument). The process working directory, IDE project folder, and
     /// host content root are never used as an implicit fallback.
     /// </remarks>
-    public static class ApplicationLocalPath
+    internal static class ApplicationLocalPath
     {
         /// <summary>
         /// Resolves a configured application-local filesystem path.
@@ -24,7 +24,7 @@ namespace VectorNNTP.Common.Configuration
         /// Absolute <paramref name="path"/> values stay absolute.
         /// </returns>
         /// <exception cref="ArgumentException">Thrown when <paramref name="path"/> is null or whitespace.</exception>
-        public static string ResolveApplicationLocalPath(string path, string? applicationBaseDirectory)
+        internal static string ResolveApplicationLocalPath(string path, string? applicationBaseDirectory)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
             var trimmed = path.Trim();

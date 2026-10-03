@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Acme
     /// After DNS-01 challenges are triggered, the issuer polls until the ACME order is
     /// <c>ready</c> (or fails) before finalize.
     /// </remarks>
-    public sealed class AcmeIssuer : ICertificateIssuer
+    internal sealed class AcmeIssuer : ICertificateIssuer
     {
         /// <summary>Named <see cref="IHttpClientFactory"/> client for ACME HTTP.</summary>
         public const string HttpClientName = "AcmeDirectory";
@@ -31,7 +31,7 @@ namespace VectorNNTP.Common.Acme
         private readonly TimeSpan _readinessInterval;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeIssuer"/> class.</summary>
-        public AcmeIssuer(
+        internal AcmeIssuer(
             IOptions<AcmeCloudflareOptions> options,
             AccountStore accountStore,
             Dns01Solver dnsSolver,

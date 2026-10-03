@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>
     /// Creates ACME components only when TLS is enabled so non-TLS startups never touch ACME state.
     /// </summary>
-    public class AcmeComponentFactory
+    internal class AcmeComponentFactory
     {
         private readonly IOptions<AcmeCloudflareOptions> _options;
         private readonly ICloudflareDnsClient _cloudflareDnsClient;
@@ -18,7 +18,7 @@ namespace VectorNNTP.Common.Acme
         private IServerCertificateProvider? _provider;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeComponentFactory"/> class.</summary>
-        public AcmeComponentFactory(
+        internal AcmeComponentFactory(
             IOptions<AcmeCloudflareOptions> options,
             ICloudflareDnsClient cloudflareDnsClient,
             IHttpClientFactory httpClientFactory,
@@ -37,7 +37,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Returns a certificate manager when TLS is enabled; otherwise <see langword="null"/>.
         /// </summary>
-        public virtual CertificateManager? GetOrCreateManager()
+        internal virtual CertificateManager? GetOrCreateManager()
         {
             var options = _options.Value;
             if (!options.IsTlsListenerEnabled)
@@ -102,7 +102,7 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Returns a certificate provider when TLS is enabled; otherwise an unavailable stub.
         /// </summary>
-        public IServerCertificateProvider GetCertificateProvider()
+        internal IServerCertificateProvider GetCertificateProvider()
         {
             if (!_options.Value.IsTlsListenerEnabled)
             {
@@ -117,7 +117,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Stub provider used when TLS / ACME is disabled.</summary>
     internal sealed class DisabledServerCertificateProvider : IServerCertificateProvider
     {
-        public static DisabledServerCertificateProvider Instance { get; } = new();
+        internal static DisabledServerCertificateProvider Instance { get; } = new();
 
         public bool IsAvailable => false;
 

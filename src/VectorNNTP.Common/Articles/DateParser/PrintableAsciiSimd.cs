@@ -8,7 +8,7 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// <summary>
     /// Validates that code units stay within printable ASCII using vector instructions when available.
     /// </summary>
-    public static class PrintableAsciiSimd
+    internal static class PrintableAsciiSimd
     {
         private const int Vector256UShortCount = 16;
         private const int Vector128UShortCount = 8;
@@ -33,7 +33,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="span">Input span.</param>
         /// <returns><see langword="true"/> when empty or every character is in range.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsAllPrintableAscii(ReadOnlySpan<char> span) =>
+        internal static bool IsAllPrintableAscii(ReadOnlySpan<char> span) =>
             span.Length == 0
             || IsAllInRange(
                 span,
@@ -50,7 +50,7 @@ namespace VectorNNTP.Common.Articles.DateParser
         /// <param name="span">Input span.</param>
         /// <returns><see langword="true"/> when empty or every byte is in range.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsAllPrintableAscii(ReadOnlySpan<byte> span) =>
+        internal static bool IsAllPrintableAscii(ReadOnlySpan<byte> span) =>
             span.Length == 0 || IsAllInRange(span);
 
         private static bool IsAllInRange(

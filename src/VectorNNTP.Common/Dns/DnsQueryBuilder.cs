@@ -9,7 +9,7 @@ namespace VectorNNTP.Common.Dns
     /// Packets that fit in a stack buffer use <c>stackalloc</c>; larger names allocate a temporary heap buffer
     /// before <c>ToArray()</c>. <see cref="Random.Shared"/> supplies transaction IDs. Stateless and thread-safe.
     /// </remarks>
-    public static class DnsQueryBuilder
+    internal static class DnsQueryBuilder
     {
         private const int MaxStackAllocQuerySize =
             DnsWireFormat.HeaderSize + DnsWireFormat.MaxWireNameLength + DnsWireFormat.QuestionSuffixSize;
@@ -26,7 +26,7 @@ namespace VectorNNTP.Common.Dns
         /// </param>
         /// <returns>DNS query bytes.</returns>
         /// <exception cref="ArgumentException">Thrown when <paramref name="name"/> is invalid for DNS wire encoding.</exception>
-        public static byte[] Build(string name, ushort qtype, out ushort queryId, bool recursionDesired = false)
+        internal static byte[] Build(string name, ushort qtype, out ushort queryId, bool recursionDesired = false)
         {
             ArgumentException.ThrowIfNullOrEmpty(name);
 

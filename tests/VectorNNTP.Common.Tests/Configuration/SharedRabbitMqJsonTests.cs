@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Tests.Configuration
         {
             var output = FindApplicationOutput(applicationName);
             var primaryPath = Path.Combine(output, applicationName + ".json");
-            var sharedPath = Path.Combine(output, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            var sharedPath = Path.Combine(output, "RabbitMq.json");
             Assert.True(File.Exists(primaryPath), primaryPath);
             Assert.True(File.Exists(sharedPath), sharedPath);
 
@@ -38,7 +38,7 @@ namespace VectorNNTP.Common.Tests.Configuration
                 builder.Configuration,
                 builder.Environment.EnvironmentName);
 
-            var rabbitIndex = IndexOf(builder.Configuration, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            var rabbitIndex = IndexOf(builder.Configuration, "RabbitMq.json");
             var rabbit = (FileConfigurationSource)builder.Configuration.Sources[rabbitIndex];
             Assert.True(rabbit.Optional);
             Assert.True(rabbit.ReloadOnChange);
@@ -72,7 +72,7 @@ namespace VectorNNTP.Common.Tests.Configuration
             try
             {
                 File.WriteAllText(
-                    Path.Combine(root.FullName, ApplicationJsonConfiguration.SharedRabbitMqFileName),
+                    Path.Combine(root.FullName, "RabbitMq.json"),
                     """{"RabbitMQ":{"Port":5672,"Hosts":["198.18.0.3"]}}""");
                 File.WriteAllText(
                     Path.Combine(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
@@ -92,7 +92,7 @@ namespace VectorNNTP.Common.Tests.Configuration
                     builder.Configuration,
                     builder.Environment.EnvironmentName);
 
-                var rabbitIndex = IndexOf(builder.Configuration, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+                var rabbitIndex = IndexOf(builder.Configuration, "RabbitMq.json");
                 Assert.True(rabbitIndex < IndexOfCommandLineAfter(builder.Configuration, rabbitIndex));
                 Assert.Equal(overriddenPort, builder.Configuration["RabbitMQ:Port"]);
                 Assert.Equal("/from-args", builder.Configuration["RabbitMQ:VirtualHost"]);
@@ -179,7 +179,7 @@ namespace VectorNNTP.Common.Tests.Configuration
                         "bin",
                         configuration,
                         "net10.0");
-                    if (File.Exists(Path.Combine(candidate, ApplicationJsonConfiguration.SharedRabbitMqFileName)))
+                    if (File.Exists(Path.Combine(candidate, "RabbitMq.json")))
                     {
                         return candidate;
                     }

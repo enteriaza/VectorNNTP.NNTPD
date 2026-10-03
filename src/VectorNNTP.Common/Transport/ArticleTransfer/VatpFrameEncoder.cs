@@ -6,13 +6,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// Deterministic encoders for VATP v1 frames. Payload-bearing frames keep header and
     /// payload as separate memories so transports can gather-write without copying.
     /// </summary>
-    public static class VatpFrameEncoder
+    internal static class VatpFrameEncoder
     {
         /// <summary>Header plus optional payload memories (no frame-sized concat).</summary>
-        public readonly record struct EncodedFrame(ReadOnlyMemory<byte> Header, ReadOnlyMemory<byte> Payload);
+        internal readonly record struct EncodedFrame(ReadOnlyMemory<byte> Header, ReadOnlyMemory<byte> Payload);
 
         /// <summary>Encodes a HELLO header+payload into caller buffers or returns owned memories.</summary>
-        public static EncodedFrame EncodeHello(uint maxFramePayload)
+        internal static EncodedFrame EncodeHello(uint maxFramePayload)
         {
             if (maxFramePayload == 0)
             {
@@ -26,7 +26,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes OPEN with RequestId GUID and 32-byte ArticleId.</summary>
-        public static EncodedFrame EncodeOpen(uint streamId, Guid requestId, ReadOnlySpan<byte> articleId)
+        internal static EncodedFrame EncodeOpen(uint streamId, Guid requestId, ReadOnlySpan<byte> articleId)
         {
             ThrowIfConnectionStream(streamId);
             if (articleId.Length != VatpProtocol.ArticleIdLength)
@@ -45,7 +45,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes STORE with a 32-byte ArticleId.</summary>
-        public static EncodedFrame EncodeStore(uint streamId, ReadOnlySpan<byte> articleId)
+        internal static EncodedFrame EncodeStore(uint streamId, ReadOnlySpan<byte> articleId)
         {
             ThrowIfConnectionStream(streamId);
             if (articleId.Length != VatpProtocol.StorePayloadLength)
@@ -61,7 +61,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes RESULT with one <c>ArticleAcceptOutcome</c> byte.</summary>
-        public static EncodedFrame EncodeResult(uint streamId, byte outcome)
+        internal static EncodedFrame EncodeResult(uint streamId, byte outcome)
         {
             ThrowIfConnectionStream(streamId);
             var payload = new byte[VatpProtocol.ResultPayloadLength];
@@ -70,7 +70,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes META from a prebuilt 76-byte payload.</summary>
-        public static EncodedFrame EncodeMeta(uint streamId, ReadOnlyMemory<byte> metaPayload)
+        internal static EncodedFrame EncodeMeta(uint streamId, ReadOnlyMemory<byte> metaPayload)
         {
             ThrowIfConnectionStream(streamId);
             if (metaPayload.Length != VatpProtocol.MetaPayloadLength)
@@ -82,7 +82,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes DATA with optional FIN. Payload memory is not copied.</summary>
-        public static EncodedFrame EncodeData(uint streamId, ReadOnlyMemory<byte> payload, bool fin = false)
+        internal static EncodedFrame EncodeData(uint streamId, ReadOnlyMemory<byte> payload, bool fin = false)
         {
             ThrowIfConnectionStream(streamId);
             if (payload.Length > int.MaxValue)
@@ -95,21 +95,21 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes an empty END frame.</summary>
-        public static EncodedFrame EncodeEnd(uint streamId)
+        internal static EncodedFrame EncodeEnd(uint streamId)
         {
             ThrowIfConnectionStream(streamId);
             return Encode(VatpFrameType.End, streamId, ReadOnlyMemory<byte>.Empty, flags: 0);
         }
 
         /// <summary>Encodes CANCEL.</summary>
-        public static EncodedFrame EncodeCancel(uint streamId)
+        internal static EncodedFrame EncodeCancel(uint streamId)
         {
             ThrowIfConnectionStream(streamId);
             return Encode(VatpFrameType.Cancel, streamId, ReadOnlyMemory<byte>.Empty, flags: 0);
         }
 
         /// <summary>Encodes WINDOW credit add.</summary>
-        public static EncodedFrame EncodeWindow(uint streamId, uint addCredit)
+        internal static EncodedFrame EncodeWindow(uint streamId, uint addCredit)
         {
             ThrowIfConnectionStream(streamId);
             var payload = new byte[VatpProtocol.WindowPayloadLength];
@@ -118,7 +118,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Encodes FAIL with error code and optional ASCII reason.</summary>
-        public static EncodedFrame EncodeFail(uint streamId, VatpErrorCode errorCode, ReadOnlySpan<byte> asciiReason = default)
+        internal static EncodedFrame EncodeFail(uint streamId, VatpErrorCode errorCode, ReadOnlySpan<byte> asciiReason = default)
         {
             if (asciiReason.Length > VatpProtocol.FailMaxReasonLength)
             {
@@ -134,7 +134,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Writes only the 16-byte header into <paramref name="destination"/>.</summary>
-        public static void WriteHeader(
+        private static void WriteHeader(
             Span<byte> destination,
             VatpFrameType type,
             uint streamId,
@@ -143,7 +143,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             VatpFrameHeader.Create(type, streamId, payloadLength, flags).WriteTo(destination);
 
         /// <summary>Encodes header + payload as separate memories.</summary>
-        public static EncodedFrame Encode(
+        internal static EncodedFrame Encode(
             VatpFrameType type,
             uint streamId,
             ReadOnlyMemory<byte> payload,
@@ -155,7 +155,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Concatenates header and payload into one owned buffer (tests / small frames).</summary>
-        public static byte[] ToSingleBuffer(in EncodedFrame frame)
+        internal static byte[] ToSingleBuffer(in EncodedFrame frame)
         {
             var result = new byte[frame.Header.Length + frame.Payload.Length];
             frame.Header.Span.CopyTo(result);

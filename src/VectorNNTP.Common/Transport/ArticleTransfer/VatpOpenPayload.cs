@@ -6,13 +6,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// OPEN payload: 16-byte RequestId GUID + 32-byte <see cref="ArticleId"/>.
     /// </summary>
-    public static class VatpOpenPayload
+    internal static class VatpOpenPayload
     {
         /// <summary>Decoded OPEN fields.</summary>
-        public readonly record struct OpenPayload(Guid RequestId, ArticleId ArticleId);
+        internal readonly record struct OpenPayload(Guid RequestId, ArticleId ArticleId);
 
         /// <summary>Attempts to decode an OPEN payload sequence.</summary>
-        public static bool TryDecode(in ReadOnlySequence<byte> payload, out OpenPayload open, out VatpErrorCode error)
+        internal static bool TryDecode(in ReadOnlySequence<byte> payload, out OpenPayload open, out VatpErrorCode error)
         {
             open = default;
             error = VatpErrorCode.None;
@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Attempts to decode a contiguous OPEN payload.</summary>
-        public static bool TryDecode(ReadOnlySpan<byte> payload, out OpenPayload open, out VatpErrorCode error)
+        private static bool TryDecode(ReadOnlySpan<byte> payload, out OpenPayload open, out VatpErrorCode error)
         {
             open = default;
             error = VatpErrorCode.None;
@@ -61,7 +61,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Writes OPEN payload bytes.</summary>
-        public static void Encode(Span<byte> destination, Guid requestId, in ArticleId articleId)
+        private static void Encode(Span<byte> destination, Guid requestId, in ArticleId articleId)
         {
             if (destination.Length < VatpProtocol.OpenPayloadLength)
             {

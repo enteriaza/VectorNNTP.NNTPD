@@ -14,7 +14,7 @@ namespace VectorNNTP.Common.Acme
         private const int MaxFieldLength = 400;
 
         /// <summary>Formats any exception into a safe ACME diagnostic fragment.</summary>
-        public static string FormatException(Exception exception)
+        internal static string FormatException(Exception exception)
         {
             ArgumentNullException.ThrowIfNull(exception);
             if (exception is AcmeCaException ca)
@@ -26,7 +26,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Formats an ACME CA exception / problem document.</summary>
-        public static string FormatCaException(AcmeCaException exception)
+        private static string FormatCaException(AcmeCaException exception)
         {
             ArgumentNullException.ThrowIfNull(exception);
             if (string.IsNullOrWhiteSpace(exception.ErrorType)
@@ -47,7 +47,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Formats structured ACME problem fields (tests / readiness diagnostics).</summary>
-        public static string FormatProblemFields(
+        internal static string FormatProblemFields(
             string? preface,
             string? type,
             int? status,
@@ -102,7 +102,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Formats a failed authorization for operator diagnostics.</summary>
-        public static string FormatAuthorizationFailure(AcmeOrderReadiness.AuthorizationView authorization)
+        internal static string FormatAuthorizationFailure(AcmeOrderReadiness.AuthorizationView authorization)
         {
             ArgumentNullException.ThrowIfNull(authorization);
             var domain = SanitizeHostname(authorization.Domain) ?? "unknown";
@@ -123,7 +123,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Formats an invalid order when per-authz detail is unavailable.</summary>
-        public static string FormatOrderInvalid(AcmeOrderReadiness.OrderView order)
+        internal static string FormatOrderInvalid(AcmeOrderReadiness.OrderView order)
         {
             ArgumentNullException.ThrowIfNull(order);
             foreach (var authz in order.Authorizations)
@@ -138,7 +138,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Builds a timeout diagnostic summarizing the last observed states.</summary>
-        public static string FormatTimeout(AcmeOrderReadiness.OrderView order)
+        internal static string FormatTimeout(AcmeOrderReadiness.OrderView order)
         {
             ArgumentNullException.ThrowIfNull(order);
             var builder = new StringBuilder();
@@ -155,7 +155,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Sanitizes free-form ACME text for logs and exception messages.</summary>
-        public static string? SanitizeText(string? text)
+        private static string? SanitizeText(string? text)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -174,7 +174,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Sanitizes a DNS hostname (rejects material that does not look like a name).</summary>
-        public static string? SanitizeHostname(string? hostname)
+        private static string? SanitizeHostname(string? hostname)
         {
             if (string.IsNullOrWhiteSpace(hostname))
             {

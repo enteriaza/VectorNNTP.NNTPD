@@ -67,7 +67,7 @@ namespace VectorNNTP.Common.Networking.Certificates
 
         /// <summary>Gets the immutable certificate context for TLS authentication.</summary>
         /// <exception cref="ObjectDisposedException">Thrown when this lease has been disposed.</exception>
-        public SslStreamCertificateContext Context =>
+        internal SslStreamCertificateContext Context =>
             (_holder ?? throw new ObjectDisposedException(nameof(TlsCertificateLease))).Context;
 
         /// <summary>Gets the holder generation (tests).</summary>
@@ -117,7 +117,7 @@ namespace VectorNNTP.Common.Networking.Certificates
     /// leases keep their leased context objects alive until those leases are disposed.
     /// </para>
     /// </remarks>
-    public sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAcmeCertificatePublisher, IAsyncDisposable
+    internal sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAcmeCertificatePublisher, IAsyncDisposable
     {
         private readonly ILogger<TlsCertificateContextProvider> _logger;
         private readonly object _gate = new();
@@ -237,18 +237,18 @@ namespace VectorNNTP.Common.Networking.Certificates
 
         private readonly X509Certificate2Collection _ownedCerts;
 
-        public SslStreamCertificateContext Context { get; }
+        internal SslStreamCertificateContext Context { get; }
 
-        public X509Certificate2 Leaf { get; }
+        private X509Certificate2 Leaf { get; }
 
-        public int Generation { get; }
+        internal int Generation { get; }
 
-        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
         /// <summary>Gets how many times <see cref="DisposeCore"/> committed disposal (tests).</summary>
-        public int DisposeCount => Volatile.Read(ref _disposeCount);
+        internal int DisposeCount => Volatile.Read(ref _disposeCount);
 
-        public static TlsCertificateHolder CreateFromPfx(ReadOnlySpan<byte> pfxBytes, string password)
+        internal static TlsCertificateHolder CreateFromPfx(ReadOnlySpan<byte> pfxBytes, string password)
         {
             // EphemeralKeySet is unsuitable for SslStreamCertificateContext / server handshake on Windows.
             // Use an in-process user key container for the published TLS context only.
@@ -302,9 +302,9 @@ namespace VectorNNTP.Common.Networking.Certificates
         }
 
         /// <summary>Marks this holder as retired; further <see cref="AddRef"/> calls fail.</summary>
-        public void Retire() => Volatile.Write(ref _retired, 1);
+        internal void Retire() => Volatile.Write(ref _retired, 1);
 
-        public void AddRef()
+        internal void AddRef()
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (Volatile.Read(ref _retired) != 0)
@@ -321,7 +321,7 @@ namespace VectorNNTP.Common.Networking.Certificates
             }
         }
 
-        public void Release()
+        internal void Release()
         {
             var remaining = Interlocked.Decrement(ref _refs);
             if (remaining > 0)

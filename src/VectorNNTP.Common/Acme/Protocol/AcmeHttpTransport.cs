@@ -30,7 +30,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         private Task<AcmeDirectoryResource>? _directory;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeHttpTransport"/> class.</summary>
-        public AcmeHttpTransport(
+        internal AcmeHttpTransport(
             IHttpClientFactory httpClientFactory,
             string httpClientName,
             Uri directoryUri,
@@ -47,7 +47,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         private HttpClient CreateClient() => _httpClientFactory.CreateClient(_httpClientName);
 
         /// <summary>Returns the cached ACME directory, fetching it on first use.</summary>
-        public Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken)
+        internal Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken)
         {
             Task<AcmeDirectoryResource>? cached = Volatile.Read(ref _directory);
             if (cached is not null && !cached.IsFaulted && !cached.IsCanceled)
@@ -73,7 +73,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>POSTs a JWS-signed payload, retrying on badNonce.</summary>
-        public async Task<AcmeResponse<T>> PostAsync<T>(
+        internal async Task<AcmeResponse<T>> PostAsync<T>(
             AcmeAccountKey key,
             string? keyId,
             Uri url,
@@ -106,7 +106,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>POST-as-GET (empty JWS payload).</summary>
-        public Task<AcmeResponse<T>> PostAsGetAsync<T>(
+        internal Task<AcmeResponse<T>> PostAsGetAsync<T>(
             AcmeAccountKey key,
             string keyId,
             Uri url,
@@ -115,7 +115,7 @@ namespace VectorNNTP.Common.Acme.Protocol
             PostAsync(key, keyId, url, string.Empty, typeInfo, cancellationToken);
 
         /// <summary>POST-as-GET returning the raw body (certificate PEM chain).</summary>
-        public async Task<AcmeRawResponse> PostAsGetRawAsync(
+        internal async Task<AcmeRawResponse> PostAsGetRawAsync(
             AcmeAccountKey key,
             string keyId,
             Uri url,

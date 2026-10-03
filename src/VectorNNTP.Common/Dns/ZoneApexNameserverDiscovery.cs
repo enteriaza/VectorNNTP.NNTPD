@@ -36,7 +36,7 @@ namespace VectorNNTP.Common.Dns
         /// Resolves distinct authoritative NS addresses for <paramref name="zoneApex"/>.
         /// </summary>
         /// <returns>Distinct NS addresses; empty when discovery fails.</returns>
-        public static async Task<IReadOnlyList<IPAddress>> DiscoverAddressesAsync(
+        internal static async Task<IReadOnlyList<IPAddress>> DiscoverAddressesAsync(
             string zoneApex,
             ILogger? logger,
             CancellationToken cancellationToken)

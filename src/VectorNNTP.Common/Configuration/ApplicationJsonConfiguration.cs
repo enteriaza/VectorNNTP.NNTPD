@@ -19,7 +19,7 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>Gets the entry assembly's short name.</summary>
         /// <returns>The <see cref="AssemblyName.Name"/> of the entry assembly.</returns>
         /// <exception cref="InvalidOperationException">The entry assembly or its name is missing.</exception>
-        public static string EntryAssemblyName
+        internal static string EntryAssemblyName
         {
             get
             {
@@ -42,7 +42,7 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="environmentName">Host environment name, for example <c>Development</c>.</param>
         /// <returns>The environment-specific JSON configuration filename.</returns>
         /// <exception cref="ArgumentException"><paramref name="environmentName"/> is empty.</exception>
-        public static string EnvironmentJsonFileName(string environmentName)
+        internal static string EnvironmentJsonFileName(string environmentName)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
             return EntryAssemblyName + "." + environmentName + ".json";
@@ -60,7 +60,7 @@ namespace VectorNNTP.Common.Configuration
         /// Optional and reload-on-change flags are copied from the sources they replace.
         /// <c>appsettings.json</c> and <c>{application}.settings.json</c> are not loaded.
         /// </remarks>
-        public static void UseEntryAssemblyJsonFiles(IConfigurationBuilder configuration, string environmentName)
+        internal static void UseEntryAssemblyJsonFiles(IConfigurationBuilder configuration, string environmentName)
         {
             ArgumentNullException.ThrowIfNull(configuration);
             ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
@@ -121,7 +121,7 @@ namespace VectorNNTP.Common.Configuration
         }
 
         /// <summary>Shared RabbitMQ configuration filename, loaded from the application binary directory.</summary>
-        public const string SharedRabbitMqFileName = "RabbitMq.json";
+        private const string SharedRabbitMqFileName = "RabbitMq.json";
 
         /// <summary>
         /// Inserts <see cref="SharedRabbitMqFileName"/> after the entry-assembly JSON sources
@@ -136,7 +136,7 @@ namespace VectorNNTP.Common.Configuration
         /// Optional and reload-on-change match the primary JSON source. There is no
         /// environment-specific RabbitMQ file. The section name inside the file remains <c>RabbitMQ</c>.
         /// </remarks>
-        public static void AddSharedRabbitMqJsonFile(IConfigurationBuilder configuration, string environmentName)
+        internal static void AddSharedRabbitMqJsonFile(IConfigurationBuilder configuration, string environmentName)
         {
             ArgumentNullException.ThrowIfNull(configuration);
             ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);

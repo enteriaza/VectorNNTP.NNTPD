@@ -44,7 +44,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         }
 
         /// <summary>Gets the generation that was current when this handle was captured.</summary>
-        public long Generation { get; }
+        internal long Generation { get; }
 
         /// <summary>
         /// Gets a value indicating whether the captured connection object currently reports itself open.
@@ -53,7 +53,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// This reads the connection flag only. It is not synchronized with service retirement
         /// and is not a lifetime pin.
         /// </remarks>
-        public bool IsOpen => _connection is { IsOpen: true };
+        internal bool IsOpen => _connection is { IsOpen: true };
 
         /// <summary>
         /// Gets a value indicating whether this generation was the service's current open connection
@@ -63,7 +63,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <see langword="true"/> only when the service is not stopping, this generation is still
         /// published, the handle refers to that same instance, and that instance reports open.
         /// </value>
-        public bool IsCurrent => _owner is not null && _owner.IsHandleCurrent(this);
+        internal bool IsCurrent => _owner is not null && _owner.IsHandleCurrent(this);
 
         /// <summary>
         /// Gets the captured connection instance. Must not be disposed by the caller.

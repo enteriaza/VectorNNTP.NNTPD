@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// Client automatic recovery and topology recovery stay disabled so
     /// <see cref="RabbitMqService"/> remains the only lifecycle owner.
     /// </remarks>
-    public sealed class RabbitMqClientConnectionFactory : IRabbitMqConnectionFactory
+    internal sealed class RabbitMqClientConnectionFactory : IRabbitMqConnectionFactory
     {
         /// <summary>Hostname used when the operating system does not report one.</summary>
         internal const string UnknownHostName = "unknown-host";

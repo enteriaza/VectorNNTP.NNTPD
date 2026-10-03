@@ -6,13 +6,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// <summary>
     /// HELLO payload codec: magic <c>VNATP01\0</c> + big-endian <c>u32</c> maxFramePayload.
     /// </summary>
-    public static class VatpHello
+    internal static class VatpHello
     {
         /// <summary>Decoded HELLO parameters.</summary>
-        public readonly record struct HelloPayload(uint MaxFramePayload);
+        internal readonly record struct HelloPayload(uint MaxFramePayload);
 
         /// <summary>Attempts to decode a HELLO payload sequence.</summary>
-        public static bool TryDecode(in ReadOnlySequence<byte> payload, out HelloPayload hello, out VatpErrorCode error)
+        internal static bool TryDecode(in ReadOnlySequence<byte> payload, out HelloPayload hello, out VatpErrorCode error)
         {
             hello = default;
             error = VatpErrorCode.None;
@@ -28,7 +28,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Attempts to decode a contiguous HELLO payload.</summary>
-        public static bool TryDecode(ReadOnlySpan<byte> payload, out HelloPayload hello, out VatpErrorCode error)
+        internal static bool TryDecode(ReadOnlySpan<byte> payload, out HelloPayload hello, out VatpErrorCode error)
         {
             hello = default;
             error = VatpErrorCode.None;
@@ -56,7 +56,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         }
 
         /// <summary>Writes a HELLO payload into <paramref name="destination"/>.</summary>
-        public static void Encode(Span<byte> destination, uint maxFramePayload)
+        internal static void Encode(Span<byte> destination, uint maxFramePayload)
         {
             if (destination.Length < VatpProtocol.HelloPayloadLength)
             {

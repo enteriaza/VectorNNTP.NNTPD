@@ -27,10 +27,10 @@ namespace VectorNNTP.Common.Articles.Parsing
     public sealed class NntpArticleParser
     {
         /// <summary>Maximum accepted Newsgroups value length.</summary>
-        public const int MaxNewsgroupsLength = 4096;
+        private const int MaxNewsgroupsLength = 4096;
 
         /// <summary>Maximum accepted From value length.</summary>
-        public const int MaxFromLength = 2048;
+        private const int MaxFromLength = 2048;
 
         private const int InlineHeaderCapacity = NntpArticleHeaderInlineStore.Capacity;
 
@@ -50,7 +50,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// </summary>
         /// <param name="localIdentity">Local FQDN used for Path rewrite classification and canonical Path writes.</param>
         /// <param name="options">Parser guardrail options.</param>
-        public NntpArticleParser(ReadOnlySpan<byte> localIdentity, NntpArticleParserOptions options)
+        internal NntpArticleParser(ReadOnlySpan<byte> localIdentity, NntpArticleParserOptions options)
         {
             if (localIdentity.IsEmpty || IsAllAsciiWhitespace(localIdentity))
             {
@@ -65,7 +65,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// Initializes a new parser instance with default parser limits.
         /// </summary>
         /// <param name="localIdentity">Local FQDN used for Path rewrite classification and canonical Path writes.</param>
-        public NntpArticleParser(ReadOnlySpan<byte> localIdentity)
+        internal NntpArticleParser(ReadOnlySpan<byte> localIdentity)
             : this(localIdentity, NntpArticleParserOptions.Default)
         {
         }
@@ -75,7 +75,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// </summary>
         /// <param name="localIdentity">Local FQDN used for Path rewrite classification and canonical Path writes.</param>
         /// <param name="options">Parser guardrail options.</param>
-        public NntpArticleParser(string localIdentity, NntpArticleParserOptions options)
+        internal NntpArticleParser(string localIdentity, NntpArticleParserOptions options)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(localIdentity);
             _localIdentity = Encoding.ASCII.GetBytes(localIdentity.Trim());
@@ -99,7 +99,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// A parse result that preserves slices into the original buffer, validates required headers,
         /// resolves Date, classifies Path rewrite, classifies content type, and validates detected yEnc sections.
         /// </returns>
-        public NntpArticleParseResult Parse(ReadOnlyMemory<byte> articleBytes)
+        internal NntpArticleParseResult Parse(ReadOnlyMemory<byte> articleBytes)
         {
             var localIdentity = (ReadOnlyMemory<byte>)_localIdentity;
             if (articleBytes.IsEmpty)
@@ -1073,26 +1073,26 @@ namespace VectorNNTP.Common.Articles.Parsing
                 Headers = headers;
             }
 
-            public bool Success { get; }
+            internal bool Success { get; }
 
-            public NntpArticleParseFailureCode FailureCode { get; }
+            internal NntpArticleParseFailureCode FailureCode { get; }
 
-            public ReadOnlyMemory<byte> ArticleBytes { get; }
+            private ReadOnlyMemory<byte> ArticleBytes { get; }
 
-            public ReadOnlyMemory<byte> HeaderBytes { get; }
+            internal ReadOnlyMemory<byte> HeaderBytes { get; }
 
-            public ReadOnlyMemory<byte> BodyBytes { get; }
+            internal ReadOnlyMemory<byte> BodyBytes { get; }
 
-            public ReadOnlySpan<NntpArticleHeaderEntry> Headers { get; }
+            internal ReadOnlySpan<NntpArticleHeaderEntry> Headers { get; }
 
-            public static HeaderParseOutcome SuccessResult(
+            internal static HeaderParseOutcome SuccessResult(
                 ReadOnlyMemory<byte> articleBytes,
                 ReadOnlyMemory<byte> headerBytes,
                 ReadOnlyMemory<byte> bodyBytes,
                 ReadOnlySpan<NntpArticleHeaderEntry> headers)
                 => new(true, NntpArticleParseFailureCode.None, articleBytes, headerBytes, bodyBytes, headers);
 
-            public static HeaderParseOutcome Fail(
+            internal static HeaderParseOutcome Fail(
                 NntpArticleParseFailureCode failureCode,
                 ReadOnlyMemory<byte> article,
                 int headerOffset,

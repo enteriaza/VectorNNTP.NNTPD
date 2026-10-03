@@ -24,13 +24,13 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <summary>Gets the active budget for the current async flow, if any.</summary>
-        public static CloudflareOperationBudget? Current => CurrentBudget.Value;
+        internal static CloudflareOperationBudget? Current => CurrentBudget.Value;
 
         /// <summary>Gets the absolute UTC deadline for this operation.</summary>
-        public DateTimeOffset DeadlineUtc { get; }
+        private DateTimeOffset DeadlineUtc { get; }
 
         /// <summary>Gets the remaining time until <see cref="DeadlineUtc"/> (zero when expired).</summary>
-        public TimeSpan Remaining
+        internal TimeSpan Remaining
         {
             get
             {
@@ -47,7 +47,7 @@ namespace VectorNNTP.Common.Cloudflare
         /// <param name="callerToken">Caller / lifecycle cancellation (earlier deadline wins).</param>
         /// <param name="linkedToken">Token cancelled when either the caller cancels or the timeout elapses.</param>
         /// <returns>A scope that restores the previous budget when disposed.</returns>
-        public static CloudflareOperationBudget Begin(
+        internal static CloudflareOperationBudget Begin(
             TimeSpan timeout,
             CancellationToken callerToken,
             out CancellationToken linkedToken)
@@ -71,7 +71,7 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Throws <see cref="OperationCanceledException"/> when the budget has expired or the token is cancelled.
         /// </summary>
-        public void ThrowIfExpired(CancellationToken cancellationToken)
+        internal void ThrowIfExpired(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (Remaining <= TimeSpan.Zero)

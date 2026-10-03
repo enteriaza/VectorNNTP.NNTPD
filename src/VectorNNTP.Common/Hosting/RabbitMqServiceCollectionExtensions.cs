@@ -7,7 +7,7 @@ namespace VectorNNTP.Common.Hosting
     /// <summary>
     /// Registers shared RabbitMQ connection infrastructure.
     /// </summary>
-    public static class RabbitMqServiceCollectionExtensions
+    internal static class RabbitMqServiceCollectionExtensions
     {
         /// <summary>
         /// Adds the RabbitMQ connection factory and <see cref="RabbitMqService"/> as singletons.
@@ -25,7 +25,7 @@ namespace VectorNNTP.Common.Hosting
         /// Topology, publishers, consumers, and Management HTTP clients remain application-owned.
         /// </para>
         /// </remarks>
-        public static IServiceCollection AddRabbitMqInfrastructure(this IServiceCollection services)
+        internal static IServiceCollection AddRabbitMqInfrastructure(this IServiceCollection services)
         {
             ArgumentNullException.ThrowIfNull(services);
 
