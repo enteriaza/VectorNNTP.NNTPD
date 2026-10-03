@@ -1,8 +1,7 @@
 using System.Globalization;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using Serilog.Configuration;
+using Serilog.Core;
 using Serilog.Events;
 using Serilog.Formatting;
 using Serilog.Formatting.Display;
@@ -30,9 +29,17 @@ namespace VectorNNTP.BackFiller.Logging
         internal const string RollingPathSuffix = "-.log";
 
         /// <summary>
-        /// Text output template used when <see cref="BackFillerLoggingOptions.Json"/> is false.
+        /// Text output template used when <see cref="BackFillerLoggingOptions.Json"/> is false and the
+        /// process switch for ambient context enrichment is off. <c>SourceContext</c> is not rendered.
         /// </summary>
         internal const string SinkOutputTemplate =
+            "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+
+        /// <summary>
+        /// Text output template used when <see cref="BackFillerLoggingOptions.Json"/> is false and the
+        /// process switch for ambient context enrichment is on. Renders <c>{SourceContext}</c>.
+        /// </summary>
+        internal const string SinkOutputTemplateWithSourceContext =
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
         /// <summary>Restricted minimum level for sinks when the configured level is at least Debug.</summary>
@@ -137,7 +144,9 @@ namespace VectorNNTP.BackFiller.Logging
         /// Does not call <c>ReadFrom.Configuration</c> and does not read a <c>Serilog</c> section.
         /// File, syslog, RabbitMQ, and console sinks are added only when their switches are on. Targets are not
         /// mutually exclusive. <paramref name="commandLine"/> enables the console sink and, when requested,
-        /// ambient context enrichment. Those switches are not configuration settings.
+        /// ambient context enrichment and rendering of <c>SourceContext</c> in text and JSON output.
+        /// Those switches are not configuration settings. Other JSON properties are still written.
+        /// The original log event keeps <c>SourceContext</c>; sinks that omit it format a copy.
         /// </remarks>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="loggerConfiguration"/> or <paramref name="configuration"/> is null.</exception>
         /// <exception cref="InvalidOperationException">
@@ -171,7 +180,8 @@ namespace VectorNNTP.BackFiller.Logging
             }
 
             var sinkLevel = minimumLevel < SinkMinimumLevel ? minimumLevel : SinkMinimumLevel;
-            ITextFormatter? jsonFormatter = logging.Json ? new JsonFormatter(renderMessage: true) : null;
+            var includeSourceContext = commandLine.EnrichFromLogContext;
+            ITextFormatter? jsonFormatter = logging.Json ? CreateJsonFormatter(includeSourceContext) : null;
             var file = logging.File ?? new BackFillerFileLoggingTargetOptions();
             var fileEnabled = file.Enabled;
 
@@ -190,28 +200,53 @@ namespace VectorNNTP.BackFiller.Logging
 
             if (commandLine.Console)
             {
-                WriteConsole(loggerConfiguration, sinkLevel, jsonFormatter);
+                WriteConsole(loggerConfiguration, sinkLevel, jsonFormatter, includeSourceContext);
             }
 
             if (fileEnabled)
             {
                 var path = EnsureRollingFilePath(configuration, applicationBaseDirectory);
                 loggerConfiguration.WriteTo.Async(
-                    sink => WriteFile(sink, path, sinkLevel, retainedFileCountLimit, jsonFormatter),
+                    sink => WriteFile(sink, path, sinkLevel, retainedFileCountLimit, jsonFormatter, includeSourceContext),
                     bufferSize: AsyncBufferSize,
                     blockWhenFull: AsyncBlockWhenFull);
             }
 
             if (rabbit.Enabled)
             {
-                WriteRabbitMq(loggerConfiguration, rabbit, sinkLevel, jsonFormatter, services);
+                WriteRabbitMq(loggerConfiguration, rabbit, sinkLevel, jsonFormatter, services, includeSourceContext);
             }
 
             if (syslog.Enabled)
             {
-                WriteSyslog(loggerConfiguration, syslog, sinkLevel, jsonFormatter);
+                WriteSyslog(loggerConfiguration, syslog, sinkLevel, jsonFormatter, includeSourceContext);
             }
         }
+
+        /// <summary>Selects the text template for sinks that are not using the JSON formatter.</summary>
+        /// <param name="includeSourceContext">
+        /// <see langword="true"/> when the process switch for ambient context enrichment is on.
+        /// </param>
+        /// <returns>
+        /// <see cref="SinkOutputTemplateWithSourceContext"/> when <paramref name="includeSourceContext"/> is true;
+        /// otherwise <see cref="SinkOutputTemplate"/>.
+        /// </returns>
+        internal static string OutputTemplate(bool includeSourceContext) =>
+            includeSourceContext ? SinkOutputTemplateWithSourceContext : SinkOutputTemplate;
+
+        /// <summary>Creates the JSON formatter shared by every JSON-enabled sink.</summary>
+        /// <param name="includeSourceContext">
+        /// <see langword="true"/> when the process switch for ambient context enrichment is on.
+        /// </param>
+        /// <returns>
+        /// Serilog's JSON formatter when <paramref name="includeSourceContext"/> is true.
+        /// Otherwise a formatter that writes the same JSON from a copy of the event that has no
+        /// <c>SourceContext</c> property.
+        /// </returns>
+        private static ITextFormatter CreateJsonFormatter(bool includeSourceContext) =>
+            includeSourceContext
+                ? new JsonFormatter(renderMessage: true)
+                : new SourceContextOmittedJsonFormatter();
 
         /// <summary>Binds <c>BackFiller:Logging</c>. Missing keys keep the option defaults.</summary>
         /// <param name="configuration">Application configuration.</param>
@@ -296,6 +331,7 @@ namespace VectorNNTP.BackFiller.Logging
         /// <param name="sinkLevel">Restricted minimum level for the sink.</param>
         /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects the text template and text content type.</param>
         /// <param name="services">Host services. Must resolve <see cref="IRabbitMqService"/>.</param>
+        /// <param name="includeSourceContext">Selects whether the text template renders <c>{SourceContext}</c>.</param>
         /// <exception cref="InvalidOperationException">Thrown when <see cref="IRabbitMqService"/> is not registered.</exception>
         /// <remarks>
         /// The sink uses <see cref="AsyncBufferSize"/> and <see cref="AsyncBlockWhenFull"/>.
@@ -306,13 +342,14 @@ namespace VectorNNTP.BackFiller.Logging
             BackFillerRabbitMqLoggingTargetOptions rabbit,
             LogEventLevel sinkLevel,
             ITextFormatter? jsonFormatter,
-            IServiceProvider? services)
+            IServiceProvider? services,
+            bool includeSourceContext)
         {
             var rabbitMq = services?.GetService<IRabbitMqService>()
                 ?? throw new InvalidOperationException(
                     "BackFiller:Logging:RabbitMQ is enabled but IRabbitMqService is not registered.");
             ITextFormatter formatter = jsonFormatter
-                ?? new MessageTemplateTextFormatter(SinkOutputTemplate, CultureInfo.InvariantCulture);
+                ?? new MessageTemplateTextFormatter(OutputTemplate(includeSourceContext), CultureInfo.InvariantCulture);
             var sink = new RabbitMqLogEventSink(
                 rabbitMq,
                 rabbit.Exchange,
@@ -353,17 +390,19 @@ namespace VectorNNTP.BackFiller.Logging
         /// <summary>Adds the console sink at <paramref name="sinkLevel"/>.</summary>
         /// <param name="loggerConfiguration">Logger configuration that receives the sink.</param>
         /// <param name="sinkLevel">Restricted minimum level.</param>
-        /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="SinkOutputTemplate"/>.</param>
+        /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="OutputTemplate"/>.</param>
+        /// <param name="includeSourceContext">Selects whether the text template renders <c>{SourceContext}</c>.</param>
         private static void WriteConsole(
             LoggerConfiguration loggerConfiguration,
             LogEventLevel sinkLevel,
-            ITextFormatter? jsonFormatter)
+            ITextFormatter? jsonFormatter,
+            bool includeSourceContext)
         {
             if (jsonFormatter is null)
             {
                 loggerConfiguration.WriteTo.Console(
                     restrictedToMinimumLevel: sinkLevel,
-                    outputTemplate: SinkOutputTemplate);
+                    outputTemplate: OutputTemplate(includeSourceContext));
                 return;
             }
 
@@ -375,7 +414,8 @@ namespace VectorNNTP.BackFiller.Logging
         /// <param name="path">Rolling path from <see cref="RollingFilePath"/>.</param>
         /// <param name="sinkLevel">Restricted minimum level.</param>
         /// <param name="retainedFileCountLimit">Retained file count from <see cref="BackFillerLoggingOptions.LogRetentionDays"/>.</param>
-        /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="SinkOutputTemplate"/>.</param>
+        /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="OutputTemplate"/>.</param>
+        /// <param name="includeSourceContext">Selects whether the text template renders <c>{SourceContext}</c>.</param>
         /// <remarks>
         /// Both branches set <see cref="FileBuffered"/>, <see cref="FileFlushToDiskInterval"/>,
         /// daily rolling, <see cref="RollOnFileSizeLimit"/>, a null file size limit,
@@ -386,14 +426,15 @@ namespace VectorNNTP.BackFiller.Logging
             string path,
             LogEventLevel sinkLevel,
             int retainedFileCountLimit,
-            ITextFormatter? jsonFormatter)
+            ITextFormatter? jsonFormatter,
+            bool includeSourceContext)
         {
             if (jsonFormatter is null)
             {
                 sink.File(
                     path,
                     restrictedToMinimumLevel: sinkLevel,
-                    outputTemplate: SinkOutputTemplate,
+                    outputTemplate: OutputTemplate(includeSourceContext),
                     fileSizeLimitBytes: null,
                     buffered: FileBuffered,
                     flushToDiskInterval: FileFlushToDiskInterval,
@@ -422,11 +463,41 @@ namespace VectorNNTP.BackFiller.Logging
         /// <param name="syslog">Enabled syslog target. Host is trimmed.</param>
         /// <param name="sinkLevel">Restricted minimum level.</param>
         /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null leaves the syslog sink formatter unset.</param>
+        /// <param name="includeSourceContext">
+        /// When false, the syslog sink sees a copy of each event without <c>SourceContext</c>.
+        /// The syslog formatters otherwise render that property themselves, including around a JSON body.
+        /// </param>
         /// <remarks>
         /// The application name is <see cref="ApplicationJsonConfiguration.EntryAssemblyName"/>.
         /// UDP is chosen by <see cref="IsUdp"/>; any other protocol uses the TCP sink.
         /// </remarks>
         private static void WriteSyslog(
+            LoggerConfiguration loggerConfiguration,
+            BackFillerSyslogLoggingTargetOptions syslog,
+            LogEventLevel sinkLevel,
+            ITextFormatter? jsonFormatter,
+            bool includeSourceContext)
+        {
+            if (!includeSourceContext)
+            {
+                loggerConfiguration.WriteTo.Logger(sub =>
+                {
+                    sub.MinimumLevel.Is(LogEventLevel.Verbose);
+                    sub.Enrich.With(new OmitSourceContextEnricher());
+                    AddSyslogSink(sub, syslog, sinkLevel, jsonFormatter);
+                });
+                return;
+            }
+
+            AddSyslogSink(loggerConfiguration, syslog, sinkLevel, jsonFormatter);
+        }
+
+        /// <summary>Adds a UDP or TCP syslog sink. TCP is opened with TLS off.</summary>
+        /// <param name="loggerConfiguration">Logger configuration that receives the sink.</param>
+        /// <param name="syslog">Enabled syslog target. Host is trimmed.</param>
+        /// <param name="sinkLevel">Restricted minimum level.</param>
+        /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null leaves the syslog sink formatter unset.</param>
+        private static void AddSyslogSink(
             LoggerConfiguration loggerConfiguration,
             BackFillerSyslogLoggingTargetOptions syslog,
             LogEventLevel sinkLevel,
@@ -465,5 +536,68 @@ namespace VectorNNTP.BackFiller.Logging
         /// <returns><see langword="true"/> when the trimmed value equals <see cref="BackFillerSyslogLoggingTargetOptions.TcpProtocol"/>.</returns>
         private static bool IsTcp(string? protocol) =>
             string.Equals(protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.TcpProtocol, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Writes Serilog JSON from a copy of the event that has no <c>SourceContext</c> property.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="JsonFormatter"/> emits every property. Removing <c>SourceContext</c> on a copy leaves
+        /// the caller's event unchanged and leaves every other property in the JSON document.
+        /// </remarks>
+        private sealed class SourceContextOmittedJsonFormatter : ITextFormatter
+        {
+            /// <summary>JSON formatter used after <c>SourceContext</c> has been removed from the copy.</summary>
+            private readonly JsonFormatter _inner = new(renderMessage: true);
+
+            /// <summary>Formats <paramref name="logEvent"/> without rendering <c>SourceContext</c>.</summary>
+            /// <param name="logEvent">Event to format. Not modified.</param>
+            /// <param name="output">Destination for the JSON document.</param>
+            public void Format(LogEvent logEvent, TextWriter output)
+            {
+                ArgumentNullException.ThrowIfNull(logEvent);
+                ArgumentNullException.ThrowIfNull(output);
+                if (!logEvent.Properties.ContainsKey(Constants.SourceContextPropertyName))
+                {
+                    _inner.Format(logEvent, output);
+                    return;
+                }
+
+                var properties = logEvent.Properties
+                    .Where(static pair => pair.Key != Constants.SourceContextPropertyName)
+                    .Select(static pair => new LogEventProperty(pair.Key, pair.Value));
+                var copy = logEvent.TraceId is { } traceId && logEvent.SpanId is { } spanId
+                    ? new LogEvent(
+                        logEvent.Timestamp,
+                        logEvent.Level,
+                        logEvent.Exception,
+                        logEvent.MessageTemplate,
+                        properties,
+                        traceId,
+                        spanId)
+                    : new LogEvent(
+                        logEvent.Timestamp,
+                        logEvent.Level,
+                        logEvent.Exception,
+                        logEvent.MessageTemplate,
+                        properties);
+                _inner.Format(copy, output);
+            }
+        }
+
+        /// <summary>
+        /// Drops <c>SourceContext</c> from a syslog sub-logger event so the syslog formatters do not render it.
+        /// </summary>
+        private sealed class OmitSourceContextEnricher : ILogEventEnricher
+        {
+            /// <summary>Removes <see cref="Constants.SourceContextPropertyName"/> when it is present.</summary>
+            /// <param name="logEvent">Event received by the syslog sub-logger.</param>
+            /// <param name="propertyFactory">Unused. The enricher only removes a property.</param>
+            public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
+            {
+                ArgumentNullException.ThrowIfNull(logEvent);
+                ArgumentNullException.ThrowIfNull(propertyFactory);
+                logEvent.RemovePropertyIfPresent(Constants.SourceContextPropertyName);
+            }
+        }
     }
 }

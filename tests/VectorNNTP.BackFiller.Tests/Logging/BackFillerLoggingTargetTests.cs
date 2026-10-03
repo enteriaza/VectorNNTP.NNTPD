@@ -10,7 +10,6 @@ using Serilog.Context;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Formatting.Display;
-using Serilog.Formatting.Json;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.Tests.Fixtures;
@@ -228,8 +227,13 @@ namespace VectorNNTP.BackFiller.Tests.Logging
                 logger.Information("json-formatter-marker");
                 (logger as IDisposable)?.Dispose();
                 var rabbitSink = Assert.Single(Sinks(logger).OfType<RabbitMqLogEventSink>());
-                Assert.IsType<JsonFormatter>(rabbitSink.Formatter);
                 Assert.Equal(RabbitMqLogEventSink.JsonContentType, rabbitSink.ContentType);
+                var rabbitJson = new StringWriter();
+                rabbitSink.Formatter.Format(
+                    SourceContextEvent("VectorNNTP.BackFiller.SourceContextProbe", "json-formatter-marker"),
+                    rabbitJson);
+                Assert.Contains("\"MessageTemplate\"", rabbitJson.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("SourceContext", rabbitJson.ToString(), StringComparison.Ordinal);
 
                 var fileText = File.ReadAllText(Directory.GetFiles(logDir, "*.log").Single());
                 Assert.Contains("\"MessageTemplate\"", fileText, StringComparison.Ordinal);
@@ -343,6 +347,256 @@ namespace VectorNNTP.BackFiller.Tests.Logging
             Assert.False(EventHasProbe(off));
             Assert.True(EventHasProbe(on));
         }
+
+        [Fact]
+        public void SourceContext_IsAbsentFromTextOutput_UnlessTheLogContextSwitchIsSet()
+        {
+            const string category = "VectorNNTP.BackFiller.SourceContextProbe";
+            const string marker = "source-context-text-marker";
+
+            var without = RenderTextTargets(
+                BackFillerLoggingCommandLine.FromArguments(["--console"]),
+                category,
+                marker);
+            Assert.Contains(marker, without.File, StringComparison.Ordinal);
+            Assert.Contains(marker, without.Console, StringComparison.Ordinal);
+            Assert.Contains(marker, without.Bootstrap, StringComparison.Ordinal);
+            Assert.Contains(marker, without.Rabbit, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, without.File, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, without.Console, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, without.Bootstrap, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, without.Rabbit, StringComparison.Ordinal);
+
+            var withContext = RenderTextTargets(
+                BackFillerLoggingCommandLine.FromArguments(["--console", "--log-context"]),
+                category,
+                marker);
+            Assert.Contains(category, withContext.File, StringComparison.Ordinal);
+            Assert.Contains(category, withContext.Console, StringComparison.Ordinal);
+            Assert.Contains(category, withContext.Bootstrap, StringComparison.Ordinal);
+            Assert.Contains(category, withContext.Rabbit, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task Syslog_RendersSourceContext_OnlyWhenTheLogContextSwitchIsSet()
+        {
+            const string category = "VectorNNTP.BackFiller.SourceContextProbe";
+            var absent = await ReadSyslogPacketAsync(
+                BackFillerLoggingCommandLine.FromArguments(null),
+                category);
+            Assert.Contains("syslog-source-context-marker", absent.Packet, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, absent.Packet, StringComparison.Ordinal);
+            Assert.True(absent.RootEventHasSourceContext);
+
+            var present = await ReadSyslogPacketAsync(
+                BackFillerLoggingCommandLine.FromArguments(["--log-context"]),
+                category);
+            Assert.Contains(category, present.Packet, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void JsonOutput_IncludesSourceContext_OnlyWhenTheLogContextSwitchIsSet()
+        {
+            const string category = "VectorNNTP.BackFiller.SourceContextProbe";
+            const string marker = "json-source-context-marker";
+
+            var without = RenderJson(BackFillerLoggingCommandLine.FromArguments(null), category, marker);
+            Assert.Contains(marker, without.File, StringComparison.Ordinal);
+            Assert.Contains("\"Application\":", without.File, StringComparison.Ordinal);
+            Assert.Contains("\"MessageTemplate\"", without.File, StringComparison.Ordinal);
+            Assert.DoesNotContain("SourceContext", without.File, StringComparison.Ordinal);
+            Assert.Contains("\"Application\":", without.Rabbit, StringComparison.Ordinal);
+            Assert.DoesNotContain("SourceContext", without.Rabbit, StringComparison.Ordinal);
+            Assert.True(without.RootEventHasSourceContext);
+
+            var withContext = RenderJson(BackFillerLoggingCommandLine.FromArguments(["--log-context"]), category, marker);
+            Assert.Contains("\"SourceContext\":\"" + category + "\"", withContext.File, StringComparison.Ordinal);
+            Assert.Contains("\"Application\":", withContext.File, StringComparison.Ordinal);
+            Assert.Contains("\"SourceContext\":\"" + category + "\"", withContext.Rabbit, StringComparison.Ordinal);
+            Assert.Contains("\"Application\":", withContext.Rabbit, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task JsonSyslog_IncludesSourceContext_OnlyWhenTheLogContextSwitchIsSet()
+        {
+            const string category = "VectorNNTP.BackFiller.SourceContextProbe";
+            var absent = await ReadSyslogPacketAsync(BackFillerLoggingCommandLine.FromArguments(null), category, json: true);
+            Assert.Contains("\"MessageTemplate\"", absent.Packet, StringComparison.Ordinal);
+            Assert.DoesNotContain(category, absent.Packet, StringComparison.Ordinal);
+            Assert.DoesNotContain("SourceContext", absent.Packet, StringComparison.Ordinal);
+            Assert.True(absent.RootEventHasSourceContext);
+
+            var present = await ReadSyslogPacketAsync(
+                BackFillerLoggingCommandLine.FromArguments(["--log-context"]),
+                category,
+                json: true);
+            Assert.Contains("\"SourceContext\":\"" + category + "\"", present.Packet, StringComparison.Ordinal);
+        }
+
+        private static (string File, string Console, string Bootstrap, string Rabbit) RenderTextTargets(
+            BackFillerLoggingCommandLine commandLine,
+            string category,
+            string marker)
+        {
+            var logDir = NewLogDir();
+            var captured = new StringWriter();
+            var previous = Console.Out;
+            try
+            {
+                Console.SetOut(captured);
+                var configuration = Configuration(logDir);
+                var logging = $"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}";
+                configuration[$"{logging}:LogLevel"] = "Debug";
+                configuration[$"{logging}:RabbitMQ:Enabled"] = "true";
+                using var services = RabbitServices();
+                string rabbit;
+                using (var logger = Build(configuration, commandLine, services))
+                {
+                    logger.ForContext(Constants.SourceContextPropertyName, category).Debug(marker);
+                    var rabbitSink = Assert.Single(Sinks(logger).OfType<RabbitMqLogEventSink>());
+                    var writer = new StringWriter();
+                    rabbitSink.Formatter.Format(SourceContextEvent(category, marker), writer);
+                    rabbit = writer.ToString();
+                }
+
+                return (
+                    File.ReadAllText(Directory.GetFiles(logDir, "*.log").Single()),
+                    captured.ToString(),
+                    RenderBootstrap(commandLine, category, marker),
+                    rabbit);
+            }
+            finally
+            {
+                Console.SetOut(previous);
+                Log.CloseAndFlush();
+                TryDelete(logDir);
+            }
+        }
+
+        private static (string File, string Rabbit, bool RootEventHasSourceContext) RenderJson(
+            BackFillerLoggingCommandLine commandLine,
+            string category,
+            string marker)
+        {
+            var logDir = NewLogDir();
+            try
+            {
+                var configuration = Configuration(logDir);
+                var logging = $"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}";
+                configuration[$"{logging}:Json"] = "true";
+                configuration[$"{logging}:LogLevel"] = "Debug";
+                configuration[$"{logging}:RabbitMQ:Enabled"] = "true";
+                using var services = RabbitServices();
+                var sink = new CollectingSink();
+                var loggerConfiguration = new LoggerConfiguration();
+                BackFillerFileLogging.ConfigureLogger(
+                    loggerConfiguration,
+                    configuration,
+                    commandLine: commandLine,
+                    services: services);
+                loggerConfiguration.WriteTo.Sink(sink);
+                string rabbit;
+                using (var logger = loggerConfiguration.CreateLogger())
+                {
+                    logger.ForContext(Constants.SourceContextPropertyName, category).Debug(marker);
+                    var rabbitSink = Assert.Single(Sinks(logger).OfType<RabbitMqLogEventSink>());
+                    var writer = new StringWriter();
+                    var probe = SourceContextEvent(category, marker);
+                    probe.AddOrUpdateProperty(new LogEventProperty("Application", new ScalarValue("json-probe-application")));
+                    rabbitSink.Formatter.Format(probe, writer);
+                    rabbit = writer.ToString();
+                    Assert.True(probe.Properties.ContainsKey(Constants.SourceContextPropertyName));
+                }
+
+                var evt = Assert.Single(sink.Events);
+                return (
+                    File.ReadAllText(Directory.GetFiles(logDir, "*.log").Single()),
+                    rabbit,
+                    evt.Properties.ContainsKey(Constants.SourceContextPropertyName));
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                TryDelete(logDir);
+            }
+        }
+
+        private static string RenderBootstrap(BackFillerLoggingCommandLine commandLine, string category, string marker)
+        {
+            var captured = new StringWriter();
+            var previous = Console.Out;
+            try
+            {
+                Console.SetOut(captured);
+                var logger = BackFillerLoggingExtensions.CreateBootstrapLogger(
+                    new BackFillerLoggingCommandLine(Console: true, commandLine.EnrichFromLogContext));
+                logger.ForContext(Constants.SourceContextPropertyName, category).Information(marker);
+                (logger as IDisposable)?.Dispose();
+                return captured.ToString();
+            }
+            finally
+            {
+                Console.SetOut(previous);
+                Log.CloseAndFlush();
+            }
+        }
+
+        private static async Task<(string Packet, bool RootEventHasSourceContext)> ReadSyslogPacketAsync(
+            BackFillerLoggingCommandLine commandLine,
+            string category,
+            bool json = false)
+        {
+            var logDir = NewLogDir();
+            UdpClient? udp = null;
+            try
+            {
+                udp = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+                var port = ((IPEndPoint)udp.Client.LocalEndPoint!).Port;
+                var configuration = Configuration(logDir);
+                var logging = $"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}";
+                configuration[$"{logging}:LogLevel"] = "Debug";
+                if (json)
+                {
+                    configuration[$"{logging}:Json"] = "true";
+                }
+
+                var section = $"{logging}:Syslog";
+                configuration[$"{section}:Enabled"] = "true";
+                configuration[$"{section}:Host"] = "127.0.0.1";
+                configuration[$"{section}:Port"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                configuration[$"{section}:Protocol"] = "Udp";
+                var sink = new CollectingSink();
+                var loggerConfiguration = new LoggerConfiguration();
+                BackFillerFileLogging.ConfigureLogger(
+                    loggerConfiguration,
+                    configuration,
+                    commandLine: commandLine);
+                loggerConfiguration.WriteTo.Sink(sink);
+                using var logger = loggerConfiguration.CreateLogger();
+                logger.ForContext(Constants.SourceContextPropertyName, category)
+                    .Debug("syslog-source-context-marker");
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var packet = await udp.ReceiveAsync(timeout.Token);
+                var evt = Assert.Single(sink.Events);
+                return (
+                    Encoding.UTF8.GetString(packet.Buffer),
+                    evt.Properties.ContainsKey(Constants.SourceContextPropertyName));
+            }
+            finally
+            {
+                udp?.Dispose();
+                Log.CloseAndFlush();
+                TryDelete(logDir);
+            }
+        }
+
+        private static LogEvent SourceContextEvent(string category, string marker) =>
+            new(
+                DateTimeOffset.UtcNow,
+                LogEventLevel.Debug,
+                exception: null,
+                new Serilog.Parsing.MessageTemplateParser().Parse(marker),
+                [new LogEventProperty(Constants.SourceContextPropertyName, new ScalarValue(category))]);
 
         private static bool EventHasProbe(BackFillerLoggingCommandLine commandLine)
         {

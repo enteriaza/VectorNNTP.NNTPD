@@ -11,22 +11,19 @@ namespace VectorNNTP.BackFiller.Logging
     internal static partial class BackFillerLoggingExtensions
     {
         /// <summary>
-        /// Single-line console template suitable for interactive terminals and journald collection.
+        /// Single-line console template used by the bootstrap logger when the process switch for
+        /// ambient context enrichment is off. Matches <see cref="BackFillerFileLogging.SinkOutputTemplate"/>.
         /// </summary>
-        /// <remarks>
-        /// Used by the bootstrap logger. Host Console/File sinks use
-        /// <see cref="BackFillerFileLogging.SinkOutputTemplate"/>.
-        /// </remarks>
-        internal const string ConsoleOutputTemplate =
-            "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
+        internal const string ConsoleOutputTemplate = BackFillerFileLogging.SinkOutputTemplate;
 
         /// <summary>
         /// Creates an early bootstrap logger used before the Generic Host is built.
         /// </summary>
         /// <param name="commandLine">
-        /// When <see cref="BackFillerLoggingCommandLine.Console"/> is true, the bootstrap logger writes to the console
-        /// with <see cref="ConsoleOutputTemplate"/>. When <see cref="BackFillerLoggingCommandLine.EnrichFromLogContext"/>
-        /// is true, the logger enriches from the ambient log context. The default value enables neither.
+        /// When <see cref="BackFillerLoggingCommandLine.Console"/> is true, the bootstrap logger writes to the console.
+        /// The text template includes <c>{SourceContext}</c> only when
+        /// <see cref="BackFillerLoggingCommandLine.EnrichFromLogContext"/> is true. That same switch enables
+        /// ambient context enrichment. The default value enables neither.
         /// </param>
         /// <returns>A bootstrap logger assigned to <see cref="Log.Logger"/>.</returns>
         internal static Serilog.ILogger CreateBootstrapLogger(BackFillerLoggingCommandLine commandLine = default)
@@ -41,7 +38,8 @@ namespace VectorNNTP.BackFiller.Logging
 
             if (commandLine.Console)
             {
-                configuration.WriteTo.Console(outputTemplate: ConsoleOutputTemplate);
+                configuration.WriteTo.Console(
+                    outputTemplate: BackFillerFileLogging.OutputTemplate(commandLine.EnrichFromLogContext));
             }
 
             return configuration.CreateBootstrapLogger();

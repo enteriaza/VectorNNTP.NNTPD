@@ -4,7 +4,10 @@ namespace VectorNNTP.BackFiller.Logging
     /// Process switches that change the code-defined logging pipeline.
     /// </summary>
     /// <param name="Console">When <see langword="true"/>, the host logger includes the Serilog console sink.</param>
-    /// <param name="EnrichFromLogContext">When <see langword="true"/>, the host logger calls <c>Enrich.FromLogContext</c>.</param>
+    /// <param name="EnrichFromLogContext">
+    /// When <see langword="true"/>, the host logger calls <c>Enrich.FromLogContext</c> and text output templates
+    /// render <c>{SourceContext}</c>. This is not a configuration setting.
+    /// </param>
     internal readonly record struct BackFillerLoggingCommandLine(bool Console, bool EnrichFromLogContext)
     {
         /// <summary>Reads logging switches from <paramref name="args"/> without changing other arguments.</summary>
@@ -12,7 +15,9 @@ namespace VectorNNTP.BackFiller.Logging
         /// <returns>The switches that were present.</returns>
         /// <remarks>
         /// <c>--console</c> and <c>--log-context</c> match with <see cref="StringComparison.OrdinalIgnoreCase"/>.
-        /// Any other argument is ignored. A null <paramref name="args"/> returns the default value, with both switches false.
+        /// <c>--log-context</c> is a process switch, not a configuration setting. It enables ambient context
+        /// enrichment and <c>{SourceContext}</c> in text output. Any other argument is ignored. A null
+        /// <paramref name="args"/> returns the default value, with both switches false.
         /// </remarks>
         internal static BackFillerLoggingCommandLine FromArguments(IReadOnlyList<string>? args)
         {
