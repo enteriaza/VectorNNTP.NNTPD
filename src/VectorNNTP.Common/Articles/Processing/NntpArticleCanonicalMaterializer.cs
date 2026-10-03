@@ -230,7 +230,7 @@ namespace VectorNNTP.Common.Articles.Processing
                 return NntpArticleCanonicalMaterializeResult.Rejected(boundaryFailure);
             }
 
-            var destination = new byte[destinationLength];
+            var destination = GC.AllocateUninitializedArray<byte>(destinationLength);
             var written = 0;
             var consumed = 0;
             var dest = destination.AsSpan();
