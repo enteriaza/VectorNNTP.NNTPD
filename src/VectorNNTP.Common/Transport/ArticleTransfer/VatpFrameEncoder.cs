@@ -163,6 +163,9 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return result;
         }
 
+        /// <summary>Rejects the connection-level stream id.</summary>
+        /// <param name="streamId">Stream id from a transfer frame.</param>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="streamId"/> is <see cref="VatpProtocol.ConnectionStreamId"/> (0).</exception>
         private static void ThrowIfConnectionStream(uint streamId)
         {
             if (streamId == VatpProtocol.ConnectionStreamId)

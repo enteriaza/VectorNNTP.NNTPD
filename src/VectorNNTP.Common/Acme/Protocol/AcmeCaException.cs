@@ -6,18 +6,30 @@ namespace VectorNNTP.Common.Acme.Protocol
     /// </summary>
     internal class AcmeCaException : Exception
     {
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaException"/> class.</summary>
+        /// <summary>
+        /// Creates a CA failure with no problem type, detail, or HTTP status.
+        /// <see cref="ErrorType"/>, <see cref="Detail"/>, and <see cref="StatusCode"/> stay <see langword="null"/>.
+        /// </summary>
         internal AcmeCaException()
         {
         }
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaException"/> class.</summary>
+        /// <summary>
+        /// Creates a CA failure from <paramref name="message"/> only.
+        /// <see cref="ErrorType"/>, <see cref="Detail"/>, and <see cref="StatusCode"/> stay <see langword="null"/>.
+        /// </summary>
+        /// <param name="message">Operator-safe summary.</param>
         internal AcmeCaException(string message)
             : base(message)
         {
         }
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaException"/> class.</summary>
+        /// <summary>
+        /// Creates a CA failure from <paramref name="message"/> and <paramref name="innerException"/>.
+        /// <see cref="ErrorType"/>, <see cref="Detail"/>, and <see cref="StatusCode"/> stay <see langword="null"/>.
+        /// </summary>
+        /// <param name="message">Operator-safe summary.</param>
+        /// <param name="innerException">Transport or parse failure that caused this exception.</param>
         internal AcmeCaException(string message, Exception innerException)
             : base(message, innerException)
         {
@@ -49,24 +61,41 @@ namespace VectorNNTP.Common.Acme.Protocol
     /// <summary>Thrown when the certificate authority rejects a request due to rate limiting.</summary>
     internal sealed class AcmeCaRateLimitException : AcmeCaException
     {
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaRateLimitException"/> class.</summary>
+        /// <summary>
+        /// Creates a rate-limit failure with no message and with <see cref="RetryAfter"/> left <see langword="null"/>.
+        /// Does not set <see cref="AcmeCaException.ErrorType"/>.
+        /// </summary>
         private AcmeCaRateLimitException()
         {
         }
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaRateLimitException"/> class.</summary>
+        /// <summary>
+        /// Creates a rate-limit failure from <paramref name="message"/> only.
+        /// <see cref="RetryAfter"/> stays <see langword="null"/> and <see cref="AcmeCaException.ErrorType"/> is not set.
+        /// </summary>
+        /// <param name="message">Operator-safe summary.</param>
         private AcmeCaRateLimitException(string message)
             : base(message)
         {
         }
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaRateLimitException"/> class.</summary>
+        /// <summary>
+        /// Creates a rate-limit failure from <paramref name="message"/> and <paramref name="innerException"/>.
+        /// <see cref="RetryAfter"/> stays <see langword="null"/> and <see cref="AcmeCaException.ErrorType"/> is not set.
+        /// </summary>
+        /// <param name="message">Operator-safe summary.</param>
+        /// <param name="innerException">Failure that caused this exception.</param>
         private AcmeCaRateLimitException(string message, Exception innerException)
             : base(message, innerException)
         {
         }
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeCaRateLimitException"/> class.</summary>
+        /// <summary>
+        /// Records HTTP 429 / <see cref="AcmeErrorTypes.RateLimited"/>, the CA detail, and the parsed Retry-After time.
+        /// </summary>
+        /// <param name="message">Operator-safe summary passed to <see cref="AcmeCaException"/>.</param>
+        /// <param name="detail">CA problem detail. <see langword="null"/> when the problem had none.</param>
+        /// <param name="retryAfter">Absolute retry time. <see langword="null"/> when the response had no usable Retry-After header.</param>
         internal AcmeCaRateLimitException(string message, string? detail, DateTimeOffset? retryAfter)
             : base(message, AcmeErrorTypes.RateLimited, detail, 429)
         {

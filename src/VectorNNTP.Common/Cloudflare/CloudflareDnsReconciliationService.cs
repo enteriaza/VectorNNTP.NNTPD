@@ -24,15 +24,31 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>Maximum wall-clock budget for best-effort clean-up after a failed or cancelled startup reconcile.</summary>
         public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
 
+        /// <summary>FQDN, zone id, and bind addresses used for reconcile and cleanup.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _options;
+
+        /// <summary>Resolves the bind addresses published as A and AAAA records.</summary>
         private readonly IBindAddressResolver _bindAddressResolver;
+
+        /// <summary>Performs the Cloudflare read/mutate/verify work.</summary>
         private readonly ICloudflareDnsReconciler _reconciler;
+
+        /// <summary>Reconciliation-service diagnostics.</summary>
         private readonly ILogger<CloudflareDnsReconciliationService> _logger;
+
+        /// <summary>
+        /// Non-zero after a reconcile in this process returns successfully.
+        /// <see cref="StopAsync"/> exchanges it back to zero and skips cleanup when it was already zero.
+        /// </summary>
         private int _fqdnOwnershipActive;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudflareDnsReconciliationService"/> class.
         /// </summary>
+        /// <param name="options">ACME and Cloudflare options, including the generated FQDN and zone id.</param>
+        /// <param name="bindAddressResolver">Resolves addresses published as A and AAAA records.</param>
+        /// <param name="reconciler">Cloudflare DNS reconciler.</param>
+        /// <param name="logger">Reconciliation-service logger.</param>
         public CloudflareDnsReconciliationService(
             IOptions<AcmeCloudflareOptions> options,
             IBindAddressResolver bindAddressResolver,
@@ -50,13 +66,24 @@ namespace VectorNNTP.Common.Cloudflare
             _logger = logger;
         }
 
-        /// <inheritdoc />
+        /// <summary>Gets the stable service name recorded by the application service manager.</summary>
         internal string Name => "CloudflareDnsReconciliation";
 
-        /// <inheritdoc />
+        /// <summary>Gets null. This service has no background execution after <see cref="StartAsync"/> returns.</summary>
         internal Task? Execution => null;
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Publishes A and AAAA records for the resolved bind addresses and marks FQDN ownership active only after verification.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels reconcile. Cancellation after reconcile begins attempts a bounded cleanup, then propagates.</param>
+        /// <returns>A task that completes when Cloudflare has verified the desired address set.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// The generated FQDN or zone id is missing, or bind-address resolution produced no eligible address.
+        /// </exception>
+        /// <remarks>
+        /// A non-cancellation failure after reconcile begins also attempts cleanup of the exact FQDN.
+        /// Cleanup failure is logged and does not replace the original startup exception.
+        /// </remarks>
         internal async Task StartAsync(CancellationToken cancellationToken)
         {
             var options = _options.Value;
@@ -111,7 +138,17 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Removes every DNS record for the exact FQDN when this process completed a successful reconcile.
+        /// </summary>
+        /// <param name="cancellationToken">Passed to cleanup. Cooperative with the caller's shutdown budget.</param>
+        /// <returns>A task that completes when cleanup is skipped or Cloudflare verifies the name is empty.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// Ownership was active but the FQDN or zone id is now missing.
+        /// </exception>
+        /// <remarks>
+        /// When ownership is inactive, cleanup is skipped and this method returns without calling Cloudflare.
+        /// </remarks>
         internal async Task StopAsync(CancellationToken cancellationToken)
         {
             // Runs during normal shutdown and startup rollback while lifecycle may already be Stopping.
@@ -139,6 +176,18 @@ namespace VectorNNTP.Common.Cloudflare
             CloudflareLogMessages.CleanupCompleted(_logger, fqdn);
         }
 
+        /// <summary>
+        /// Best-effort exact-FQDN removal after a failed or canceled startup reconcile, bounded by
+        /// <see cref="FailedStartCleanupTimeout"/>.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact FQDN to remove.</param>
+        /// <param name="original">Startup failure logged with the cleanup attempt. Null when startup was canceled.</param>
+        /// <param name="cancellationException"><see langword="true"/> when startup failed because it was canceled.</param>
+        /// <remarks>
+        /// Success clears <see cref="_fqdnOwnershipActive"/>. Timeout, cancellation, and other cleanup failures are logged
+        /// and swallowed so the original startup exception remains the one propagated by <see cref="StartAsync"/>.
+        /// </remarks>
         private async Task TryCleanupAfterFailedStartAsync(
             string zoneId,
             string fqdn,

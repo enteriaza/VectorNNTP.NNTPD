@@ -172,6 +172,11 @@ namespace VectorNNTP.Common.Dns
             return offset;
         }
 
+        /// <summary>Writes one DNS label as ASCII into <paramref name="destination"/>.</summary>
+        /// <param name="label">Presentation-form label. The length byte is written by the caller.</param>
+        /// <param name="destination">Buffer that must hold the label bytes.</param>
+        /// <returns>The number of bytes written.</returns>
+        /// <exception cref="ArgumentException">The label contains a non-ASCII character.</exception>
         private static int EncodeAsciiLabel(ReadOnlySpan<char> label, Span<byte> destination)
         {
             if (Ascii.FromUtf16(label, destination, out int written) != OperationStatus.Done)
@@ -182,6 +187,11 @@ namespace VectorNNTP.Common.Dns
             return written;
         }
 
+        /// <summary>Throws when <paramref name="actualLength"/> is shorter than <paramref name="requiredLength"/>.</summary>
+        /// <param name="requiredLength">Bytes the encode operation needs.</param>
+        /// <param name="actualLength">Bytes available in the destination.</param>
+        /// <param name="paramName">Parameter name used on the thrown <see cref="ArgumentException"/>.</param>
+        /// <exception cref="ArgumentException"><paramref name="actualLength"/> is too small.</exception>
         private static void EnsureDestinationLength(int requiredLength, int actualLength, string paramName)
         {
             if (actualLength < requiredLength)
@@ -192,6 +202,15 @@ namespace VectorNNTP.Common.Dns
             }
         }
 
+        /// <summary>
+        /// Splits <paramref name="name"/> on dots into <paramref name="labelRanges"/>.
+        /// A split that fills the range buffer is treated as too many labels.
+        /// </summary>
+        /// <param name="name">Presentation-form name without a trailing root dot.</param>
+        /// <param name="labelRanges">Buffer of label ranges. The last slot must remain unused for the overflow check.</param>
+        /// <param name="labelCount">Number of labels written.</param>
+        /// <param name="error">Failure text when the name has too many labels; otherwise null.</param>
+        /// <returns><see langword="false"/> when the split fills <paramref name="labelRanges"/>.</returns>
         private static bool TrySplitDnsLabels(
             ReadOnlySpan<char> name,
             Span<Range> labelRanges,

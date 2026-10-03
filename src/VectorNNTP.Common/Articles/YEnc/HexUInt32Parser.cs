@@ -37,6 +37,9 @@ namespace VectorNNTP.Common.Articles.YEnc
             return true;
         }
 
+        /// <summary>Maps one ASCII hex digit to <c>0..15</c>.</summary>
+        /// <param name="b">Candidate byte.</param>
+        /// <returns><c>0..9</c> for <c>0-9</c>, <c>10..15</c> for <c>a-f</c> and <c>A-F</c>, otherwise <c>-1</c>.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int HexByteToNibble(byte b) =>
             (uint)(b - (byte)'0') <= 9

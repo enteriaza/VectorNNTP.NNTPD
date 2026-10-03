@@ -183,6 +183,12 @@ namespace VectorNNTP.Common.Configuration
             configuration.Sources.Insert(insertAt, source);
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="path"/> is a host settings file
+        /// (<c>*.settings.json</c>, or another <c>.json</c> path containing <c>.settings.</c>).
+        /// </summary>
+        /// <param name="path">Configuration source path. Comparison is ordinal and case-insensitive.</param>
+        /// <returns><see langword="true"/> when the path matches either host-settings pattern.</returns>
         private static bool IsHostNamedSettingsFile(string path) =>
             path.EndsWith(".settings.json", StringComparison.OrdinalIgnoreCase)
             || (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)

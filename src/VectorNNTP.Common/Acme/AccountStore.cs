@@ -11,9 +11,11 @@ namespace VectorNNTP.Common.Acme
     /// </remarks>
     internal sealed class AccountStore
     {
+        /// <summary>Shared ACME state root. Account files live under <c>account/</c>.</summary>
         private readonly string _stateDir;
 
-        /// <summary>Initializes a new instance of the <see cref="AccountStore"/> class.</summary>
+        /// <summary>Creates the shared account and journal directories under <paramref name="stateDir"/>.</summary>
+        /// <param name="stateDir">ACME state root. Whitespace throws <see cref="ArgumentException"/>.</param>
         internal AccountStore(string stateDir)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
@@ -75,6 +77,9 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Atomically persists account key and metadata; refuses to overwrite a different key.</summary>
+        /// <param name="state">Account URI, directory URL, PKCS#8 key, and registration body. A null registration body is stored as empty.</param>
+        /// <exception cref="AcmeAccountException">Thrown with category <c>account_key_conflict</c> when a different key is already on disk.</exception>
+        /// <exception cref="AcmeStorageException">Thrown with category <c>account_persist_failed</c> when a write throws <see cref="IOException"/>.</exception>
         internal void Save(AcmeAccountState state)
         {
             ArgumentNullException.ThrowIfNull(state);
@@ -114,7 +119,13 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>
         /// Create-or-load the local ACME account (pending-key crash recovery matching pyNNTPD).
+        /// A complete account whose directory differs from <paramref name="directoryUrl"/> throws category <c>directory_mismatch</c>.
         /// </summary>
+        /// <param name="directoryUrl">Directory URL that must match a persisted or pending account.</param>
+        /// <param name="generateKeyDer">Creates a new PKCS#8 key when nothing can be resumed. An empty result throws category <c>malformed_pending</c>.</param>
+        /// <param name="register">Registers the key and returns the account URI and body. Exceptions other than <see cref="AcmeAccountException"/> and cancellation become category <c>registration_failed</c>.</param>
+        /// <param name="cancellationToken">Checked before load and before <paramref name="register"/>. Not passed into <paramref name="register"/>.</param>
+        /// <returns>The persisted account reloaded from disk after save, or the existing account when one was already complete.</returns>
         internal AcmeAccountState EnsureRegistered(
             string directoryUrl,
             Func<byte[]> generateKeyDer,
@@ -195,6 +206,11 @@ namespace VectorNNTP.Common.Acme
             return Load() ?? throw new AcmeAccountException("account_persist_failed", "account missing after save");
         }
 
+        /// <summary>
+        /// Returns a complete account, or <see langword="null"/> when nothing is stored or the pair is incomplete.
+        /// Other <see cref="AcmeAccountException"/> values, including malformed JSON, propagate.
+        /// </summary>
+        /// <returns>The loaded account, or <see langword="null"/>.</returns>
         private AcmeAccountState? LoadCompleteOrNone()
         {
             try
@@ -207,6 +223,12 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>
+        /// Returns a pending PKCS#8 key, or the committed key when metadata is missing.
+        /// A pending directory that differs from <paramref name="directoryUrl"/> throws <see cref="AcmeAccountException"/> category <c>directory_mismatch</c>.
+        /// </summary>
+        /// <param name="directoryUrl">Directory URL required for a pending registration.</param>
+        /// <returns>The key bytes, or <see langword="null"/> when there is nothing to resume.</returns>
         private byte[]? ResumePrivateKey(string directoryUrl)
         {
             var pendingPath = AcmePaths.AccountPendingKeyPath(_stateDir);
@@ -246,6 +268,9 @@ namespace VectorNNTP.Common.Acme
             return null;
         }
 
+        /// <summary>Writes <c>private_key.der.pending</c> and <c>registration.pending.json</c> version 1 before account creation.</summary>
+        /// <param name="privateKeyDer">PKCS#8 DER key that registration will use.</param>
+        /// <param name="directoryUrl">Directory URL stored in the pending metadata.</param>
         private void SavePendingRegistration(byte[] privateKeyDer, string directoryUrl)
         {
             AcmePaths.EnsureStateLayout(_stateDir);
@@ -261,12 +286,18 @@ namespace VectorNNTP.Common.Acme
                 + Environment.NewLine);
         }
 
+        /// <summary>Deletes the pending key and pending metadata files. Missing files are ignored.</summary>
         private void ClearPendingRegistration()
         {
             AtomicFile.TryDelete(AcmePaths.AccountPendingKeyPath(_stateDir));
             AtomicFile.TryDelete(AcmePaths.AccountPendingMetaPath(_stateDir));
         }
 
+        /// <summary>
+        /// Reads <c>directory_url</c> from pending metadata.
+        /// A missing file returns <see langword="null"/>. An empty URL or unreadable JSON throws category <c>malformed_pending</c>.
+        /// </summary>
+        /// <returns>The pending directory URL, or <see langword="null"/> when the pending metadata file is absent.</returns>
         private string? PendingDirectoryUrl()
         {
             var path = AcmePaths.AccountPendingMetaPath(_stateDir);

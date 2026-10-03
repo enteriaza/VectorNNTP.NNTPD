@@ -21,8 +21,10 @@ namespace VectorNNTP.Common.Dns
     /// </remarks>
     internal static class DnsUdpExchange
     {
+        /// <summary>Maximum UDP clients retained in <see cref="Pool"/>. Additional returns dispose the client.</summary>
         private const int PoolMaxSize = 8;
 
+        /// <summary>Process-wide bag of unbound UDP clients rented by address family.</summary>
         private static readonly ConcurrentBag<UdpClient> Pool = [];
 
         /// <summary>
@@ -31,6 +33,7 @@ namespace VectorNNTP.Common.Dns
         internal readonly struct Result
         {
             /// <summary>Initializes a successful exchange.</summary>
+            /// <param name="buffer">Response datagram accepted from the expected nameserver.</param>
             internal Result(byte[] buffer)
             {
                 Buffer = buffer;
@@ -38,6 +41,9 @@ namespace VectorNNTP.Common.Dns
                 Failed = false;
             }
 
+            /// <summary>Initializes a timeout or socket-failure outcome with no response buffer.</summary>
+            /// <param name="timedOut"><see langword="true"/> when the receive window elapsed.</param>
+            /// <param name="failed"><see langword="true"/> when a socket or disposal error prevented a response.</param>
             private Result(bool timedOut, bool failed)
             {
                 Buffer = null;
@@ -65,6 +71,11 @@ namespace VectorNNTP.Common.Dns
         /// Sends <paramref name="query"/> to <paramref name="destination"/>:53 and returns the first
         /// response whose remote endpoint matches that destination.
         /// </summary>
+        /// <param name="destination">Nameserver address. The destination port is always 53.</param>
+        /// <param name="query">DNS query bytes.</param>
+        /// <param name="timeoutMilliseconds">Receive window. Non-matching datagrams are discarded until it elapses.</param>
+        /// <param name="cancellationToken">Cancels send and receive. A timeout that is not caller cancellation returns <see cref="Result.Timeout"/>.</param>
+        /// <returns>A success, timeout, or socket-failure outcome. The rented socket is always returned to the pool.</returns>
         internal static async Task<Result> QueryAsync(
             IPAddress destination,
             byte[] query,
@@ -112,6 +123,10 @@ namespace VectorNNTP.Common.Dns
             }
         }
 
+        /// <summary>Returns whether <paramref name="remote"/> is an <see cref="IPEndPoint"/> with the expected address and port.</summary>
+        /// <param name="remote">Datagram remote endpoint. Null and non-IP endpoints do not match.</param>
+        /// <param name="expected">Nameserver endpoint, including port 53.</param>
+        /// <returns><see langword="true"/> when both address and port match.</returns>
         private static bool RemoteEndpointMatches(EndPoint? remote, IPEndPoint expected)
         {
             if (remote is not IPEndPoint ip)
@@ -122,6 +137,11 @@ namespace VectorNNTP.Common.Dns
             return ip.Port == expected.Port && ip.Address.Equals(expected.Address);
         }
 
+        /// <summary>
+        /// Takes a pooled unbound client of <paramref name="family"/>, disposing pooled clients of a different family, or creates a new one.
+        /// </summary>
+        /// <param name="family">Address family of the nameserver being queried.</param>
+        /// <returns>A client the caller must pass to <see cref="Return"/>.</returns>
         private static UdpClient Rent(AddressFamily family)
         {
             while (Pool.TryTake(out UdpClient? client))
@@ -137,6 +157,10 @@ namespace VectorNNTP.Common.Dns
             return new UdpClient(family);
         }
 
+        /// <summary>
+        /// Returns <paramref name="client"/> to <see cref="Pool"/> when fewer than <see cref="PoolMaxSize"/> clients are retained; otherwise disposes it.
+        /// </summary>
+        /// <param name="client">Client rented for one exchange.</param>
         private static void Return(UdpClient client)
         {
             if (Pool.Count < PoolMaxSize)

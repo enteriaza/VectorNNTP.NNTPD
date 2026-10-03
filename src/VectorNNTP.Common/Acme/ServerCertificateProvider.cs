@@ -20,9 +20,11 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Certificate provider backed by <see cref="CertificateManager"/>.</summary>
     internal sealed class ServerCertificateProvider : IServerCertificateProvider
     {
+        /// <summary>Manager that loads the live PFX. Not disposed by this provider.</summary>
         private readonly CertificateManager _manager;
 
-        /// <summary>Initializes a new instance of the <see cref="ServerCertificateProvider"/> class.</summary>
+        /// <summary>Stores the manager used for availability checks and certificate loads.</summary>
+        /// <param name="manager">Certificate manager. Null throws <see cref="ArgumentNullException"/>.</param>
         internal ServerCertificateProvider(CertificateManager manager)
         {
             ArgumentNullException.ThrowIfNull(manager);
@@ -33,7 +35,12 @@ namespace VectorNNTP.Common.Acme
         public bool IsAvailable => _manager.CurrentMaterial is not null
                                    || _manager.EvaluateExisting().Usable;
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns a new <see cref="X509Certificate2"/> including the private key for TLS.
+        /// Caller owns disposal.
+        /// </summary>
+        /// <returns>The live certificate.</returns>
+        /// <exception cref="AcmeCertificateException">Thrown with category <c>no_certificate</c> when no in-memory or on-disk material exists.</exception>
         public X509Certificate2 GetCertificate() => _manager.CreateTlsCertificate();
     }
 }

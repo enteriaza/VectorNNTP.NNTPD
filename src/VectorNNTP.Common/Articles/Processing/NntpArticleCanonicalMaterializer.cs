@@ -128,6 +128,7 @@ namespace VectorNNTP.Common.Articles.Processing
     /// </remarks>
     internal static class NntpArticleCanonicalMaterializer
     {
+        /// <summary>ASCII prefix written when a Path header is inserted: <c>Path: </c>, including the trailing SP.</summary>
         private static ReadOnlySpan<byte> PathHeaderPrefix => "Path: "u8;
 
         /// <summary>
@@ -270,6 +271,13 @@ namespace VectorNNTP.Common.Articles.Processing
                 : NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
         }
 
+        /// <summary>
+        /// Finds the header whose known name, value length, and value bytes match the parser's selected date.
+        /// </summary>
+        /// <param name="parseResult">Accepted parse result. <see cref="NntpArticleHeaderName.Unknown"/> fails immediately.</param>
+        /// <param name="source">Original article bytes that own the header slices.</param>
+        /// <param name="dateHeader">First wire-order header that matches name, length, and bytes. Otherwise default.</param>
+        /// <returns><see langword="false"/> when no header matches. Later headers with the same name are not considered after a match.</returns>
         private static bool TryResolveSelectedDateHeader(
             in NntpArticleParseResult parseResult,
             ReadOnlySpan<byte> source,
@@ -305,6 +313,13 @@ namespace VectorNNTP.Common.Articles.Processing
             return false;
         }
 
+        /// <summary>
+        /// Finds the single Path header, or reports that Path is absent.
+        /// </summary>
+        /// <param name="parseResult">Accepted parse result.</param>
+        /// <param name="pathHeader">The Path entry when exactly one exists; otherwise <see langword="null"/>.</param>
+        /// <param name="failure"><see cref="NntpArticleCanonicalFailureCode.DuplicatePath"/> when a second Path is seen; otherwise <see cref="NntpArticleCanonicalFailureCode.None"/>, including when Path is absent.</param>
+        /// <returns><see langword="false"/> only for a duplicate Path. Absence is success with a null header so the caller can insert one.</returns>
         private static bool TryResolvePathHeader(
             in NntpArticleParseResult parseResult,
             out NntpArticleHeaderEntry? pathHeader,
@@ -332,6 +347,16 @@ namespace VectorNNTP.Common.Articles.Processing
             return true;
         }
 
+        /// <summary>
+        /// Locates the blank line that ends the header section: two terminators back to back at <paramref name="headerLength"/>.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="headerLength">Parser header-section length, including the blank line.</param>
+        /// <param name="separator">
+        /// Start of the blank-line terminator and the length of the terminator that ended the previous header line.
+        /// A CRLF blank line yields terminator length 2; a lone CR or LF yields 1.
+        /// </param>
+        /// <returns><see langword="false"/> when <paramref name="headerLength"/> is outside the buffer or either terminator is missing.</returns>
         private static bool TryResolveHeaderSeparator(ReadOnlySpan<byte> source, int headerLength, out HeaderSeparator separator)
         {
             separator = default;
@@ -363,6 +388,12 @@ namespace VectorNNTP.Common.Articles.Processing
             return true;
         }
 
+        /// <summary>
+        /// Returns the length of the CR, LF, or CRLF that ends at <paramref name="endExclusive"/>.
+        /// </summary>
+        /// <param name="buffer">Article bytes.</param>
+        /// <param name="endExclusive">Index just after the candidate terminator.</param>
+        /// <returns>2 for CRLF, 1 for a lone LF or CR, or 0 when the preceding byte is not a terminator or the index is not positive.</returns>
         private static int ResolveTerminatorLengthEndingAt(ReadOnlySpan<byte> buffer, int endExclusive)
         {
             if (endExclusive <= 0)
@@ -379,6 +410,24 @@ namespace VectorNNTP.Common.Articles.Processing
             return last == (byte)'\r' ? 1 : 0;
         }
 
+        /// <summary>
+        /// Rejects a canonical article whose total size or rewritten date or Path line would exceed the resource limits.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="parseResult">Header index used to find the physical lines being rewritten.</param>
+        /// <param name="dateEdit">Selected date value replacement.</param>
+        /// <param name="pathEdit">Existing Path value replacement, or <see langword="null"/> when Path will be inserted.</param>
+        /// <param name="pathInsert">Inserted Path line, or <see langword="null"/> when an existing Path is rewritten.</param>
+        /// <param name="destinationLength">Projected canonical length, already checked for overflow by the caller.</param>
+        /// <returns>
+        /// <see cref="NntpArticleCanonicalFailureCode.ArticleTooLarge"/>,
+        /// <see cref="NntpArticleCanonicalFailureCode.DateLineTooLong"/>,
+        /// <see cref="NntpArticleCanonicalFailureCode.PathRewriteLineTooLong"/>,
+        /// <see cref="NntpArticleCanonicalFailureCode.PathInsertionLineTooLong"/>,
+        /// <see cref="NntpArticleCanonicalFailureCode.InvalidHeaderSeparator"/> when the physical line cannot be measured,
+        /// or <see cref="NntpArticleCanonicalFailureCode.None"/>.
+        /// Line limits use <see cref="ArticleResourceLimits.MaxArticleLineBytes"/> on the line content without its terminator.
+        /// </returns>
         private static NntpArticleCanonicalFailureCode ValidateCanonicalArticleBoundaries(
             ReadOnlySpan<byte> source,
             in NntpArticleParseResult parseResult,
@@ -439,6 +488,16 @@ namespace VectorNNTP.Common.Articles.Processing
             return NntpArticleCanonicalFailureCode.None;
         }
 
+        /// <summary>
+        /// Computes the header line length after replacing the value and excluding the trailing terminator.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="valueOffset">Header value offset that identifies the line.</param>
+        /// <param name="removedLength">Original value length.</param>
+        /// <param name="replacementLength">Canonical value length.</param>
+        /// <param name="parseResult">Header table. The line runs from this header's name to the next header's name, or to the blank-line separator.</param>
+        /// <param name="lineContentLength">Content length after replacement, not including CR/LF. 0 on failure.</param>
+        /// <returns><see langword="false"/> when the header cannot be found, the separator is invalid, or the length overflows.</returns>
         private static bool TryComputePhysicalHeaderLineLength(
             ReadOnlySpan<byte> source,
             int valueOffset,
@@ -494,6 +553,13 @@ namespace VectorNNTP.Common.Articles.Processing
             return true;
         }
 
+        /// <summary>
+        /// Returns the terminator length at the end of <c>[lineStart, lineEndExclusive)</c>.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="lineStart">Start of the physical header line.</param>
+        /// <param name="lineEndExclusive">Start of the next header, or the blank-line separator.</param>
+        /// <returns>2 for a trailing CRLF, 1 for a trailing CR or LF, or 0 when the slice is empty or does not end in a terminator.</returns>
         private static int ResolveTrailingLineTerminatorLength(ReadOnlySpan<byte> source, int lineStart, int lineEndExclusive)
         {
             var physicalLength = lineEndExclusive - lineStart;
@@ -506,6 +572,16 @@ namespace VectorNNTP.Common.Articles.Processing
                     : source[lineEndExclusive - 1] is (byte)'\r' or (byte)'\n' ? 1 : 0;
         }
 
+        /// <summary>
+        /// Copies unchanged source bytes up to a value, then writes the replacement.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="destination">Canonical buffer.</param>
+        /// <param name="consumed">Source index already copied. Must be less than or equal to the edit start.</param>
+        /// <param name="written">Destination index. Advanced by the gap and the replacement.</param>
+        /// <param name="edit">Value range to replace. The name and colon before <see cref="HeaderEdit.StartOffset"/> are copied as source bytes.</param>
+        /// <param name="replacement">Canonical value bytes. Length must match <see cref="HeaderEdit.ReplacementLength"/>; the method copies this span, not the stored length.</param>
+        /// <returns><see langword="false"/> when the edit starts before <paramref name="consumed"/>.</returns>
         private static bool TryApplyEdit(
             ReadOnlySpan<byte> source,
             Span<byte> destination,
@@ -527,6 +603,16 @@ namespace VectorNNTP.Common.Articles.Processing
             return true;
         }
 
+        /// <summary>
+        /// Inserts <c>Path: </c>, the canonical path, and a copy of the preceding line terminator.
+        /// </summary>
+        /// <param name="source">Original article bytes.</param>
+        /// <param name="destination">Canonical buffer.</param>
+        /// <param name="consumed">Source index already copied. Must be less than or equal to the insert offset.</param>
+        /// <param name="written">Destination index.</param>
+        /// <param name="insert">Insert point at the blank-line terminator, the total inserted length, and the terminator length to copy.</param>
+        /// <param name="canonicalPath">Path value bytes, without the <c>Path: </c> prefix.</param>
+        /// <returns><see langword="false"/> when the insert point is before <paramref name="consumed"/>.</returns>
         private static bool TryApplyInsert(
             ReadOnlySpan<byte> source,
             Span<byte> destination,
@@ -552,10 +638,27 @@ namespace VectorNNTP.Common.Articles.Processing
             return true;
         }
 
+        /// <summary>
+        /// One in-place replacement of a header value. Bytes outside the value are copied unchanged.
+        /// </summary>
+        /// <param name="StartOffset">Source offset of the first value byte.</param>
+        /// <param name="RemovedLength">Original value length.</param>
+        /// <param name="ReplacementLength">Canonical value length used for the size delta. The write copies the supplied span.</param>
         private readonly record struct HeaderEdit(int StartOffset, int RemovedLength, int ReplacementLength);
 
+        /// <summary>
+        /// Blank line between headers and body, expressed as the start of its terminator and the previous line's terminator length.
+        /// </summary>
+        /// <param name="StartOffset">Source offset where the blank-line terminator begins. A Path insert is placed here.</param>
+        /// <param name="LineTerminatorLength">Length of the terminator that ended the last header: 2 for CRLF, 1 for CR or LF.</param>
         private readonly record struct HeaderSeparator(int StartOffset, int LineTerminatorLength);
 
+        /// <summary>
+        /// A Path header inserted because the source article had none.
+        /// </summary>
+        /// <param name="Offset">Source offset of the blank-line terminator, where the new line is inserted.</param>
+        /// <param name="InsertedLength"><c>Path: </c> plus the canonical path plus <paramref name="LineTerminatorLength"/>.</param>
+        /// <param name="LineTerminatorLength">Terminator copied from the bytes immediately before <paramref name="Offset"/>.</param>
         private readonly record struct HeaderInsert(int Offset, int InsertedLength, int LineTerminatorLength);
     }
 }

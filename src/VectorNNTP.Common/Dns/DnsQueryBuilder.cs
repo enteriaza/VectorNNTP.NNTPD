@@ -11,6 +11,10 @@ namespace VectorNNTP.Common.Dns
     /// </remarks>
     internal static class DnsQueryBuilder
     {
+        /// <summary>
+        /// Largest query this builder places in a stack buffer: header, maximum wire name, and question suffix.
+        /// Longer packets use a heap buffer.
+        /// </summary>
         private const int MaxStackAllocQuerySize =
             DnsWireFormat.HeaderSize + DnsWireFormat.MaxWireNameLength + DnsWireFormat.QuestionSuffixSize;
 

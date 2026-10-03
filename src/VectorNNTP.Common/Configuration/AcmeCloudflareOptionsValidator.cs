@@ -12,16 +12,23 @@ namespace VectorNNTP.Common.Configuration
     /// </remarks>
     internal sealed class AcmeCloudflareOptionsValidator : IValidateOptions<AcmeCloudflareOptions>
     {
+        /// <summary>NIC assignment check used for explicit bind addresses. Wildcards are not checked here.</summary>
         private readonly ILocalIpAddressAssignee _localIpAddressAssignee;
 
         /// <summary>Initializes a new validator.</summary>
+        /// <param name="localIpAddressAssignee">Reports whether an explicit bind address is assigned to a local interface.</param>
         public AcmeCloudflareOptionsValidator(ILocalIpAddressAssignee localIpAddressAssignee)
         {
             ArgumentNullException.ThrowIfNull(localIpAddressAssignee);
             _localIpAddressAssignee = localIpAddressAssignee;
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Validates bind addresses, ports, Cloudflare credentials, DNS suffix, ACME settings, and certificate zone coverage.
+        /// </summary>
+        /// <param name="name">Named-options name. This validator does not branch on it.</param>
+        /// <param name="options">Options instance to validate.</param>
+        /// <returns>Success, or a failure list that does not include secret values.</returns>
         public ValidateOptionsResult Validate(string? name, AcmeCloudflareOptions options)
         {
             ArgumentNullException.ThrowIfNull(options);
@@ -35,6 +42,12 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>
         /// Collects shared validation failures without constructing an options result.
         /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="localIpAddressAssignee">NIC assignment check for explicit bind addresses.</param>
+        /// <param name="failures">Destination list. Existing entries are kept.</param>
+        /// <param name="validateCertificateZoneCoverage">
+        /// When <see langword="true"/> and TLS is enabled, certificate identities must fall inside <see cref="AcmeCloudflareOptions.DnsSuffix"/>.
+        /// </param>
         private static void CollectFailures(
             AcmeCloudflareOptions options,
             ILocalIpAddressAssignee localIpAddressAssignee,
@@ -54,6 +67,7 @@ namespace VectorNNTP.Common.Configuration
         }
 
         /// <summary>Normalizes empty bind lists to a single wildcard and trims entries.</summary>
+        /// <param name="options">Options whose <see cref="AcmeCloudflareOptions.BindAddress"/> array is replaced or trimmed in place.</param>
         internal static void NormalizeBindAddresses(AcmeCloudflareOptions options)
         {
             ArgumentNullException.ThrowIfNull(options);
@@ -81,6 +95,11 @@ namespace VectorNNTP.Common.Configuration
         internal static string ResolveAcmeStateDir(string acmeStateDir, string? applicationBaseDirectory) =>
             ApplicationLocalPath.ResolveApplicationLocalPath(acmeStateDir, applicationBaseDirectory);
 
+        /// <summary>
+        /// Requires <see cref="AcmeCloudflareOptions.CloudFlareOperationTimeout"/> to be from 1 second through 1 hour, inclusive.
+        /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="failures">Receives a message when the timeout is outside that range.</param>
         private static void ValidateCloudFlareTimeout(AcmeCloudflareOptions options, List<string> failures)
         {
             if (options.CloudFlareOperationTimeout < TimeSpan.FromSeconds(1))
@@ -97,6 +116,9 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>
         /// Validates bind-address tokens: wildcards, IPv4/IPv6 literals, and NIC assignment.
         /// </summary>
+        /// <param name="options">Options whose bind list is checked. An empty list is a failure.</param>
+        /// <param name="localIpAddressAssignee">Assignment check for non-wildcard entries.</param>
+        /// <param name="failures">Receives one message per invalid entry. Wildcard entries are accepted without a NIC check.</param>
         internal static void CollectBindAddressFailures(
             AcmeCloudflareOptions options,
             ILocalIpAddressAssignee localIpAddressAssignee,
@@ -137,6 +159,11 @@ namespace VectorNNTP.Common.Configuration
             }
         }
 
+        /// <summary>
+        /// Requires <see cref="AcmeCloudflareOptions.BindPortTls"/> to be 0 (TLS disabled) or an integer from 1 through 65535.
+        /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="failures">Receives a message when the port is outside that set.</param>
         private static void ValidatePorts(AcmeCloudflareOptions options, List<string> failures)
         {
             if (options.BindPortTls is < 0 or > 65535)
@@ -146,6 +173,19 @@ namespace VectorNNTP.Common.Configuration
             }
         }
 
+        /// <summary>
+        /// Requires an absolute HTTPS ACME directory URL, a non-empty state directory, and a renewal threshold from 1 through 90 days.
+        /// When TLS is enabled, also requires a plausible account email and a certificate password.
+        /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="failures">Receives one message per failed ACME rule.</param>
+        /// <param name="validateCertificateZoneCoverage">
+        /// When <see langword="true"/>, TLS is enabled, and both FQDN and DNS suffix are present, certificate identities must lie in the DNS zone.
+        /// </param>
+        /// <remarks>
+        /// Email and certificate password are not required when <see cref="AcmeCloudflareOptions.BindPortTls"/> is 0.
+        /// Zone-coverage failures are copied from the thrown configuration or argument message.
+        /// </remarks>
         private static void ValidateAcme(
             AcmeCloudflareOptions options,
             List<string> failures,
@@ -212,6 +252,11 @@ namespace VectorNNTP.Common.Configuration
             }
         }
 
+        /// <summary>
+        /// Requires a non-whitespace Cloudflare API key and zone id. Failure text names the configuration keys and environment variables, not the secret.
+        /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="failures">Receives one message per missing Cloudflare setting.</param>
         private static void ValidateCloudFlare(AcmeCloudflareOptions options, List<string> failures)
         {
             if (string.IsNullOrWhiteSpace(options.CloudFlareApiKey))
@@ -227,6 +272,11 @@ namespace VectorNNTP.Common.Configuration
             }
         }
 
+        /// <summary>
+        /// Requires <see cref="AcmeCloudflareOptions.DnsSuffix"/> to be non-whitespace and a syntactically valid DNS name after trimming a trailing dot.
+        /// </summary>
+        /// <param name="options">Options instance to validate.</param>
+        /// <param name="failures">Receives a message when the suffix is missing or invalid. A missing suffix skips the syntax check.</param>
         private static void ValidateDnsSuffix(AcmeCloudflareOptions options, List<string> failures)
         {
             if (string.IsNullOrWhiteSpace(options.DnsSuffix))
@@ -242,6 +292,11 @@ namespace VectorNNTP.Common.Configuration
             }
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="email"/> has one <c>@</c>, a non-empty local part, length 1–254, and a dotted domain that passes <see cref="NntpdDnsName.IsValidSuffix"/>.
+        /// </summary>
+        /// <param name="email">Contact address. Leading and trailing whitespace is ignored.</param>
+        /// <returns><see langword="false"/> for blank, too long, or structurally invalid addresses. Delivery is not checked.</returns>
         private static bool IsPlausibleEmail(string email)
         {
             var trimmed = email.Trim();
@@ -265,6 +320,10 @@ namespace VectorNNTP.Common.Configuration
     internal static class NntpdDnsName
     {
         /// <summary>Validates DNS suffix / name syntax (labels, length, allowed characters).</summary>
+        /// <param name="suffix">Candidate name. A trailing dot is removed before the checks. Whitespace is invalid.</param>
+        /// <returns>
+        /// <see langword="true"/> when the name is 1–253 characters, has no empty labels, and each label is 1–63 ASCII letters, digits, or hyphens not starting or ending with a hyphen.
+        /// </returns>
         internal static bool IsValidSuffix(string suffix)
         {
             if (string.IsNullOrWhiteSpace(suffix))

@@ -25,6 +25,10 @@ namespace VectorNNTP.Common.Core
     /// </remarks>
     public sealed class ApplicationLifecycle : IAsyncDisposable
     {
+        /// <summary>
+        /// Legal state changes. Any other pair causes <see cref="Transition"/> to throw
+        /// <see cref="InvalidOperationException"/>. Same-state calls are a no-op and are not listed.
+        /// </summary>
         private static readonly HashSet<(ApplicationState From, ApplicationState To)> ValidTransitions =
         [
             (ApplicationState.Created, ApplicationState.Starting),
@@ -35,21 +39,60 @@ namespace VectorNNTP.Common.Core
             (ApplicationState.Stopping, ApplicationState.Stopped),
         ];
 
+        /// <summary>Ordered start, stop, and rollback of registered application services.</summary>
         private readonly ApplicationServiceManager _serviceManager;
+
+        /// <summary>Display name, optional startup timeout, and graceful-shutdown budget.</summary>
         private readonly IApplicationLifecycleOptions _options;
+
+        /// <summary>Lifecycle diagnostics.</summary>
         private readonly ILogger<ApplicationLifecycle> _logger;
+
+        /// <summary>Serializes <see cref="StartAsync"/> and <see cref="StopCoreAsync"/>.</summary>
         private readonly SemaphoreSlim _gate = new(1, 1);
+
+        /// <summary>Guards <see cref="_state"/> reads and writes.</summary>
         private readonly object _stateSync = new();
+
+        /// <summary>
+        /// Completes when the lifecycle reaches <see cref="ApplicationState.Stopped"/>,
+        /// including never-started stop and startup-failure cleanup.
+        /// </summary>
         private readonly TaskCompletionSource _stoppedTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// Completes when unexpected service termination is observed while
+        /// <see cref="ApplicationState.Running"/>.
+        /// </summary>
         private readonly TaskCompletionSource _unexpectedTerminationTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>Current state. Mutated only under <see cref="_stateSync"/>. Starts at <see cref="ApplicationState.Created"/>.</summary>
         private ApplicationState _state = ApplicationState.Created;
+
+        /// <summary>
+        /// In-flight <see cref="StopCoreAsync"/>, or <see langword="null"/> until stop begins.
+        /// Later <see cref="StopAsync"/> callers await this task.
+        /// </summary>
         private Task? _stopTask;
+
+        /// <summary>Non-zero after <see cref="DisposeAsync"/> has marked the instance disposed, which happens after stop.</summary>
         private int _disposed;
+
+        /// <summary>Non-zero after the first <see cref="DisposeAsync"/> entry. Later callers await the existing stop.</summary>
         private int _disposeStarted;
+
+        /// <summary>
+        /// Non-zero once stop is requested or the state moves to
+        /// <see cref="ApplicationState.Stopping"/> or <see cref="ApplicationState.Stopped"/>.
+        /// </summary>
         private int _shutdownRequested;
+
+        /// <summary>
+        /// Completes when <see cref="DisposeAsync"/> finishes releasing resources.
+        /// Faults when shutdown threw, so the first dispose caller can rethrow that failure.
+        /// </summary>
         private readonly TaskCompletionSource _disposeCompleted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -302,6 +345,10 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// Waits for an in-flight stop and for disposal completion.
+        /// Failures stay with the first <see cref="DisposeAsync"/> caller; this path does not rethrow them.
+        /// </summary>
         private async Task AwaitExistingStopAsync()
         {
             Task? stop;
@@ -332,6 +379,17 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// Holds <see cref="_gate"/>, moves to <see cref="ApplicationState.Stopping"/> when not already there,
+        /// stops services, then moves to <see cref="ApplicationState.Stopped"/>.
+        /// </summary>
+        /// <param name="cancellationToken">
+        /// Passed to <see cref="ApplicationServiceManager.StopAsync"/>. The gate wait itself is not canceled.
+        /// </param>
+        /// <remarks>
+        /// <see cref="TimeoutException"/> and other stop failures still force <see cref="ApplicationState.Stopped"/>,
+        /// complete <see cref="_stoppedTcs"/>, and are rethrown.
+        /// </remarks>
         private async Task StopCoreAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -391,6 +449,15 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// After startup failure or cancellation, moves <see cref="ApplicationState.Starting"/> through
+        /// <see cref="ApplicationState.Stopping"/> to <see cref="ApplicationState.Stopped"/>, completes
+        /// <see cref="_stoppedTcs"/>, and best-effort stops any services the manager still tracks.
+        /// </summary>
+        /// <remarks>
+        /// The service manager is expected to have rolled back already. Errors from the residual stop are logged
+        /// and do not replace the original startup exception.
+        /// </remarks>
         private async Task FailStartupCleanupAsync()
         {
             // Services should already be rolled back by the manager; ensure lifecycle ends in Stopped.
@@ -422,6 +489,16 @@ namespace VectorNNTP.Common.Core
             await Task.CompletedTask.ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Commits a validated state change under <see cref="_stateSync"/>, logs it, then raises
+        /// <see cref="StateChanged"/> outside the lock.
+        /// </summary>
+        /// <param name="to">Destination state.</param>
+        /// <exception cref="InvalidOperationException">The pair is not in <see cref="ValidTransitions"/>.</exception>
+        /// <remarks>
+        /// Same-state calls return without logging. Moving to <see cref="ApplicationState.Stopping"/> or
+        /// <see cref="ApplicationState.Stopped"/> sets <see cref="ShutdownRequested"/>.
+        /// </remarks>
         private void Transition(ApplicationState to)
         {
             ApplicationState from;
@@ -454,6 +531,11 @@ namespace VectorNNTP.Common.Core
             RaiseStateChanged(from, to);
         }
 
+        /// <summary>
+        /// Invokes <see cref="StateChanged"/>. A handler exception is logged and does not undo the transition.
+        /// </summary>
+        /// <param name="from">State before the transition.</param>
+        /// <param name="to">State after the transition.</param>
         private void RaiseStateChanged(ApplicationState from, ApplicationState to)
         {
             try
@@ -466,6 +548,12 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// While <see cref="ApplicationState.Running"/>, logs the termination and completes
+        /// <see cref="UnexpectedTermination"/>. Events received in any other state are ignored.
+        /// </summary>
+        /// <param name="sender">The <see cref="ApplicationServiceManager"/> that raised the event.</param>
+        /// <param name="e">Service name, exception, and whether execution completed without fault or cancellation.</param>
         private void OnUnexpectedServiceTermination(object? sender, UnexpectedServiceTerminationEventArgs e)
         {
             if (State != ApplicationState.Running)
@@ -491,6 +579,8 @@ namespace VectorNNTP.Common.Core
         /// <summary>
         /// Initializes a new instance of the <see cref="ApplicationStateChangedEventArgs"/> class.
         /// </summary>
+        /// <param name="fromState">State before the committed transition.</param>
+        /// <param name="toState">State after the committed transition.</param>
         internal ApplicationStateChangedEventArgs(ApplicationState fromState, ApplicationState toState)
         {
             FromState = fromState;

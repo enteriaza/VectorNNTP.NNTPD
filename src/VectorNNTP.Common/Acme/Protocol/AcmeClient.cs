@@ -8,18 +8,32 @@ namespace VectorNNTP.Common.Acme.Protocol
     /// </summary>
     internal sealed class AcmeClient
     {
+        /// <summary><c>Accept</c> value sent when downloading a certificate chain.</summary>
         private const string PemChainContentType = "application/pem-certificate-chain";
 
+        /// <summary>Upper bound applied to a CA Retry-After delay during order polling.</summary>
         private static readonly TimeSpan MaxPollDelay = TimeSpan.FromSeconds(30);
 
+        /// <summary>Transport that signs and sends JWS requests.</summary>
         private readonly AcmeHttpTransport _http;
+
+        /// <summary>Account key used for every JWS. Not disposed by this client.</summary>
         private readonly AcmeAccountKey _accountKey;
+
+        /// <summary>Logger for the account-registered event.</summary>
         private readonly ILogger _logger;
+
+        /// <summary>Clock used for the order-poll deadline and Retry-After delays.</summary>
         private readonly TimeProvider _time;
 
+        /// <summary>Account Location URL bound as <c>kid</c>. <see langword="null"/> until registration or <see cref="BindExistingAccount"/>.</summary>
         private string? _keyId;
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeClient"/> class.</summary>
+        /// <summary>Stores the transport, account key, logger, and clock. Does not contact the CA.</summary>
+        /// <param name="http">JWS transport aimed at one directory.</param>
+        /// <param name="accountKey">Key that signs requests. The caller retains ownership.</param>
+        /// <param name="logger">Logger for account registration.</param>
+        /// <param name="time">Clock for order polling.</param>
         internal AcmeClient(AcmeHttpTransport http, AcmeAccountKey accountKey, ILogger logger, TimeProvider time)
         {
             _http = http;
@@ -37,6 +51,7 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Binds a previously persisted ACME account URL (kid) without calling newAccount.
         /// </summary>
+        /// <param name="accountUrl">Account Location URL. Whitespace throws <see cref="ArgumentException"/>.</param>
         internal void BindExistingAccount(string accountUrl)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(accountUrl);
@@ -44,10 +59,15 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Fetches the ACME directory.</summary>
+        /// <param name="cancellationToken">Passed to the transport directory cache.</param>
+        /// <returns>The cached or newly fetched directory.</returns>
         private Task<AcmeDirectoryResource> GetDirectoryAsync(CancellationToken cancellationToken) =>
             _http.GetDirectoryAsync(cancellationToken);
 
         /// <summary>POST-as-GET for an order resource.</summary>
+        /// <param name="orderUrl">Order Location URL.</param>
+        /// <param name="cancellationToken">Cancels the request.</param>
+        /// <returns>The order JSON. An empty body throws <see cref="AcmeCaException"/>.</returns>
         internal async Task<AcmeOrderResource> GetOrderAsync(Uri orderUrl, CancellationToken cancellationToken)
         {
             AcmeResponse<AcmeOrderResource> response = await _http.PostAsGetAsync(
@@ -59,7 +79,13 @@ namespace VectorNNTP.Common.Acme.Protocol
 
         /// <summary>
         /// Registers a new account (or reuses one for this key) and returns the account Location URL.
+        /// The JWS uses the account JWK because no <c>kid</c> is sent. The Location URL is stored as <see cref="KeyId"/>.
         /// </summary>
+        /// <param name="contacts">Contact URIs. An empty list omits the <c>contact</c> field.</param>
+        /// <param name="termsOfServiceAgreed">Value of <c>termsOfServiceAgreed</c>.</param>
+        /// <param name="externalAccountBinding">Optional EAB. <see langword="null"/> omits <c>externalAccountBinding</c>.</param>
+        /// <param name="cancellationToken">Cancels the directory fetch and the POST.</param>
+        /// <returns>The account Location URL.</returns>
         internal async Task<string> RegisterAccountAsync(
             IReadOnlyList<string> contacts,
             bool termsOfServiceAgreed,
@@ -89,6 +115,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Creates a new order for the given identifiers.</summary>
+        /// <param name="identifiers">Order identifiers. No profile is requested.</param>
+        /// <param name="cancellationToken">Cancels the directory fetch and the POST.</param>
+        /// <returns>The order Location URL and the created order JSON.</returns>
         internal async Task<AcmeOrder> CreateOrderAsync(
             IReadOnlyList<AcmeIdentifier> identifiers,
             CancellationToken cancellationToken)
@@ -116,6 +145,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>POST-as-GET for an authorization resource.</summary>
+        /// <param name="authorizationUrl">Authorization URL from the order.</param>
+        /// <param name="cancellationToken">Cancels the request.</param>
+        /// <returns>The authorization JSON. An empty body throws <see cref="AcmeCaException"/>.</returns>
         internal async Task<AcmeAuthorizationResource> GetAuthorizationAsync(Uri authorizationUrl, CancellationToken cancellationToken)
         {
             AcmeResponse<AcmeAuthorizationResource> response = await _http.PostAsGetAsync(
@@ -126,12 +158,19 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Submits a challenge for validation (empty JSON object payload).</summary>
+        /// <param name="challengeUrl">Challenge URL.</param>
+        /// <param name="cancellationToken">Cancels the POST of <c>{}</c>.</param>
+        /// <returns>A task that completes when the CA accepts the POST.</returns>
         internal async Task SubmitChallengeAsync(Uri challengeUrl, CancellationToken cancellationToken) =>
             await _http.PostAsync(
                 _accountKey, KeyId, challengeUrl, "{}", AcmeJsonContext.Default.AcmeChallengeResource, cancellationToken)
                 .ConfigureAwait(false);
 
         /// <summary>Finalizes an order with a PKCS#10 CSR.</summary>
+        /// <param name="finalizeUrl">Order <c>finalize</c> URL.</param>
+        /// <param name="certificateSigningRequest">DER PKCS#10 bytes, sent as base64url <c>csr</c>.</param>
+        /// <param name="cancellationToken">Cancels the POST.</param>
+        /// <returns>The order JSON from the finalize response. An empty body throws <see cref="AcmeCaException"/>.</returns>
         internal async Task<AcmeOrderResource> FinalizeOrderAsync(
             Uri finalizeUrl,
             byte[] certificateSigningRequest,
@@ -147,6 +186,12 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Polls the order until status is <c>valid</c> or <c>invalid</c>.</summary>
+        /// <param name="orderUrl">Order Location URL.</param>
+        /// <param name="timeout">Deadline measured with <see cref="_time"/>.</param>
+        /// <param name="pollInterval">Minimum delay between polls. A shorter Retry-After is raised to this value; a longer one is capped at <see cref="MaxPollDelay"/>.</param>
+        /// <param name="cancellationToken">Cancels a poll or the delay.</param>
+        /// <returns>The order once <see cref="AcmeStatus.Valid"/>.</returns>
+        /// <exception cref="AcmeCaException">Thrown when the status is <see cref="AcmeStatus.Invalid"/> or the deadline passes.</exception>
         internal async Task<AcmeOrderResource> WaitForOrderAsync(
             Uri orderUrl,
             TimeSpan timeout,
@@ -188,6 +233,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Downloads the PEM certificate chain (RFC 8555 §7.4.2).</summary>
+        /// <param name="certificateUrl">Order <c>certificate</c> URL.</param>
+        /// <param name="cancellationToken">Cancels the POST-as-GET.</param>
+        /// <returns>The PEM body and Link URLs whose relation is <c>alternate</c>.</returns>
         internal async Task<AcmeCertificate> DownloadCertificateAsync(Uri certificateUrl, CancellationToken cancellationToken)
         {
             AcmeRawResponse response = await _http.PostAsGetRawAsync(
@@ -206,6 +254,13 @@ namespace VectorNNTP.Common.Acme.Protocol
             return new AcmeCertificate(response.Body, alternates);
         }
 
+        /// <summary>
+        /// Chooses the next poll delay. No Retry-After uses <paramref name="pollInterval"/>.
+        /// A requested delay below that interval is raised to it, and one above <see cref="MaxPollDelay"/> is capped.
+        /// </summary>
+        /// <param name="retryAfter">Absolute Retry-After time. <see langword="null"/> uses <paramref name="pollInterval"/>.</param>
+        /// <param name="pollInterval">Caller minimum delay.</param>
+        /// <returns>The delay to wait.</returns>
         private TimeSpan PollDelay(DateTimeOffset? retryAfter, TimeSpan pollInterval)
         {
             if (retryAfter is not { } at)
@@ -222,6 +277,15 @@ namespace VectorNNTP.Common.Acme.Protocol
             return requested > MaxPollDelay ? MaxPollDelay : requested;
         }
 
+        /// <summary>
+        /// Builds the <c>newAccount</c> JSON. When <paramref name="externalAccountBinding"/> is set, appends an HS256 <c>externalAccountBinding</c> JWS over the account JWK.
+        /// </summary>
+        /// <param name="accountKey">Key whose JWK is the EAB payload.</param>
+        /// <param name="contacts">Contact URIs. Empty omits <c>contact</c>.</param>
+        /// <param name="termsOfServiceAgreed">Written as <c>termsOfServiceAgreed</c>.</param>
+        /// <param name="externalAccountBinding">Optional binding. <see langword="null"/> leaves the field out.</param>
+        /// <param name="newAccountUrl">URL placed in the EAB protected header.</param>
+        /// <returns>The JSON payload string.</returns>
         private static string BuildAccountPayload(
             AcmeAccountKey accountKey,
             IReadOnlyList<string> contacts,
@@ -264,6 +328,9 @@ namespace VectorNNTP.Common.Acme.Protocol
             return body[..^1] + ",\"externalAccountBinding\":" + binding + "}";
         }
 
+        /// <summary>Writes <c>{"identifiers":[{"type","value"}, ...]}</c>.</summary>
+        /// <param name="identifiers">Identifiers to include. An empty list writes an empty array.</param>
+        /// <returns>The JSON payload string.</returns>
         private static string BuildOrderPayload(IReadOnlyList<AcmeIdentifier> identifiers)
         {
             using var stream = new MemoryStream();
@@ -287,6 +354,9 @@ namespace VectorNNTP.Common.Acme.Protocol
             return Encoding.UTF8.GetString(stream.ToArray());
         }
 
+        /// <summary>Writes <c>{"csr":"..."}</c> with the CSR as unpadded base64url.</summary>
+        /// <param name="certificateSigningRequest">DER PKCS#10 bytes.</param>
+        /// <returns>The JSON payload string.</returns>
         private static string BuildFinalizePayload(byte[] certificateSigningRequest)
         {
             using var stream = new MemoryStream();

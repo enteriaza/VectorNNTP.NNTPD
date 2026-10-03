@@ -5,9 +5,12 @@ namespace VectorNNTP.Common.Acme
     /// </summary>
     internal static class DerCrypto
     {
+        /// <summary>ASCII prefix <c>-----BEGIN</c> used to reject PEM account keys.</summary>
         private static readonly byte[] PemBeginMarker = "-----BEGIN"u8.ToArray();
 
         /// <summary>Returns whether <paramref name="data"/> looks like PEM text rather than DER.</summary>
+        /// <param name="data">Key bytes. Leading whitespace and a UTF-8 BOM are skipped.</param>
+        /// <returns><see langword="true"/> when the remaining bytes start with <c>-----BEGIN</c>.</returns>
         internal static bool LooksLikePem(ReadOnlySpan<byte> data)
         {
             if (data.Length < PemBeginMarker.Length)

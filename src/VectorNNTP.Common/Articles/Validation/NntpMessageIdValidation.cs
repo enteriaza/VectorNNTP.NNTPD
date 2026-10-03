@@ -127,6 +127,18 @@ namespace VectorNNTP.Common.Articles.Validation
         internal static bool IsValidMessageId(string? messageId, bool stripSpaces = false) =>
             messageId is { Length: > 0 } && IsValidMessageId(messageId.AsSpan(), stripSpaces);
 
+        /// <summary>
+        /// Validates the domain side of a bracketed Message-ID, from <paramref name="startIndex"/> through <paramref name="endIndex"/>.
+        /// </summary>
+        /// <param name="span">Full candidate, already known to be ASCII when called from <see cref="IsValidMessageId(ReadOnlySpan{char}, bool)"/>.</param>
+        /// <param name="startIndex">First character of the domain (after <c>@</c>).</param>
+        /// <param name="endIndex">Exclusive end of the domain. Callers pass the index of <c>&gt;</c>, which this method does not consume when <paramref name="bracket"/> is false.</param>
+        /// <param name="stripSpaces">When <see langword="true"/>, Unicode whitespace after the domain or closing bracket is skipped before the end check.</param>
+        /// <param name="bracket">When <see langword="true"/>, require a <c>&gt;</c> immediately after the domain.</param>
+        /// <returns>
+        /// <see langword="false"/> when the range is empty, the domain is not a dot-atom or a non-empty <c>[...]</c> literal,
+        /// a required <c>&gt;</c> is missing, or bytes remain after the accepted domain.
+        /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsValidRightPartMessageId(
             ReadOnlySpan<char> span,
@@ -171,6 +183,18 @@ namespace VectorNNTP.Common.Articles.Validation
             return index == endIndex;
         }
 
+        /// <summary>
+        /// Validates the domain side of a bracketed Message-ID on ASCII bytes.
+        /// </summary>
+        /// <param name="span">Full candidate bytes.</param>
+        /// <param name="startIndex">First byte of the domain (after <c>@</c>).</param>
+        /// <param name="endIndex">Exclusive end.</param>
+        /// <param name="stripSpaces">When <see langword="true"/>, SP, HTAB, LF, CR, FF, and VT after the domain are skipped before the end check.</param>
+        /// <param name="bracket">When <see langword="true"/>, require <c>0x3E</c> immediately after the domain.</param>
+        /// <returns>
+        /// <see langword="false"/> when the range is empty, the domain is not a dot-atom or a non-empty bracketed literal,
+        /// a required closing bracket is missing, or bytes remain after the accepted domain.
+        /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsValidRightPartMessageId(
             ReadOnlySpan<byte> span,
@@ -215,6 +239,18 @@ namespace VectorNNTP.Common.Articles.Validation
             return index == endIndex;
         }
 
+        /// <summary>
+        /// Parses one or more atom runs separated by <c>.</c>, stopping before <paramref name="stopChar"/> when it is not <c>\0</c>.
+        /// </summary>
+        /// <param name="span">Candidate characters.</param>
+        /// <param name="startIndex">Inclusive start. Must be less than <paramref name="endIndex"/>.</param>
+        /// <param name="endIndex">Exclusive end.</param>
+        /// <param name="stopChar"><c>@</c> for the local part, or <c>\0</c> when the sequence must consume through <paramref name="endIndex"/>.</param>
+        /// <param name="stopIndex">Index of <paramref name="stopChar"/>, or <paramref name="endIndex"/> when <paramref name="stopChar"/> is <c>\0</c> and the sequence is consumed. Unchanged from <paramref name="startIndex"/> on failure.</param>
+        /// <returns>
+        /// <see langword="false"/> for an empty atom, a trailing dot, or a character that is neither dot, atom, nor the stop character.
+        /// A <c>\0</c> stop succeeds only when the sequence ends exactly at <paramref name="endIndex"/>.
+        /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TryParseDotAtomSequence(
             ReadOnlySpan<char> span,
@@ -270,6 +306,17 @@ namespace VectorNNTP.Common.Articles.Validation
             return parsedAtom && stopChar == '\0';
         }
 
+        /// <summary>
+        /// Parses one or more atom runs separated by <c>0x2E</c>, stopping before <paramref name="stopChar"/> when it is not zero.
+        /// </summary>
+        /// <param name="span">Candidate bytes.</param>
+        /// <param name="startIndex">Inclusive start. Must be less than <paramref name="endIndex"/>.</param>
+        /// <param name="endIndex">Exclusive end.</param>
+        /// <param name="stopChar"><c>0x40</c> for the local part, or <c>0</c> when the sequence must consume through <paramref name="endIndex"/>.</param>
+        /// <param name="stopIndex">Index of <paramref name="stopChar"/>, or <paramref name="endIndex"/> when <paramref name="stopChar"/> is zero and the sequence is consumed. Left at <paramref name="startIndex"/> on failure.</param>
+        /// <returns>
+        /// <see langword="false"/> for an empty atom, a trailing dot, or a byte that is neither dot, atom, nor the stop byte.
+        /// </returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TryParseDotAtomSequence(
             ReadOnlySpan<byte> span,
@@ -325,6 +372,14 @@ namespace VectorNNTP.Common.Articles.Validation
             return parsedAtom && stopChar == 0;
         }
 
+        /// <summary>
+        /// Parses a domain literal <c>[</c> … <c>]</c> whose interior characters pass <see cref="NntpMessageIdCharClasses.IsNorm(char)"/>.
+        /// </summary>
+        /// <param name="span">Candidate characters.</param>
+        /// <param name="startIndex">Index of the opening <c>[</c>.</param>
+        /// <param name="rangeEndIndex">Exclusive end of the allowed range.</param>
+        /// <param name="endIndex">Index just after <c>]</c> on success; otherwise <paramref name="startIndex"/>.</param>
+        /// <returns><see langword="false"/> when <c>[</c> is missing, the interior is empty, a non-norm character appears, or <c>]</c> is absent.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TryParseDomainLiteral(ReadOnlySpan<char> span, int startIndex, int rangeEndIndex, out int endIndex)
         {
@@ -355,6 +410,14 @@ namespace VectorNNTP.Common.Articles.Validation
             return false;
         }
 
+        /// <summary>
+        /// Parses a domain literal <c>[</c> … <c>]</c> whose interior bytes pass <see cref="NntpMessageIdCharClasses.IsNorm(byte)"/>.
+        /// </summary>
+        /// <param name="span">Candidate bytes.</param>
+        /// <param name="startIndex">Index of <c>0x5B</c>.</param>
+        /// <param name="rangeEndIndex">Exclusive end of the allowed range.</param>
+        /// <param name="endIndex">Index just after <c>0x5D</c> on success; otherwise <paramref name="startIndex"/>.</param>
+        /// <returns><see langword="false"/> when the opening bracket is missing, the interior is empty, a non-norm byte appears, or the closing bracket is absent.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TryParseDomainLiteral(ReadOnlySpan<byte> span, int startIndex, int rangeEndIndex, out int endIndex)
         {

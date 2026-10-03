@@ -13,6 +13,9 @@ namespace VectorNNTP.Common.Articles
     /// </remarks>
     public readonly struct ArticleRecord
     {
+        /// <summary>
+        /// Canonical unstuffed article buffer. Field ranges index these bytes. The struct stores the reference and does not copy the array.
+        /// </summary>
         private readonly byte[] _artData;
 
         /// <summary>

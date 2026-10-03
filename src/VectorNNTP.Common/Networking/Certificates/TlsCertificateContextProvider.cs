@@ -57,8 +57,11 @@ namespace VectorNNTP.Common.Networking.Certificates
     /// </remarks>
     public sealed class TlsCertificateLease : IDisposable
     {
+        /// <summary>Holder this lease references. Cleared on <see cref="Dispose"/> so a second dispose is a no-op.</summary>
         private TlsCertificateHolder? _holder;
 
+        /// <summary>Takes one reference on <paramref name="holder"/>.</summary>
+        /// <param name="holder">Published or already-leased holder. Must not be retired or disposed.</param>
         internal TlsCertificateLease(TlsCertificateHolder holder)
         {
             _holder = holder;
@@ -119,12 +122,25 @@ namespace VectorNNTP.Common.Networking.Certificates
     /// </remarks>
     internal sealed class TlsCertificateContextProvider : ITlsCertificateContextProvider, IAcmeCertificatePublisher, IAsyncDisposable
     {
+        /// <summary>Receives the publication-generation log. Certificate material and the PFX password are not written.</summary>
         private readonly ILogger<TlsCertificateContextProvider> _logger;
+
+        /// <summary>
+        /// Serializes availability checks, <see cref="Acquire"/>, the publication swap, and retirement.
+        /// PFX parsing and holder disposal run outside this lock.
+        /// </summary>
         private readonly object _gate = new();
+
+        /// <summary>Currently published holder, or <see langword="null"/> when none is published.</summary>
         private TlsCertificateHolder? _current;
+
+        /// <summary><c>1</c> after <see cref="DisposeAsync"/> begins. Later publication and acquire calls fail.</summary>
         private int _disposed;
 
-        /// <summary>Initializes a new instance of the <see cref="TlsCertificateContextProvider"/> class.</summary>
+        /// <summary>
+        /// Creates a provider with no published context. <see cref="Acquire"/> fails until <see cref="PublishFromPfx"/> succeeds.
+        /// </summary>
+        /// <param name="logger">Receives the publication-generation log. Certificate bytes and the PFX password are not logged.</param>
         public TlsCertificateContextProvider(ILogger<TlsCertificateContextProvider> logger)
         {
             ArgumentNullException.ThrowIfNull(logger);
@@ -216,13 +232,26 @@ namespace VectorNNTP.Common.Networking.Certificates
     /// </remarks>
     internal sealed class TlsCertificateHolder
     {
+        /// <summary>Process-wide counter incremented once per successful <see cref="CreateFromPfx"/>.</summary>
         private static int s_generation;
 
+        /// <summary>Outstanding references. Starts at 1 for the provider's publication reference.</summary>
         private int _refs = 1; // publication reference
+
+        /// <summary><c>1</c> after <see cref="Retire"/>. Further <see cref="AddRef"/> calls throw.</summary>
         private int _retired;
+
+        /// <summary><c>1</c> after <see cref="DisposeCore"/> commits disposal.</summary>
         private int _disposed;
+
+        /// <summary>Times <see cref="DisposeCore"/> passed the one-shot dispose gate. Expected to stay 0 or 1.</summary>
         private int _disposeCount;
 
+        /// <summary>Stores the context, leaf, owned certificate collection, and generation. Does not take an extra reference.</summary>
+        /// <param name="context">Context built for TLS. Disposed in <see cref="DisposeCore"/> when it implements <see cref="IDisposable"/>.</param>
+        /// <param name="leaf">Certificate that supplied the private key. Also present in <paramref name="ownedCerts"/>.</param>
+        /// <param name="ownedCerts">PKCS#12 collection disposed with the holder. Includes <paramref name="leaf"/> and intermediates.</param>
+        /// <param name="generation">Value taken from <see cref="s_generation"/> at creation.</param>
         private TlsCertificateHolder(
             SslStreamCertificateContext context,
             X509Certificate2 leaf,
@@ -235,19 +264,39 @@ namespace VectorNNTP.Common.Networking.Certificates
             Generation = generation;
         }
 
+        /// <summary>Certificates loaded from the PFX, including the leaf. Disposed exactly once in <see cref="DisposeCore"/>.</summary>
         private readonly X509Certificate2Collection _ownedCerts;
 
+        /// <summary>Immutable TLS context for this generation. Valid until <see cref="DisposeCore"/>.</summary>
         internal SslStreamCertificateContext Context { get; }
 
+        /// <summary>Leaf certificate that had the private key. Disposed as part of <see cref="_ownedCerts"/>.</summary>
         private X509Certificate2 Leaf { get; }
 
+        /// <summary>Monotonic generation assigned when the PFX was loaded.</summary>
         internal int Generation { get; }
 
+        /// <summary><see langword="true"/> after <see cref="DisposeCore"/> has committed disposal.</summary>
         internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
         /// <summary>Gets how many times <see cref="DisposeCore"/> committed disposal (tests).</summary>
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
 
+        /// <summary>
+        /// Loads a PKCS#12 collection and publishes an offline <see cref="SslStreamCertificateContext"/>.
+        /// </summary>
+        /// <param name="pfxBytes">PFX bytes. Not retained after the certificates are loaded.</param>
+        /// <param name="password">PFX password. Not logged. An empty password is rejected by the caller.</param>
+        /// <returns>A holder whose reference count is 1 (the publication reference).</returns>
+        /// <exception cref="AcmeCertificateException">
+        /// The PFX is malformed, or no certificate in the collection has a private key (<c>malformed_pfx</c>).
+        /// Certificates loaded before that failure are disposed.
+        /// </exception>
+        /// <remarks>
+        /// Key storage is <see cref="X509KeyStorageFlags.Exportable"/> and <see cref="X509KeyStorageFlags.UserKeySet"/>.
+        /// The first certificate with a private key is the leaf; the rest are intermediates.
+        /// Context creation uses <c>offline: true</c>, so OCSP and CRL are not fetched here.
+        /// </remarks>
         internal static TlsCertificateHolder CreateFromPfx(ReadOnlySpan<byte> pfxBytes, string password)
         {
             // EphemeralKeySet is unsuitable for SslStreamCertificateContext / server handshake on Windows.
@@ -304,6 +353,8 @@ namespace VectorNNTP.Common.Networking.Certificates
         /// <summary>Marks this holder as retired; further <see cref="AddRef"/> calls fail.</summary>
         internal void Retire() => Volatile.Write(ref _retired, 1);
 
+        /// <summary>Adds one lease or publication reference.</summary>
+        /// <exception cref="ObjectDisposedException">The holder is disposed, retired, or the count cannot be raised above zero.</exception>
         internal void AddRef()
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -321,6 +372,8 @@ namespace VectorNNTP.Common.Networking.Certificates
             }
         }
 
+        /// <summary>Drops one reference. The last reference runs <see cref="DisposeCore"/>.</summary>
+        /// <exception cref="InvalidOperationException">Released more times than references were taken. The count is restored before the throw.</exception>
         internal void Release()
         {
             var remaining = Interlocked.Decrement(ref _refs);
@@ -338,6 +391,9 @@ namespace VectorNNTP.Common.Networking.Certificates
             DisposeCore();
         }
 
+        /// <summary>
+        /// Disposes owned certificates and the context once. A second call returns without disposing again.
+        /// </summary>
         private void DisposeCore()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1)

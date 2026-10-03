@@ -221,6 +221,9 @@ namespace VectorNNTP.Common.Messaging.Cache
             }
         }
 
+        /// <summary>Creates a compact UTF-8 writer. Validation stays enabled; HTML escaping is relaxed.</summary>
+        /// <param name="writer">Buffer that receives the lookup JSON.</param>
+        /// <returns>A writer the caller must dispose after flushing.</returns>
         private static Utf8JsonWriter CreateWriter(ArrayBufferWriter<byte> writer) =>
             new(writer, new JsonWriterOptions
             {
@@ -229,6 +232,11 @@ namespace VectorNNTP.Common.Messaging.Cache
                 Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
             });
 
+        /// <summary>Parses <paramref name="payload"/> as a JSON object.</summary>
+        /// <param name="payload">UTF-8 lookup body. Copied into an array for <see cref="JsonDocument.Parse(System.ReadOnlyMemory{byte}, JsonDocumentOptions)"/>.</param>
+        /// <param name="document">Parsed document on success. The caller disposes it. Default when parsing fails.</param>
+        /// <param name="reason">Empty on success; otherwise why the payload was rejected.</param>
+        /// <returns><see langword="false"/> for invalid JSON or a non-object root. The document is disposed in the failure path.</returns>
         private static bool TryParseObject(ReadOnlySpan<byte> payload, out JsonDocument document, out string reason)
         {
             reason = string.Empty;
@@ -254,9 +262,19 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads the integer <c>version</c> property.</summary>
+        /// <param name="root">Lookup object.</param>
+        /// <param name="version">Parsed version. Unchanged meaning on failure is the default 0 from <see cref="TryReadInt32"/>.</param>
+        /// <param name="reason">Empty on success; otherwise a missing-property or type error.</param>
+        /// <returns><see langword="true"/> when <c>version</c> is a JSON integer that fits in <see cref="int"/>.</returns>
         private static bool TryReadVersion(JsonElement root, out int version, out string reason) =>
             TryReadInt32(root, "version", out version, out reason);
 
+        /// <summary>Reads <c>articleId</c> as a 64-character lowercase hexadecimal <see cref="ArticleId"/>.</summary>
+        /// <param name="root">Lookup object.</param>
+        /// <param name="articleId">Parsed id on success; otherwise the default value.</param>
+        /// <param name="reason">Empty on success; otherwise a missing, non-string, or malformed id error.</param>
+        /// <returns><see langword="true"/> when <see cref="ArticleId.TryParseLowerHex(ReadOnlySpan{char}, out ArticleId)"/> accepts the property.</returns>
         private static bool TryReadArticleId(JsonElement root, out ArticleId articleId, out string reason)
         {
             articleId = default;
@@ -274,6 +292,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads <paramref name="name"/> as a GUID string.</summary>
+        /// <param name="root">Lookup object.</param>
+        /// <param name="name">Property name, such as <c>requestId</c> or <c>serverId</c>.</param>
+        /// <param name="value">Parsed GUID on success; <see cref="Guid.Empty"/> on failure.</param>
+        /// <param name="reason">Empty on success; otherwise a missing, non-string, or non-UUID error.</param>
+        /// <returns><see langword="true"/> when <see cref="Guid.TryParse(string?, out Guid)"/> accepts the property.</returns>
         private static bool TryReadGuid(JsonElement root, string name, out Guid value, out string reason)
         {
             value = Guid.Empty;
@@ -291,6 +315,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads <paramref name="name"/> as a JSON number that fits in <see cref="int"/>.</summary>
+        /// <param name="root">Lookup object.</param>
+        /// <param name="name">Required property name.</param>
+        /// <param name="value">Parsed integer on success; 0 on failure.</param>
+        /// <param name="reason">Empty on success; otherwise a missing-property or type error.</param>
+        /// <returns><see langword="false"/> when the property is absent or not an <see cref="int"/> JSON number.</returns>
         private static bool TryReadInt32(JsonElement root, string name, out int value, out string reason)
         {
             value = 0;
@@ -310,6 +340,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads <paramref name="name"/> as a JSON string. A JSON null string becomes empty.</summary>
+        /// <param name="root">Lookup object.</param>
+        /// <param name="name">Required property name.</param>
+        /// <param name="value">Property text on success; empty on failure.</param>
+        /// <param name="reason">Empty on success; otherwise a missing-property or type error.</param>
+        /// <returns><see langword="false"/> when the property is absent or not a string.</returns>
         private static bool TryReadString(JsonElement root, string name, out string value, out string reason)
         {
             value = string.Empty;

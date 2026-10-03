@@ -25,25 +25,67 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// </remarks>
     internal sealed class RabbitMqService : IRabbitMqService, IApplicationService, IAsyncDisposable
     {
+        /// <summary>Opens broker connections. Does not keep them after <see cref="ConnectAndInstallAsync"/> publishes one.</summary>
         private readonly IRabbitMqConnectionFactory _connectionFactory;
+
+        /// <summary>Bound options used for the initial connect and every reconnect.</summary>
         private readonly IOptions<RabbitMqOptions> _options;
+
+        /// <summary>Read once in <see cref="StartAsync"/> to set <see cref="_connectionName"/>.</summary>
         private readonly IRabbitMqConnectionNameProvider _connectionNameProvider;
+
+        /// <summary>Lifecycle logger. Credential values are not written here.</summary>
         private readonly ILogger<RabbitMqService> _logger;
+
+        /// <summary>Clock for reconnect backoff and connect elapsed time.</summary>
         private readonly TimeProvider _timeProvider;
+
+        /// <summary>Cancelled by <see cref="DisposeAsync"/> to stop <see cref="WatchConnectionAsync"/>. Disposed after that task ends.</summary>
         private readonly CancellationTokenSource _runCts = new();
+
+        /// <summary>Serializes publication, retirement, and handle checks. Not held across broker I/O.</summary>
         private readonly object _gate = new();
 
+        /// <summary>
+        /// One-shot signal consumed by the watch loop. Replaced after each wait so a later loss is not dropped.
+        /// </summary>
         private TaskCompletionSource _recoveryRequested = NewRecoverySource();
+
+        /// <summary>Options projected at the start of <see cref="StartAsync"/>. <see langword="null"/> until then.</summary>
         private RabbitMqRuntimeOptions? _runtime;
+
+        /// <summary>Client-provided connection name captured at start. Empty until then.</summary>
         private string _connectionName = string.Empty;
+
+        /// <summary>Published generation, or <see langword="null"/> when none is current.</summary>
         private LiveConnection? _current;
+
+        /// <summary>Watch loop started after the first successful connect. <see langword="null"/> before that and when start fails.</summary>
         private Task? _execution;
+
+        /// <summary>Monotonic generation counter. Zero before the first successful <see cref="Publish"/>.</summary>
         private long _generation;
+
+        /// <summary>
+        /// <c>0</c> until <see cref="StartAsync"/> begins, then <c>1</c>. Reset to <c>0</c> when start fails so a later start can retry.
+        /// </summary>
         private int _started;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>. Later dispose calls return immediately.</summary>
         private int _disposed;
+
+        /// <summary>
+        /// Set under <see cref="_gate"/> when shutdown starts. Blocks publication and ignores recovery requests.
+        /// </summary>
         private bool _stopping;
 
-        /// <summary>Initializes a new instance of the <see cref="RabbitMqService"/> class.</summary>
+        /// <summary>
+        /// Creates the process connection owner, using <see cref="TimeProvider.System"/> for reconnect delays.
+        /// </summary>
+        /// <param name="connectionFactory">Opens broker connections. This service disposes each connection it publishes.</param>
+        /// <param name="options">RabbitMQ options read during <see cref="StartAsync"/> and each reconnect.</param>
+        /// <param name="connectionNameProvider">Supplies the client-provided connection name once at start.</param>
+        /// <param name="logger">Lifecycle logger. This service does not log credentials.</param>
         public RabbitMqService(
             IRabbitMqConnectionFactory connectionFactory,
             IOptions<RabbitMqOptions> options,
@@ -53,7 +95,14 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         {
         }
 
-        /// <summary>Initializes a new instance with an explicit clock (tests).</summary>
+        /// <summary>
+        /// Creates the process connection owner with an explicit clock for reconnect delays and elapsed-time logs.
+        /// </summary>
+        /// <param name="connectionFactory">Opens broker connections. This service disposes each connection it publishes.</param>
+        /// <param name="options">RabbitMQ options read during <see cref="StartAsync"/> and each reconnect.</param>
+        /// <param name="connectionNameProvider">Supplies the client-provided connection name once at start.</param>
+        /// <param name="logger">Lifecycle logger. This service does not log credentials.</param>
+        /// <param name="timeProvider">Clock used for reconnect <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> and connect duration.</param>
         internal RabbitMqService(
             IRabbitMqConnectionFactory connectionFactory,
             IOptions<RabbitMqOptions> options,
@@ -208,6 +257,10 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             _runCts.Dispose();
         }
 
+        /// <summary>
+        /// Waits for each recovery signal and runs <see cref="RecoverAsync"/> until <paramref name="cancellationToken"/> is cancelled.
+        /// </summary>
+        /// <param name="cancellationToken">Shutdown token from <see cref="_runCts"/>. Cancellation ends the loop without a failure.</param>
         private async Task WatchConnectionAsync(CancellationToken cancellationToken)
         {
             try
@@ -228,6 +281,14 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Retries connect with exponential backoff until a generation is installed or <paramref name="cancellationToken"/> is cancelled.
+        /// </summary>
+        /// <param name="cancellationToken">Shutdown token. Cancellation throws <see cref="OperationCanceledException"/>.</param>
+        /// <remarks>
+        /// There is no attempt limit. The first failure is logged as a reconnect failure; later failures are logged
+        /// only when <see cref="ShouldAnnounceReconnect"/> is true. A failed attempt does not leave a partial connection published.
+        /// </remarks>
         private async Task RecoverAsync(CancellationToken cancellationToken)
         {
             var runtime = _runtime
@@ -275,6 +336,20 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Opens one connection, publishes it as the next generation, and disposes the generation it replaced.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the broker connect. A cancelled connect disposes any connection not yet published.</param>
+        /// <param name="startup">
+        /// When <see langword="true"/>, a failure other than cancellation is logged as a connection failure.
+        /// Reconnect failures are logged by <see cref="RecoverAsync"/> instead.
+        /// </param>
+        /// <param name="logConnect">When <see langword="true"/>, logs the connect attempt and the successful connect.</param>
+        /// <returns>The generation installed by <see cref="Publish"/>.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// The service is stopping, runtime options were not projected, or the opened connection is not usable.
+        /// The unusable connection is disposed before the exception is thrown.
+        /// </exception>
         private async Task<long> ConnectAndInstallAsync(
             CancellationToken cancellationToken,
             bool startup,
@@ -366,6 +441,16 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Subscribes to connection loss, then publishes <paramref name="connection"/> as the next generation.
+        /// </summary>
+        /// <param name="connection">Open connection to make current. The caller must not dispose it after a successful return.</param>
+        /// <returns>The installed generation and the previous generation, if one was still published.</returns>
+        /// <exception cref="InvalidOperationException">The service is stopping. The loss handler is removed and the connection is not published.</exception>
+        /// <remarks>
+        /// Does not dispose <paramref name="connection"/> or the previous generation. The caller disposes the previous one.
+        /// A close that races this method is still observed because the handler is attached before the publish.
+        /// </remarks>
         private PublishedConnection Publish(IRabbitMqConnection connection)
         {
             // Subscribe before making the instance current so a close that races the
@@ -389,6 +474,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Logs loss of the current connection and requests recovery. A retired sender is ignored.
+        /// </summary>
+        /// <param name="sender">Connection that raised the loss. Ignored unless it is still <see cref="_current"/>.</param>
+        /// <param name="eventArgs">Broker reply code, text, and initiator. Logged and not otherwise interpreted.</param>
+        /// <remarks>Does not dispose the connection and does not start reconnect inline. Shutdown drops the event.</remarks>
         private void OnConnectionLost(object? sender, RabbitMqConnectionLostEventArgs eventArgs)
         {
             long generation;
@@ -414,6 +505,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             RequestRecovery();
         }
 
+        /// <summary>
+        /// Completes the current recovery signal. Concurrent calls collapse onto the same signal. No-op while stopping.
+        /// </summary>
         private void RequestRecovery()
         {
             TaskCompletionSource source;
@@ -430,6 +524,14 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             source.TrySetResult();
         }
 
+        /// <summary>
+        /// Waits for <see cref="RequestRecovery"/>, then replaces a completed signal before recovery runs.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the wait. The signal is left in place when the wait is cancelled.</param>
+        /// <remarks>
+        /// The replacement happens only after the observed signal has completed, so a loss of the generation
+        /// installed by the following <see cref="RecoverAsync"/> is not dropped as an already-seen event.
+        /// </remarks>
         private async Task WaitForRecoveryRequestAsync(CancellationToken cancellationToken)
         {
             Task wait;
@@ -451,6 +553,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Unpublishes the current connection, detaches its loss handler, and disposes it. No-op when none is current.
+        /// </summary>
         private async Task RetireCurrentAsync()
         {
             LiveConnection? current;
@@ -469,6 +574,10 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             await DisposeConnectionQuietlyAsync(current.Connection).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Disposes <paramref name="connection"/>. A dispose failure is logged and not rethrown.
+        /// </summary>
+        /// <param name="connection">Connection to dispose. May already be closed.</param>
         private async Task DisposeConnectionQuietlyAsync(IRabbitMqConnection connection)
         {
             try
@@ -481,6 +590,8 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>Throws when shutdown has started.</summary>
+        /// <exception cref="InvalidOperationException">The service is stopping.</exception>
         private void ThrowIfStopping()
         {
             lock (_gate)
@@ -492,9 +603,24 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Returns whether this reconnect attempt should be logged. True for attempt 1 or when
+        /// <paramref name="delay"/> has reached <see cref="RabbitMqRuntimeOptions.PoolReconnectMaxDelayMs"/>.
+        /// </summary>
+        /// <param name="options">Reconnect delay settings.</param>
+        /// <param name="attempt">One-based attempt number for the current recovery.</param>
+        /// <param name="delay">Delay computed for <paramref name="attempt"/>.</param>
+        /// <returns><see langword="true"/> when the attempt is announced.</returns>
         private static bool ShouldAnnounceReconnect(RabbitMqRuntimeOptions options, int attempt, TimeSpan delay) =>
             attempt == 1 || delay.TotalMilliseconds >= options.PoolReconnectMaxDelayMs;
 
+        /// <summary>
+        /// Computes reconnect delay as <see cref="RabbitMqRuntimeOptions.PoolReconnectBaseDelayMs"/> times
+        /// 2^(attempt-1), capped at <see cref="RabbitMqRuntimeOptions.PoolReconnectMaxDelayMs"/>.
+        /// </summary>
+        /// <param name="options">Base and maximum delay in milliseconds.</param>
+        /// <param name="attempt">One-based attempt. Clamped to 1..30 before the power is applied.</param>
+        /// <returns>The delay to wait before the next connect. No jitter is added.</returns>
         private static TimeSpan ComputeReconnectBackoff(RabbitMqRuntimeOptions options, int attempt)
         {
             var boundedAttempt = Math.Clamp(attempt, 1, 30);
@@ -504,16 +630,28 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             return TimeSpan.FromMilliseconds(delayMs);
         }
 
+        /// <summary>
+        /// Creates a recovery signal whose continuations run asynchronously, so they do not resume under <see cref="_gate"/>.
+        /// </summary>
+        /// <returns>An incomplete <see cref="TaskCompletionSource"/>.</returns>
         private static TaskCompletionSource NewRecoverySource() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>One published connection and the generation assigned to it. This type does not dispose the connection.</summary>
+        /// <param name="connection">Open connection that is current for <paramref name="generation"/>.</param>
+        /// <param name="generation">Generation assigned by <see cref="Publish"/>.</param>
         private sealed class LiveConnection(IRabbitMqConnection connection, long generation)
         {
+            /// <summary>The published connection instance.</summary>
             internal IRabbitMqConnection Connection { get; } = connection;
 
+            /// <summary>Generation assigned when this instance was published.</summary>
             internal long Generation { get; } = generation;
         }
 
+        /// <summary>The generation just published and the generation it replaced, if one was still current.</summary>
+        /// <param name="Current">Generation installed by <see cref="Publish"/>.</param>
+        /// <param name="Replaced">Previous generation, or <see langword="null"/> when none was published.</param>
         private readonly record struct PublishedConnection(LiveConnection Current, LiveConnection? Replaced);
     }
 }

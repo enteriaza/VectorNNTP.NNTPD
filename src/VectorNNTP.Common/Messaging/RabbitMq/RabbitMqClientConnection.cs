@@ -7,12 +7,25 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <summary>Owns one RabbitMQ.Client <see cref="IConnection"/>.</summary>
     internal sealed class RabbitMqClientConnection : IRabbitMqConnection
     {
+        /// <summary>Owned RabbitMQ.Client connection. Closed, then disposed, by <see cref="DisposeAsync"/>.</summary>
         private readonly IConnection _connection;
+
+        /// <summary>Logger for a failed <c>CloseAsync</c>. Credentials are not written.</summary>
         private readonly ILogger _logger;
+
+        /// <summary>Stored shutdown delegate so <see cref="DisposeAsync"/> can unsubscribe the same instance.</summary>
         private readonly AsyncEventHandler<ShutdownEventArgs> _shutdownHandler;
+
+        /// <summary>Stored callback-exception delegate so dispose can unsubscribe the same instance.</summary>
         private readonly AsyncEventHandler<CallbackExceptionEventArgs> _callbackHandler;
+
+        /// <summary>Stored connection-blocked delegate so dispose can unsubscribe the same instance.</summary>
         private readonly AsyncEventHandler<ConnectionBlockedEventArgs> _blockedHandler;
+
+        /// <summary>Stored connection-unblocked delegate so dispose can unsubscribe the same instance.</summary>
         private readonly AsyncEventHandler<AsyncEventArgs> _unblockedHandler;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>. Later calls return immediately.</summary>
         private int _disposed;
 
         /// <summary>Initializes a new wrapper around an opened broker connection.</summary>
@@ -182,6 +195,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             await _connection.DisposeAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Raises <see cref="ConnectionLost"/> with the broker reply code, text, and initiator. Does not dispose the connection.
+        /// </summary>
+        /// <param name="sender">Unused. The event is raised on this wrapper.</param>
+        /// <param name="eventArgs">Shutdown details copied into <see cref="RabbitMqConnectionLostEventArgs"/>.</param>
+        /// <returns>A completed task. Recovery is requested by <see cref="RabbitMqService"/>, not here.</returns>
         private Task OnShutdownAsync(object sender, ShutdownEventArgs eventArgs)
         {
             ConnectionLost?.Invoke(
@@ -193,18 +212,30 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             return Task.CompletedTask;
         }
 
+        /// <summary>Logs the callback exception message. Does not raise <see cref="ConnectionLost"/> or dispose the connection.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Callback failure. Only <see cref="Exception.Message"/> is logged.</param>
+        /// <returns>A completed task.</returns>
         private Task OnCallbackExceptionAsync(object sender, CallbackExceptionEventArgs eventArgs)
         {
             RabbitMqLogMessages.CallbackException(_logger, eventArgs.Exception.Message);
             return Task.CompletedTask;
         }
 
+        /// <summary>Logs the broker block reason. Does not pause channels or request recovery.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Broker block reason.</param>
+        /// <returns>A completed task.</returns>
         private Task OnBlockedAsync(object sender, ConnectionBlockedEventArgs eventArgs)
         {
             RabbitMqLogMessages.ConnectionBlocked(_logger, eventArgs.Reason);
             return Task.CompletedTask;
         }
 
+        /// <summary>Logs that the broker unblocked the connection. <paramref name="eventArgs"/> is unused.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Unused client event args.</param>
+        /// <returns>A completed task.</returns>
         private Task OnUnblockedAsync(object sender, AsyncEventArgs eventArgs)
         {
             RabbitMqLogMessages.ConnectionUnblocked(_logger);

@@ -12,11 +12,22 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// </remarks>
     internal static partial class NewsDateParser
     {
+        /// <summary>
+        /// <see cref="DateTimeStyles.AllowWhiteSpaces"/>, <see cref="DateTimeStyles.AssumeUniversal"/>, and <see cref="DateTimeStyles.AdjustToUniversal"/>.
+        /// Offset-less values are treated as UTC and the parsed result is UTC.
+        /// </summary>
         private const DateTimeStyles ParseStyles =
             DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal;
 
+        /// <summary>
+        /// Invariant format written by <see cref="TryFormatCanonicalRfc5322Utc"/> before the literal ASCII suffix <c> +0000</c>.
+        /// </summary>
         private const string CanonicalFormat = "ddd, dd MMM yyyy HH:mm:ss";
 
+        /// <summary>
+        /// Exact invariant-culture patterns passed to <see cref="DateTimeOffset.TryParseExact(ReadOnlySpan{char}, string[], IFormatProvider, DateTimeStyles, out DateTimeOffset)"/>
+        /// after abbreviation substitution. <see cref="TryQuickParse"/> may accept a value before this list is used.
+        /// </summary>
         private static readonly string[] DateFormats =
         [
             "ddd, dd MMM yyyy HH:mm:ss zzz",
@@ -207,6 +218,12 @@ namespace VectorNNTP.Common.Articles.DateParser
                 : utc;
         }
 
+        /// <summary>
+        /// Tries <see cref="DateTimeOffset.TryParse(ReadOnlySpan{char}, IFormatProvider, DateTimeStyles, out DateTimeOffset)"/> with <see cref="ParseStyles"/>.
+        /// </summary>
+        /// <param name="input">Printable-ASCII date text already copied to UTF-16.</param>
+        /// <param name="result"><see cref="DateTimeOffset.UtcDateTime"/> on success; otherwise <see langword="default"/>.</param>
+        /// <returns><see langword="true"/> when the BCL parser accepts <paramref name="input"/>.</returns>
         private static bool TryQuickParse(ReadOnlySpan<char> input, out DateTime result)
         {
             if (DateTimeOffset.TryParse(input, CultureInfo.InvariantCulture, ParseStyles, out var dto))
@@ -219,6 +236,12 @@ namespace VectorNNTP.Common.Articles.DateParser
             return false;
         }
 
+        /// <summary>
+        /// Tries <see cref="DateFormats"/> with <see cref="ParseStyles"/> after timezone substitution.
+        /// </summary>
+        /// <param name="input">Normalized date text.</param>
+        /// <param name="result"><see cref="DateTimeOffset.UtcDateTime"/> on success; otherwise <see langword="default"/>.</param>
+        /// <returns><see langword="true"/> when one pattern matches.</returns>
         private static bool TryExactParse(ReadOnlySpan<char> input, out DateTime result)
         {
             if (DateTimeOffset.TryParseExact(input, DateFormats, CultureInfo.InvariantCulture, ParseStyles, out var dto))
@@ -231,6 +254,11 @@ namespace VectorNNTP.Common.Articles.DateParser
             return false;
         }
 
+        /// <summary>
+        /// Drops leading and trailing SP and HTAB. CR and LF are not whitespace here.
+        /// </summary>
+        /// <param name="value">Raw date bytes.</param>
+        /// <returns>A slice of <paramref name="value"/>, not a copy.</returns>
         private static ReadOnlySpan<byte> TrimAsciiWhitespace(ReadOnlySpan<byte> value)
         {
             var start = 0;
@@ -248,6 +276,12 @@ namespace VectorNNTP.Common.Articles.DateParser
             return value[start..end];
         }
 
+        /// <summary>
+        /// Moves the SP/HTAB-trimmed prefix of <paramref name="buffer"/> to index 0.
+        /// </summary>
+        /// <param name="buffer">Working date bytes. Bytes past the returned length are left unchanged.</param>
+        /// <param name="length">Count of significant bytes currently in <paramref name="buffer"/>.</param>
+        /// <returns>Length after leading and trailing SP and HTAB are removed.</returns>
         private static int TrimAsciiWhitespaceInPlace(Span<byte> buffer, int length)
         {
             var start = 0;
@@ -271,8 +305,16 @@ namespace VectorNNTP.Common.Articles.DateParser
             return remaining;
         }
 
+        /// <summary>Returns whether <paramref name="value"/> is SP or HTAB.</summary>
+        /// <param name="value">Byte to test.</param>
+        /// <returns><see langword="true"/> for <c>0x20</c> and <c>0x09</c> only.</returns>
         private static bool IsAsciiWhitespace(byte value) => value is (byte)' ' or (byte)'\t';
 
+        /// <summary>
+        /// Zero-extends each ASCII byte into <paramref name="destination"/>. Does not transcode and does not check destination length.
+        /// </summary>
+        /// <param name="source">Bytes already restricted to printable ASCII by the caller.</param>
+        /// <param name="destination">UTF-16 buffer at least as long as <paramref name="source"/>.</param>
         private static void CopyAsciiBytesToChars(ReadOnlySpan<byte> source, Span<char> destination)
         {
             for (var i = 0; i < source.Length; i++)
@@ -281,6 +323,12 @@ namespace VectorNNTP.Common.Articles.DateParser
             }
         }
 
+        /// <summary>
+        /// Collapses consecutive SP (<c>0x20</c>) to a single SP. HTAB is preserved.
+        /// </summary>
+        /// <param name="buffer">Working date bytes, overwritten from the start.</param>
+        /// <param name="length">Count of significant bytes.</param>
+        /// <returns>Compacted length. Bytes past that length are left unchanged.</returns>
         private static int CollapseInteriorSpaces(Span<byte> buffer, int length)
         {
             var write = 0;
@@ -308,6 +356,17 @@ namespace VectorNNTP.Common.Articles.DateParser
             return write;
         }
 
+        /// <summary>
+        /// Drops one trailing parenthetical comment and the SP/HTAB before its <c>(</c>.
+        /// </summary>
+        /// <param name="buffer">Working date bytes. Not rewritten; only the returned length changes.</param>
+        /// <param name="length">Count of significant bytes.</param>
+        /// <returns>
+        /// Index of the last byte kept, after trailing SP/HTAB before <c>(</c> is excluded.
+        /// Returns <paramref name="length"/> when the trimmed text does not end in <c>)</c>,
+        /// when a <c>)</c> appears before the matching <c>(</c>, or when no <c>(</c> exists.
+        /// Nested comments are left intact.
+        /// </returns>
         private static int StripTrailingParenthetical(Span<byte> buffer, int length)
         {
             var end = length;

@@ -7,9 +7,19 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <summary>Owns one RabbitMQ.Client channel for topology, manual-ack consume, and settlement.</summary>
     internal sealed class RabbitMqClientManualAckChannel : IRabbitMqManualAckChannel
     {
+        /// <summary>
+        /// Owned channel with publisher confirms disabled. <see cref="DisposeAsync"/> unsubscribes the consumer,
+        /// closes the channel when open (close errors are swallowed), then disposes it.
+        /// </summary>
         private readonly IChannel _channel;
+
+        /// <summary>Consumer registered by <see cref="BasicConsumeAsync"/>. Unsubscribed on dispose.</summary>
         private AsyncEventingBasicConsumer? _consumer;
+
+        /// <summary>Delivery handler from <see cref="BasicConsumeAsync"/>. A null handler drops the delivery without ack or nack.</summary>
         private Func<RabbitMqManualAckDelivery, Task>? _onDelivery;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary>
@@ -168,6 +178,14 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             await _channel.DisposeAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Builds a <see cref="RabbitMqManualAckDelivery"/> and awaits <see cref="_onDelivery"/>. Does not ack or nack.
+        /// </summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Client delivery. The body is passed through without copying.</param>
+        /// <remarks>
+        /// When no handler is installed the delivery is ignored and left unsettled. Handler exceptions propagate to the client consumer.
+        /// </remarks>
         private async Task OnReceivedAsync(object sender, BasicDeliverEventArgs eventArgs)
         {
             var handler = _onDelivery;
@@ -191,6 +209,11 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             await handler(delivery).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Reads the <c>RequestId</c> header as a string, UTF-8 <see cref="byte"/> array, or <see cref="ReadOnlyMemory{T}"/> of bytes.
+        /// </summary>
+        /// <param name="headers">AMQP headers. <see langword="null"/>, a missing key, or any other value type yields <see langword="null"/>.</param>
+        /// <returns>The request id text, or <see langword="null"/> when it is absent or not one of those encodings.</returns>
         private static string? ReadRequestId(IDictionary<string, object?>? headers)
         {
             if (headers is null
@@ -209,6 +232,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             };
         }
 
+        /// <summary>Copies <paramref name="arguments"/> into a new ordinal dictionary for RabbitMQ.Client.</summary>
+        /// <param name="arguments">Declare or bind arguments. Not mutated.</param>
+        /// <returns><see langword="null"/> when <paramref name="arguments"/> is <see langword="null"/>; otherwise a new dictionary.</returns>
         private static IDictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
         {
             if (arguments is null)

@@ -9,7 +9,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </remarks>
     internal struct ArticleTransferWindow
     {
+        /// <summary>Bytes this stream may still accept. Never negative.</summary>
         private long _credit;
+
+        /// <summary>Saturation ceiling for <see cref="Add"/>. Adds beyond this value are clipped.</summary>
         private readonly long _maxCredit;
 
         /// <summary>Initializes credit to <paramref name="initialCredit"/> capped by <paramref name="maxCredit"/>.</summary>

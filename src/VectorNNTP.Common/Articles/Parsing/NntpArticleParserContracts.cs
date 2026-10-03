@@ -184,7 +184,7 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// <param name="MaxHeaderCount">Maximum number of header fields accepted.</param>
     /// <param name="MaxHeaderLineBytes">Maximum characters for one physical header or body line, enforced on ASCII wire bytes.</param>
     /// <param name="MaxHeaderNameBytes">Maximum bytes for one header name token.</param>
-    /// <param name="MaxHeaderValueBytes">Maximum bytes for one unfolded header value.</param>
+    /// <param name="MaxHeaderValueBytes">Maximum bytes in one header value span, from the trimmed first value byte through the end of its last folded continuation line.</param>
     /// <param name="YEncDetectionScanBytes">Maximum body bytes scanned for yEnc marker detection before full validation.</param>
     internal readonly record struct NntpArticleParserOptions(
         int MaxArticleBytes,
@@ -217,6 +217,9 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <summary>Number of header slots stored inline on <see cref="NntpArticleParseResult"/>.</summary>
         public const int Capacity = 48;
 
+        /// <summary>
+        /// Inline-array seed. The compiler repeats this slot <see cref="Capacity"/> times; each slot holds one <see cref="NntpArticleHeaderEntry"/>.
+        /// </summary>
         private NntpArticleHeaderEntry _element0;
     }
 
@@ -230,8 +233,20 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// </remarks>
     internal readonly struct NntpArticleParseResult
     {
+        /// <summary>
+        /// First <see cref="NntpArticleHeaderInlineStore.Capacity"/> headers. Unused slots past <c>HeaderCount</c> are not part of the result.
+        /// </summary>
         private readonly NntpArticleHeaderInlineStore _inlineHeaders;
+
+        /// <summary>
+        /// Headers past the inline capacity, or <see langword="null"/> when every header fit inline.
+        /// The array may be longer than the stored count; only <c>HeaderCount</c> entries are live.
+        /// </summary>
         private readonly NntpArticleHeaderEntry[]? _overflowHeaders;
+
+        /// <summary>
+        /// Parser local-identity bytes copied into the result. Lifetime is the parser instance that produced this result.
+        /// </summary>
         private readonly ReadOnlyMemory<byte> _localIdentity;
 
         /// <summary>
@@ -495,8 +510,13 @@ namespace VectorNNTP.Common.Articles.Parsing
     /// </summary>
     internal readonly struct NntpArticleHeaderList : IReadOnlyList<NntpArticleHeaderEntry>
     {
+        /// <summary>Parse result whose <c>HeaderCount</c> and <c>GetHeader</c> supply this list. Headers are not copied.</summary>
         private readonly NntpArticleParseResult _result;
 
+        /// <summary>
+        /// Wraps <paramref name="result"/> as an <see cref="IReadOnlyList{T}"/> without copying header entries.
+        /// </summary>
+        /// <param name="result">Parse result that owns the header table.</param>
         internal NntpArticleHeaderList(NntpArticleParseResult result)
         {
             _result = result;
@@ -517,6 +537,10 @@ namespace VectorNNTP.Common.Articles.Parsing
             }
         }
 
+        /// <summary>
+        /// Returns the generic enumerator, which yields headers in stored order.
+        /// </summary>
+        /// <returns>An <see cref="IEnumerator"/> over <see cref="NntpArticleHeaderEntry"/> values from the wrapped parse result.</returns>
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

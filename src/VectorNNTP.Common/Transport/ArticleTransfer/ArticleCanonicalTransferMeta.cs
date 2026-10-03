@@ -91,7 +91,13 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </summary>
     internal static class VatpMetaCodec
     {
+        /// <summary>
+        /// Byte offset of the first field range: 8-byte ArtHash, 4-byte ArtLines, 4-byte ArtSize,
+        /// 1-byte selected date header, and 3 reserved zero bytes.
+        /// </summary>
         private const int FieldTableOffset = 20;
+
+        /// <summary>Bytes in one field range: big-endian <c>int32</c> offset followed by big-endian <c>int32</c> length.</summary>
         private const int RangePairBytes = 8;
 
         /// <summary>Encodes <paramref name="meta"/> into <paramref name="destination"/> (exactly 76 bytes).</summary>
@@ -168,6 +174,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return true;
         }
 
+        /// <summary>Writes one field range at <see cref="FieldTableOffset"/> plus <paramref name="index"/> times <see cref="RangePairBytes"/>.</summary>
+        /// <param name="destination">META buffer. The caller guarantees it holds the 8-byte range.</param>
+        /// <param name="index">Zero-based field index in MessageId, Newsgroups, Subject, From, Date, References, Path order.</param>
+        /// <param name="range">Offset and length written big-endian. Absent ranges are not rewritten here.</param>
         private static void WriteRange(Span<byte> destination, int index, ArticleByteRange range)
         {
             var offset = FieldTableOffset + (index * RangePairBytes);
@@ -175,6 +185,14 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             BinaryPrimitives.WriteInt32BigEndian(destination.Slice(offset + 4, 4), range.Length);
         }
 
+        /// <summary>Reads one field range. Offset <c>-1</c> with length 0 is <see cref="ArticleByteRange.Absent"/>.</summary>
+        /// <param name="payload">Exact META payload.</param>
+        /// <param name="index">Zero-based field index in MessageId, Newsgroups, Subject, From, Date, References, Path order.</param>
+        /// <param name="range">Decoded range when the method returns <see langword="true"/>.</param>
+        /// <returns>
+        /// <see langword="false"/> when offset is <c>-1</c> and length is not 0, or when offset or length is negative.
+        /// This method does not check that the range lies inside ArtSize.
+        /// </returns>
         private static bool TryReadRange(ReadOnlySpan<byte> payload, int index, out ArticleByteRange range)
         {
             var offset = FieldTableOffset + (index * RangePairBytes);

@@ -213,6 +213,19 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Writes optional prepended hops, then <c>!</c>-separated components from <paramref name="remaining"/>.
+        /// </summary>
+        /// <param name="remaining">Path value still to split. Empty components are skipped.</param>
+        /// <param name="prepend1">First hop, or empty. Used for <see cref="OrganizationalTrackerHost"/> when it must be inserted.</param>
+        /// <param name="prepend2">Second hop, or empty. Used for the application FQDN in traverse mode.</param>
+        /// <param name="trackerAlreadyEmitted">
+        /// When <see langword="true"/>, later components equal to <see cref="OrganizationalTrackerHost"/> are omitted.
+        /// The first such component is written and then this suppression applies.
+        /// </param>
+        /// <param name="destination">Output buffer. Hop bytes are copied unchanged.</param>
+        /// <param name="bytesWritten">Bytes written on success. Set to 0 when a hop does not fit.</param>
+        /// <returns><see langword="false"/> when a non-empty hop does not fit in <paramref name="destination"/>.</returns>
         private static bool TryWriteJoinedComponents(
             ReadOnlySpan<byte> remaining,
             ReadOnlySpan<byte> prepend1,
@@ -255,6 +268,14 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Appends one hop, prefixed by <c>!</c> when it is not the first hop written.
+        /// </summary>
+        /// <param name="hop">Hop bytes. Empty is a no-op success.</param>
+        /// <param name="first"><see langword="true"/> until the first non-empty hop is written, then set to <see langword="false"/>.</param>
+        /// <param name="destination">Output buffer.</param>
+        /// <param name="bytesWritten">Running length. Set to 0 when the hop does not fit.</param>
+        /// <returns><see langword="false"/> when <paramref name="bytesWritten"/> plus the hop and optional separator exceeds <paramref name="destination"/>.</returns>
         private static bool TryWriteHop(
             ReadOnlySpan<byte> hop,
             ref bool first,
@@ -284,6 +305,12 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Takes the next <c>!</c>-separated component and trims SP and HTAB from it.
+        /// </summary>
+        /// <param name="remaining">Unconsumed path bytes. Advanced past the component and its separator.</param>
+        /// <param name="component">Trimmed component, which may be empty between consecutive <c>!</c> bytes. The last component is the remainder.</param>
+        /// <returns><see langword="false"/> only when <paramref name="remaining"/> is empty on entry.</returns>
         private static bool TryConsumePathComponent(ref ReadOnlySpan<byte> remaining, out ReadOnlySpan<byte> component)
         {
             if (remaining.IsEmpty)
@@ -305,6 +332,9 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>Drops leading and trailing SP and HTAB.</summary>
+        /// <param name="value">One path component.</param>
+        /// <returns>A slice of <paramref name="value"/>.</returns>
         private static ReadOnlySpan<byte> TrimAscii(ReadOnlySpan<byte> value)
         {
             var start = 0;
@@ -322,6 +352,12 @@ namespace VectorNNTP.Common.Articles.Parsing
             return value[start..end];
         }
 
+        /// <summary>
+        /// Compares hops after folding ASCII <c>A-Z</c> to <c>a-z</c>. Other bytes are compared unchanged.
+        /// </summary>
+        /// <param name="left">Left hop.</param>
+        /// <param name="right">Right hop.</param>
+        /// <returns><see langword="false"/> when the lengths differ or any folded byte differs.</returns>
         private static bool AsciiEqualsIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         {
             if (left.Length != right.Length)
@@ -340,6 +376,9 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>Folds ASCII <c>A-Z</c> to <c>a-z</c>. Every other byte is returned unchanged.</summary>
+        /// <param name="value">Byte to fold.</param>
+        /// <returns>The folded byte.</returns>
         private static byte ToLowerAscii(byte value)
             => (uint)(value - (byte)'A') <= 'Z' - 'A' ? (byte)(value + 32) : value;
     }

@@ -29,14 +29,31 @@ namespace VectorNNTP.Common.Acme
     /// </remarks>
     internal static class AcmePaths
     {
+        /// <summary>Directory name <c>live</c> under the state root.</summary>
         private const string Live = "live";
+
+        /// <summary>Directory name <c>gens</c> under an FQDN live directory.</summary>
         private const string Gens = "gens";
+
+        /// <summary>File name <c>current</c> that stores the active generation id.</summary>
         private const string Current = "current";
+
+        /// <summary>File name <c>complete</c> written after a generation round-trips successfully.</summary>
         private const string Complete = "complete";
+
+        /// <summary>File name <c>certificate.pfx</c> inside a generation directory.</summary>
         private const string CertificatePfx = "certificate.pfx";
+
+        /// <summary>File name <c>private_key.der</c> for the shared account key.</summary>
         private const string AccountPrivateKey = "private_key.der";
+
+        /// <summary>Directory name <c>journal</c> for per-FQDN transaction files.</summary>
         private const string Journal = "journal";
+
+        /// <summary>Directory name <c>dns01</c> under an FQDN live directory for recovery files.</summary>
         private const string Dns01 = "dns01";
+
+        /// <summary>File name <c>.issuance.lock</c> under an FQDN live directory.</summary>
         private const string IssuanceLockFile = ".issuance.lock";
 
         /// <summary>Ensures the shared account and journal-root directories exist.</summary>

@@ -11,6 +11,10 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// </remarks>
     internal static class ArticleDateHeaderResolver
     {
+        /// <summary>
+        /// Date-family headers in the order they are tried: Date, Injection-Date, NNTP-Posting-Date, Posted, X-Date, Delivery-Date.
+        /// Within one name, the first entry in wire order that unfolds and parses wins. A present but unparsable candidate does not stop the scan.
+        /// </summary>
         private static readonly NntpArticleHeaderName[] CandidateHeaderNames =
         [
             NntpArticleHeaderName.Date,

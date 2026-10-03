@@ -6,6 +6,10 @@ namespace VectorNNTP.Common.Acme
     internal static class DnsZoneCoverage
     {
         /// <summary>Normalizes a DNS hostname (lowercase, no trailing dots).</summary>
+        /// <param name="name">Hostname to trim, strip of trailing dots, and lowercase.</param>
+        /// <param name="settingName">Name included in <see cref="AcmeConfigurationException"/> when <paramref name="name"/> is empty, a wildcard, or has an empty label.</param>
+        /// <returns>The normalized hostname.</returns>
+        /// <exception cref="AcmeConfigurationException">Thrown when the name is empty, contains <c>*</c>, or has an empty label.</exception>
         internal static string NormalizeDnsHostname(string name, string settingName = "dns_name")
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -34,6 +38,9 @@ namespace VectorNNTP.Common.Acme
         /// Returns whether <paramref name="hostname"/> is <paramref name="zoneApex"/> or a subdomain thereof
         /// (label-boundary aware).
         /// </summary>
+        /// <param name="zoneApex">Configured DNS apex. Normalized before comparison.</param>
+        /// <param name="hostname">Certificate identity. Normalized before comparison.</param>
+        /// <returns><see langword="true"/> when the host equals the apex or ends with <c>.{apex}</c>.</returns>
         private static bool ZoneCoversHostname(string zoneApex, string hostname)
         {
             var zone = NormalizeDnsHostname(zoneApex, "zone_apex");
@@ -42,6 +49,9 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Fails closed unless every identity is inside <paramref name="zoneApex"/>.</summary>
+        /// <param name="identities">Certificate DNS names. Empty input fails.</param>
+        /// <param name="zoneApex">Configured DNS apex (<c>DnsSuffix</c>).</param>
+        /// <exception cref="AcmeConfigurationException">Thrown when the list is empty or any identity is outside the apex.</exception>
         internal static void RequireIdentitiesInDnsZone(IReadOnlyList<string> identities, string zoneApex)
         {
             ArgumentNullException.ThrowIfNull(identities);

@@ -7,18 +7,43 @@ namespace VectorNNTP.Common.Acme
     /// </summary>
     internal sealed class CertificateManager
     {
+        /// <summary>Normalized certificate FQDN that owns this manager's store and journal.</summary>
         private readonly string _fqdn;
+
+        /// <summary>Shared ACME state root passed to the store, journal, and issuance lock.</summary>
         private readonly string _stateDir;
+
+        /// <summary>Directory URL recorded on each journal transaction.</summary>
         private readonly string _acmeDirectoryUrl;
+
+        /// <summary>SAN set from <see cref="CertificateIdentities.ForFqdn"/>, including the news hostname when requested.</summary>
         private readonly IReadOnlyList<string> _domains;
+
+        /// <summary>FQDN-scoped live certificate store.</summary>
         private readonly CertificateStore _store;
+
+        /// <summary>Issuer called when the live certificate is missing, invalid, or due for renewal.</summary>
         private readonly ICertificateIssuer _issuer;
+
+        /// <summary>Journal that records the request, persist, promote, and failure events.</summary>
         private readonly AcmeTransactionJournal _journal;
+
+        /// <summary>PKCS#12 password. Not logged.</summary>
         private readonly string _pfxPassword;
+
+        /// <summary>How long before not-after a usable certificate is treated as due for renewal.</summary>
         private readonly TimeSpan _renewalThreshold;
+
+        /// <summary>Logger for reuse, renewal, and ready events.</summary>
         private readonly ILogger<CertificateManager> _logger;
+
+        /// <summary>Serializes ensure and renew on this instance. The cross-process lock is separate.</summary>
         private readonly SemaphoreSlim _gate = new(1, 1);
+
+        /// <summary>Last material accepted by ensure or renew. <see langword="null"/> until then.</summary>
         private CertificateMaterial? _current;
+
+        /// <summary>Count of successful persists on this instance. Logged by <see cref="AcmeLogMessages.ServerCertificateReady"/>; not the filesystem generation id.</summary>
         private int _generation;
 
         /// <summary>Initializes a new instance of the <see cref="CertificateManager"/> class.</summary>
@@ -81,6 +106,8 @@ namespace VectorNNTP.Common.Acme
         internal CertificateMaterial? CurrentMaterial => _current;
 
         /// <summary>Assesses on-disk certificate without contacting ACME.</summary>
+        /// <param name="now">UTC time passed to validation. <see langword="null"/> uses <see cref="DateTimeOffset.UtcNow"/>.</param>
+        /// <returns>Usable material, or a non-usable status whose reason is <c>absent</c> or the storage/certificate category.</returns>
         internal CertificateStatus EvaluateExisting(DateTimeOffset? now = null)
         {
             try
@@ -109,6 +136,8 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Reuses a usable certificate or issues a new one (startup path).</summary>
+        /// <param name="cancellationToken">Cancels the in-process gate wait, the issuance lock wait, and issuance.</param>
+        /// <returns>The reused or newly stored material.</returns>
         internal async Task<CertificateMaterial> EnsureCertificateAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -145,7 +174,10 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Renews when absent, invalid, or past the renewal threshold.
         /// Returns <see langword="true"/> when a new certificate was persisted.
+        /// When a previously usable certificate exists and issuance fails, that material is kept and the result is <see langword="false"/>.
         /// </summary>
+        /// <param name="cancellationToken">Cancels the gate wait, the issuance lock wait, and issuance. Cancellation is not swallowed.</param>
+        /// <returns><see langword="true"/> when a new certificate was persisted.</returns>
         internal async Task<bool> RenewIfDueAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -191,6 +223,13 @@ namespace VectorNNTP.Common.Acme
             return PfxCrypto.LoadCertificate(material.PfxBytes, _pfxPassword);
         }
 
+        /// <summary>
+        /// Starts a journal transaction, issues, validates, saves, and completes the transaction.
+        /// Failures other than cancellation call <see cref="AcmeTransactionJournal.CompleteFailure"/> and are rethrown.
+        /// </summary>
+        /// <param name="cancellationToken">Passed to <see cref="ICertificateIssuer.IssueAsync"/>. Journal writes use their own token.</param>
+        /// <returns>The validated material now stored as current.</returns>
+        /// <exception cref="AcmeCertificateException">Thrown with category <c>invalid_certificate</c> when the issued PFX fails validation.</exception>
         private async Task<CertificateMaterial> IssueAndPersistAsync(CancellationToken cancellationToken)
         {
             var transactionId = _journal.BeginTransaction(_domains, _acmeDirectoryUrl, DateTimeOffset.UtcNow);

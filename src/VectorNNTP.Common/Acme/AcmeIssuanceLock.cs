@@ -9,11 +9,17 @@ namespace VectorNNTP.Common.Acme
     /// </remarks>
     internal sealed class AcmeIssuanceLock : IAsyncDisposable, IDisposable
     {
+        /// <summary>Milliseconds between sharing-violation retries. The wait observes <c>cancellationToken</c>.</summary>
         private const int RetryDelayMilliseconds = 50;
 
+        /// <summary>Open lock file at <c>live/{fqdn}/.issuance.lock</c>. Disposing it releases the lock.</summary>
         private readonly FileStream _stream;
+
+        /// <summary>Non-zero after <see cref="Dispose"/> has run.</summary>
         private int _disposed;
 
+        /// <summary>Takes ownership of an already exclusive <paramref name="stream"/>.</summary>
+        /// <param name="stream">Lock stream. Disposed by <see cref="Dispose"/>.</param>
         private AcmeIssuanceLock(FileStream stream)
         {
             _stream = stream;
@@ -75,7 +81,7 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>Closes the lock stream, releasing the FQDN issuance lock. A second call does nothing.</summary>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1)
@@ -86,7 +92,8 @@ namespace VectorNNTP.Common.Acme
             _stream.Dispose();
         }
 
-        /// <inheritdoc />
+        /// <summary>Releases the lock synchronously and returns a completed task.</summary>
+        /// <returns>A completed <see cref="ValueTask"/>.</returns>
         public ValueTask DisposeAsync()
         {
             Dispose();

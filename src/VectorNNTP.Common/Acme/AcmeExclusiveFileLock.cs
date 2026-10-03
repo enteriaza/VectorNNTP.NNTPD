@@ -11,11 +11,17 @@ namespace VectorNNTP.Common.Acme
     /// </remarks>
     internal sealed class AcmeExclusiveFileLock : IDisposable
     {
+        /// <summary>Wait between sharing-violation retries. Cancellation is observed on this wait.</summary>
         private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
 
+        /// <summary>Open lock file. Disposing it releases <see cref="FileShare.None"/>.</summary>
         private readonly FileStream _stream;
+
+        /// <summary>Non-zero after <see cref="Dispose"/> has run.</summary>
         private int _disposed;
 
+        /// <summary>Takes ownership of an already exclusive <paramref name="stream"/>.</summary>
+        /// <param name="stream">Lock stream. Disposed by <see cref="Dispose"/>.</param>
         private AcmeExclusiveFileLock(FileStream stream)
         {
             _stream = stream;
@@ -79,7 +85,7 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>Closes the lock stream, releasing the exclusive file lock. A second call does nothing.</summary>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 1)

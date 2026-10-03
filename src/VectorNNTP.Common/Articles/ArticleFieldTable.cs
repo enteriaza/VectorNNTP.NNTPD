@@ -213,6 +213,14 @@ namespace VectorNNTP.Common.Articles
             }
         }
 
+        /// <summary>
+        /// Maps a header name to a field-table identity using ASCII case folding.
+        /// </summary>
+        /// <param name="nameBytes">Header name bytes, without the colon.</param>
+        /// <returns>
+        /// Date, Injection-Date, NNTP-Posting-Date, Posted, X-Date, Delivery-Date, Path, Message-ID,
+        /// Newsgroups, From, Subject, or References. Every other name, including Content-Type, is <see cref="NntpArticleHeaderName.Unknown"/>.
+        /// </returns>
         private static NntpArticleHeaderName ClassifyKnownHeaderName(ReadOnlySpan<byte> nameBytes)
             => AsciiEqualsIgnoreCase(nameBytes, "Date"u8)
                 ? NntpArticleHeaderName.Date
@@ -240,6 +248,12 @@ namespace VectorNNTP.Common.Articles
                                                             ? NntpArticleHeaderName.References
                                                             : NntpArticleHeaderName.Unknown;
 
+        /// <summary>
+        /// Compares header-name bytes after folding ASCII <c>A-Z</c> to <c>a-z</c>.
+        /// </summary>
+        /// <param name="left">Left name.</param>
+        /// <param name="right">Right name.</param>
+        /// <returns><see langword="false"/> when the lengths differ or any folded byte differs.</returns>
         private static bool AsciiEqualsIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         {
             if (left.Length != right.Length)
@@ -270,6 +284,12 @@ namespace VectorNNTP.Common.Articles
             return true;
         }
 
+        /// <summary>
+        /// Finds the next CR or LF at or after <paramref name="start"/>.
+        /// </summary>
+        /// <param name="buffer">Article bytes.</param>
+        /// <param name="start">Inclusive search start.</param>
+        /// <returns>Index of the first CR or LF, or <c>-1</c> when neither occurs.</returns>
         private static int FindLineTerminator(ReadOnlySpan<byte> buffer, int start)
         {
             for (var i = start; i < buffer.Length; i++)
@@ -283,6 +303,14 @@ namespace VectorNNTP.Common.Articles
             return -1;
         }
 
+        /// <summary>
+        /// Advances past a CR, LF, or CRLF at <paramref name="lineTerminatorIndex"/>.
+        /// </summary>
+        /// <param name="buffer">Article bytes.</param>
+        /// <param name="lineTerminatorIndex">Index returned by <see cref="FindLineTerminator"/>, or a negative value.</param>
+        /// <returns>
+        /// Two bytes past a CRLF, one byte past a lone CR or LF, or <c>buffer.Length</c> when the index is outside the buffer.
+        /// </returns>
         private static int AdvancePastTerminator(ReadOnlySpan<byte> buffer, int lineTerminatorIndex)
             => lineTerminatorIndex < 0 || lineTerminatorIndex >= buffer.Length
                 ? buffer.Length

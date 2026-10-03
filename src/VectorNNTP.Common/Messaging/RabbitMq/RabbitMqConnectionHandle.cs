@@ -31,9 +31,18 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// </remarks>
     public readonly struct RabbitMqConnectionHandle
     {
+        /// <summary>Service that answers <see cref="IsCurrent"/>. <see langword="null"/> on a default handle.</summary>
         private readonly RabbitMqService? _owner;
+
+        /// <summary>Captured connection instance. <see langword="null"/> on a default handle. Not owned or pinned.</summary>
         private readonly IRabbitMqConnection? _connection;
 
+        /// <summary>
+        /// Captures <paramref name="connection"/> at <paramref name="generation"/> without subscribing or taking a lease.
+        /// </summary>
+        /// <param name="owner">Service that later answers <see cref="IsCurrent"/>.</param>
+        /// <param name="connection">Connection instance that was current. The caller retains disposal.</param>
+        /// <param name="generation">Generation assigned to <paramref name="connection"/>.</param>
         internal RabbitMqConnectionHandle(RabbitMqService owner, IRabbitMqConnection connection, long generation)
         {
             ArgumentNullException.ThrowIfNull(owner);
@@ -75,6 +84,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         internal IRabbitMqConnection Connection =>
             _connection ?? throw new InvalidOperationException("RabbitMQ connection handle is empty.");
 
+        /// <summary>Returns whether <paramref name="connection"/> is the captured instance.</summary>
+        /// <param name="connection">Connection to compare by reference.</param>
+        /// <returns><see langword="true"/> when both refer to the same object.</returns>
         internal bool RefersTo(IRabbitMqConnection connection) => ReferenceEquals(_connection, connection);
     }
 }

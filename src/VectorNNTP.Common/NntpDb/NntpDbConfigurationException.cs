@@ -28,6 +28,12 @@ namespace VectorNNTP.Common.NntpDb
         /// <summary>Gets the MySqlConnector parse or configuration reason without secrets.</summary>
         internal string Reason { get; }
 
+        /// <summary>
+        /// Builds the exception message from <paramref name="reason"/> without appending a connection string.
+        /// A blank reason becomes a fixed invalid-connection-string sentence.
+        /// </summary>
+        /// <param name="reason">Parser or configuration reason without secrets.</param>
+        /// <returns>The exception message.</returns>
         private static string CreateMessage(string reason) =>
             string.IsNullOrWhiteSpace(reason)
                 ? "NntpDB connection string is invalid."

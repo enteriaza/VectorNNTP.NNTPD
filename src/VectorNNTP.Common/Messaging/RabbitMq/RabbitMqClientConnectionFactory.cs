@@ -21,9 +21,13 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>Hostname used when the operating system does not report one.</summary>
         internal const string UnknownHostName = "unknown-host";
 
+        /// <summary>Passed into each <see cref="RabbitMqClientConnection"/> for close-failure logs. Not used to log credentials.</summary>
         private readonly ILogger<RabbitMqClientConnectionFactory> _logger;
 
-        /// <summary>Initializes a new instance of the <see cref="RabbitMqClientConnectionFactory"/> class.</summary>
+        /// <summary>
+        /// Creates a factory that passes <paramref name="logger"/> into each opened <see cref="RabbitMqClientConnection"/>.
+        /// </summary>
+        /// <param name="logger">Logger used when that connection's close fails. This factory does not log credentials.</param>
         public RabbitMqClientConnectionFactory(ILogger<RabbitMqClientConnectionFactory> logger)
         {
             ArgumentNullException.ThrowIfNull(logger);

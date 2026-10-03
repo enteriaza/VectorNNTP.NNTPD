@@ -53,6 +53,9 @@ namespace VectorNNTP.Common.Acme
         /// Evaluates a poll snapshot. When <see cref="Decision.Invalid"/>, <paramref name="invalidDiagnostic"/>
         /// is set to a sanitized explanation.
         /// </summary>
+        /// <param name="view">Order status and authorization snapshots.</param>
+        /// <param name="invalidDiagnostic">Sanitized explanation when the result is <see cref="Decision.Invalid"/>; otherwise <see langword="null"/>.</param>
+        /// <returns><see cref="Decision.Ready"/> for order status <c>ready</c> or <c>valid</c>, <see cref="Decision.Invalid"/> for an invalid authorization or order, otherwise <see cref="Decision.Continue"/>.</returns>
         internal static Decision Evaluate(OrderView view, out string? invalidDiagnostic)
         {
             ArgumentNullException.ThrowIfNull(view);

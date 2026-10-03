@@ -34,13 +34,33 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </remarks>
     internal sealed class ArticleTransferReceiveStream
     {
+        /// <summary>Limits captured at construction. Window credit is initialized from these values.</summary>
         private readonly ArticleTransferLimits _limits;
+
+        /// <summary>Receive credit for this stream. DATA consumes it; WINDOW adds it, saturating at the configured maximum.</summary>
         private ArticleTransferWindow _receiveWindow;
+
+        /// <summary>META accepted for this stream. Meaningful after the phase leaves <see cref="ArticleTransferPhase.AwaitingMeta"/>.</summary>
         private ArticleCanonicalTransferMeta _meta;
+
+        /// <summary>
+        /// Article bytes sized to META <c>ArtSize</c>. Cleared on failure, cancellation, or after ownership moves into the record.
+        /// </summary>
         private byte[]? _artData;
+
+        /// <summary>DATA payload bytes copied. Not reset when the buffer is dropped.</summary>
         private int _received;
+
+        /// <summary><see langword="true"/> after a DATA frame with FIN has been accepted.</summary>
         private bool _finSeen;
+
+        /// <summary>Record exposed after canonical validation succeeds. Default until then.</summary>
         private ArticleRecord _record;
+
+        /// <summary>
+        /// <see langword="true"/> after validation until <see cref="TryTakeRecord"/> takes the record.
+        /// Cleared on failure.
+        /// </summary>
         private bool _hasRecord;
 
         /// <summary>Creates a stream after a successful OPEN.</summary>
@@ -328,6 +348,17 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return true;
         }
 
+        /// <summary>
+        /// Validates the buffered bytes with <see cref="ArticleRecordFactory.TryCreateFromCanonicalTransfer"/> and completes the stream.
+        /// </summary>
+        /// <returns>
+        /// Success when the record is consumable. Failure clears the buffer and sets <see cref="Phase"/> to
+        /// <see cref="ArticleTransferPhase.Failed"/>.
+        /// </returns>
+        /// <remarks>
+        /// Requires <see cref="_artData"/> and an exact <c>ArtSize</c> match. On success the byte array's ownership moves into the record
+        /// and this stream no longer clears it.
+        /// </remarks>
         private ArticleTransferApplyResult TryFinalizeCanonical()
         {
             if (_artData is null || _received != _meta.ArtSize)
@@ -355,6 +386,9 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return ArticleTransferApplyResult.Ok();
         }
 
+        /// <summary>Drops the article buffer, marks the stream failed, and returns <paramref name="error"/>.</summary>
+        /// <param name="error">Failure stored in <see cref="Failure"/> and returned to the caller.</param>
+        /// <returns>A failed <see cref="ArticleTransferApplyResult"/>.</returns>
         private ArticleTransferApplyResult FailStream(VatpErrorCode error)
         {
             ClearArtData();
@@ -364,12 +398,16 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return ArticleTransferApplyResult.Fail(error);
         }
 
+        /// <summary>Drops the article buffer. <see cref="_received"/> is left unchanged.</summary>
         private void ClearArtData()
         {
             // Drop the article buffer. _received remains the copied DATA payload count.
             _artData = null;
         }
 
+        /// <summary>Maps a canonical-transfer rejection onto a VATP error. Unlisted codes become <see cref="VatpErrorCode.CanonicalTransferRejected"/>.</summary>
+        /// <param name="code">Failure from <see cref="ArticleRecordFactory.TryCreateFromCanonicalTransfer"/>.</param>
+        /// <returns>The VATP error stored on the failed stream.</returns>
         private static VatpErrorCode MapTransferFailure(NntpArticleCanonicalFailureCode code) =>
             code switch
             {

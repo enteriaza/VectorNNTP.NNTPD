@@ -9,9 +9,12 @@ namespace VectorNNTP.Common.Networking
     public sealed class ResolvedBindAddresses
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="ResolvedBindAddresses"/> class.
+        /// Copies <paramref name="addresses"/> into IPv4 and IPv6 lists, dropping duplicate DNS forms.
         /// </summary>
-        /// <param name="addresses">Eligible addresses (already filtered and deduplicated).</param>
+        /// <param name="addresses">
+        /// Candidate addresses. A <see langword="null"/> entry throws. Eligibility is not rechecked;
+        /// duplicates are dropped by <see cref="IpAddressEligibility.ToDnsContent"/>.
+        /// </param>
         internal ResolvedBindAddresses(IEnumerable<IPAddress> addresses)
         {
             ArgumentNullException.ThrowIfNull(addresses);

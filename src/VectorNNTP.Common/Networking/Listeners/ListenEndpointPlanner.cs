@@ -125,6 +125,17 @@ namespace VectorNNTP.Common.Networking.Listeners
             return result;
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="address"/> would overlap a wildcard socket already added to the plan.
+        /// </summary>
+        /// <param name="address">Explicit address still under consideration.</param>
+        /// <param name="hasIpv4Any"><see langword="true"/> when an IPv4-any socket is planned.</param>
+        /// <param name="hasIpv6Any"><see langword="true"/> when a single-family IPv6-any socket is planned.</param>
+        /// <param name="dualStackIpv6Any"><see langword="true"/> when a dual-stack IPv6-any socket is planned.</param>
+        /// <returns>
+        /// IPv4 is covered by IPv4-any or dual-stack IPv6-any. IPv6 is covered by IPv6-any.
+        /// IPv4-mapped IPv6 is also covered by dual-stack IPv6-any.
+        /// </returns>
         private static bool IsCoveredByPlannedWildcard(
             IPAddress address,
             bool hasIpv4Any,
@@ -154,6 +165,10 @@ namespace VectorNNTP.Common.Networking.Listeners
             return false;
         }
 
+        /// <summary>Returns whether <paramref name="candidate"/> is already in <paramref name="addresses"/> using <see cref="IPAddress.Equals(object?)"/>.</summary>
+        /// <param name="addresses">Explicit addresses collected so far.</param>
+        /// <param name="candidate">Address to test.</param>
+        /// <returns><see langword="true"/> when an equal address is already present.</returns>
         private static bool ContainsAddress(List<IPAddress> addresses, IPAddress candidate)
         {
             foreach (var existing in addresses)

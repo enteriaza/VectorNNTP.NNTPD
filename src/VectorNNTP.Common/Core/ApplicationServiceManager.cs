@@ -12,14 +12,37 @@ namespace VectorNNTP.Common.Core
     /// </remarks>
     internal sealed class ApplicationServiceManager
     {
+        /// <summary>Registered services in startup order. The sequence is fixed for the manager lifetime.</summary>
         private readonly IReadOnlyList<IApplicationService> _services;
+
+        /// <summary>Graceful-shutdown budget applied to stop and startup rollback.</summary>
         private readonly IApplicationLifecycleOptions _options;
+
+        /// <summary>Service-manager diagnostics.</summary>
         private readonly ILogger<ApplicationServiceManager> _logger;
+
+        /// <summary>Serializes the body of <see cref="StartAsync"/> and <see cref="StopAsync"/> after the busy flag is taken.</summary>
         private readonly SemaphoreSlim _gate = new(1, 1);
+
+        /// <summary>
+        /// Services whose <see cref="IApplicationService.StartAsync"/> succeeded and whose stop attempt has not yet finished.
+        /// Guarded by <see cref="_startedSync"/>.
+        /// </summary>
         private readonly List<IApplicationService> _started = new();
+
+        /// <summary>Guards <see cref="_started"/>.</summary>
         private readonly object _startedSync = new();
+
+        /// <summary>
+        /// Non-zero while <see cref="StartAsync"/> or <see cref="StopAsync"/> is in progress.
+        /// A second call throws <see cref="InvalidOperationException"/> instead of queueing.
+        /// </summary>
         private int _lifecycleBusy;
+
+        /// <summary>Cancels execution watches during stop or rollback. <see langword="null"/> when monitoring is not active.</summary>
         private CancellationTokenSource? _executionCts;
+
+        /// <summary>In-flight <see cref="MonitorExecutionsAsync"/> task, or <see langword="null"/> when no service exposes <see cref="IApplicationService.Execution"/>.</summary>
         private Task? _executionMonitor;
 
         /// <summary>
@@ -380,6 +403,14 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// Stops services already in <see cref="_started"/>, in reverse order, after a failed or canceled startup.
+        /// </summary>
+        /// <param name="cancellationToken">Linked with <see cref="IApplicationLifecycleOptions.GracefulShutdownTimeout"/>.</param>
+        /// <remarks>
+        /// Stop failures are logged and do not fail the rollback. Each service is removed from
+        /// <see cref="StartedServices"/> after its stop attempt. Execution monitoring is stopped first.
+        /// </remarks>
         private async Task RollbackStartedAsync(CancellationToken cancellationToken)
         {
             await StopExecutionMonitoringAsync().ConfigureAwait(false);
@@ -423,6 +454,11 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// After every service has started, watches each non-null <see cref="IApplicationService.Execution"/>
+        /// until stop or rollback cancels the watch.
+        /// </summary>
+        /// <remarks>Does nothing when no registered service exposes an execution task.</remarks>
         private void BeginExecutionMonitoring()
         {
             var monitored = _services
@@ -439,6 +475,9 @@ namespace VectorNNTP.Common.Core
             _executionMonitor = MonitorExecutionsAsync(monitored, token);
         }
 
+        /// <summary>Runs <see cref="WatchServiceAsync"/> for each monitored service until all complete or <paramref name="cancellationToken"/> is canceled.</summary>
+        /// <param name="monitored">Services that had a non-null <see cref="IApplicationService.Execution"/> when monitoring began.</param>
+        /// <param name="cancellationToken">Canceled by <see cref="StopExecutionMonitoringAsync"/> during orderly shutdown.</param>
         private async Task MonitorExecutionsAsync(IReadOnlyList<IApplicationService> monitored, CancellationToken cancellationToken)
         {
             var tasks = monitored
@@ -455,6 +494,12 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// Waits for <paramref name="service"/>'s execution task. A fault, cancellation, or successful completion
+        /// while <paramref name="cancellationToken"/> is not canceled raises <see cref="UnexpectedServiceTermination"/>.
+        /// </summary>
+        /// <param name="service">Started service whose <see cref="IApplicationService.Execution"/> was non-null.</param>
+        /// <param name="cancellationToken">Orderly-shutdown signal. When canceled, the watch returns without raising the event.</param>
         private async Task WatchServiceAsync(IApplicationService service, CancellationToken cancellationToken)
         {
             var execution = service.Execution;
@@ -515,6 +560,13 @@ namespace VectorNNTP.Common.Core
             }
         }
 
+        /// <summary>
+        /// Cancels and awaits the execution monitor, then disposes its token source.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="OperationCanceledException"/> from the monitor is expected.
+        /// Any other exception is logged and does not fail stop or rollback.
+        /// </remarks>
         private async Task StopExecutionMonitoringAsync()
         {
             var cts = Interlocked.Exchange(ref _executionCts, null);

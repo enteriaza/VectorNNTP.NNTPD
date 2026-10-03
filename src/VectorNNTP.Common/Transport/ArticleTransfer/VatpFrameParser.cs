@@ -85,6 +85,15 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
                 or (byte)VatpFrameType.Store
                 or (byte)VatpFrameType.Result;
 
+        /// <summary>
+        /// Checks version, frame type, header length, flags, payload limit, and stream id.
+        /// </summary>
+        /// <param name="header">Decoded 16-byte header.</param>
+        /// <param name="maxFramePayload">Maximum accepted payload length. A larger <see cref="VatpFrameHeader.PayloadLength"/> is <see cref="VatpErrorCode.FrameTooLarge"/>.</param>
+        /// <returns><see cref="VatpErrorCode.None"/> when the header is acceptable; otherwise the first failing code.</returns>
+        /// <remarks>
+        /// FIN is legal only on DATA. Any bit in <see cref="VatpProtocol.ReservedFlagsMask"/> is <see cref="VatpErrorCode.InvalidFlags"/>.
+        /// </remarks>
         private static VatpErrorCode ValidateHeader(in VatpFrameHeader header, uint maxFramePayload)
         {
             if (header.Version != VatpProtocol.Version1)
@@ -120,6 +129,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             return ValidateStreamId(header);
         }
 
+        /// <summary>
+        /// HELLO must use stream 0. OPEN, META, DATA, END, CANCEL, WINDOW, STORE, and RESULT must not.
+        /// FAIL may use either.
+        /// </summary>
+        /// <param name="header">Header whose type and stream id are checked.</param>
+        /// <returns><see cref="VatpErrorCode.InvalidStreamId"/>, <see cref="VatpErrorCode.InvalidFrameType"/>, or <see cref="VatpErrorCode.None"/>.</returns>
         private static VatpErrorCode ValidateStreamId(in VatpFrameHeader header)
         {
             switch (header.Type)
@@ -150,6 +165,17 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             }
         }
 
+        /// <summary>Checks that the buffered payload length matches the header and the fixed size for that frame type.</summary>
+        /// <param name="header">Header already accepted by <see cref="ValidateHeader"/>.</param>
+        /// <param name="payload">Bytes following the header. DATA length is not further constrained here.</param>
+        /// <returns>
+        /// <see cref="VatpErrorCode.None"/> when the length matches. HELLO, OPEN, and META use their specific error codes;
+        /// other mismatches use <see cref="VatpErrorCode.InvalidFrameLength"/>.
+        /// </returns>
+        /// <remarks>
+        /// END and CANCEL must be empty. WINDOW is 4 bytes. FAIL is 2 bytes plus at most
+        /// <see cref="VatpProtocol.FailMaxReasonLength"/> reason bytes. STORE is 32 bytes. RESULT is 1 byte.
+        /// </remarks>
         private static VatpErrorCode ValidatePayloadShape(in VatpFrameHeader header, in ReadOnlySequence<byte> payload)
         {
             if (payload.Length != header.PayloadLength)

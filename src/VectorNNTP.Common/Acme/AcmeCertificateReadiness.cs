@@ -19,6 +19,7 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Process-wide ACME readiness gate.</summary>
     internal sealed class AcmeCertificateReadiness : IAcmeCertificateReadiness
     {
+        /// <summary>Non-zero after <see cref="MarkReady"/>. Read and written with volatile operations.</summary>
         private int _ready;
 
         /// <inheritdoc />

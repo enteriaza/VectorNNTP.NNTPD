@@ -32,17 +32,29 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <summary>Maximum accepted From value length.</summary>
         private const int MaxFromLength = 2048;
 
+        /// <summary>Inline header slots before an array-pool buffer is rented. Equal to <see cref="NntpArticleHeaderInlineStore.Capacity"/>.</summary>
         private const int InlineHeaderCapacity = NntpArticleHeaderInlineStore.Capacity;
 
+        /// <summary>Case-sensitive body-line prefix <c>=ybegin </c>, including the trailing SP, used only for yEnc detection.</summary>
         private static ReadOnlySpan<byte> YEncBeginMarker => "=ybegin "u8;
 
+        /// <summary>ASCII substring <c>multipart/</c> sought in Content-Type values. Matching is case-insensitive.</summary>
         private static ReadOnlySpan<byte> MultipartMarker => "multipart/"u8;
 
+        /// <summary>ASCII substring <c>base64</c> sought in Content-Transfer-Encoding values. Matching is case-insensitive.</summary>
         private static ReadOnlySpan<byte> Base64Encoding => "base64"u8;
 
+        /// <summary>ASCII substring <c>binary</c> sought in Content-Transfer-Encoding values. Matching is case-insensitive.</summary>
         private static ReadOnlySpan<byte> BinaryEncoding => "binary"u8;
 
+        /// <summary>
+        /// Local FQDN bytes copied at construction. Used for Path classification and canonical Path writes. Lifetime is this instance.
+        /// </summary>
         private readonly byte[] _localIdentity;
+
+        /// <summary>
+        /// Parse limits after <see cref="CapOptions"/> clamps article and header-line ceilings to <see cref="ArticleResourceLimits"/>.
+        /// </summary>
         private readonly NntpArticleParserOptions _options;
 
         /// <summary>
@@ -301,6 +313,12 @@ namespace VectorNNTP.Common.Articles.Parsing
             }
         }
 
+        /// <summary>
+        /// Clamps <see cref="NntpArticleParserOptions.MaxArticleBytes"/> and <see cref="NntpArticleParserOptions.MaxHeaderLineBytes"/>
+        /// to <see cref="ArticleResourceLimits"/>. Other limits are left as supplied.
+        /// </summary>
+        /// <param name="options">Caller-supplied limits.</param>
+        /// <returns>A copy with those two fields reduced when they exceed the resource ceilings.</returns>
         private static NntpArticleParserOptions CapOptions(NntpArticleParserOptions options)
             => options with
             {
@@ -308,6 +326,11 @@ namespace VectorNNTP.Common.Articles.Parsing
                 MaxHeaderLineBytes = Math.Min(options.MaxHeaderLineBytes, ArticleResourceLimits.MaxArticleLineBytes),
             };
 
+        /// <summary>
+        /// Returns whether every byte is SP or HTAB. An empty span is treated as whitespace.
+        /// </summary>
+        /// <param name="value">Local-identity bytes.</param>
+        /// <returns><see langword="false"/> when any byte is not <c>0x20</c> or <c>0x09</c>.</returns>
         private static bool IsAllAsciiWhitespace(ReadOnlySpan<byte> value)
         {
             for (var i = 0; i < value.Length; i++)
@@ -321,6 +344,21 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Splits the header section from the body and records each header's name and trimmed value range.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes used for scanning.</param>
+        /// <param name="articleBytes">Same buffer as a memory, so returned slices keep the caller's lifetime.</param>
+        /// <param name="options">Capped limits for line length, header count, name length, value length, and header-section size.</param>
+        /// <param name="inlineHeaders">Stack or caller buffer of <see cref="InlineHeaderCapacity"/> slots.</param>
+        /// <param name="rentedHeaders">Set when the header count exceeds the inline buffer. The caller returns it to the array pool.</param>
+        /// <returns>
+        /// Success includes the header slice through the blank line and the body after it.
+        /// A first line with no colon that is not a continuation is success with an empty header slice and the whole article as the body.
+        /// Missing a blank line fails with <see cref="NntpArticleParseFailureCode.MissingHeaderBodySeparator"/>.
+        /// Folded lines extend the current value through the continuation line, including the leading whitespace.
+        /// Value ranges drop leading and trailing SP and HTAB on the first physical line only.
+        /// </returns>
         private static HeaderParseOutcome TryParseHeaders(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlyMemory<byte> articleBytes,
@@ -505,6 +543,15 @@ namespace VectorNNTP.Common.Articles.Parsing
                 headers[..headerCount]);
         }
 
+        /// <summary>
+        /// Appends one header, renting an array-pool buffer of <paramref name="maxHeaderCount"/> when the inline span is full.
+        /// </summary>
+        /// <param name="headers">Current header span. Replaced with the rented buffer when growth is required.</param>
+        /// <param name="headerCount">Live count. Incremented on success.</param>
+        /// <param name="rentedHeaders">Previous rented buffer, returned to the pool when a new one is rented.</param>
+        /// <param name="maxHeaderCount">Hard cap. The rented array is this long.</param>
+        /// <param name="entry">Header to store.</param>
+        /// <returns><see langword="false"/> when <paramref name="headerCount"/> is already at <paramref name="maxHeaderCount"/>.</returns>
         private static bool TryAddHeader(
             ref Span<NntpArticleHeaderEntry> headers,
             ref int headerCount,
@@ -534,6 +581,15 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Maps a header name to a parser identity using ASCII case folding.
+        /// </summary>
+        /// <param name="nameBytes">Name bytes before the colon.</param>
+        /// <returns>
+        /// One of Date, Injection-Date, NNTP-Posting-Date, Posted, X-Date, Delivery-Date, Path, Message-ID,
+        /// Newsgroups, From, Subject, Content-Type, Content-Transfer-Encoding, or References.
+        /// Every other name is <see cref="NntpArticleHeaderName.Unknown"/>.
+        /// </returns>
         private static NntpArticleHeaderName ClassifyKnownHeaderName(ReadOnlySpan<byte> nameBytes)
             => AsciiEqualsIgnoreCase(nameBytes, "Date"u8)
                 ? NntpArticleHeaderName.Date
@@ -565,6 +621,20 @@ namespace VectorNNTP.Common.Articles.Parsing
                                                                     ? NntpArticleHeaderName.References
                                                                     : NntpArticleHeaderName.Unknown;
 
+        /// <summary>
+        /// Requires exactly one Message-ID whose unfolded value passes <see cref="NntpMessageIdValidation.IsValidMessageId(ReadOnlySpan{byte}, bool)"/>.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes.</param>
+        /// <param name="headers">Parsed headers in wire order.</param>
+        /// <param name="articleBytes">Buffer that owns the returned slice.</param>
+        /// <param name="messageIdBytes">Original value slice, including any folded bytes, when validation succeeds. Not the unfolded form.</param>
+        /// <param name="failureCode">
+        /// <see cref="NntpArticleParseFailureCode.DuplicateMessageId"/>,
+        /// <see cref="NntpArticleParseFailureCode.MissingMessageId"/>,
+        /// <see cref="NntpArticleParseFailureCode.InvalidMessageId"/> when unfolding fails or the grammar rejects the value,
+        /// or <see cref="NntpArticleParseFailureCode.None"/>.
+        /// </param>
+        /// <returns><see langword="true"/> only for a single valid Message-ID. Whitespace is not stripped before the grammar check.</returns>
         private static bool TryValidateMessageId(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
@@ -619,6 +689,21 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Requires exactly one Newsgroups value of length 1 through <see cref="MaxNewsgroupsLength"/>.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes.</param>
+        /// <param name="headers">Parsed headers in wire order.</param>
+        /// <param name="failureCode">
+        /// <see cref="NntpArticleParseFailureCode.DuplicateNewsgroups"/>,
+        /// <see cref="NntpArticleParseFailureCode.MissingNewsgroups"/>,
+        /// <see cref="NntpArticleParseFailureCode.InvalidNewsgroups"/>, or <see cref="NntpArticleParseFailureCode.None"/>.
+        /// </param>
+        /// <returns>
+        /// <see langword="false"/> for an empty token (leading, trailing, or doubled comma), a byte other than SP, HTAB, comma,
+        /// or <see cref="IsPlausibleNewsgroupChar"/>, or a value whose last token has no plausible character.
+        /// SP and HTAB are skipped and do not separate tokens.
+        /// </returns>
         private static bool TryValidateNewsgroups(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
@@ -697,6 +782,16 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Checks every From header. Absence is success. Duplicates are each checked and are not themselves a failure.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes.</param>
+        /// <param name="headers">Parsed headers in wire order.</param>
+        /// <param name="failureCode"><see cref="NntpArticleParseFailureCode.InvalidFrom"/> or <see cref="NntpArticleParseFailureCode.None"/>.</param>
+        /// <returns>
+        /// <see langword="false"/> when a From value is empty, does not unfold into <see cref="MaxFromLength"/>,
+        /// has no <c>@</c> with bytes on both sides, contains a byte outside <c>0x20..0x7E</c>, or is only SP and HTAB.
+        /// </returns>
         private static bool TryValidateFrom(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
@@ -759,6 +854,18 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Requires at most one Path header and classifies it with <see cref="ArticlePathCanonicalizer.TryAnalyze"/>.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes.</param>
+        /// <param name="headers">Parsed headers in wire order.</param>
+        /// <param name="articleBytes">Buffer that owns <paramref name="originalPathValue"/>.</param>
+        /// <param name="localIdentity">Parser FQDN bytes.</param>
+        /// <param name="pathKind">Rewrite classification. <see cref="ArticlePathKind.Missing"/> when no Path header exists.</param>
+        /// <param name="containsOrganizationalTracker">Whether a Path token equals the organizational tracker host.</param>
+        /// <param name="originalPathValue">Original Path value slice when a header exists; otherwise empty.</param>
+        /// <param name="failureCode"><see cref="NntpArticleParseFailureCode.DuplicatePath"/> or the code returned by path analysis.</param>
+        /// <returns><see langword="false"/> for a second Path header or when path analysis rejects the value. A missing Path is success.</returns>
         private static bool TryAnalyzePath(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
@@ -810,6 +917,18 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Picks one article type. yEnc detection wins, then a Content-Type containing <c>multipart/</c>,
+        /// then a Content-Transfer-Encoding containing <c>base64</c> or <c>binary</c>, then the text heuristic.
+        /// </summary>
+        /// <param name="articleSpan">Article bytes used to slice header values.</param>
+        /// <param name="headers">Parsed headers. Substring checks are ASCII case-insensitive.</param>
+        /// <param name="body">Body bytes passed to <see cref="IsLikelyTextBody"/> only when no earlier class matches.</param>
+        /// <param name="yEncDetected">Result of <see cref="DetectYEnc"/>.</param>
+        /// <returns>
+        /// <see cref="NntpArticleType.YEnc"/>, <see cref="NntpArticleType.MimeMultipart"/>, <see cref="NntpArticleType.BinaryEncoded"/>,
+        /// <see cref="NntpArticleType.Text"/>, or <see cref="NntpArticleType.Unknown"/>. Flags are not combined.
+        /// </returns>
         private static NntpArticleType ClassifyArticle(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
@@ -848,6 +967,16 @@ namespace VectorNNTP.Common.Articles.Parsing
                         : IsLikelyTextBody(body) ? NntpArticleType.Text : NntpArticleType.Unknown;
         }
 
+        /// <summary>
+        /// Counts body lines and rejects a line whose content exceeds <paramref name="maxLineBytes"/>.
+        /// </summary>
+        /// <param name="body">Body bytes after the header separator.</param>
+        /// <param name="maxLineBytes">Maximum content bytes before CR or LF.</param>
+        /// <param name="lineCount">
+        /// Lines seen. An empty body is 0. Each CR, LF, or CRLF ends one line, and a final unterminated fragment counts as one line.
+        /// </param>
+        /// <param name="failureCode"><see cref="NntpArticleParseFailureCode.BodyLineTooLong"/> or <see cref="NntpArticleParseFailureCode.None"/>.</param>
+        /// <returns><see langword="false"/> only when a line is too long. The count then includes that line.</returns>
         private static bool TryValidateBodyLineLengths(
             ReadOnlySpan<byte> body,
             int maxLineBytes,
@@ -891,6 +1020,12 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Returns whether any line in the first <paramref name="maxScanBytes"/> of <paramref name="body"/> starts with <see cref="YEncBeginMarker"/>.
+        /// </summary>
+        /// <param name="body">Body bytes.</param>
+        /// <param name="maxScanBytes">Scan window. Bytes past it are ignored.</param>
+        /// <returns><see langword="true"/> on a case-sensitive <c>=ybegin </c> prefix. A NUL ends the current scan window as if the line had no terminator.</returns>
         private static bool DetectYEnc(ReadOnlySpan<byte> body, int maxScanBytes)
         {
             var scanLength = Math.Min(body.Length, maxScanBytes);
@@ -916,6 +1051,14 @@ namespace VectorNNTP.Common.Articles.Parsing
             return false;
         }
 
+        /// <summary>
+        /// Classifies the first 4096 body bytes as text unless a NUL or too many other controls appear.
+        /// </summary>
+        /// <param name="body">Body bytes. An empty body is text.</param>
+        /// <returns>
+        /// <see langword="false"/> when a NUL is present. Bytes below <c>0x09</c>, and bytes from <c>0x0E</c> through <c>0x1F</c>, are suspicious.
+        /// HT, LF, VT, FF, and CR are not. A sample shorter than 16 bytes requires zero suspicious bytes; a longer sample requires fewer than one sixteenth suspicious.
+        /// </returns>
         private static bool IsLikelyTextBody(ReadOnlySpan<byte> body)
         {
             var sampleLength = Math.Min(body.Length, 4096);
@@ -942,6 +1085,15 @@ namespace VectorNNTP.Common.Articles.Parsing
             return sampleLength < 16 ? suspicious == 0 : suspicious < (sampleLength / 16);
         }
 
+        /// <summary>
+        /// Finds the next CR or LF, stopping after <paramref name="maximumScanBytes"/> or at a NUL.
+        /// </summary>
+        /// <param name="buffer">Article or body bytes.</param>
+        /// <param name="start">Inclusive search start.</param>
+        /// <param name="maximumScanBytes">Maximum bytes examined. <see cref="int.MaxValue"/> scans through the buffer.</param>
+        /// <returns>
+        /// Index of the first CR or LF, <c>-2</c> when a NUL is seen first, or <c>-1</c> when the window ends without either.
+        /// </returns>
         private static int FindLineTerminator(ReadOnlySpan<byte> buffer, int start, int maximumScanBytes = int.MaxValue)
         {
             var boundedScanBytes = Math.Max(0, maximumScanBytes);
@@ -966,6 +1118,15 @@ namespace VectorNNTP.Common.Articles.Parsing
             return -1;
         }
 
+        /// <summary>
+        /// Advances past a CR, LF, or CRLF at <paramref name="lineTerminatorIndex"/>.
+        /// </summary>
+        /// <param name="buffer">Article or body bytes.</param>
+        /// <param name="lineTerminatorIndex">Index from <see cref="FindLineTerminator"/>, including the negative sentinels.</param>
+        /// <returns>
+        /// Two bytes past a CRLF, one byte past a lone CR or LF, or <c>buffer.Length</c> when the index is outside the buffer.
+        /// A <c>-2</c> NUL sentinel therefore jumps to the end.
+        /// </returns>
         private static int AdvancePastTerminator(ReadOnlySpan<byte> buffer, int lineTerminatorIndex)
             => lineTerminatorIndex < 0 || lineTerminatorIndex >= buffer.Length
                 ? buffer.Length
@@ -975,6 +1136,11 @@ namespace VectorNNTP.Common.Articles.Parsing
                     ? lineTerminatorIndex + 2
                     : lineTerminatorIndex + 1;
 
+        /// <summary>
+        /// Returns whether a header line contains NUL or a control byte other than HTAB.
+        /// </summary>
+        /// <param name="line">One physical header line without its terminator. CR and LF are not included.</param>
+        /// <returns><see langword="true"/> for <c>0x00</c> or any byte below <c>0x20</c> except <c>0x09</c>. Bytes above <c>0x7F</c> are allowed here.</returns>
         private static bool ContainsIllegalHeaderControl(ReadOnlySpan<byte> line)
         {
             for (var i = 0; i < line.Length; i++)
@@ -994,12 +1160,21 @@ namespace VectorNNTP.Common.Articles.Parsing
             return false;
         }
 
+        /// <summary>Returns whether <paramref name="b"/> may appear in a newsgroup token.</summary>
+        /// <param name="b">Candidate byte.</param>
+        /// <returns><see langword="true"/> for ASCII letters, digits, <c>.</c>, <c>-</c>, <c>_</c>, and <c>+</c> only.</returns>
         private static bool IsPlausibleNewsgroupChar(byte b)
             => b is (>= ((byte)'a') and <= ((byte)'z'))
                 or (>= ((byte)'A') and <= ((byte)'Z'))
                 or (>= ((byte)'0') and <= ((byte)'9'))
                 or (byte)'.' or (byte)'-' or (byte)'_' or (byte)'+';
 
+        /// <summary>
+        /// Compares header names after folding ASCII <c>A-Z</c> to <c>a-z</c>. Other bytes are compared unchanged.
+        /// </summary>
+        /// <param name="left">Left name.</param>
+        /// <param name="right">Right name.</param>
+        /// <returns><see langword="false"/> when the lengths differ or any folded byte differs.</returns>
         private static bool AsciiEqualsIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
         {
             if (left.Length != right.Length)
@@ -1018,6 +1193,12 @@ namespace VectorNNTP.Common.Articles.Parsing
             return true;
         }
 
+        /// <summary>
+        /// Finds <paramref name="needle"/> in <paramref name="haystack"/> after folding ASCII <c>A-Z</c> to <c>a-z</c>.
+        /// </summary>
+        /// <param name="haystack">Header value bytes.</param>
+        /// <param name="needle">Marker such as <c>multipart/</c>. An empty needle matches at index 0.</param>
+        /// <returns>Index of the first match, or <c>-1</c> when the needle is longer than the haystack or does not occur.</returns>
         private static int IndexOfAsciiIgnoreCase(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
         {
             if (needle.Length == 0)
@@ -1052,11 +1233,26 @@ namespace VectorNNTP.Common.Articles.Parsing
             return -1;
         }
 
+        /// <summary>Folds ASCII <c>A-Z</c> to <c>a-z</c>. Every other byte is returned unchanged.</summary>
+        /// <param name="value">Byte to fold.</param>
+        /// <returns>The folded byte.</returns>
         private static byte ToLowerAscii(byte value)
             => (uint)(value - (byte)'A') <= 'Z' - 'A' ? (byte)(value + 32) : value;
 
+        /// <summary>
+        /// Header-split result held as a <see langword="ref"/> struct so <see cref="Headers"/> can be a span over the inline or rented buffer.
+        /// </summary>
         private readonly ref struct HeaderParseOutcome
         {
+            /// <summary>
+            /// Stores one header-split outcome. Slices alias <paramref name="articleBytes"/>.
+            /// </summary>
+            /// <param name="success"><see langword="true"/> when a header/body split was accepted.</param>
+            /// <param name="failureCode"><see cref="NntpArticleParseFailureCode.None"/> on success.</param>
+            /// <param name="articleBytes">Original article buffer.</param>
+            /// <param name="headerBytes">Header slice, empty when the article is treated as body-only.</param>
+            /// <param name="bodyBytes">Body slice.</param>
+            /// <param name="headers">Parsed header entries. Empty on failure paths that have not stored any, and on the body-only success path.</param>
             private HeaderParseOutcome(
                 bool success,
                 NntpArticleParseFailureCode failureCode,
@@ -1073,18 +1269,32 @@ namespace VectorNNTP.Common.Articles.Parsing
                 Headers = headers;
             }
 
+            /// <summary><see langword="true"/> when the header section was split from the body.</summary>
             internal bool Success { get; }
 
+            /// <summary>Rejection code when <see cref="Success"/> is false; otherwise <see cref="NntpArticleParseFailureCode.None"/>.</summary>
             internal NntpArticleParseFailureCode FailureCode { get; }
 
+            /// <summary>Original article buffer supplied to the split. Retained so failure slices stay inside it.</summary>
             private ReadOnlyMemory<byte> ArticleBytes { get; }
 
+            /// <summary>Header bytes as a slice of the original article, including the blank line on success.</summary>
             internal ReadOnlyMemory<byte> HeaderBytes { get; }
 
+            /// <summary>Body bytes as a slice of the original article, or the whole article on the body-only success path.</summary>
             internal ReadOnlyMemory<byte> BodyBytes { get; }
 
+            /// <summary>Parsed headers in wire order. The span is valid only while the inline or rented buffer lives.</summary>
             internal ReadOnlySpan<NntpArticleHeaderEntry> Headers { get; }
 
+            /// <summary>
+            /// Builds a successful split. Header and body slices alias <paramref name="articleBytes"/>.
+            /// </summary>
+            /// <param name="articleBytes">Original article buffer.</param>
+            /// <param name="headerBytes">Header slice.</param>
+            /// <param name="bodyBytes">Body slice.</param>
+            /// <param name="headers">Headers stored before the blank line.</param>
+            /// <returns>An outcome with <see cref="Success"/> set and <see cref="NntpArticleParseFailureCode.None"/>.</returns>
             internal static HeaderParseOutcome SuccessResult(
                 ReadOnlyMemory<byte> articleBytes,
                 ReadOnlyMemory<byte> headerBytes,
@@ -1092,6 +1302,15 @@ namespace VectorNNTP.Common.Articles.Parsing
                 ReadOnlySpan<NntpArticleHeaderEntry> headers)
                 => new(true, NntpArticleParseFailureCode.None, articleBytes, headerBytes, bodyBytes, headers);
 
+            /// <summary>
+            /// Builds a failed split. The body starts at <paramref name="bodyOffset"/> clamped into <paramref name="article"/>.
+            /// </summary>
+            /// <param name="failureCode">Why the header section was rejected.</param>
+            /// <param name="article">Original article buffer.</param>
+            /// <param name="headerOffset">Start of the header slice. Callers pass 0.</param>
+            /// <param name="bodyOffset">Proposed body start. Negative becomes 0; past the end becomes the article length.</param>
+            /// <param name="headers">Headers accepted before the failure.</param>
+            /// <returns>An outcome with <see cref="Success"/> clear. Header bytes are <c>article[headerOffset..clampedBody]</c>.</returns>
             internal static HeaderParseOutcome Fail(
                 NntpArticleParseFailureCode failureCode,
                 ReadOnlyMemory<byte> article,

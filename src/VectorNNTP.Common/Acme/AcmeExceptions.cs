@@ -3,7 +3,12 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Base type for ACME subsystem failures (sanitized messages; never include key material).</summary>
     internal class AcmeException : Exception
     {
-        /// <summary>Initializes a new instance of the <see cref="AcmeException"/> class.</summary>
+        /// <summary>
+        /// Stores <paramref name="category"/> and sets <see cref="Exception.Message"/> to <c>{category}: {message}</c>.
+        /// Callers must pass sanitized text; this constructor does not redact.
+        /// </summary>
+        /// <param name="category">Stable failure category used by logs and the journal.</param>
+        /// <param name="message">Sanitized detail appended after the category.</param>
         internal AcmeException(string category, string message)
             : base($"{category}: {message}")
         {
@@ -79,9 +84,12 @@ namespace VectorNNTP.Common.Acme
     /// </summary>
     internal static class AcmeFailureSanitizer
     {
+        /// <summary>Maximum length of a sanitized <see cref="AcmeException"/> message before an ellipsis is appended.</summary>
         private const int MaxSanitizedLength = 512;
 
         /// <summary>Returns a short sanitized description of <paramref name="exception"/>.</summary>
+        /// <param name="exception">Failure to describe. An <see cref="AcmeException"/> contributes its message, truncated to <see cref="MaxSanitizedLength"/>; any other exception contributes only its type name.</param>
+        /// <returns>Single-line text safe to log.</returns>
         internal static string Sanitize(Exception exception)
         {
             ArgumentNullException.ThrowIfNull(exception);

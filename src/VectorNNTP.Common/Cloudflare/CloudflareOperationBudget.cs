@@ -11,11 +11,19 @@ namespace VectorNNTP.Common.Cloudflare
     /// </remarks>
     internal sealed class CloudflareOperationBudget : IDisposable
     {
+        /// <summary>Budget visible to nested HTTP retries on the current async flow.</summary>
         private static readonly AsyncLocal<CloudflareOperationBudget?> CurrentBudget = new();
 
+        /// <summary>Budget that was current when this one began. Restored by <see cref="Dispose"/>.</summary>
         private readonly CloudflareOperationBudget? _previous;
+
+        /// <summary><see langword="true"/> after <see cref="Dispose"/>. A second dispose is a no-op.</summary>
         private bool _disposed;
 
+        /// <summary>
+        /// Publishes this budget as <see cref="Current"/> and remembers the previous budget.
+        /// </summary>
+        /// <param name="deadlineUtc">Absolute UTC time when the operation budget expires.</param>
         private CloudflareOperationBudget(DateTimeOffset deadlineUtc)
         {
             DeadlineUtc = deadlineUtc;
@@ -66,6 +74,10 @@ namespace VectorNNTP.Common.Cloudflare
             return budget;
         }
 
+        /// <summary>
+        /// Caller token linked with <see cref="CancellationTokenSource.CancelAfter(System.TimeSpan)"/>.
+        /// Disposed with the budget. Null only for a budget not created by <see cref="Begin"/>.
+        /// </summary>
         private CancellationTokenSource? LinkedCts { get; init; }
 
         /// <summary>

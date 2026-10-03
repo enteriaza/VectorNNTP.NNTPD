@@ -20,7 +20,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </remarks>
     internal sealed class ArticleTransferReadyRing
     {
+        /// <summary>Write-ready stream ids in enqueue order. A stream id is stored at most once.</summary>
         private readonly List<uint> _ring = [];
+
+        /// <summary>Index of the next <see cref="TryTakeNext"/> candidate. Adjusted when a preceding entry is removed.</summary>
         private int _next;
 
         /// <summary>Gets the number of write-ready stream ids.</summary>

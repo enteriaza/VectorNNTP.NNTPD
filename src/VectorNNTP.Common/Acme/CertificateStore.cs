@@ -9,12 +9,22 @@ namespace VectorNNTP.Common.Acme
     /// </summary>
     internal sealed class CertificateStore
     {
+        /// <summary>32 lowercase hex characters, the <c>N</c> format of a <see cref="Guid"/>.</summary>
         private static readonly Regex GenerationIdRegex = new("^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+        /// <summary>Shared ACME state root.</summary>
         private readonly string _stateDir;
+
+        /// <summary>Normalized FQDN that owns this live partition.</summary>
         private readonly string _fqdn;
+
+        /// <summary>Password used when a reloaded PFX is validated. Not logged.</summary>
         private readonly string _pfxPassword;
+
+        /// <summary>DNS SANs required on every loaded or saved certificate.</summary>
         private readonly IReadOnlyList<string> _requiredDomains;
+
+        /// <summary>Renewal window passed to <see cref="CertificateValidator.ValidatePfx"/> on load and save.</summary>
         private readonly TimeSpan _renewalThreshold;
 
         /// <summary>Initializes a new instance of the <see cref="CertificateStore"/> class.</summary>
@@ -115,6 +125,10 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Persists a new generation after a serialize → reload → validate round trip, then commits <c>current</c>.
         /// </summary>
+        /// <param name="material">PFX bytes to write. They are validated before and after the write.</param>
+        /// <returns>Paths of the generation that is now current.</returns>
+        /// <exception cref="AcmeCertificateException">Thrown when pre-validation or the reload round trip fails.</exception>
+        /// <exception cref="AcmeStorageException">Thrown when the write fails after the new generation directory is removed.</exception>
         internal CertificatePaths Save(CertificateMaterial material)
         {
             ArgumentNullException.ThrowIfNull(material);
@@ -202,6 +216,10 @@ namespace VectorNNTP.Common.Acme
             CleanupNonCurrentGenerations(keep: null);
         }
 
+        /// <summary>
+        /// Reads the current-pointer file. Returns <see langword="null"/> when the file is missing, unreadable, or not a 32-hex id.
+        /// </summary>
+        /// <returns>The generation id, or <see langword="null"/>.</returns>
         private string? ReadCurrentId()
         {
             var path = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
@@ -221,6 +239,11 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>
+        /// A generation is complete when the id matches <see cref="GenerationIdRegex"/>, the <c>complete</c> marker exists, and <c>certificate.pfx</c> exists and is non-empty.
+        /// </summary>
+        /// <param name="generationId">Directory name under <c>gens</c>.</param>
+        /// <returns><see langword="false"/> when any of those checks fail, including an <see cref="IOException"/> reading the length.</returns>
         private bool GenerationIsComplete(string generationId)
         {
             if (!GenerationIdRegex.IsMatch(generationId))
@@ -245,6 +268,8 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Deletes every generation directory except <paramref name="keep"/>. <see langword="null"/> deletes all of them. IO failures are ignored.</summary>
+        /// <param name="keep">Generation id to retain, or <see langword="null"/>.</param>
         private void CleanupNonCurrentGenerations(string? keep)
         {
             var root = AcmePaths.GenerationsDir(_stateDir, _fqdn);
@@ -265,6 +290,8 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Deletes <paramref name="path"/> recursively. <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/> are ignored.</summary>
+        /// <param name="path">Generation directory.</param>
         private static void TryDeleteDirectory(string path)
         {
             try

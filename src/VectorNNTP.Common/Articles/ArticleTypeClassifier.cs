@@ -56,6 +56,12 @@ namespace VectorNNTP.Common.Articles
             }
         }
 
+        /// <summary>
+        /// Splits <paramref name="block"/> on CRLF and passes each line, without the terminator, to <see cref="ObserveLine"/>.
+        /// </summary>
+        /// <param name="block">Destuffed header block or body prefix.</param>
+        /// <param name="inHeader"><see langword="true"/> while scanning headers. A final fragment with no CRLF is still one line. Lone LF is not a split.</param>
+        /// <param name="type">Classification flags updated in place.</param>
         private static void ScanLines(ReadOnlySpan<byte> block, bool inHeader, ref ArticleType type)
         {
             var offset = 0;
@@ -79,6 +85,14 @@ namespace VectorNNTP.Common.Articles
             }
         }
 
+        /// <summary>
+        /// Sets yEnc flags when <paramref name="line"/> starts with <c>=YBEGIN PART=</c> or <c>=YBEGIN LINE=</c> under ASCII case folding.
+        /// </summary>
+        /// <param name="line">One destuffed line without its CRLF. The match also requires length at least 13 and a leading <c>=</c>.</param>
+        /// <param name="type">
+        /// <c>=YBEGIN PART=</c> adds <see cref="ArticleType.Binary"/>, <see cref="ArticleType.Partial"/>, and <see cref="ArticleType.YEncoded"/>.
+        /// <c>=YBEGIN LINE=</c> adds <see cref="ArticleType.Binary"/> and <see cref="ArticleType.YEncoded"/>.
+        /// </param>
         private static void ObserveYenc(ReadOnlySpan<byte> line, ref ArticleType type)
         {
             if (line.Length >= 13 && line[0] == (byte)'=' && StartsWithFolded(line, "=YBEGIN PART="u8))
@@ -93,6 +107,16 @@ namespace VectorNNTP.Common.Articles
             }
         }
 
+        /// <summary>
+        /// Applies Content-Type, Content-Transfer-Encoding, Control, and MIME-Version prefix matches.
+        /// </summary>
+        /// <param name="line">One destuffed line. Prefixes are matched with <see cref="StartsWithFolded"/> against uppercase ASCII needles.</param>
+        /// <param name="inHeader">Control and <c>MIME-Version:</c> matches are applied only when this is <see langword="true"/>.</param>
+        /// <param name="type">
+        /// HTML, multipart, PostScript, BinHex, octet-stream, message/partial, and a bare <c>Content-Type:</c> set the corresponding MIME flags.
+        /// Base64, X-BommaNews, and X-UniDataEncoding set binary plus their encoding flag.
+        /// <c>Control: cancel</c> followed by SP or HTAB sets <see cref="ArticleType.Control"/> and <see cref="ArticleType.Cancel"/>; any other <c>Control:</c> sets <see cref="ArticleType.Control"/>.
+        /// </param>
         private static void ObserveContentAndControl(ReadOnlySpan<byte> line, bool inHeader, ref ArticleType type)
         {
             if (StartsWithFolded(line, "CONTENT-TYPE: TEXT/HTML"u8))
@@ -155,6 +179,14 @@ namespace VectorNNTP.Common.Articles
             }
         }
 
+        /// <summary>
+        /// Sets body-prefix flags for a PGP armor line or a <c>BEGIN </c> line longer than 6 bytes.
+        /// </summary>
+        /// <param name="line">One destuffed body line.</param>
+        /// <param name="type">
+        /// <c>-----BEGIN PGP MESSAGE-----</c> adds <see cref="ArticleType.PgpMessage"/>.
+        /// <c>BEGIN </c> with length greater than 6 adds <see cref="ArticleType.UuEncode"/> and <see cref="ArticleType.Binary"/>. The mode digits are not checked.
+        /// </param>
         private static void ObserveBodyMarkers(ReadOnlySpan<byte> line, ref ArticleType type)
         {
             if (StartsWithFolded(line, "-----BEGIN PGP MESSAGE-----"u8))
@@ -208,6 +240,12 @@ namespace VectorNNTP.Common.Articles
         public static bool IsYencBegin(ReadOnlySpan<byte> line) =>
             line.Length >= 8 && line[0] == (byte)'=' && StartsWithFolded(line, "=YBEGIN"u8);
 
+        /// <summary>
+        /// Returns whether <paramref name="value"/> begins with <paramref name="upperAscii"/> after folding ASCII <c>a-z</c> to upper case.
+        /// </summary>
+        /// <param name="value">Line or header bytes.</param>
+        /// <param name="upperAscii">Needle already in uppercase ASCII. Bytes outside <c>a-z</c> in <paramref name="value"/> are compared unchanged.</param>
+        /// <returns><see langword="false"/> when <paramref name="value"/> is shorter than the needle or any folded byte differs.</returns>
         internal static bool StartsWithFolded(ReadOnlySpan<byte> value, ReadOnlySpan<byte> upperAscii)
         {
             if (value.Length < upperAscii.Length)
@@ -232,6 +270,11 @@ namespace VectorNNTP.Common.Articles
             return true;
         }
 
+        /// <summary>
+        /// Parses a non-negative decimal integer after optional leading SP or HTAB.
+        /// </summary>
+        /// <param name="text">Remainder of a header or <c>size=</c> token. Parsing stops at the first non-digit and does not require the span to end there.</param>
+        /// <returns>The integer, or <c>-1</c> when there is no digit or the value would exceed <see cref="int.MaxValue"/>. A leading sign is rejected.</returns>
         private static int TryParseNonNegativeInt(ReadOnlySpan<byte> text)
         {
             var i = 0;

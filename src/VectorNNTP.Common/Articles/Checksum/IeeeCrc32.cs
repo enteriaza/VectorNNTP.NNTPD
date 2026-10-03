@@ -18,6 +18,9 @@ namespace VectorNNTP.Common.Articles.Checksum
         /// <summary>Initial accumulator value before feeding bytes.</summary>
         public const uint InitialAccumulator = 0xFFFFFFFFu;
 
+        /// <summary>
+        /// 256-entry reflected lookup. Index <c>(crc ^ byte) &amp; 0xFF</c> holds the polynomial fold of that byte.
+        /// </summary>
         private static readonly uint[] Table = CreateTable();
 
         /// <summary>
@@ -50,6 +53,10 @@ namespace VectorNNTP.Common.Articles.Checksum
         internal static uint Compute(ReadOnlySpan<byte> data) =>
             Finalize(Update(InitialAccumulator, data));
 
+        /// <summary>
+        /// Builds <see cref="Table"/> from <see cref="Polynomial"/> with eight reflected steps per entry.
+        /// </summary>
+        /// <returns>The 256-word table used by <see cref="Update"/>.</returns>
         private static uint[] CreateTable()
         {
             var table = new uint[256];

@@ -16,6 +16,9 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Parses TXT answers from a DNS response and returns concatenated character-string bytes per RR.
         /// </summary>
+        /// <param name="buffer">DNS response.</param>
+        /// <param name="expectedId">Transaction id that must match the response.</param>
+        /// <param name="results">Cleared, then filled with one concatenated TXT payload per accepted answer.</param>
         /// <returns><see langword="true"/> when the header and question section were well-formed.</returns>
         internal static bool TryParseTxtRecords(ReadOnlySpan<byte> buffer, ushort expectedId, List<byte[]> results)
         {
@@ -144,6 +147,9 @@ namespace VectorNNTP.Common.Dns
         /// <summary>
         /// Parses TXT answers as ASCII strings (lossy for non-ASCII wire data).
         /// </summary>
+        /// <param name="buffer">DNS response.</param>
+        /// <param name="expectedId">Transaction id that must match the response.</param>
+        /// <returns>One ASCII string per accepted TXT answer, or empty when the packet is not well-formed.</returns>
         internal static List<string> ParseTxtStrings(byte[] buffer, ushort expectedId)
         {
             List<string> results = [];
@@ -161,6 +167,13 @@ namespace VectorNNTP.Common.Dns
             return results;
         }
 
+        /// <summary>
+        /// Concatenates the character-strings in one TXT RDATA and advances <paramref name="offset"/> to the end of that RDATA.
+        /// </summary>
+        /// <param name="span">DNS message.</param>
+        /// <param name="offset">Start of RDATA. On return, the first byte after this RDATA, including when the RDATA is malformed.</param>
+        /// <param name="rdLength">RDLENGTH.</param>
+        /// <returns>The concatenated bytes, or null when a character-string does not fit.</returns>
         private static byte[]? TryReadTxtRdata(ReadOnlySpan<byte> span, ref int offset, ushort rdLength)
         {
             int rdEnd = offset + rdLength;
@@ -204,6 +217,14 @@ namespace VectorNNTP.Common.Dns
             return result;
         }
 
+        /// <summary>
+        /// Returns whether the concatenated TXT character-strings equal <paramref name="expectedTxt"/>, and always advances past the RDATA.
+        /// </summary>
+        /// <param name="span">DNS message.</param>
+        /// <param name="offset">Start of RDATA. On return, the first byte after this RDATA.</param>
+        /// <param name="rdLength">RDLENGTH.</param>
+        /// <param name="expectedTxt">Expected concatenated TXT bytes.</param>
+        /// <returns><see langword="false"/> when the RDATA is malformed or the bytes differ.</returns>
         private static bool TryTxtRdataEquals(
             ReadOnlySpan<byte> span,
             ref int offset,

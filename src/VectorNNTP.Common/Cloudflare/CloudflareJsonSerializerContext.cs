@@ -22,6 +22,7 @@ namespace VectorNNTP.Common.Cloudflare
     /// <summary>Minimal delete-result payload (<c>result.id</c>) when Cloudflare returns one.</summary>
     internal sealed class CloudflareDeleteResult
     {
+        /// <summary>Gets or sets <c>result.id</c> when Cloudflare returns it. Null when the field is absent. Delete success does not require this value.</summary>
         [JsonPropertyName("id")]
         public string? Id { get; set; }
     }

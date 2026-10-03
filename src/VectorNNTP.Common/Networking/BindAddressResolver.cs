@@ -16,12 +16,17 @@ namespace VectorNNTP.Common.Networking
     /// </remarks>
     internal sealed class BindAddressResolver : IBindAddressResolver
     {
+        /// <summary>Source of assigned unicast addresses. Queried only when a wildcard bind entry is present.</summary>
         private readonly ILocalIpAddressAssignee _localIpAddressAssignee;
+
+        /// <summary>Receives skip and resolution-count logs.</summary>
         private readonly ILogger<BindAddressResolver> _logger;
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="BindAddressResolver"/> class.
+        /// Creates a resolver that expands wildcard entries through <paramref name="localIpAddressAssignee"/>.
         /// </summary>
+        /// <param name="localIpAddressAssignee">Assigned unicast addresses. Queried only when a wildcard entry is present.</param>
+        /// <param name="logger">Receives omitted-address and resolution-count logs.</param>
         public BindAddressResolver(
             ILocalIpAddressAssignee localIpAddressAssignee,
             ILogger<BindAddressResolver> logger)
@@ -85,6 +90,12 @@ namespace VectorNNTP.Common.Networking
             return resolved;
         }
 
+        /// <summary>
+        /// Appends DNS-eligible assigned addresses selected by <paramref name="wildcardEntry"/>.
+        /// </summary>
+        /// <param name="wildcardEntry">Trimmed wildcard. <c>0.0.0.0</c> selects IPv4, <c>::</c> selects IPv6, and any other wildcard selects both.</param>
+        /// <param name="localUnicast">Assigned unicast addresses. Ineligible addresses are skipped.</param>
+        /// <param name="collected">Destination list. Duplicates are not removed here.</param>
         private static void AppendWildcardAddresses(
             string wildcardEntry,
             IReadOnlyList<IPAddress> localUnicast,

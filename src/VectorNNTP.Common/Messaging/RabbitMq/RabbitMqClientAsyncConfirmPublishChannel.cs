@@ -9,7 +9,13 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// </summary>
     internal sealed class RabbitMqClientAsyncConfirmPublishChannel : IRabbitMqAsyncConfirmPublishChannel
     {
+        /// <summary>
+        /// Owned channel opened with publisher confirms enabled and confirmation tracking disabled.
+        /// <see cref="DisposeAsync"/> closes it when open, swallowing close errors, then disposes it.
+        /// </summary>
         private readonly IChannel _channel;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary>Initializes a new wrapper around an opened async-confirm channel.</summary>
@@ -111,6 +117,17 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             await _channel.DisposeAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Builds persistent AMQP properties for a handoff publish. Confirms are not waited here.
+        /// </summary>
+        /// <param name="messageId">AMQP <c>message-id</c>.</param>
+        /// <param name="appId">AMQP <c>app-id</c>.</param>
+        /// <param name="expiration">Per-message TTL in milliseconds, as an AMQP short string.</param>
+        /// <param name="publishSequenceNumber">
+        /// Value written to <see cref="Constants.PublishSequenceNumberHeader"/> as invariant decimal digits.
+        /// A <see cref="ulong"/> table value is rejected by RabbitMQ.Client 7.2.2 wire formatting.
+        /// </param>
+        /// <returns>Properties passed to <c>BasicPublishAsync</c>. Mandatory routing is set by the caller, not here.</returns>
         internal static BasicProperties CreateHandoffProperties(
             string messageId,
             string appId,

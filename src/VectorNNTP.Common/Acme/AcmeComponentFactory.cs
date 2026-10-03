@@ -9,15 +9,32 @@ namespace VectorNNTP.Common.Acme
     /// </summary>
     internal class AcmeComponentFactory
     {
+        /// <summary>ACME and Cloudflare options read on each factory call.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _options;
+
+        /// <summary>DNS client passed to the <see cref="Dns01Solver"/> created with the manager.</summary>
         private readonly ICloudflareDnsClient _cloudflareDnsClient;
+
+        /// <summary>HTTP client factory passed to <see cref="AcmeIssuer"/>.</summary>
         private readonly IHttpClientFactory _httpClientFactory;
+
+        /// <summary>Creates loggers for the resolver, issuer, and certificate manager.</summary>
         private readonly ILoggerFactory _loggerFactory;
+
+        /// <summary>Guards one-time construction of <see cref="_manager"/> and <see cref="_provider"/>.</summary>
         private readonly object _sync = new();
+
+        /// <summary>Manager created on the first TLS-enabled request. <see langword="null"/> until then.</summary>
         private CertificateManager? _manager;
+
+        /// <summary>Provider created with <see cref="_manager"/>. <see langword="null"/> until the manager exists.</summary>
         private IServerCertificateProvider? _provider;
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeComponentFactory"/> class.</summary>
+        /// <summary>Stores the options, DNS client, HTTP factory, and logger factory used when TLS is enabled.</summary>
+        /// <param name="options">ACME and Cloudflare options.</param>
+        /// <param name="cloudflareDnsClient">Client that creates and deletes DNS-01 TXT records.</param>
+        /// <param name="httpClientFactory">Factory for the ACME directory HTTP client.</param>
+        /// <param name="loggerFactory">Factory for component loggers.</param>
         internal AcmeComponentFactory(
             IOptions<AcmeCloudflareOptions> options,
             ICloudflareDnsClient cloudflareDnsClient,
@@ -36,7 +53,9 @@ namespace VectorNNTP.Common.Acme
 
         /// <summary>
         /// Returns a certificate manager when TLS is enabled; otherwise <see langword="null"/>.
+        /// The first TLS-enabled call builds the account store, certificate store, DNS-01 solver, issuer, journal, and manager under <see cref="_sync"/>.
         /// </summary>
+        /// <returns>The cached manager, or <see langword="null"/> when <see cref="AcmeCloudflareOptions.IsTlsListenerEnabled"/> is false.</returns>
         internal virtual CertificateManager? GetOrCreateManager()
         {
             var options = _options.Value;
@@ -102,6 +121,10 @@ namespace VectorNNTP.Common.Acme
         /// <summary>
         /// Returns a certificate provider when TLS is enabled; otherwise an unavailable stub.
         /// </summary>
+        /// <returns>
+        /// <see cref="DisabledServerCertificateProvider.Instance"/> when TLS is disabled or the manager was not created.
+        /// Otherwise the provider created with the manager.
+        /// </returns>
         internal IServerCertificateProvider GetCertificateProvider()
         {
             if (!_options.Value.IsTlsListenerEnabled)
@@ -117,10 +140,15 @@ namespace VectorNNTP.Common.Acme
     /// <summary>Stub provider used when TLS / ACME is disabled.</summary>
     internal sealed class DisabledServerCertificateProvider : IServerCertificateProvider
     {
+        /// <summary>Process-wide stub returned when the TLS listener is disabled.</summary>
         internal static DisabledServerCertificateProvider Instance { get; } = new();
 
+        /// <summary>Always <see langword="false"/>. No certificate is loaded while TLS is disabled.</summary>
         public bool IsAvailable => false;
 
+        /// <summary>Always throws. TLS is disabled, so there is no certificate to return.</summary>
+        /// <returns>This method does not return.</returns>
+        /// <exception cref="InvalidOperationException">Always thrown.</exception>
         public System.Security.Cryptography.X509Certificates.X509Certificate2 GetCertificate() =>
             throw new InvalidOperationException("TLS is disabled; no server certificate is available.");
     }

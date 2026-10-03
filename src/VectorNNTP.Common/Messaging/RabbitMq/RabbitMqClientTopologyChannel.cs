@@ -5,7 +5,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// <summary>Adapts a RabbitMQ.Client channel to declare-only topology operations.</summary>
     internal sealed class RabbitMqClientTopologyChannel : IRabbitMqTopologyChannel
     {
+        /// <summary>
+        /// Owned declare-only channel. <see cref="DisposeAsync"/> disposes it once and does not call <c>CloseAsync</c> first.
+        /// </summary>
         private readonly IChannel _channel;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary>Initializes a new wrapper around an opened broker channel.</summary>

@@ -5,10 +5,24 @@ namespace VectorNNTP.Common.Articles.DateParser
     /// </content>
     internal static partial class NewsDateParser
     {
+        /// <summary>
+        /// One trailing date abbreviation and the ASCII offset bytes written in its place.
+        /// </summary>
+        /// <param name="Abbreviation">Abbreviation bytes matched with ASCII case folding.</param>
+        /// <param name="Offset">Replacement bytes, including the sign, such as <c>+00:00</c> or <c>+05:30</c>.</param>
         private readonly record struct TimezoneMapping(byte[] Abbreviation, byte[] Offset);
 
+        /// <summary>
+        /// Fixed abbreviation-to-offset table used by <c>SubstituteTimezoneAbbreviation</c>.
+        /// First case-insensitive match wins. <c>CST</c> maps to <c>+08:00</c> and <c>CDT</c> maps to <c>-05:00</c>
+        /// as stored here. <c>UTC+0</c> through <c>UTC+9</c> and <c>UTC-1</c> through <c>UTC-9</c> are included; other numeric forms are not.
+        /// </summary>
         private static readonly TimezoneMapping[] TimezoneMappings = CreateDefaultTimezoneMappings();
 
+        /// <summary>
+        /// Builds <see cref="TimezoneMappings"/> from the abbreviation/offset pairs in this method.
+        /// </summary>
+        /// <returns>The table in match order.</returns>
         private static TimezoneMapping[] CreateDefaultTimezoneMappings() =>
         [
             new("UT"u8.ToArray(), "+00:00"u8.ToArray()),

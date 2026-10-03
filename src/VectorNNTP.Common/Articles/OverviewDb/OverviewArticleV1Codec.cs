@@ -16,19 +16,51 @@ namespace VectorNNTP.Common.Articles.OverviewDb
     /// </remarks>
     internal static class OverviewArticleV1Codec
     {
+        /// <summary>Protobuf wire type 0, used for schema version, bytes, and lines.</summary>
         private const int WireVarint = 0;
+
+        /// <summary>Protobuf wire type 2, used for article id and the text fields.</summary>
         private const int WireLengthDelimited = 2;
+
+        /// <summary>Field number 1. Varint schema version.</summary>
         private const int FieldSchemaVersion = 1;
+
+        /// <summary>Field number 2. Length-delimited 32-byte <see cref="ArticleId"/> digest.</summary>
         private const int FieldArticleId = 2;
+
+        /// <summary>Field number 3. Length-delimited Message-ID header value bytes.</summary>
         private const int FieldMessageId = 3;
+
+        /// <summary>Field number 4. Repeated length-delimited newsgroup token.</summary>
         private const int FieldNewsgroups = 4;
+
+        /// <summary>Field number 5. Length-delimited Subject header value bytes.</summary>
         private const int FieldSubject = 5;
+
+        /// <summary>Field number 6. Length-delimited From header value bytes.</summary>
         private const int FieldFrom = 6;
+
+        /// <summary>Field number 7. Length-delimited winning Date header value bytes.</summary>
         private const int FieldDate = 7;
+
+        /// <summary>Field number 8. Length-delimited References header value bytes.</summary>
         private const int FieldReferences = 8;
+
+        /// <summary>Field number 9. Varint article size. Negative <see cref="ArticleRecord.ArtSize"/> is written as 0.</summary>
         private const int FieldBytes = 9;
+
+        /// <summary>Field number 10. Varint body line count. Negative <see cref="ArticleRecord.ArtLines"/> is written as 0.</summary>
         private const int FieldLines = 10;
+
+        /// <summary>
+        /// Per comma-separated Newsgroups piece added by <see cref="GetMaxEncodedSize"/>.
+        /// Slack for that token's key and length varint, not a measured tag size.
+        /// </summary>
         private const int TagOverhead = 10;
+
+        /// <summary>
+        /// Fixed slack in <see cref="GetMaxEncodedSize"/> for the scalar keys, varints, and article-id framing.
+        /// </summary>
         private const int FixedScalarOverhead = 64;
 
         /// <summary>
@@ -190,6 +222,13 @@ namespace VectorNNTP.Common.Articles.OverviewDb
         internal static bool ContainsCompleteArticle(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> artData)
             => artData.Length > 0 && payload.IndexOf(artData) >= 0;
 
+        /// <summary>
+        /// Writes each non-empty comma-separated token as a repeated <see cref="FieldNewsgroups"/> length-delimited field.
+        /// </summary>
+        /// <param name="destination">Remaining encode buffer.</param>
+        /// <param name="newsgroups">Newsgroups header value bytes. SP, HTAB, CR, and LF around each token are omitted.</param>
+        /// <returns>Bytes written. Empty tokens, including a trailing comma, are skipped.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="destination"/> cannot hold a token.</exception>
         private static int WriteNewsgroups(Span<byte> destination, ReadOnlySpan<byte> newsgroups)
         {
             var written = 0;
@@ -211,6 +250,9 @@ namespace VectorNNTP.Common.Articles.OverviewDb
             return written;
         }
 
+        /// <summary>Drops leading and trailing SP, HTAB, CR, and LF from one newsgroup token.</summary>
+        /// <param name="value">Bytes between commas, or the whole value when there is no comma.</param>
+        /// <returns>A slice of <paramref name="value"/>.</returns>
         private static ReadOnlySpan<byte> TrimHeaderToken(ReadOnlySpan<byte> value)
         {
             while (!value.IsEmpty && IsHeaderWhitespace(value[0]))
@@ -226,9 +268,18 @@ namespace VectorNNTP.Common.Articles.OverviewDb
             return value;
         }
 
+        /// <summary>Returns whether <paramref name="value"/> is SP, HTAB, CR, or LF.</summary>
+        /// <param name="value">Byte to test.</param>
+        /// <returns><see langword="true"/> for those four bytes only.</returns>
         private static bool IsHeaderWhitespace(byte value) =>
             value is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n';
 
+        /// <summary>Writes a protobuf key with wire type <see cref="WireVarint"/> and then <paramref name="value"/>.</summary>
+        /// <param name="destination">Remaining encode buffer.</param>
+        /// <param name="fieldNumber">Protobuf field number.</param>
+        /// <param name="value">Unsigned scalar.</param>
+        /// <returns>Bytes written.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="destination"/> is too small.</exception>
         private static int WriteVarintField(Span<byte> destination, int fieldNumber, uint value)
         {
             var written = WriteKey(destination, fieldNumber, WireVarint);
@@ -236,6 +287,14 @@ namespace VectorNNTP.Common.Articles.OverviewDb
             return written;
         }
 
+        /// <summary>
+        /// Writes a length-delimited field by copying <paramref name="value"/> unchanged. Does not UTF-8-encode.
+        /// </summary>
+        /// <param name="destination">Remaining encode buffer.</param>
+        /// <param name="fieldNumber">Protobuf field number.</param>
+        /// <param name="value">Raw field bytes.</param>
+        /// <returns>Bytes written, including key, length, and payload.</returns>
+        /// <exception cref="ArgumentException">Thrown when the key, length, or payload does not fit.</exception>
         private static int WriteBytesField(Span<byte> destination, int fieldNumber, ReadOnlySpan<byte> value)
         {
             var written = WriteKey(destination, fieldNumber, WireLengthDelimited);
@@ -249,9 +308,22 @@ namespace VectorNNTP.Common.Articles.OverviewDb
             return written + value.Length;
         }
 
+        /// <summary>Writes <c>(fieldNumber &lt;&lt; 3) | wireType</c> as a varint.</summary>
+        /// <param name="destination">Remaining encode buffer.</param>
+        /// <param name="fieldNumber">Protobuf field number.</param>
+        /// <param name="wireType"><see cref="WireVarint"/> or <see cref="WireLengthDelimited"/>.</param>
+        /// <returns>Bytes written.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="destination"/> is too small.</exception>
         private static int WriteKey(Span<byte> destination, int fieldNumber, int wireType) =>
             WriteVarint(destination, ((uint)fieldNumber << 3) | (uint)wireType);
 
+        /// <summary>
+        /// Writes <paramref name="value"/> as a protobuf varint, 7 bits per byte with the continuation bit <c>0x80</c>.
+        /// </summary>
+        /// <param name="destination">Remaining encode buffer.</param>
+        /// <param name="value">Unsigned value. At most five bytes are emitted.</param>
+        /// <returns>Bytes written.</returns>
+        /// <exception cref="ArgumentException">Thrown when a continuation or final byte would pass the end of <paramref name="destination"/>.</exception>
         private static int WriteVarint(Span<byte> destination, uint value)
         {
             var written = 0;
@@ -275,6 +347,16 @@ namespace VectorNNTP.Common.Articles.OverviewDb
             return written;
         }
 
+        /// <summary>
+        /// Reads one protobuf varint from the front of <paramref name="source"/>.
+        /// </summary>
+        /// <param name="source">Remaining payload.</param>
+        /// <param name="value">Decoded integer. Low 7 bits of each byte are accumulated until the continuation bit is clear.</param>
+        /// <returns>The unread suffix after the varint.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the payload ends before a byte with bit <c>0x80</c> clear, or when the shift would exceed 63
+        /// (<c>OverviewDB protobuf varint is too long.</c> / <c>OverviewDB protobuf payload is truncated.</c>).
+        /// </exception>
         private static ReadOnlySpan<byte> ReadVarint(ReadOnlySpan<byte> source, out ulong value)
         {
             value = 0;

@@ -63,11 +63,19 @@ namespace VectorNNTP.Common.Acme
         /// <summary>Issuance failed.</summary>
         public const string EventCertificateIssuanceFailed = "certificate_issuance_failed";
 
+        /// <summary>In-process lock per journal path so same-FQDN writers do not interleave before the file lock.</summary>
         private static readonly ConcurrentDictionary<string, object> FileGates = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Normalized certificate FQDN stored in and required by the journal file.</summary>
         private readonly string _fqdn;
+
+        /// <summary>Path of <c>journal/{fqdn}.json</c>.</summary>
         private readonly string _journalPath;
+
+        /// <summary>Exclusive lock path <c>{journalPath}.lock</c>.</summary>
         private readonly string _journalLockPath;
+
+        /// <summary>Transaction id from the last <see cref="BeginTransaction"/> that has not been completed. <see langword="null"/> otherwise.</summary>
         private string? _activeTransactionId;
 
         /// <summary>Initializes a new instance of the <see cref="AcmeTransactionJournal"/> class.</summary>
@@ -391,6 +399,8 @@ namespace VectorNNTP.Common.Acme
             return WithGate(() => LoadDocument().UnattributedEvents);
         }
 
+        /// <summary>Appends <paramref name="journalEvent"/> to <see cref="_activeTransactionId"/>. Does nothing when no transaction is active.</summary>
+        /// <param name="journalEvent">Event to store. The caller sets its type and time.</param>
         private void AppendEvent(AcmeJournalEvent journalEvent)
         {
             var transactionId = _activeTransactionId;
@@ -402,6 +412,9 @@ namespace VectorNNTP.Common.Acme
             Mutate(document => RequireTransaction(document, transactionId).Events.Add(journalEvent));
         }
 
+        /// <summary>Loads the document, applies <paramref name="mutate"/>, and writes it back under the journal lock.</summary>
+        /// <param name="mutate">In-memory edit. It runs while the lock is held.</param>
+        /// <param name="cancellationToken">Cancels waiting for the lock. The edit itself is synchronous.</param>
         private void Mutate(Action<AcmeJournalDocument> mutate, CancellationToken cancellationToken = default)
         {
             WithGate(
@@ -415,6 +428,11 @@ namespace VectorNNTP.Common.Acme
                 cancellationToken);
         }
 
+        /// <summary>Runs <paramref name="action"/> under the in-process gate and the exclusive <c>.lock</c> file.</summary>
+        /// <typeparam name="T">Result of <paramref name="action"/>.</typeparam>
+        /// <param name="action">Work that reads or writes the journal. It runs on the caller thread.</param>
+        /// <param name="cancellationToken">Cancels waiting for the file lock.</param>
+        /// <returns>The value returned by <paramref name="action"/>.</returns>
         private T WithGate<T>(Func<T> action, CancellationToken cancellationToken = default)
         {
             var gate = FileGates.GetOrAdd(Path.GetFullPath(_journalPath), static _ => new object());
@@ -425,6 +443,11 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>
+        /// Reads the journal file. A missing file returns an empty version-<see cref="SchemaVersion"/> document for this FQDN.
+        /// A version or FQDN mismatch throws <see cref="AcmeStorageException"/> category <c>malformed_journal</c>.
+        /// </summary>
+        /// <returns>The in-memory document. The caller mutates and persists it.</returns>
         private AcmeJournalDocument LoadDocument()
         {
             if (!File.Exists(_journalPath))
@@ -487,6 +510,8 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Writes <paramref name="document"/> as indented JSON plus a trailing newline via <see cref="AtomicFile"/>.</summary>
+        /// <param name="document">Document to serialize. Timestamps are formatted as round-trip UTC strings.</param>
         private void Persist(AcmeJournalDocument document)
         {
             var transactions = new List<AcmeJournalWireTransaction>(document.Transactions.Count);
@@ -515,6 +540,9 @@ namespace VectorNNTP.Common.Acme
                 + Environment.NewLine);
         }
 
+        /// <summary>Copies one transaction to the wire type, formatting timestamps and omitting null optional fields as null.</summary>
+        /// <param name="transaction">In-memory transaction.</param>
+        /// <returns>The JSON object written under <c>transactions</c>.</returns>
         private static AcmeJournalWireTransaction SerializeTransaction(AcmeJournalTransaction transaction)
         {
             var events = new List<AcmeJournalWireEvent>(transaction.Events.Count);
@@ -544,6 +572,9 @@ namespace VectorNNTP.Common.Acme
             };
         }
 
+        /// <summary>Copies one event to the wire type. Null optional fields are written as JSON null.</summary>
+        /// <param name="journalEvent">In-memory event.</param>
+        /// <returns>The JSON object written under <c>events</c> or <c>unattributed_events</c>.</returns>
         private static AcmeJournalWireEvent SerializeEvent(AcmeJournalEvent journalEvent) =>
             new()
             {
@@ -561,6 +592,12 @@ namespace VectorNNTP.Common.Acme
                 RecoveryEntryId = journalEvent.RecoveryEntryId,
             };
 
+        /// <summary>
+        /// Reads one transaction object. Missing optional strings become null. A missing <c>started_at</c> becomes <see cref="DateTimeOffset.MinValue"/>.
+        /// Blank identifier strings are dropped.
+        /// </summary>
+        /// <param name="root">One element of <c>transactions</c>.</param>
+        /// <returns>The in-memory transaction.</returns>
         private AcmeJournalTransaction ParseTransaction(JsonElement root)
         {
             var identifiers = new List<string>();
@@ -606,6 +643,9 @@ namespace VectorNNTP.Common.Acme
             };
         }
 
+        /// <summary>Reads one event object. A missing <c>at</c> becomes <see cref="DateTimeOffset.MinValue"/>. Absent or blank optional strings become null.</summary>
+        /// <param name="root">One event element.</param>
+        /// <returns>The in-memory event.</returns>
         private static AcmeJournalEvent ParseEvent(JsonElement root) =>
             new()
             {
@@ -623,6 +663,10 @@ namespace VectorNNTP.Common.Acme
                 RecoveryEntryId = ReadOptionalString(root, "recovery_entry_id"),
             };
 
+        /// <summary>Finds <paramref name="transactionId"/> in <paramref name="document"/>. A missing id throws category <c>missing_journal_transaction</c>.</summary>
+        /// <param name="document">Loaded journal. Its FQDN must equal this instance's FQDN.</param>
+        /// <param name="transactionId">Transaction id to update.</param>
+        /// <returns>The matching transaction.</returns>
         private AcmeJournalTransaction RequireTransaction(AcmeJournalDocument document, string transactionId)
         {
             var transaction = document.Transactions.FirstOrDefault(
@@ -640,9 +684,16 @@ namespace VectorNNTP.Common.Acme
             return transaction;
         }
 
+        /// <summary>Formats <paramref name="value"/> as UTC round-trip (<c>o</c>) text.</summary>
+        /// <param name="value">Timestamp to convert to UTC.</param>
+        /// <returns>The invariant round-trip string.</returns>
         private static string FormatTimestamp(DateTimeOffset value) =>
             value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
 
+        /// <summary>Reads a timestamp property. Missing, null, or blank text returns null. Other text is parsed as round-trip and converted to UTC.</summary>
+        /// <param name="root">Object that may contain the property.</param>
+        /// <param name="name">Wire property name.</param>
+        /// <returns>The UTC time, or null when the property is absent or blank.</returns>
         private static DateTimeOffset? ParseTimestamp(JsonElement root, string name)
         {
             if (!root.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
@@ -660,6 +711,10 @@ namespace VectorNNTP.Common.Acme
                 .ToUniversalTime();
         }
 
+        /// <summary>Reads a string property. Missing, null, or whitespace returns null.</summary>
+        /// <param name="root">Object that may contain the property.</param>
+        /// <param name="name">Wire property name.</param>
+        /// <returns>The string, or null when absent or blank.</returns>
         private static string? ReadOptionalString(JsonElement root, string name)
         {
             if (!root.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
@@ -671,6 +726,10 @@ namespace VectorNNTP.Common.Acme
             return string.IsNullOrWhiteSpace(value) ? null : value;
         }
 
+        /// <summary>Loads the PFX and reads serial, thumbprint, and validity. The certificate is disposed. Load failures become category <c>journal_certificate_inspect_failed</c>.</summary>
+        /// <param name="pfxBytes">Issued PKCS#12 bytes.</param>
+        /// <param name="password">PFX password. Not included in the exception.</param>
+        /// <returns>The inspected fields. Serial and thumbprint come from <see cref="X509Certificate2"/>.</returns>
         private static CertificateInspection InspectCertificate(byte[] pfxBytes, string password)
         {
             X509Certificate2? cert = null;
@@ -693,6 +752,11 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Leaf fields copied into a successful journal transaction.</summary>
+        /// <param name="SerialNumber"><see cref="X509Certificate2.SerialNumber"/>. May be null.</param>
+        /// <param name="Thumbprint"><see cref="X509Certificate2.Thumbprint"/>. May be null.</param>
+        /// <param name="NotBefore">Not-before converted with <see cref="DateTime.ToUniversalTime"/>.</param>
+        /// <param name="NotAfter">Not-after converted with <see cref="DateTime.ToUniversalTime"/>.</param>
         private readonly record struct CertificateInspection(
             string? SerialNumber,
             string? Thumbprint,

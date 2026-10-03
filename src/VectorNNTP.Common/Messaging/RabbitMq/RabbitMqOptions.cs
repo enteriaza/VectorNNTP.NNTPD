@@ -277,6 +277,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
                 WorkRequestMaxPayloadBytes: WorkRequestMaxPayloadBytes ?? 1024);
         }
 
+        /// <summary>Creates the exception thrown when a required option is still null during runtime projection.</summary>
+        /// <param name="name">Option property name included in the message. Not a secret value.</param>
+        /// <returns>An <see cref="InvalidOperationException"/> stating that the named RabbitMQ option is required.</returns>
         private static InvalidOperationException Missing(string name) =>
             new($"RabbitMQ {name} is required.");
     }

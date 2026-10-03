@@ -12,7 +12,10 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
     /// </remarks>
     internal sealed class ArticleTransferStreamTable
     {
+        /// <summary>Active streams keyed by StreamId. StreamId 0 is never inserted.</summary>
         private readonly Dictionary<uint, ArticleTransferReceiveStream> _streams;
+
+        /// <summary>Limits used for the maximum active-stream count and for streams this table creates.</summary>
         private readonly ArticleTransferLimits _limits;
 
         /// <summary>Creates a table with the given limits.</summary>

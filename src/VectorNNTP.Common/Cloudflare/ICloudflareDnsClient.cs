@@ -41,6 +41,11 @@
         /// <summary>
         /// Creates a DNS record.
         /// </summary>
+        /// <param name="zoneId">Cloudflare zone identifier.</param>
+        /// <param name="request">Record body. Managed A/AAAA callers set TTL and proxy explicitly.</param>
+        /// <param name="cancellationToken">Cancellation token. Canceling a mutation leaves the remote outcome uncertain.</param>
+        /// <returns>The record returned by Cloudflare.</returns>
+        /// <exception cref="CloudflareDnsException">The API call failed or returned success without a record payload.</exception>
         Task<CloudflareDnsRecord> CreateRecordAsync(
             string zoneId,
             CloudflareDnsRecordWriteRequest request,
@@ -49,6 +54,12 @@
         /// <summary>
         /// Updates an existing DNS record.
         /// </summary>
+        /// <param name="zoneId">Cloudflare zone identifier.</param>
+        /// <param name="recordId">Cloudflare record identifier.</param>
+        /// <param name="request">Replacement record body.</param>
+        /// <param name="cancellationToken">Cancellation token. Canceling a mutation leaves the remote outcome uncertain.</param>
+        /// <returns>The record returned by Cloudflare.</returns>
+        /// <exception cref="CloudflareDnsException">The API call failed or returned success without a record payload.</exception>
         Task<CloudflareDnsRecord> UpdateRecordAsync(
             string zoneId,
             string recordId,
@@ -58,6 +69,11 @@
         /// <summary>
         /// Deletes an existing DNS record.
         /// </summary>
+        /// <param name="zoneId">Cloudflare zone identifier.</param>
+        /// <param name="recordId">Cloudflare record identifier.</param>
+        /// <param name="cancellationToken">Cancellation token. Canceling a mutation leaves the remote outcome uncertain.</param>
+        /// <returns>A task that completes when Cloudflare reports success. A returned record id is not required.</returns>
+        /// <exception cref="CloudflareDnsException">The API call failed.</exception>
         Task DeleteRecordAsync(
             string zoneId,
             string recordId,

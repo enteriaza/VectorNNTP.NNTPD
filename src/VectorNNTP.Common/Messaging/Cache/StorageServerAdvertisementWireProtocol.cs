@@ -26,7 +26,10 @@ namespace VectorNNTP.Common.Messaging.Cache
 
         /// <summary>Serializes a version-1 advertisement into compact UTF-8 JSON.</summary>
         /// <param name="advertisement">Concrete valid v1 advertisement.</param>
-        /// <returns>UTF-8 bytes containing only the seven canonical properties.</returns>
+        /// <returns>
+        /// Compact UTF-8 JSON for the required advertisement properties, plus <c>vatpPort</c> when
+        /// <see cref="StorageServerAdvertisement.VatpPort"/> has a value.
+        /// </returns>
         internal static byte[] SerializeV1(StorageServerAdvertisement advertisement)
         {
             ArgumentNullException.ThrowIfNull(advertisement);
@@ -189,6 +192,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             }
         }
 
+        /// <summary>Reads <paramref name="name"/> as a JSON number that fits in <see cref="int"/>.</summary>
+        /// <param name="root">Advertisement object.</param>
+        /// <param name="name">Required property name.</param>
+        /// <param name="value">Parsed integer on success; 0 on failure.</param>
+        /// <param name="reason">Empty on success; otherwise an advertisement missing-property or type error.</param>
+        /// <returns><see langword="false"/> when the property is absent or not an <see cref="int"/> JSON number.</returns>
         private static bool TryReadInt32(JsonElement root, string name, out int value, out string reason)
         {
             value = 0;
@@ -208,6 +217,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads a byte-count property as a JSON number that fits in <see cref="long"/>.</summary>
+        /// <param name="root">Advertisement object.</param>
+        /// <param name="name">Required property name, such as <c>totalBytes</c>.</param>
+        /// <param name="value">Parsed integer on success; 0 on failure.</param>
+        /// <param name="reason">Empty on success; otherwise an advertisement missing-property or type error.</param>
+        /// <returns><see langword="false"/> when the property is absent or not a <see cref="long"/> JSON number.</returns>
         private static bool TryReadInt64(JsonElement root, string name, out long value, out string reason)
         {
             value = 0;
@@ -227,6 +242,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads <paramref name="name"/> as a JSON string. A JSON null string becomes empty.</summary>
+        /// <param name="root">Advertisement object.</param>
+        /// <param name="name">Required property name.</param>
+        /// <param name="value">Property text on success; empty on failure.</param>
+        /// <param name="reason">Empty on success; otherwise an advertisement missing-property or type error.</param>
+        /// <returns><see langword="false"/> when the property is absent or not a string.</returns>
         private static bool TryReadString(JsonElement root, string name, out string value, out string reason)
         {
             value = string.Empty;
@@ -247,6 +268,12 @@ namespace VectorNNTP.Common.Messaging.Cache
             return true;
         }
 
+        /// <summary>Reads <paramref name="name"/> as a round-trip ISO-8601 timestamp and converts it to UTC.</summary>
+        /// <param name="root">Advertisement object.</param>
+        /// <param name="name">Required property name, normally <c>timestamp</c>.</param>
+        /// <param name="value">UTC timestamp on success; otherwise the default.</param>
+        /// <param name="reason">Empty on success; otherwise a missing, non-string, or unparseable timestamp error.</param>
+        /// <returns><see langword="true"/> when invariant round-trip parsing succeeds.</returns>
         private static bool TryReadTimestamp(
             JsonElement root,
             string name,

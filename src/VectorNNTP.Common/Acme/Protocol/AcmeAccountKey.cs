@@ -9,9 +9,16 @@ namespace VectorNNTP.Common.Acme.Protocol
     /// </summary>
     internal sealed class AcmeAccountKey : IDisposable
     {
+        /// <summary>Account RSA key. Disposed by <see cref="Dispose"/>.</summary>
         private readonly RSA _rsa;
+
+        /// <summary>Hash used for JWS signatures. Always SHA-256.</summary>
         private readonly HashAlgorithmName _hash = HashAlgorithmName.SHA256;
 
+        /// <summary>
+        /// Captures <paramref name="rsa"/> and computes the canonical JWK and thumbprint from the public parameters.
+        /// </summary>
+        /// <param name="rsa">RSA key this instance owns.</param>
         private AcmeAccountKey(RSA rsa)
         {
             _rsa = rsa;
@@ -32,6 +39,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         internal string Thumbprint { get; }
 
         /// <summary>Creates a new RSA account key (minimum 2048 bits).</summary>
+        /// <param name="keySize">RSA modulus size in bits. Values below 2048 throw.</param>
+        /// <returns>An owned account key. The caller disposes it.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="keySize"/> is below 2048.</exception>
         private static AcmeAccountKey CreateRsa(int keySize = 2048)
         {
             if (keySize < 2048)
@@ -45,6 +55,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Imports a PKCS#8 DER RSA private key. Consumes the entire buffer; preserves key material losslessly.
         /// </summary>
+        /// <param name="pkcs8Der">PKCS#8 DER bytes. Empty input throws <see cref="CryptographicException"/>.</param>
+        /// <returns>An owned account key. The caller disposes it.</returns>
+        /// <exception cref="CryptographicException">Thrown when the buffer is empty, import fails, or not every byte is consumed.</exception>
         internal static AcmeAccountKey ImportPkcs8Der(ReadOnlySpan<byte> pkcs8Der)
         {
             if (pkcs8Der.IsEmpty)
@@ -74,6 +87,8 @@ namespace VectorNNTP.Common.Acme.Protocol
         /// <summary>
         /// Proves DER → <see cref="AcmeAccountKey"/> → DER preserves RSA private key material (modulus and D).
         /// </summary>
+        /// <param name="pkcs8Der">PKCS#8 DER bytes to import and export.</param>
+        /// <exception cref="CryptographicException">Thrown when modulus or D differs after the round trip, or import fails.</exception>
         internal static void AssertPkcs8DerRoundTripPreservesRsaMaterial(ReadOnlySpan<byte> pkcs8Der)
         {
             using var original = RSA.Create();
@@ -93,25 +108,35 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Exports the private key as PKCS#8 DER.</summary>
+        /// <returns>PKCS#8 DER bytes of <see cref="_rsa"/>.</returns>
         private byte[] ExportPkcs8Der() => _rsa.ExportPkcs8PrivateKey();
 
         /// <summary>Signs <paramref name="data"/> for JWS (RSA PKCS#1 v1.5 / SHA-256).</summary>
+        /// <param name="data">ASCII signing input <c>protected.payload</c>.</param>
+        /// <returns>The RSA signature.</returns>
         internal byte[] Sign(ReadOnlySpan<byte> data) =>
             _rsa.SignData(data.ToArray(), _hash, RSASignaturePadding.Pkcs1);
 
         /// <summary>Builds the ACME key authorization string for <paramref name="token"/>.</summary>
+        /// <param name="token">Challenge token from the CA.</param>
+        /// <returns><c>{token}.{thumbprint}</c>.</returns>
         internal string GetKeyAuthorization(string token) => token + "." + Thumbprint;
 
         /// <summary>Computes the DNS-01 TXT value (base64url SHA-256 of the key authorization).</summary>
+        /// <param name="token">Challenge token from the CA.</param>
+        /// <returns>Unpadded base64url SHA-256 of <see cref="GetKeyAuthorization"/>.</returns>
         internal string GetDnsRecordValue(string token)
         {
             byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(GetKeyAuthorization(token)));
             return Base64Url.Encode(digest);
         }
 
-        /// <inheritdoc />
+        /// <summary>Disposes the RSA account key.</summary>
         public void Dispose() => _rsa.Dispose();
 
+        /// <summary>Base64url-encodes the SHA-256 digest of the canonical JWK JSON.</summary>
+        /// <param name="canonicalJwk">JWK JSON already in thumbprint order.</param>
+        /// <returns>The JWK thumbprint.</returns>
         private static string ComputeThumbprint(string canonicalJwk) =>
             Base64Url.Encode(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJwk)));
     }

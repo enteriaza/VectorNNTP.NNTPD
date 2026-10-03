@@ -5,6 +5,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// </summary>
     internal sealed class DelegateRabbitMqConnectionNameProvider : IRabbitMqConnectionNameProvider
     {
+        /// <summary>Invoked by <see cref="GetConnectionName"/>. A null or whitespace result throws there.</summary>
         private readonly Func<string> _factory;
 
         /// <summary>Initializes a new instance that invokes <paramref name="factory"/> on each request.</summary>

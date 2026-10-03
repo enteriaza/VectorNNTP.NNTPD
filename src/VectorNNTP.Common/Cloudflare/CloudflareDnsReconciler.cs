@@ -35,9 +35,19 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>Maximum reconcile attempts within a single <see cref="ReconcileAsync"/> call.</summary>
         internal const int MaxAttempts = 3;
 
+        /// <summary>Cloudflare DNS record API used for list, create, update, and delete.</summary>
         private readonly ICloudflareDnsClient _client;
+
+        /// <summary>Supplies <see cref="AcmeCloudflareOptions.CloudFlareOperationTimeout"/> when a call does not pass its own budget.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _options;
+
+        /// <summary>Reconcile and cleanup diagnostics.</summary>
         private readonly ILogger<CloudflareDnsReconciler> _logger;
+
+        /// <summary>
+        /// Serializes <see cref="ReconcileAsync"/> and <see cref="RemoveAllRecordsForFqdnAsync"/> on this instance.
+        /// The wait observes the caller token, so a canceled waiter does not enter the operation.
+        /// </summary>
         private readonly SemaphoreSlim _gate = new(1, 1);
 
         /// <summary>
@@ -49,6 +59,9 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudflareDnsReconciler"/> class.
         /// </summary>
+        /// <param name="client">DNS record API client.</param>
+        /// <param name="options">Options that supply the default operation timeout.</param>
+        /// <param name="logger">Reconciler logger.</param>
         public CloudflareDnsReconciler(
             ICloudflareDnsClient client,
             IOptions<AcmeCloudflareOptions> options,
@@ -280,6 +293,17 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>
+        /// Lists exact-FQDN records, deletes each by id, then lists again and fails if any remain.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact ownership boundary.</param>
+        /// <param name="attempt">One-based cleanup attempt, logged with the listed count.</param>
+        /// <param name="cancellationToken">Operation token. Checked before each delete.</param>
+        /// <exception cref="CloudflareDnsException">
+        /// A listed record has no id, or verification still sees records. A missing id is permanent.
+        /// Verification failure is not marked permanent, so the caller may retry.
+        /// </exception>
         private async Task RemoveAllAttemptAsync(
             string zoneId,
             string fqdn,
@@ -327,6 +351,17 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>
+        /// Lists every record type for <paramref name="fqdn"/> and keeps only names classified as an exact match.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Expected exact name.</param>
+        /// <param name="cancellationToken">Cancels the list.</param>
+        /// <returns>Records whose normalized name equals <paramref name="fqdn"/>.</returns>
+        /// <exception cref="CloudflareDnsException">
+        /// A returned name cannot be classified. That failure is permanent and deletes nothing.
+        /// Names that classify as non-exact are skipped and logged.
+        /// </exception>
         private async Task<IReadOnlyList<CloudflareDnsRecord>> ListExactFqdnRecordsAsync(
             string zoneId,
             string fqdn,
@@ -370,6 +405,14 @@ namespace VectorNNTP.Common.Cloudflare
         /// Classifies whether a Cloudflare record name is exactly the expected FQDN.
         /// Returns <see langword="false"/> when the name cannot be classified safely.
         /// </summary>
+        /// <param name="recordName">Name returned by Cloudflare.</param>
+        /// <param name="normalizedExpected">Expected name already trimmed, de-dotted, and lowercased.</param>
+        /// <param name="isExactMatch">
+        /// <see langword="true"/> only when classification succeeds and the normalized names are equal.
+        /// </param>
+        /// <returns>
+        /// <see langword="false"/> for blank input, a name that normalizes to empty, or a name containing an empty label.
+        /// </returns>
         internal static bool TryClassifyExactFqdn(string? recordName, string normalizedExpected, out bool isExactMatch)
         {
             isExactMatch = false;
@@ -394,9 +437,22 @@ namespace VectorNNTP.Common.Cloudflare
             return true;
         }
 
+        /// <summary>Trims <paramref name="fqdn"/>, removes one trailing dot, and lowercases it with the invariant culture.</summary>
+        /// <param name="fqdn">DNS name from configuration or a Cloudflare record.</param>
+        /// <returns>The normalized name used for exact comparisons.</returns>
         private static string NormalizeFqdnName(string fqdn) =>
             fqdn.Trim().TrimEnd('.').ToLowerInvariant();
 
+        /// <summary>
+        /// One non-atomic reconcile pass: read A and AAAA, create missing records, update managed TTL and proxy,
+        /// delete stale, duplicate, and unparseable records, then re-read and verify.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact FQDN.</param>
+        /// <param name="desiredV4">Desired IPv4 contents from <c>IpAddressEligibility.ToDnsContent</c>.</param>
+        /// <param name="desiredV6">Desired IPv6 contents from <c>IpAddressEligibility.ToDnsContent</c>.</param>
+        /// <param name="attempt">One-based attempt number logged with the plan counts.</param>
+        /// <param name="cancellationToken">Operation token. Checked before each mutation.</param>
         private async Task ReconcileAttemptAsync(
             string zoneId,
             string fqdn,
@@ -448,6 +504,14 @@ namespace VectorNNTP.Common.Cloudflare
             await VerifyAsync(zoneId, fqdn, desiredV4, desiredV6, cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Creates one A or AAAA record per missing content, with managed TTL and DNS-only proxy.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Record name.</param>
+        /// <param name="type"><see cref="CloudflareDnsRecordTypes.A"/> or <see cref="CloudflareDnsRecordTypes.AAAA"/>.</param>
+        /// <param name="missingContents">Desired contents that had no matching record.</param>
+        /// <param name="cancellationToken">Operation token. Checked before each create.</param>
         private async Task CreateMissingAsync(
             string zoneId,
             string fqdn,
@@ -474,6 +538,18 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>
+        /// Updates kept desired records whose TTL or proxy flag is not the managed value.
+        /// Records that already match are left unchanged.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Record name written on update.</param>
+        /// <param name="type"><see cref="CloudflareDnsRecordTypes.A"/> or <see cref="CloudflareDnsRecordTypes.AAAA"/>.</param>
+        /// <param name="keptDesired">One existing record per desired content.</param>
+        /// <param name="cancellationToken">Operation token. Checked before each update.</param>
+        /// <exception cref="CloudflareDnsException">
+        /// A kept record's content is not a valid address for <paramref name="type"/>. That failure is permanent.
+        /// </exception>
         private async Task EnsureManagedAttributesAsync(
             string zoneId,
             string fqdn,
@@ -520,6 +596,12 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>Deletes each planned record by id. Called only after desired creates have completed.</summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">FQDN logged with the delete.</param>
+        /// <param name="type">Record type logged with the delete.</param>
+        /// <param name="records">Stale, duplicate, and unparseable records.</param>
+        /// <param name="cancellationToken">Operation token. Checked before each delete.</param>
         private async Task DeleteRecordsAsync(
             string zoneId,
             string fqdn,
@@ -535,6 +617,12 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>Re-reads A and AAAA and requires each family to match the desired content set and managed attributes.</summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact FQDN.</param>
+        /// <param name="desiredV4">Desired IPv4 contents.</param>
+        /// <param name="desiredV6">Desired IPv6 contents.</param>
+        /// <param name="cancellationToken">Cancels the verification lists.</param>
         private async Task VerifyAsync(
             string zoneId,
             string fqdn,
@@ -553,6 +641,17 @@ namespace VectorNNTP.Common.Cloudflare
             AssertExactSet(fqdn, CloudflareDnsRecordTypes.AAAA, desiredV6, actualAaaa);
         }
 
+        /// <summary>
+        /// Fails verification unless <paramref name="actual"/> is exactly <paramref name="desired"/>:
+        /// same contents, same count, DNS-only proxy, managed TTL, and parseable content.
+        /// </summary>
+        /// <param name="fqdn">FQDN included in the failure message.</param>
+        /// <param name="type">Address family being checked.</param>
+        /// <param name="desired">Desired normalized contents.</param>
+        /// <param name="actual">Records returned by the verification list.</param>
+        /// <exception cref="CloudflareDnsException">
+        /// The set, count, proxy flag, TTL, or content does not match. The failure is not marked permanent.
+        /// </exception>
         private static void AssertExactSet(
             string fqdn,
             string type,
@@ -622,6 +721,14 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>
+        /// Classifies existing records into missing contents, one kept record per desired content,
+        /// duplicates, stale contents, and unparseable records that must be deleted.
+        /// </summary>
+        /// <param name="existing">Current records for one address family.</param>
+        /// <param name="type">Address family used to accept or reject record content.</param>
+        /// <param name="desiredContents">Desired normalized contents for that family.</param>
+        /// <returns>The plan. Unparseable records are only in <see cref="FamilyPlan.RecordsToDelete"/>.</returns>
         private static FamilyPlan BuildPlan(
             IReadOnlyList<CloudflareDnsRecord> existing,
             string type,
@@ -686,6 +793,14 @@ namespace VectorNNTP.Common.Cloudflare
             return new FamilyPlan(missing, keptDesired, stale, duplicateExtras, toDelete);
         }
 
+        /// <summary>
+        /// Waits for reconciler backoff unless it exceeds the remaining <see cref="CloudflareOperationBudget"/>.
+        /// </summary>
+        /// <param name="delay">Delay from <see cref="GetAttemptBackoff"/>. Zero or negative returns without waiting.</param>
+        /// <param name="cancellationToken">Operation token.</param>
+        /// <exception cref="OperationCanceledException">
+        /// The token is canceled, the budget is expired, or <paramref name="delay"/> is longer than the remaining budget.
+        /// </exception>
         private async Task DelayRespectingBudgetAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -706,6 +821,11 @@ namespace VectorNNTP.Common.Cloudflare
             await DelayAsync(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Returns the delay before the next reconcile or cleanup attempt: 200 ms times <c>2^(failedAttempt-1)</c>, clamped to 200–2000 ms.
+        /// </summary>
+        /// <param name="failedAttempt">One-based attempt that just failed. HTTP 429 delays are chosen separately by the client.</param>
+        /// <returns>The backoff delay.</returns>
         private static TimeSpan GetAttemptBackoff(int failedAttempt)
         {
             // 200ms, 400ms between reconciler attempts (HTTP 429 has its own Retry-After policy).
@@ -713,6 +833,9 @@ namespace VectorNNTP.Common.Cloudflare
             return TimeSpan.FromMilliseconds(Math.Clamp(ms, 200, 2000));
         }
 
+        /// <summary>Converts desired addresses to the DNS content strings used for set comparison.</summary>
+        /// <param name="addresses">IPv4 or IPv6 addresses for one family.</param>
+        /// <returns>A case-insensitive set of <c>IpAddressEligibility.ToDnsContent</c> values.</returns>
         private static HashSet<string> ToContentSet(IReadOnlyList<IPAddress> addresses)
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -724,6 +847,10 @@ namespace VectorNNTP.Common.Cloudflare
             return set;
         }
 
+        /// <summary>Collects parseable record contents for one address family. Unparseable contents are omitted.</summary>
+        /// <param name="records">Records returned by Cloudflare.</param>
+        /// <param name="type">Address family passed to <see cref="NormalizeContent"/>.</param>
+        /// <returns>A case-insensitive set of normalized contents.</returns>
         private static HashSet<string> ToObservedContentSet(IReadOnlyList<CloudflareDnsRecord> records, string type)
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -739,6 +866,12 @@ namespace VectorNNTP.Common.Cloudflare
             return set;
         }
 
+        /// <summary>
+        /// Parses record content as an IP and returns its canonical DNS form when the address family matches <paramref name="type"/>.
+        /// </summary>
+        /// <param name="content">Cloudflare record content. Null or non-IP text returns null.</param>
+        /// <param name="type"><see cref="CloudflareDnsRecordTypes.A"/> or <see cref="CloudflareDnsRecordTypes.AAAA"/>.</param>
+        /// <returns>The canonical content, or null when missing, unparseable, or the wrong family.</returns>
         private static string? NormalizeContent(string? content, string type)
         {
             if (!IpAddressEligibility.TryParseDnsContent(content, out var address))
@@ -759,6 +892,12 @@ namespace VectorNNTP.Common.Cloudflare
             return IpAddressEligibility.ToDnsContent(address);
         }
 
+        /// <summary>Per-address-family reconcile plan for one attempt.</summary>
+        /// <param name="Missing">Desired contents with no current record. These are created before any delete.</param>
+        /// <param name="KeptDesired">The first existing record for each desired content.</param>
+        /// <param name="Stale">Records whose content is not desired.</param>
+        /// <param name="DuplicateExtras">Records after the first for a desired content.</param>
+        /// <param name="RecordsToDelete">Stale, duplicate, and unparseable records, in that order.</param>
         private sealed record FamilyPlan(
             IReadOnlyList<string> Missing,
             IReadOnlyList<CloudflareDnsRecord> KeptDesired,

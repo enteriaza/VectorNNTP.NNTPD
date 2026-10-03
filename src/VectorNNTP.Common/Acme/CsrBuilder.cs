@@ -8,6 +8,10 @@ namespace VectorNNTP.Common.Acme
     internal static class CsrBuilder
     {
         /// <summary>Creates a PKCS#10 CSR covering the given DNS names (first name is CN when ≤64 chars).</summary>
+        /// <param name="dnsNames">SAN values. The first entry is the CN when its length is at most 64 characters; otherwise the subject is empty. Values that parse as IP addresses are IP SANs.</param>
+        /// <param name="key">Leaf key that signs the request. Not disposed.</param>
+        /// <returns>The DER-encoded PKCS#10 request.</returns>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="dnsNames"/> is empty.</exception>
         internal static byte[] CreateDnsSigningRequest(IReadOnlyList<string> dnsNames, AcmeCertificateKey key)
         {
             ArgumentNullException.ThrowIfNull(dnsNames);

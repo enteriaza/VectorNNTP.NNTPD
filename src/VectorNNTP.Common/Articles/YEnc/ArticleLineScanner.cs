@@ -13,9 +13,16 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// </remarks>
     internal static class ArticleLineScanner
     {
+        /// <summary>CR byte <c>0x0D</c>, recognized only as the first byte of a CRLF pair.</summary>
         private const byte CR = (byte)'\r';
+
+        /// <summary>LF byte <c>0x0A</c>. A line ends at LF when the previous byte is not CR, including LF at the search start.</summary>
         private const byte LF = (byte)'\n';
 
+        /// <summary>
+        /// Shuffle that places <c>0xFF</c> in lane 0 and copies lanes 0..14 of the current vector into lanes 1..15.
+        /// Used when the search starts at index 0 so the synthetic previous byte is not CR.
+        /// </summary>
         private static readonly Vector128<byte> PrevByteShuffleIndices = Vector128.Create(
             0xFF, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14);
 
@@ -141,6 +148,14 @@ namespace VectorNNTP.Common.Articles.YEnc
             return -1;
         }
 
+        /// <summary>
+        /// Scalar scan for the first CRLF or standalone LF at or after <paramref name="i"/>.
+        /// </summary>
+        /// <param name="b">Reference to <c>span[0]</c>.</param>
+        /// <param name="n">Span length.</param>
+        /// <param name="i">Inclusive scan start, already at or after <paramref name="startOffset"/>.</param>
+        /// <param name="startOffset">Original search start. An LF at this index is a terminator even when the previous byte is CR.</param>
+        /// <returns>Index of the CR in a CRLF pair or of a standalone LF, or <c>-1</c> when none remains.</returns>
         private static int IndexOfCrLfScalar(ref byte b, int n, int i, int startOffset)
         {
             for (; i < n; i++)

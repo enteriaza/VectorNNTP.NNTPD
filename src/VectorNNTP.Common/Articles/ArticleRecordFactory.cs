@@ -190,6 +190,11 @@ namespace VectorNNTP.Common.Articles
             return ArticleRecordCreateResult.Accepted(record, meta.SelectedDateHeaderName);
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="name"/> is Date, Injection-Date, NNTP-Posting-Date, Posted, X-Date, or Delivery-Date.
+        /// </summary>
+        /// <param name="name">Classified header name.</param>
+        /// <returns><see langword="true"/> for those six identities only.</returns>
         private static bool IsDateFamilyHeader(NntpArticleHeaderName name) =>
             name is NntpArticleHeaderName.Date
                 or NntpArticleHeaderName.InjectionDate
@@ -198,6 +203,12 @@ namespace VectorNNTP.Common.Articles
                 or NntpArticleHeaderName.XDate
                 or NntpArticleHeaderName.DeliveryDate;
 
+        /// <summary>
+        /// Requires every field range to be absent or fully inside <c>[0, artSize)</c>.
+        /// </summary>
+        /// <param name="fields">Header ranges proposed for the record.</param>
+        /// <param name="artSize">Length of the canonical article buffer.</param>
+        /// <returns><see langword="false"/> when any range fails <see cref="TryValidateRange"/>.</returns>
         private static bool TryValidateFieldTable(in ArticleFieldTable fields, int artSize)
         {
             return TryValidateRange(fields.MessageId, artSize)
@@ -209,6 +220,16 @@ namespace VectorNNTP.Common.Articles
                 && TryValidateRange(fields.Path, artSize);
         }
 
+        /// <summary>
+        /// Accepts an absent range (<see cref="ArticleByteRange.Offset"/> <c>-1</c> and length 0) or a present range that fits in the article.
+        /// </summary>
+        /// <param name="range">One header-value range.</param>
+        /// <param name="artSize">Length of the canonical article buffer.</param>
+        /// <returns>
+        /// <see langword="false"/> when a present range has a negative offset or length, or when
+        /// <c>offset + length</c> exceeds <paramref name="artSize"/> using a 64-bit sum.
+        /// An absent range with any other offset or length is also rejected.
+        /// </returns>
         private static bool TryValidateRange(ArticleByteRange range, int artSize)
         {
             if (!range.IsPresent)
@@ -224,6 +245,12 @@ namespace VectorNNTP.Common.Articles
             return (long)range.Offset + range.Length <= artSize;
         }
 
+        /// <summary>
+        /// Splits on the first CRLF CRLF. The separator stays with the header slice.
+        /// </summary>
+        /// <param name="artData">Canonical article bytes.</param>
+        /// <param name="headers">Bytes through the blank-line separator, or all of <paramref name="artData"/> when CRLF CRLF is absent.</param>
+        /// <param name="body">Bytes after the separator, or empty when the separator is absent. Lone LF separators are not recognized.</param>
         private static void SplitHeadersAndBody(
             ReadOnlySpan<byte> artData,
             out ReadOnlySpan<byte> headers,
@@ -248,6 +275,14 @@ namespace VectorNNTP.Common.Articles
     /// </summary>
     public readonly struct ArticleRecordCreateResult
     {
+        /// <summary>
+        /// Stores the acceptance flag, record, and failure codes exactly as the factory methods pass them.
+        /// </summary>
+        /// <param name="isAccepted"><see langword="true"/> only for <see cref="Accepted"/>.</param>
+        /// <param name="record">Canonical record when accepted; otherwise <see langword="default"/>.</param>
+        /// <param name="parseFailure">Parser failure, or <see cref="NntpArticleParseFailureCode.None"/> when parse succeeded.</param>
+        /// <param name="materializeFailure">Materializer or transfer failure, or <see cref="NntpArticleCanonicalFailureCode.None"/> when that stage succeeded.</param>
+        /// <param name="selectedDateHeaderName">Winning Date-family name, or <see cref="NntpArticleHeaderName.Unknown"/> when not accepted.</param>
         private ArticleRecordCreateResult(
             bool isAccepted,
             ArticleRecord record,

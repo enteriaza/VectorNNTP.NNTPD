@@ -14,7 +14,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
     /// </remarks>
     internal sealed class RabbitMqClientPublishChannel : IRabbitMqPublishChannel
     {
+        /// <summary>
+        /// Owned confirm-enabled channel. <see cref="DisposeAsync"/> closes it when open, swallowing close errors, then disposes it.
+        /// </summary>
         private readonly IChannel _channel;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary>Initializes a new wrapper around an opened confirm-enabled channel.</summary>

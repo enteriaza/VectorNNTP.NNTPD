@@ -1,7 +1,8 @@
 namespace VectorNNTP.Common.Core
 {
     /// <summary>
-    /// Explicit application lifecycle states for VectorNNTP.NNTPD.
+    /// Explicit application lifecycle states shared by hosts that use
+    /// <see cref="ApplicationLifecycle"/>.
     /// </summary>
     internal enum ApplicationState
     {

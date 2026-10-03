@@ -72,6 +72,13 @@ namespace VectorNNTP.Common.Configuration
             return results;
         }
 
+        /// <summary>
+        /// Returns whether <paramref name="left"/> and <paramref name="right"/> are the same unicast address.
+        /// IPv6 equality ignores scope-id differences when the address bytes match.
+        /// </summary>
+        /// <param name="left">Address from a local interface.</param>
+        /// <param name="right">Address being tested.</param>
+        /// <returns><see langword="true"/> when the addresses match under that rule.</returns>
         private static bool AddressesMatch(IPAddress left, IPAddress right)
         {
             if (left.Equals(right))

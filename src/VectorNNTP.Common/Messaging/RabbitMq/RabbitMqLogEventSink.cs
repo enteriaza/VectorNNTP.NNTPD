@@ -39,10 +39,21 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>AMQP content encoding written on every publication.</summary>
         public const string Utf8ContentEncoding = "utf-8";
 
+        /// <summary>Process connection owner. This sink does not dispose it and does not open its own connection.</summary>
         private readonly IRabbitMqService _rabbitMq;
+
+        /// <summary>Serializes <see cref="Emit"/> publication and channel disposal.</summary>
         private readonly object _gate = new();
+
+        /// <summary>
+        /// Cached confirm channel for the current connection generation. Replaced when the generation changes or the channel is closed.
+        /// </summary>
         private IRabbitMqPublishChannel? _channel;
+
+        /// <summary><c>1</c> while <see cref="Emit"/> is in progress. A re-entrant call is dropped.</summary>
         private int _emitDepth;
+
+        /// <summary><c>1</c> after <see cref="Dispose"/>. Later events are ignored.</summary>
         private int _disposed;
 
         /// <summary>
@@ -152,6 +163,15 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             }
         }
 
+        /// <summary>
+        /// Confirm-publishes <paramref name="logEvent"/> on the current connection. Skips the event when no open handle is available.
+        /// </summary>
+        /// <param name="logEvent">Event already accepted by <see cref="Emit"/>.</param>
+        /// <remarks>
+        /// The body is persistent UTF-8 with a new message id, empty expiration, mandatory routing disabled, and the log timestamp.
+        /// <see cref="IRabbitMqPublishChannel.PublishConfirmedAsync(RabbitMqConfirmedPublication, CancellationToken)"/> is awaited synchronously.
+        /// This method does not declare the exchange. Failures propagate to <see cref="Emit"/>.
+        /// </remarks>
         private void Publish(LogEvent logEvent)
         {
             if (!_rabbitMq.TryGetCurrent(out var handle) || !handle.IsOpen)
@@ -179,6 +199,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             channel.PublishConfirmedAsync(publication, CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
+        /// <summary>
+        /// Returns the cached open channel when it matches <paramref name="handle"/>'s generation; otherwise replaces it.
+        /// </summary>
+        /// <param name="handle">Current connection snapshot. Not pinned for the publish that follows.</param>
+        /// <returns>An open confirm channel for <paramref name="handle"/>'s generation.</returns>
+        /// <remarks>Channel creation blocks on <see cref="IRabbitMqConnection.CreatePublishChannelAsync"/>. Topology is not declared.</remarks>
         private IRabbitMqPublishChannel EnsureChannel(RabbitMqConnectionHandle handle)
         {
             if (_channel is { IsOpen: true } current && current.Generation == handle.Generation)
@@ -195,6 +221,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             return _channel;
         }
 
+        /// <summary>Formats <paramref name="logEvent"/> with <see cref="Formatter"/> and returns UTF-8 bytes.</summary>
+        /// <param name="logEvent">Event to format.</param>
+        /// <returns>The formatted payload. No AMQP framing is added.</returns>
         private byte[] Format(LogEvent logEvent)
         {
             using var writer = new StringWriter(CultureInfo.InvariantCulture);
@@ -202,6 +231,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             return Encoding.UTF8.GetBytes(writer.ToString());
         }
 
+        /// <summary>
+        /// Disposes the cached publish channel and clears it. A dispose failure is written to <see cref="SelfLog"/> and not thrown.
+        /// </summary>
         private void DisposeChannel()
         {
             var channel = _channel;

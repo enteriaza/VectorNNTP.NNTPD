@@ -22,11 +22,25 @@ namespace VectorNNTP.Common.Articles
         /// <summary>BLAKE3 output length in bytes.</summary>
         internal const int Length = 32;
 
+        /// <summary>Little-endian bytes 0 through 7 of the 32-byte BLAKE3 digest.</summary>
         private readonly ulong _w0;
+
+        /// <summary>Little-endian bytes 8 through 15 of the 32-byte BLAKE3 digest.</summary>
         private readonly ulong _w1;
+
+        /// <summary>Little-endian bytes 16 through 23 of the 32-byte BLAKE3 digest.</summary>
         private readonly ulong _w2;
+
+        /// <summary>Little-endian bytes 24 through 31 of the 32-byte BLAKE3 digest.</summary>
         private readonly ulong _w3;
 
+        /// <summary>
+        /// Stores the four little-endian lanes of a 32-byte digest. Callers pass lanes read by <see cref="FromSpan"/>.
+        /// </summary>
+        /// <param name="w0">Bytes 0 through 7.</param>
+        /// <param name="w1">Bytes 8 through 15.</param>
+        /// <param name="w2">Bytes 16 through 23.</param>
+        /// <param name="w3">Bytes 24 through 31.</param>
         private ArticleId(ulong w0, ulong w1, ulong w2, ulong w3)
         {
             _w0 = w0;
@@ -160,6 +174,11 @@ namespace VectorNNTP.Common.Articles
         /// <summary>Inequality operator.</summary>
         public static bool operator !=(ArticleId left, ArticleId right) => !left.Equals(right);
 
+        /// <summary>
+        /// Maps one lowercase hexadecimal character to its nibble.
+        /// </summary>
+        /// <param name="c">Character already constrained by <see cref="TryParseLowerHex"/> to <c>0-9</c> or <c>a-f</c> on the success path.</param>
+        /// <returns><c>0..15</c> for <c>0-9</c> and <c>a-f</c>; <c>-1</c> for every other character, including <c>A-F</c>.</returns>
         private static int HexValue(char c) =>
             c switch
             {

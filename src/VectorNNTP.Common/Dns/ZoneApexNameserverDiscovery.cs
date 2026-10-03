@@ -25,16 +25,26 @@ namespace VectorNNTP.Common.Dns
     /// </remarks>
     internal static class ZoneApexNameserverDiscovery
     {
+        /// <summary>UDP receive window, in milliseconds, for each recursive NS, A, and AAAA query.</summary>
         private const int UdpTimeoutMs = 5_000;
 
+        /// <summary>
+        /// OS DNS servers discovered at type initialization, or <c>1.1.1.1</c> and <c>8.8.8.8</c> when none qualify or discovery throws.
+        /// </summary>
         private static readonly IPAddress[] RecursiveResolvers = ResolveRecursiveResolvers();
 
+        /// <summary>Exception from OS resolver discovery, when public fallback resolvers are in use. Null otherwise.</summary>
         private static Exception? s_recursiveResolverDiscoveryException;
+
+        /// <summary>Non-zero after the public-fallback event has been logged once.</summary>
         private static int s_loggedRecursiveResolverFallback;
 
         /// <summary>
         /// Resolves distinct authoritative NS addresses for <paramref name="zoneApex"/>.
         /// </summary>
+        /// <param name="zoneApex">Configured zone apex. A trailing dot is removed. There is no label walk.</param>
+        /// <param name="logger">Optional logger for fallback and empty-result diagnostics. Null suppresses those events.</param>
+        /// <param name="cancellationToken">Cancels resolver queries and hostname resolution. Cancellation propagates.</param>
         /// <returns>Distinct NS addresses; empty when discovery fails.</returns>
         internal static async Task<IReadOnlyList<IPAddress>> DiscoverAddressesAsync(
             string zoneApex,
@@ -103,6 +113,13 @@ namespace VectorNNTP.Common.Dns
             return [];
         }
 
+        /// <summary>
+        /// Reads DNS server addresses from operational NICs, skipping any, loopback, and duplicates.
+        /// </summary>
+        /// <returns>
+        /// Those addresses, or <c>1.1.1.1</c> and <c>8.8.8.8</c> when the list is empty or enumeration throws.
+        /// A thrown exception is stored for a one-time fallback log.
+        /// </returns>
         private static IPAddress[] ResolveRecursiveResolvers()
         {
             try
@@ -158,6 +175,10 @@ namespace VectorNNTP.Common.Dns
             ];
         }
 
+        /// <summary>
+        /// Logs the stored OS-discovery failure once. Later calls and a null <paramref name="logger"/> do nothing.
+        /// </summary>
+        /// <param name="logger">Caller logger. Null skips the event without consuming the one-time flag.</param>
         private static void LogRecursiveResolverFallbackIfNeeded(ILogger? logger)
         {
             if (logger is null || s_recursiveResolverDiscoveryException is null)
@@ -174,6 +195,9 @@ namespace VectorNNTP.Common.Dns
             DnsLogMessages.RecursiveResolverDiscoveryFallback(logger, ex.GetType().Name, ex);
         }
 
+        /// <summary>Appends <paramref name="ip"/> when <paramref name="list"/> does not already contain an equal address.</summary>
+        /// <param name="list">Destination address list.</param>
+        /// <param name="ip">Address to add.</param>
         private static void AddUnique(List<IPAddress> list, IPAddress ip)
         {
             foreach (IPAddress existing in list)
@@ -187,9 +211,19 @@ namespace VectorNNTP.Common.Dns
             list.Add(ip);
         }
 
+        /// <summary>Removes one trailing dot and lowercases <paramref name="name"/> with the invariant culture.</summary>
+        /// <param name="name">DNS name used as a glue or comparison key.</param>
+        /// <returns>The normalized name.</returns>
         private static string NormalizeDnsName(string name)
             => name.TrimEnd('.').ToLowerInvariant();
 
+        /// <summary>
+        /// Resolves an NS hostname with recursive A and AAAA queries, then the OS stub resolver if every recursive resolver returns nothing.
+        /// </summary>
+        /// <param name="host">NS hostname.</param>
+        /// <param name="logger">Optional logger for the OS stub failure. Null suppresses that event.</param>
+        /// <param name="cancellationToken">Cancels the queries and the OS lookup.</param>
+        /// <returns>Addresses from the first recursive resolver that returns any, or the OS result.</returns>
         private static async Task<IReadOnlyList<IPAddress>> ResolveNsHostnameViaWireThenOsAsync(
             string host,
             ILogger? logger,
@@ -225,6 +259,15 @@ namespace VectorNNTP.Common.Dns
             return await ResolveHostAddressesAsync(host, logger, cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Appends answer-section A or AAAA rdata whose type, class, and length match the query.
+        /// A malformed header or question section adds nothing.
+        /// </summary>
+        /// <param name="buffer">DNS response.</param>
+        /// <param name="expectedId">Transaction id that must match the response.</param>
+        /// <param name="expectedType"><see cref="DnsRecordType.A"/> or <see cref="DnsRecordType.Aaaa"/>.</param>
+        /// <param name="expectedRdLength">4 for A and 16 for AAAA.</param>
+        /// <param name="dest">Receives matching addresses. Existing entries are kept.</param>
         private static void CollectAddressAnswers(
             byte[] buffer,
             ushort expectedId,
@@ -276,6 +319,14 @@ namespace VectorNNTP.Common.Dns
             }
         }
 
+        /// <summary>
+        /// Resolves <paramref name="host"/> with <see cref="System.Net.Dns.GetHostAddressesAsync(string, System.Threading.CancellationToken)"/>
+        /// and keeps IPv4 and IPv6 results.
+        /// </summary>
+        /// <param name="host">NS hostname.</param>
+        /// <param name="logger">Optional logger. A non-cancellation failure is logged and becomes an empty list.</param>
+        /// <param name="cancellationToken">Cancels the OS lookup. Cancellation propagates.</param>
+        /// <returns>IPv4 and IPv6 addresses, or empty when the OS returns none or throws.</returns>
         private static async Task<IReadOnlyList<IPAddress>> ResolveHostAddressesAsync(
             string host,
             ILogger? logger,
@@ -315,6 +366,14 @@ namespace VectorNNTP.Common.Dns
             }
         }
 
+        /// <summary>
+        /// Reads NS names and A/AAAA glue from the answer, authority, and additional sections.
+        /// </summary>
+        /// <param name="buffer">DNS response to an NS query.</param>
+        /// <param name="expectedId">Transaction id that must match.</param>
+        /// <param name="nsHostnames">Receives distinct NS hostnames. Replaced on entry.</param>
+        /// <param name="glue">Receives additional A/AAAA addresses keyed by normalized owner name. Replaced on entry.</param>
+        /// <returns><see langword="false"/> when the header or question section cannot be read. Section parse stops early still return <see langword="true"/>.</returns>
         private static bool TryParseNsResponse(
             byte[] buffer,
             ushort expectedId,
@@ -348,6 +407,14 @@ namespace VectorNNTP.Common.Dns
             return true;
         }
 
+        /// <summary>
+        /// Scans one DNS section for IN NS names and IN A/AAAA glue. A truncated record stops the section.
+        /// </summary>
+        /// <param name="span">Full DNS message.</param>
+        /// <param name="offset">Start of the section. Advanced past every record that is consumed.</param>
+        /// <param name="count">Record count from the header.</param>
+        /// <param name="nsHostnames">Receives distinct NS target names.</param>
+        /// <param name="glue">Receives A/AAAA addresses keyed by normalized owner name.</param>
         private static void ProcessSection(
             ReadOnlySpan<byte> span,
             ref int offset,
@@ -398,6 +465,10 @@ namespace VectorNNTP.Common.Dns
             }
         }
 
+        /// <summary>Adds <paramref name="ip"/> under the normalized <paramref name="owner"/> when that address is not already present.</summary>
+        /// <param name="glue">Glue map keyed by normalized owner name.</param>
+        /// <param name="owner">Record owner name.</param>
+        /// <param name="ip">A or AAAA rdata.</param>
         private static void AddGlue(Dictionary<string, List<IPAddress>> glue, string owner, IPAddress ip)
         {
             string key = NormalizeDnsName(owner);
@@ -418,6 +489,18 @@ namespace VectorNNTP.Common.Dns
             list.Add(ip);
         }
 
+        /// <summary>
+        /// Reads one resource record's owner, type, class, and rdata bounds, then advances <paramref name="offset"/> past the rdata.
+        /// TTL is skipped. Compression in the owner name is followed by <see cref="DnsNameCodec.TryReadDomainName"/>.
+        /// </summary>
+        /// <param name="packet">Full DNS message.</param>
+        /// <param name="offset">Start of the record. On success, the first byte after rdata.</param>
+        /// <param name="ownerName">Uncompressed owner name.</param>
+        /// <param name="rrType">TYPE field.</param>
+        /// <param name="rrClass">CLASS field.</param>
+        /// <param name="rdataStart">Offset of RDATA.</param>
+        /// <param name="rdLength">RDLENGTH.</param>
+        /// <returns><see langword="false"/> when the name or fixed fields do not fit. Out parameters other than the name are then zero.</returns>
         private static bool TryConsumeResourceRecord(
             ReadOnlySpan<byte> packet,
             ref int offset,

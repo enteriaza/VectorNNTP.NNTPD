@@ -89,48 +89,68 @@ namespace VectorNNTP.Common.Cloudflare
         public bool Proxied { get; set; } = CloudflareManagedDnsPolicy.ManagedProxied;
     }
 
+    /// <summary>
+    /// Cloudflare API v4 response envelope. <see cref="Success"/> false is an API failure even when HTTP status is 200.
+    /// </summary>
+    /// <typeparam name="T">Deserialized <c>result</c> payload.</typeparam>
     internal sealed class CloudflareApiResponse<T>
     {
+        /// <summary>Gets or sets whether Cloudflare accepted the request. False is a failure even with HTTP 200.</summary>
         [JsonPropertyName("success")]
         public bool Success { get; set; }
 
+        /// <summary>Gets or sets Cloudflare error objects. Empty when the payload omits errors.</summary>
         [JsonPropertyName("errors")]
         public List<CloudflareApiError> Errors { get; set; } = [];
 
+        /// <summary>Gets or sets Cloudflare informational messages. The DNS client does not treat these as success or failure.</summary>
         [JsonPropertyName("messages")]
         public List<CloudflareApiMessage> Messages { get; set; } = [];
 
+        /// <summary>Gets or sets the operation payload. Null when the field is absent.</summary>
         [JsonPropertyName("result")]
         public T? Result { get; set; }
 
+        /// <summary>Gets or sets list pagination metadata. Null when the field is absent; list calls then fail closed.</summary>
         [JsonPropertyName("result_info")]
         public CloudflareResultInfo? ResultInfo { get; set; }
     }
 
+    /// <summary>One object from a Cloudflare API <c>errors</c> array.</summary>
     internal sealed class CloudflareApiError
     {
+        /// <summary>Gets or sets the Cloudflare error code. Auth codes 10000, 9109, 9106, and 6003 are treated as permanent on HTTP 2xx.</summary>
         [JsonPropertyName("code")]
         public int Code { get; set; }
 
+        /// <summary>Gets or sets the Cloudflare error text. Diagnostics truncate it and do not log the API key.</summary>
         [JsonPropertyName("message")]
         public string Message { get; set; } = string.Empty;
     }
 
+    /// <summary>One object from a Cloudflare API <c>messages</c> array.</summary>
     internal sealed class CloudflareApiMessage
     {
+        /// <summary>Gets or sets the Cloudflare message code.</summary>
         [JsonPropertyName("code")]
         public int Code { get; set; }
 
+        /// <summary>Gets or sets the Cloudflare message text.</summary>
         [JsonPropertyName("message")]
         public string Message { get; set; } = string.Empty;
     }
 
+    /// <summary>
+    /// Cloudflare <c>result_info</c> pagination object. List calls require <see cref="CloudflareResultInfo.TotalPages"/>
+    /// and fail closed when it is missing.
+    /// </summary>
     internal sealed class CloudflareResultInfo
     {
         /// <summary>Gets or sets the current page number when Cloudflare includes it.</summary>
         [JsonPropertyName("page")]
         public int? Page { get; set; }
 
+        /// <summary>Gets or sets the page size Cloudflare reported. Null when absent. Listing completeness uses <see cref="TotalPages"/>, not this value.</summary>
         [JsonPropertyName("per_page")]
         public int? PerPage { get; set; }
 
@@ -140,9 +160,11 @@ namespace VectorNNTP.Common.Cloudflare
         [JsonPropertyName("total_pages")]
         public int? TotalPages { get; set; }
 
+        /// <summary>Gets or sets the count Cloudflare reported for the current page. Null when absent. Not used to decide listing completeness.</summary>
         [JsonPropertyName("count")]
         public int? Count { get; set; }
 
+        /// <summary>Gets or sets the total record count Cloudflare reported. Null when absent. Not used to decide listing completeness.</summary>
         [JsonPropertyName("total_count")]
         public int? TotalCount { get; set; }
     }

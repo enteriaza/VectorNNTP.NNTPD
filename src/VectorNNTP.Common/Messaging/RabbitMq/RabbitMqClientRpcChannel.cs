@@ -10,7 +10,12 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>AMQP header name carrying the logical request UUID.</summary>
         internal const string RequestIdPropertyName = "RequestId";
 
+        /// <summary>
+        /// Owned channel. <see cref="DisposeAsync"/> disposes it once and does not call <c>CloseAsync</c> first.
+        /// </summary>
         private readonly IChannel _channel;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary>Initializes a new wrapper around an opened broker channel.</summary>
@@ -151,6 +156,9 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             };
         }
 
+        /// <summary>Copies <paramref name="arguments"/> into a new ordinal dictionary for RabbitMQ.Client.</summary>
+        /// <param name="arguments">Queue-declare arguments. Not mutated.</param>
+        /// <returns><see langword="null"/> when <paramref name="arguments"/> is <see langword="null"/>; otherwise a new dictionary.</returns>
         private static IDictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
         {
             if (arguments is null)

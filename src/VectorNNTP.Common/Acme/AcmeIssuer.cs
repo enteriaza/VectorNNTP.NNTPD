@@ -19,18 +19,40 @@ namespace VectorNNTP.Common.Acme
         /// <summary>Named <see cref="IHttpClientFactory"/> client for ACME HTTP.</summary>
         public const string HttpClientName = "AcmeDirectory";
 
+        /// <summary>RSA size, in bits, for both the account key and the leaf key.</summary>
         private const int KeySizeBits = 2048;
 
+        /// <summary>Directory URL, contact email, PFX password, and renewal threshold.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _options;
+
+        /// <summary>Loads or creates the persisted ACME account key.</summary>
         private readonly AccountStore _accountStore;
+
+        /// <summary>Places, waits for, and deletes DNS-01 TXT records.</summary>
         private readonly Dns01Solver _dnsSolver;
+
+        /// <summary>Creates the HTTP client used by <see cref="AcmeHttpTransport"/>.</summary>
         private readonly IHttpClientFactory _httpClientFactory;
+
+        /// <summary>Logger passed to the transport and client.</summary>
         private readonly ILogger<AcmeIssuer> _logger;
+
+        /// <summary>Optional journal. Validation started/succeeded events are skipped when null or when no transaction is active.</summary>
         private readonly AcmeTransactionJournal? _journal;
+
+        /// <summary>How long to wait for the order to become ready. Default is <see cref="AcmeOrderReadiness.DefaultTimeout"/>.</summary>
         private readonly TimeSpan _readinessTimeout;
+
+        /// <summary>Delay between readiness polls. Default is <see cref="AcmeOrderReadiness.DefaultInterval"/>.</summary>
         private readonly TimeSpan _readinessInterval;
 
-        /// <summary>Initializes a new instance of the <see cref="AcmeIssuer"/> class.</summary>
+        /// <summary>Uses <see cref="AcmeOrderReadiness.DefaultTimeout"/> and <see cref="AcmeOrderReadiness.DefaultInterval"/>.</summary>
+        /// <param name="options">ACME directory, email, password, and renewal threshold.</param>
+        /// <param name="accountStore">Persisted account key store.</param>
+        /// <param name="dnsSolver">DNS-01 publisher for this certificate FQDN.</param>
+        /// <param name="httpClientFactory">Factory for <see cref="HttpClientName"/>.</param>
+        /// <param name="logger">Issuer logger.</param>
+        /// <param name="journal">Optional transaction journal. <see langword="null"/> skips issuer journal events.</param>
         internal AcmeIssuer(
             IOptions<AcmeCloudflareOptions> options,
             AccountStore accountStore,
@@ -51,6 +73,14 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Test constructor with injectable readiness poll timing.</summary>
+        /// <param name="options">ACME directory, email, password, and renewal threshold.</param>
+        /// <param name="accountStore">Persisted account key store.</param>
+        /// <param name="dnsSolver">DNS-01 publisher.</param>
+        /// <param name="httpClientFactory">Factory for <see cref="HttpClientName"/>.</param>
+        /// <param name="logger">Issuer logger.</param>
+        /// <param name="readinessTimeout">Order-ready wait. <see langword="null"/> uses <see cref="AcmeOrderReadiness.DefaultTimeout"/>.</param>
+        /// <param name="readinessInterval">Order-ready poll delay. <see langword="null"/> uses <see cref="AcmeOrderReadiness.DefaultInterval"/>.</param>
+        /// <param name="journal">Optional transaction journal.</param>
         internal AcmeIssuer(
             IOptions<AcmeCloudflareOptions> options,
             AccountStore accountStore,
@@ -76,7 +106,15 @@ namespace VectorNNTP.Common.Acme
             _readinessInterval = readinessInterval ?? AcmeOrderReadiness.DefaultInterval;
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Registers or reuses the ACME account, orders the DNS identifiers, publishes dns-01 TXT records,
+        /// waits until the order is ready, finalizes a PKCS#10 CSR, and returns a validated PKCS#12.
+        /// DNS records created for this call are deleted before return, including on failure.
+        /// Account registration itself runs with <see cref="CancellationToken.None"/>.
+        /// </summary>
+        /// <param name="domains">DNS names for the order and CSR. Empty throws category <c>missing_identities</c>.</param>
+        /// <param name="cancellationToken">Cancels order, DNS, and finalize work. A cancelled call still attempts DNS cleanup.</param>
+        /// <returns>PFX material that passed <see cref="CertificateValidator.RequireValidPfx"/>.</returns>
         public async Task<CertificateMaterial> IssueAsync(
             IReadOnlyList<string> domains,
             CancellationToken cancellationToken)
@@ -241,6 +279,11 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Polls the order and its authorizations until ready, invalid, or the readiness timeout.</summary>
+        /// <param name="acme">Bound ACME client.</param>
+        /// <param name="orderUrl">Order Location URL.</param>
+        /// <param name="authorizationUrls">Authorization URLs from the created order.</param>
+        /// <param name="cancellationToken">Cancels each poll.</param>
         private async Task WaitForOrderReadyAsync(
             AcmeClient acme,
             Uri orderUrl,
@@ -255,6 +298,12 @@ namespace VectorNNTP.Common.Acme
                 .ConfigureAwait(false);
         }
 
+        /// <summary>POST-as-GET the order and each authorization, keeping the dns-01 challenge error when present.</summary>
+        /// <param name="acme">Bound ACME client.</param>
+        /// <param name="orderUrl">Order Location URL.</param>
+        /// <param name="authorizationUrls">Authorization URLs to fetch.</param>
+        /// <param name="cancellationToken">Cancels each fetch.</param>
+        /// <returns>A snapshot for <see cref="AcmeOrderReadiness.Evaluate"/>.</returns>
         private static async Task<AcmeOrderReadiness.OrderView> CaptureOrderViewAsync(
             AcmeClient acme,
             Uri orderUrl,
@@ -289,6 +338,10 @@ namespace VectorNNTP.Common.Acme
                 authzViews);
         }
 
+        /// <summary>Loads or creates the account for <paramref name="options"/>'s directory URL.</summary>
+        /// <param name="options">Supplies the directory URL and contact email used at registration.</param>
+        /// <param name="cancellationToken">Passed to <see cref="AccountStore.EnsureRegistered"/>.</param>
+        /// <returns>The persisted account, including the PKCS#8 key.</returns>
         private AcmeAccountState EnsureAccount(AcmeCloudflareOptions options, CancellationToken cancellationToken)
         {
             return _accountStore.EnsureRegistered(
@@ -298,12 +351,21 @@ namespace VectorNNTP.Common.Acme
                 cancellationToken);
         }
 
+        /// <summary>Creates a new <see cref="KeySizeBits"/>-bit RSA key and returns its PKCS#8 DER encoding.</summary>
+        /// <returns>The private key bytes. The temporary <see cref="RSA"/> is disposed.</returns>
         private static byte[] GenerateAccountKeyDer()
         {
             using var rsa = RSA.Create(KeySizeBits);
             return rsa.ExportPkcs8PrivateKey();
         }
 
+        /// <summary>
+        /// Calls <c>newAccount</c> with <c>termsOfServiceAgreed</c> true, an optional <c>mailto:</c> contact, and no external account binding.
+        /// The call blocks on <see cref="CancellationToken.None"/>. The stored registration body is empty.
+        /// </summary>
+        /// <param name="options">Directory URL and email.</param>
+        /// <param name="keyDer">PKCS#8 account key.</param>
+        /// <returns>The account Location URL and an empty registration body.</returns>
         private (string AccountUri, string RegistrationBody) RegisterAccount(AcmeCloudflareOptions options, byte[] keyDer)
         {
             try
@@ -346,6 +408,14 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>
+        /// Pairs the first PEM certificate with <paramref name="certKey"/> and exports leaf plus the remaining certificates as a PFX.
+        /// A blank or empty chain throws category <c>empty_certificate</c>.
+        /// </summary>
+        /// <param name="certificateChainPem">PEM chain from the CA. The first certificate is the leaf.</param>
+        /// <param name="certKey">Leaf private key. Not disposed.</param>
+        /// <param name="password">PFX password.</param>
+        /// <returns>PKCS#12 bytes.</returns>
         private static byte[] BuildPfx(string certificateChainPem, AcmeCertificateKey certKey, string password)
         {
             if (string.IsNullOrWhiteSpace(certificateChainPem))
@@ -382,6 +452,8 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>Deletes TXT records created by this issuance. Cleanup failures become category <c>txt_cleanup_failed</c>.</summary>
+        /// <param name="cancellationToken">Cancels cleanup. Cancellation propagates.</param>
         private async Task CleanupDnsAsync(CancellationToken cancellationToken)
         {
             try
@@ -398,6 +470,11 @@ namespace VectorNNTP.Common.Acme
             }
         }
 
+        /// <summary>
+        /// Deletes TXT records after a failed issuance.
+        /// Cancellation is ignored unless <paramref name="cancellationToken"/> itself is already cancelled. Other failures are ignored.
+        /// </summary>
+        /// <param name="cancellationToken">Passed to cleanup. <see cref="CancellationToken.None"/> is used when the caller was cancelled.</param>
         private async Task BestEffortDnsCleanupAsync(CancellationToken cancellationToken)
         {
             try

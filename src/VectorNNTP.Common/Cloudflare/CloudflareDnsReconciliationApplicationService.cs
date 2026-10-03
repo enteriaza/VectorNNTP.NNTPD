@@ -13,9 +13,11 @@ namespace VectorNNTP.Common.Cloudflare
     /// </remarks>
     internal sealed class CloudflareDnsReconciliationApplicationService : IApplicationService
     {
+        /// <summary>Reconciliation service that performs hostname, bind-address, and Cloudflare work.</summary>
         private readonly CloudflareDnsReconciliationService _inner;
 
         /// <summary>Initializes a new wrapper.</summary>
+        /// <param name="inner">Reconciliation service registered beside this adapter.</param>
         public CloudflareDnsReconciliationApplicationService(CloudflareDnsReconciliationService inner)
         {
             ArgumentNullException.ThrowIfNull(inner);

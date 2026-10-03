@@ -6,6 +6,8 @@ namespace VectorNNTP.Common.Acme.Protocol
     internal static class Base64Url
     {
         /// <summary>Encodes <paramref name="bytes"/> as unpadded base64url.</summary>
+        /// <param name="bytes">Bytes to encode. Empty input returns an empty string.</param>
+        /// <returns>Base64url text with <c>+</c> and <c>/</c> mapped to <c>-</c> and <c>_</c> and with padding removed.</returns>
         internal static string Encode(ReadOnlySpan<byte> bytes)
         {
             if (bytes.IsEmpty)
@@ -54,6 +56,9 @@ namespace VectorNNTP.Common.Acme.Protocol
         }
 
         /// <summary>Decodes unpadded or padded base64url into bytes.</summary>
+        /// <param name="value">Base64url text. <c>-</c> and <c>_</c> are mapped back to <c>+</c> and <c>/</c>, then padding is added.</param>
+        /// <returns>The decoded bytes.</returns>
+        /// <exception cref="FormatException">Thrown when the length mod 4 is 3, or the padded text is not valid base64.</exception>
         internal static byte[] Decode(string value)
         {
             ArgumentNullException.ThrowIfNull(value);

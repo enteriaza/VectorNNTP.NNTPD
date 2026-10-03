@@ -23,8 +23,15 @@ namespace VectorNNTP.Common.Cloudflare
     /// </remarks>
     internal sealed class CloudflareDnsClient : ICloudflareDnsClient
     {
+        /// <summary>Named <see cref="HttpClient"/> registered for the Cloudflare DNS API.</summary>
         internal const string HttpClientName = "CloudflareDns";
+
+        /// <summary>Page size sent as <c>per_page</c> on every DNS list request.</summary>
         private const int DefaultPerPage = 100;
+
+        /// <summary>
+        /// HTTP 429 waits after the first response. The send loop then makes one more attempt that does not wait.
+        /// </summary>
         private const int MaxRateLimitRetries = 3;
 
         /// <summary>
@@ -38,10 +45,18 @@ namespace VectorNNTP.Common.Cloudflare
         /// </summary>
         internal const int MaxListPages = 20;
 
+        /// <summary>
+        /// Default Cloudflare API v4 base URI, applied only when the injected <see cref="HttpClient"/> has no base address.
+        /// </summary>
         private static readonly Uri ApiBaseAddress = new("https://api.cloudflare.com/client/v4/");
 
+        /// <summary>HTTP client used for DNS record calls. Its base address is set to <see cref="ApiBaseAddress"/> when missing.</summary>
         private readonly HttpClient _httpClient;
+
+        /// <summary>Supplies the bearer token from <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/> on each request.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _options;
+
+        /// <summary>Client diagnostics. The API key and authorization header are not logged.</summary>
         private readonly ILogger<CloudflareDnsClient> _logger;
 
         /// <summary>
@@ -53,6 +68,9 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Initializes a new instance of the <see cref="CloudflareDnsClient"/> class.
         /// </summary>
+        /// <param name="httpClient">Client for the Cloudflare API. A missing base address is set to the v4 API root.</param>
+        /// <param name="options">Options that supply the API token. The token is read per request and is not logged.</param>
+        /// <param name="logger">Client logger.</param>
         internal CloudflareDnsClient(
             HttpClient httpClient,
             IOptions<AcmeCloudflareOptions> options,
@@ -123,6 +141,23 @@ namespace VectorNNTP.Common.Cloudflare
                 cancellationToken);
         }
 
+        /// <summary>
+        /// Lists DNS records page by page until <c>result_info.total_pages</c> is reached.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone identifier used in the request path and zone check.</param>
+        /// <param name="queryWithoutPage">Query string without the <c>page</c> parameter.</param>
+        /// <param name="includeRecord">Client-side filter applied after validation. Non-matching records are omitted.</param>
+        /// <param name="validateRecord">Per-record check that throws a permanent data failure when required fields are missing.</param>
+        /// <param name="cancellationToken">Cancels the list. Cancellation is not treated as success.</param>
+        /// <returns>Records that passed <paramref name="includeRecord"/>, across every page.</returns>
+        /// <exception cref="CloudflareDnsException">
+        /// Pagination metadata is missing or inconsistent, a page exceeds <see cref="MaxListPages"/>,
+        /// or a record fails zone or field validation. Those failures are permanent.
+        /// </exception>
+        /// <remarks>
+        /// <see cref="CloudflareOperationBudget.Current"/> is checked before each page. A changing
+        /// <c>total_pages</c> between pages fails the list so reconciliation cannot mutate from a partial result.
+        /// </remarks>
         private async Task<IReadOnlyList<CloudflareDnsRecord>> ListPagedRecordsAsync(
             string zoneId,
             string queryWithoutPage,
@@ -251,6 +286,19 @@ namespace VectorNNTP.Common.Cloudflare
                 .ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Creates or updates one DNS record and requires a result payload.
+        /// </summary>
+        /// <param name="method"><see cref="HttpMethod.Post"/> for create or <see cref="HttpMethod.Put"/> for update.</param>
+        /// <param name="path">Relative DNS-record path, including the zone and, for update, the record id.</param>
+        /// <param name="zoneId">Zone that a returned <c>zone_id</c> must match when Cloudflare includes one.</param>
+        /// <param name="request">Record body. A/AAAA writes use the managed TTL and proxy flag supplied by the caller.</param>
+        /// <param name="cancellationToken">Cancels the mutation. Cancellation after send is logged as an uncertain outcome and propagated.</param>
+        /// <returns>The record Cloudflare returned.</returns>
+        /// <exception cref="CloudflareDnsException">
+        /// The call failed, or HTTP success arrived without a result payload. A missing result is outcome-uncertain.
+        /// Returned A/AAAA records must include id, type, content, TTL, and proxy flag.
+        /// </exception>
         private async Task<CloudflareDnsRecord> SendRecordAsync(
             HttpMethod method,
             string path,
@@ -287,6 +335,25 @@ namespace VectorNNTP.Common.Cloudflare
             return envelope.Result;
         }
 
+        /// <summary>
+        /// Sends one Cloudflare API call, retrying HTTP 429 up to <see cref="MaxRateLimitRetries"/> waits.
+        /// </summary>
+        /// <typeparam name="T">Deserialized <c>result</c> type.</typeparam>
+        /// <param name="method">HTTP method.</param>
+        /// <param name="relativePath">Path relative to the API base address.</param>
+        /// <param name="content">JSON body for create and update. Null for list and delete.</param>
+        /// <param name="isMutation">
+        /// <see langword="true"/> for create, update, and delete. Transport failure and caller cancellation then leave the remote outcome uncertain.
+        /// </param>
+        /// <param name="responseTypeInfo">Source-generated metadata for the response envelope.</param>
+        /// <param name="cancellationToken">Caller or operation-budget token. Caller cancellation is propagated and is not converted into success.</param>
+        /// <returns>The success envelope, including a false-success check that throws instead of returning.</returns>
+        /// <exception cref="CloudflareDnsException">
+        /// Transport failure, unreadable JSON, empty body, non-success HTTP, <c>success: false</c>, or exhausted 429 retries.
+        /// Mutations mark <see cref="CloudflareDnsException.IsOutcomeUncertain"/> when Cloudflare may already have applied the call.
+        /// Non-mutation data failures are permanent.
+        /// </exception>
+        /// <exception cref="OperationCanceledException">The caller or operation budget canceled the attempt.</exception>
         private async Task<CloudflareApiResponse<T>> SendAsync<T>(
             HttpMethod method,
             string relativePath,
@@ -422,6 +489,12 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Builds a per-attempt token cancelled when the operation cancels or the request timeout elapses.
         /// </summary>
+        /// <param name="operationToken">Caller or operation-budget token. Already-canceled tokens throw before the source is created.</param>
+        /// <param name="sendToken">Token the HTTP send must observe. Canceled with the returned source.</param>
+        /// <returns>The linked source. The caller disposes it.</returns>
+        /// <exception cref="OperationCanceledException">
+        /// <paramref name="operationToken"/> is canceled or the active budget has already expired.
+        /// </exception>
         /// <remarks>
         /// When remaining <see cref="CloudflareOperationBudget"/> is at least <see cref="PerRequestTimeout"/>,
         /// this token independently times out after <see cref="PerRequestTimeout"/>. When remaining budget is
@@ -462,6 +535,16 @@ namespace VectorNNTP.Common.Cloudflare
             return cts;
         }
 
+        /// <summary>
+        /// Builds a JSON request with <c>Authorization: Bearer</c> from <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>.
+        /// </summary>
+        /// <param name="method">HTTP method.</param>
+        /// <param name="relativePath">Path relative to the API base address.</param>
+        /// <param name="content">Optional record body. Null omits the request content.</param>
+        /// <returns>The request. The caller owns and disposes it.</returns>
+        /// <exception cref="CloudflareDnsException">
+        /// The API key is missing or whitespace. That failure is permanent and does not include the key.
+        /// </exception>
         private HttpRequestMessage CreateRequest(
             HttpMethod method,
             string relativePath,
@@ -492,6 +575,19 @@ namespace VectorNNTP.Common.Cloudflare
             return request;
         }
 
+        /// <summary>
+        /// Maps a non-success HTTP status or <c>success: false</c> envelope into <see cref="CloudflareDnsException"/>.
+        /// </summary>
+        /// <typeparam name="T">Envelope result type. Only <c>errors</c> are read.</typeparam>
+        /// <param name="method">HTTP method that failed.</param>
+        /// <param name="relativePath">Relative path that failed.</param>
+        /// <param name="statusCode">HTTP status.</param>
+        /// <param name="envelope">Parsed envelope, or null when the body was empty or unreadable.</param>
+        /// <param name="isMutation"><see langword="true"/> when a 5xx response leaves the remote outcome uncertain.</param>
+        /// <returns>
+        /// An exception whose 4xx status (except 429) is permanent, whose known auth codes on HTTP 2xx are permanent,
+        /// and whose 5xx mutation is outcome-uncertain.
+        /// </returns>
         private static CloudflareDnsException CreateFailureException<T>(
             HttpMethod method,
             string relativePath,
@@ -532,6 +628,11 @@ namespace VectorNNTP.Common.Cloudflare
         /// <summary>
         /// Cloudflare often returns HTTP 200 with <c>success: false</c> for auth failures; treat known codes as permanent.
         /// </summary>
+        /// <param name="statusCode">HTTP status. Values outside 200–299 return <see langword="false"/>.</param>
+        /// <param name="codes">Cloudflare error codes from the envelope.</param>
+        /// <returns>
+        /// <see langword="true"/> when <paramref name="statusCode"/> is HTTP 2xx and a code is 10000, 9109, 9106, or 6003.
+        /// </returns>
         private static bool IsPermanentCloudflareApiFailure(int statusCode, IReadOnlyList<int> codes)
         {
             if (statusCode is < 200 or >= 300)
@@ -551,6 +652,14 @@ namespace VectorNNTP.Common.Cloudflare
             return false;
         }
 
+        /// <summary>
+        /// Waits for an HTTP 429 delay unless it exceeds the remaining <see cref="CloudflareOperationBudget"/>.
+        /// </summary>
+        /// <param name="delay">Delay from <see cref="GetRetryDelay"/>. Zero or negative returns without waiting.</param>
+        /// <param name="cancellationToken">Caller token. Cancellation before the wait throws.</param>
+        /// <exception cref="OperationCanceledException">
+        /// The token is canceled, the budget is already expired, or <paramref name="delay"/> is longer than the remaining budget.
+        /// </exception>
         private async Task DelayForRateLimitAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -571,6 +680,13 @@ namespace VectorNNTP.Common.Cloudflare
             await DelayAsync(delay, cancellationToken).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Chooses the HTTP 429 wait: <c>Retry-After</c> delta or HTTP-date, capped at two minutes;
+        /// otherwise <c>2^attempt</c> seconds clamped to 1–8.
+        /// </summary>
+        /// <param name="response">429 response. Its headers are read before the caller disposes it.</param>
+        /// <param name="attempt">Zero-based send index used only for the exponential fallback.</param>
+        /// <returns>The delay passed to <see cref="DelayForRateLimitAsync"/>.</returns>
         private static TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
         {
             if (response.Headers.RetryAfter?.Delta is { } delta && delta > TimeSpan.Zero)
@@ -591,6 +707,11 @@ namespace VectorNNTP.Common.Cloudflare
             return TimeSpan.FromSeconds(Math.Clamp(seconds, 1, 8));
         }
 
+        /// <summary>
+        /// Trims Cloudflare error text and truncates it to 160 characters so exception messages stay bounded.
+        /// </summary>
+        /// <param name="text">Error text from the API. This method does not redact secrets.</param>
+        /// <returns>The trimmed text, with an ellipsis appended when truncated.</returns>
         private static string SanitizeDiagnosticText(string text)
         {
             const int max = 160;
@@ -603,8 +724,17 @@ namespace VectorNNTP.Common.Cloudflare
             return trimmed[..max] + "…";
         }
 
+        /// <summary>Trims <paramref name="fqdn"/>, removes one trailing dot, and lowercases it with the invariant culture.</summary>
+        /// <param name="fqdn">DNS name from configuration or a Cloudflare record.</param>
+        /// <returns>The normalized name used for exact comparisons.</returns>
         private static string NormalizeFqdn(string fqdn) => fqdn.Trim().TrimEnd('.').ToLowerInvariant();
 
+        /// <summary>
+        /// Returns whether <paramref name="recordName"/> is the same DNS name as <paramref name="normalizedFqdn"/> after <see cref="NormalizeFqdn"/>.
+        /// </summary>
+        /// <param name="recordName">Name returned by Cloudflare. Whitespace does not match.</param>
+        /// <param name="normalizedFqdn">Name already passed through <see cref="NormalizeFqdn"/>.</param>
+        /// <returns><see langword="true"/> for an ordinal exact match.</returns>
         private static bool NamesMatch(string recordName, string normalizedFqdn)
         {
             if (string.IsNullOrWhiteSpace(recordName))
@@ -754,6 +884,12 @@ namespace VectorNNTP.Common.Cloudflare
             }
         }
 
+        /// <summary>
+        /// Creates a permanent, outcome-certain data failure for list or response validation.
+        /// </summary>
+        /// <param name="operation">Operation name stored on <see cref="CloudflareDnsException.FailedOperation"/>.</param>
+        /// <param name="message">Exception message. It must not include the API key.</param>
+        /// <returns>The permanent failure.</returns>
         private static CloudflareDnsException CreatePermanentDataException(string operation, string message) =>
             new(message)
             {

@@ -25,18 +25,30 @@ namespace VectorNNTP.Common.Acme
     /// </remarks>
     internal sealed class AuthoritativeTxtResolver : IAuthoritativeTxtResolver
     {
+        /// <summary>Normalized DNS apex whose NS set is queried. Challenge names are not used to discover a cut.</summary>
         private readonly string _zoneApex;
+
+        /// <summary>Logger for skipped authoritative queries.</summary>
         private readonly ILogger<AuthoritativeTxtResolver> _logger;
+
+        /// <summary>Test override for NS endpoints. <see langword="null"/> discovers them from <see cref="_zoneApex"/>.</summary>
         private readonly Func<CancellationToken, Task<IReadOnlyList<IPEndPoint>>>? _nameserverProvider;
+
+        /// <summary>Test override for TXT answers. <see langword="null"/> queries UDP then TCP with RD=0.</summary>
         private readonly Func<IPAddress, string, CancellationToken, Task<IReadOnlyList<string>>>? _txtQuery;
 
-        /// <summary>Initializes a new instance of the <see cref="AuthoritativeTxtResolver"/> class.</summary>
+        /// <summary>Uses live apex NS discovery and live TXT queries.</summary>
+        /// <param name="zoneApex">DNS apex (<c>DnsSuffix</c>). Wildcards and empty labels throw <see cref="AcmeConfigurationException"/>.</param>
+        /// <param name="logger">Logger for skipped queries.</param>
         internal AuthoritativeTxtResolver(string zoneApex, ILogger<AuthoritativeTxtResolver> logger)
             : this(zoneApex, logger, nameserverProvider: null, txtQuery: null)
         {
         }
 
         /// <summary>Test constructor with injectable authoritative endpoints.</summary>
+        /// <param name="zoneApex">DNS apex. Still normalized, even when endpoints are injected.</param>
+        /// <param name="logger">Logger for skipped queries.</param>
+        /// <param name="nameserverProvider">Endpoint source. <see langword="null"/> uses live discovery.</param>
         internal AuthoritativeTxtResolver(
             string zoneApex,
             ILogger<AuthoritativeTxtResolver> logger,
@@ -46,6 +58,10 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Test constructor with injectable endpoints and TXT answers (no live DNS).</summary>
+        /// <param name="zoneApex">DNS apex. Still normalized.</param>
+        /// <param name="logger">Logger for skipped queries.</param>
+        /// <param name="nameserverProvider">Endpoint source. <see langword="null"/> uses live discovery.</param>
+        /// <param name="txtQuery">TXT answer source. <see langword="null"/> uses live UDP/TCP queries.</param>
         internal AuthoritativeTxtResolver(
             string zoneApex,
             ILogger<AuthoritativeTxtResolver> logger,
@@ -60,7 +76,14 @@ namespace VectorNNTP.Common.Acme
             _txtQuery = txtQuery;
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns the intersection of TXT strings from every authoritative address that answers.
+        /// Failed servers are skipped. An empty nameserver list throws <see cref="AcmeChallengeException"/> category <c>ns_discovery_failed</c>.
+        /// When every query fails, the result is empty.
+        /// </summary>
+        /// <param name="name">TXT owner name. A trailing dot is removed before the query.</param>
+        /// <param name="cancellationToken">Cancels discovery and each query.</param>
+        /// <returns>TXT values present on every successful answer. Empty when no server answered.</returns>
         public async Task<IReadOnlyList<string>> LookupTxtAsync(string name, CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -110,6 +133,9 @@ namespace VectorNNTP.Common.Acme
             return intersection.ToArray();
         }
 
+        /// <summary>Resolves apex NS addresses and returns them as port-53 endpoints. An empty set throws category <c>ns_discovery_failed</c>.</summary>
+        /// <param name="cancellationToken">Cancels NS discovery.</param>
+        /// <returns>One endpoint per discovered address.</returns>
         private async Task<IReadOnlyList<IPEndPoint>> DiscoverAuthoritativeEndpointsAsync(
             CancellationToken cancellationToken)
         {
