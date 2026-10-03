@@ -26,7 +26,18 @@ internal static class BackFillerArticleWorkTopology
     /// </summary>
     /// <param name="channel">Caller-owned manual-ack channel on the current connection generation.</param>
     /// <param name="backbone">Provider backbone label (for example <c>Giganews</c>).</param>
-    /// <param name="cancellationToken">Token used to cancel declaration.</param>
+    /// <param name="cancellationToken">Token passed to each exchange, queue, and bind call.</param>
+    /// <returns>A task that completes when the exchange, quorum queue, and binding have been declared.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="channel"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="backbone"/> is null or whitespace.</exception>
+    /// <remarks>
+    /// Exchange name, queue name, and binding routing key are all
+    /// <see cref="BackFillerRabbitMqTopology.ComposeProviderEntity(string)"/> of <paramref name="backbone"/>.
+    /// The exchange is durable <see cref="FanoutExchangeType"/> with no arguments and is not auto-delete.
+    /// The queue is durable, not exclusive, and not auto-delete, with <see cref="QueueTypeArgumentName"/>
+    /// set to <see cref="QuorumQueueType"/>. This method does not delete or rewrite an existing entity.
+    /// Broker failures, including cancellation, propagate from the channel.
+    /// </remarks>
     internal static async Task DeclareProviderEndpointAsync(
         VectorNNTP.Common.Messaging.RabbitMq.IRabbitMqManualAckChannel channel,
         string backbone,

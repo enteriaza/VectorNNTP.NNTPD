@@ -11,19 +11,37 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// VATP OPEN by RequestId. Article Work Success publishes this BackFiller's FQDN, VATP port, and the
 /// lowercase hexadecimal <see cref="ArticleId"/>. Those fields are routing metadata, not a transfer protocol.
 /// </summary>
+/// <remarks>
+/// Does not publish the RPC response or settle the delivery.
+/// The <c>Last*</c> properties are test observations written by <see cref="HandleAsync"/> with no synchronization.
+/// </remarks>
 internal sealed class ProviderArticleWorkHandler : IArticleWorkHandler
 {
+    /// <summary>NNTP ARTICLE retriever used for admitted work.</summary>
     private readonly INntpArticleRetriever _retriever;
+
+    /// <summary>Canonical retention authority that admits or rejects the built record.</summary>
     private readonly IArticleRetentionAuthority _retention;
+
+    /// <summary>Parser used to build the CanonicalV1 record from the retrieved article bytes.</summary>
     private readonly NntpArticleParser _parser;
 
     /// <summary>Initializes the handler with the test-host Path identity <c>backfiller.test</c>.</summary>
+    /// <param name="retriever">NNTP ARTICLE retriever.</param>
+    /// <param name="retention">Canonical retention authority.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="retriever"/> or <paramref name="retention"/> is null.</exception>
     public ProviderArticleWorkHandler(INntpArticleRetriever retriever, IArticleRetentionAuthority retention)
         : this(retriever, retention, new NntpArticleParser("backfiller.test"))
     {
     }
 
     /// <summary>Initializes the handler.</summary>
+    /// <param name="retriever">NNTP ARTICLE retriever.</param>
+    /// <param name="retention">Canonical retention authority.</param>
+    /// <param name="parser">CanonicalV1 parser, including the Path host identity it stamps onto accepted articles.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="retriever"/>, <paramref name="retention"/>, or <paramref name="parser"/> is null.
+    /// </exception>
     public ProviderArticleWorkHandler(
         INntpArticleRetriever retriever,
         IArticleRetentionAuthority retention,
@@ -55,7 +73,31 @@ internal sealed class ProviderArticleWorkHandler : IArticleWorkHandler
     /// <summary>Gets the last retained VATP listen port (tests).</summary>
     internal int? LastVatpPort { get; private set; }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Retrieves the requested article, accepts a CanonicalV1 record, and retains it for VATP OPEN.
+    /// </summary>
+    /// <param name="item">Admitted work.</param>
+    /// <param name="cancellationToken">
+    /// Cancels retrieval. When it is already cancelled, or retrieval throws
+    /// <see cref="OperationCanceledException"/> because it is cancelled, the outcome is
+    /// <see cref="ArticleWorkOutcome.Cancelled"/> and retention is not attempted.
+    /// </param>
+    /// <returns>
+    /// <see cref="ArticleWorkOutcome.Success"/> with FQDN, VATP port, and article id when retention reports the article available.
+    /// <see cref="ArticleRetrievalKind.ArticleNotFound"/> and <see cref="ArticleRetrievalKind.InvalidArticle"/> stay terminal.
+    /// <see cref="ArticleRetrievalKind.AuthenticationFailure"/> and every other non-retrieved kind become
+    /// <see cref="ArticleWorkOutcome.ProviderFailure"/>. Parse failure and Message-ID mismatch become
+    /// <see cref="ArticleWorkOutcome.InvalidArticle"/>. A retrieved body that cannot be transferred or is not an
+    /// owned contiguous buffer becomes <see cref="ArticleWorkOutcome.RetentionRejected"/>.
+    /// Success routing fields are null unless retention made the article available.
+    /// <see cref="ArticleWorkHandlerResult.Article"/> is always null; the retrieval buffer is disposed before return.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="item"/> is null.</exception>
+    /// <remarks>
+    /// An <see cref="OperationCanceledException"/> whose token is not <paramref name="cancellationToken"/> propagates.
+    /// Other exceptions from retrieval, parsing, or retention also propagate. The caller maps those to
+    /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
+    /// </remarks>
     public async ValueTask<ArticleWorkHandlerResult> HandleAsync(
         ArticleWorkItem item,
         CancellationToken cancellationToken)
@@ -162,6 +204,11 @@ internal sealed class ProviderArticleWorkHandler : IArticleWorkHandler
         }
     }
 
+    /// <summary>Maps a parse-failure code to a terminal invalid-article result.</summary>
+    /// <param name="failureCode">Parser failure code. The result error text is its name.</param>
+    /// <returns>
+    /// <see cref="ArticleWorkOutcome.InvalidArticle"/> with no success routing fields.
+    /// </returns>
     private static ArticleWorkHandlerResult MapParseFailure(NntpArticleParseFailureCode failureCode)
     {
         return new ArticleWorkHandlerResult(
@@ -169,6 +216,13 @@ internal sealed class ProviderArticleWorkHandler : IArticleWorkHandler
             failureCode.ToString());
     }
 
+    /// <summary>Maps a non-retrieved retrieval result to an Article Work outcome.</summary>
+    /// <param name="retrieval">Retrieval that is not <see cref="ArticleRetrievalKind.ArticleRetrieved"/>.</param>
+    /// <returns>
+    /// Article-not-found and invalid-article stay terminal and copy <see cref="ArticleRetrievalResult.Reason"/>.
+    /// Cancelled carries a null error. Authentication failure and every other kind become
+    /// <see cref="ArticleWorkOutcome.ProviderFailure"/> with that reason.
+    /// </returns>
     private static ArticleWorkHandlerResult MapRetrieval(ArticleRetrievalResult retrieval)
     {
         return retrieval.Kind switch

@@ -24,6 +24,14 @@ internal interface IArticleRetentionAuthority
     /// <summary>
     /// Retains a CanonicalV1 article record and attaches a VATP OPEN RequestId capability.
     /// </summary>
+    /// <param name="messageId">Exact Message-ID. Not normalized.</param>
+    /// <param name="requestId">ArticleWork Success RequestId to attach as an openable capability.</param>
+    /// <param name="record">CanonicalV1 record. ArtData is referenced on first admission and is not copied.</param>
+    /// <param name="selectedDateHeaderName">Date-family header name stored for VATP META on first admission.</param>
+    /// <returns>
+    /// Admission classification, identity when one was resolved, the VATP endpoint when the article
+    /// is available, and the payload-byte totals after the attempt.
+    /// </returns>
     /// <remarks>
     /// Does not copy ArtData. On AlreadyPresent, the existing retained
     /// <see cref="VectorNNTP.Common.Articles.ArticleRecord"/> remains authoritative (first-wins);
@@ -52,17 +60,32 @@ internal interface IArticleRetentionAuthority
     /// gate before RequestId consumption. Returning <see langword="false"/> rejects OPEN and
     /// leaves the RequestId available for retry.
     /// </param>
+    /// <returns>
+    /// <see cref="VatpOpenKind.Opened"/> with a reader lease after that RequestId is consumed, or
+    /// <see cref="VatpOpenKind.Rejected"/> with no lease.
+    /// </returns>
     VatpOpenResult TryOpenTransfer(
         Guid requestId,
         VectorNNTP.Common.Articles.ArticleId expectedArticleId,
         Func<int, bool>? tryReserveOutboundBytes = null);
 
     /// <summary>Cancels one openable RequestId without releasing the Message-ID entry.</summary>
+    /// <param name="requestId">Openable RequestId to detach.</param>
+    /// <returns>
+    /// <see langword="true"/> when that RequestId was removed.
+    /// <see langword="false"/> when it was not an openable capability.
+    /// </returns>
     bool TryCancelPendingRequest(Guid requestId);
 
     /// <summary>Reclaims TTL-expired entries.</summary>
+    /// <returns>Payload bytes physically released by this pass. Zero when nothing was physically released.</returns>
     long SweepExpired();
 
     /// <summary>Stops new admissions.</summary>
+    /// <remarks>
+    /// Closes <see cref="RetainCanonical"/> only. Existing entries, openable RequestIds,
+    /// <see cref="TryOpenTransfer"/>, <see cref="TryCancelPendingRequest"/>, and
+    /// <see cref="SweepExpired"/> stay available until the authority is disposed.
+    /// </remarks>
     void BeginShutdown();
 }

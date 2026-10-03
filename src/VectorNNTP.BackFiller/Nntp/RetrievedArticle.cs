@@ -5,10 +5,12 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// </summary>
 internal sealed class RetrievedArticle : IDisposable
 {
+    /// <summary>Owned destuffed payload. <see cref="Dispose"/> clears the reference.</summary>
     private byte[]? _bytes;
 
     /// <summary>Initializes an owner for <paramref name="bytes"/>.</summary>
     /// <param name="bytes">Exact destuffed article payload. Ownership transfers to this instance.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="bytes"/> is null.</exception>
     internal RetrievedArticle(byte[] bytes)
     {
         ArgumentNullException.ThrowIfNull(bytes);
@@ -27,9 +29,14 @@ internal sealed class RetrievedArticle : IDisposable
     }
 
     /// <summary>Gets the payload length.</summary>
+    /// <exception cref="ObjectDisposedException">Thrown after <see cref="Dispose"/>.</exception>
     internal int Length => Memory.Length;
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Drops the owned buffer. Later <see cref="Memory"/> and <see cref="Length"/> reads throw
+    /// <see cref="ObjectDisposedException"/>.
+    /// </summary>
+    /// <remarks>The buffer contents are not cleared. A second call has no effect.</remarks>
     public void Dispose()
     {
         _ = Interlocked.Exchange(ref _bytes, null);

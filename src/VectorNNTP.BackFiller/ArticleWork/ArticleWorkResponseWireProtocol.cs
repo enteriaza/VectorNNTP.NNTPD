@@ -28,8 +28,20 @@ internal static class ArticleWorkResponseWireProtocol
     internal const string ExpirationMilliseconds = "1000";
 
     /// <summary>Serializes one validated v1 response. Does not embed article bytes.</summary>
-    /// <param name="intent">Pipeline intent, including the retention URI for Success.</param>
-    /// <returns>Compact UTF-8 JSON.</returns>
+    /// <param name="intent">
+    /// Pipeline intent. Success carries <c>fqdn</c>, <c>vatpPort</c>, and <c>articleId</c>.
+    /// Other publishable outcomes carry <c>error</c> and omit those success fields.
+    /// </param>
+    /// <returns>Compact UTF-8 JSON with the property names declared by this type.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="intent"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="intent"/> is not a publishable v1 response.
+    /// <see cref="ArticleWorkOutcome.ProviderFailure"/>, <see cref="ArticleWorkOutcome.Cancelled"/>,
+    /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, and <see cref="ArticleWorkOutcome.RetentionRejected"/>
+    /// are rejected. Success requires a canonical FQDN, a port in 1–65535, and a 64-character lowercase
+    /// hexadecimal article id, and must not include <c>error</c>. Other publishable outcomes require a
+    /// non-empty <c>error</c> and must not include success fields.
+    /// </exception>
     internal static byte[] SerializeV1(ArticleWorkResponseIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
@@ -89,7 +101,14 @@ internal static class ArticleWorkResponseWireProtocol
         return writer.WrittenSpan.ToArray();
     }
 
-    /// <summary>Returns the protocol outcome name.</summary>
+    /// <summary>Returns the protocol outcome name written to the <c>outcome</c> property.</summary>
+    /// <param name="outcome">Classified outcome to encode.</param>
+    /// <returns>
+    /// <c>Success</c>, <c>ArticleNotFound</c>, <c>InvalidArticle</c>, or <c>InvalidRequest</c>.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="outcome"/> is not a publishable terminal response.
+    /// </exception>
     internal static string OutcomeName(ArticleWorkOutcome outcome) =>
         outcome switch
         {
@@ -100,6 +119,16 @@ internal static class ArticleWorkResponseWireProtocol
             _ => throw new InvalidOperationException($"Outcome '{outcome}' is not a publishable terminal response."),
         };
 
+    /// <summary>
+    /// Rejects an intent that <see cref="SerializeV1"/> must not write.
+    /// </summary>
+    /// <param name="intent">Intent already known to be non-null.</param>
+    /// <exception cref="InvalidOperationException">Thrown when a required field is missing or a forbidden field is present.</exception>
+    /// <remarks>
+    /// Does not inspect AMQP <c>CorrelationId</c> or <c>ReplyTo</c>. Those are enforced by the publisher.
+    /// <see cref="ArticleWorkOutcome.InvalidRequest"/> may omit request id, message id, and backbone.
+    /// A present request id must not be <see cref="Guid.Empty"/>.
+    /// </remarks>
     private static void Validate(ArticleWorkResponseIntent intent)
     {
         switch (intent.Outcome)
@@ -178,6 +207,11 @@ internal static class ArticleWorkResponseWireProtocol
         }
     }
 
+    /// <summary>
+    /// Requires a non-empty request id, message id, and backbone for outcomes other than <see cref="ArticleWorkOutcome.InvalidRequest"/>.
+    /// </summary>
+    /// <param name="intent">Success, article-not-found, or invalid-article intent.</param>
+    /// <exception cref="InvalidOperationException">Thrown when any of those identities is missing or the request id is <see cref="Guid.Empty"/>.</exception>
     private static void RequireIdentity(ArticleWorkResponseIntent intent)
     {
         if (intent.RequestId is not { } requestId || requestId == Guid.Empty)

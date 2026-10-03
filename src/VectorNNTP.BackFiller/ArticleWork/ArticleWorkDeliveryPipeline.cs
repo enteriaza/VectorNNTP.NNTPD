@@ -7,8 +7,13 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 internal sealed class ArticleWorkDeliveryPipeline
 {
+    /// <summary>Handler for validated work. This pipeline does not serialize calls to it.</summary>
     private readonly IArticleWorkHandler _handler;
+
+    /// <summary>Response-publish seam. Confirm serialization belongs to the publisher.</summary>
     private readonly IArticleWorkResponsePublisher _publisher;
+
+    /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
     private readonly int _maxPayloadBytes;
 
     /// <summary>
@@ -16,7 +21,9 @@ internal sealed class ArticleWorkDeliveryPipeline
     /// </summary>
     /// <param name="handler">Admitted-work handler.</param>
     /// <param name="publisher">Response-publish seam.</param>
-    /// <param name="maxPayloadBytes">Maximum accepted JSON body size.</param>
+    /// <param name="maxPayloadBytes">Maximum accepted JSON body size. Must be at least 1.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> or <paramref name="publisher"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxPayloadBytes"/> is less than 1.</exception>
     internal ArticleWorkDeliveryPipeline(
         IArticleWorkHandler handler,
         IArticleWorkResponsePublisher publisher,
@@ -31,17 +38,37 @@ internal sealed class ArticleWorkDeliveryPipeline
     }
 
     /// <summary>
-    /// Processes one delivery on <paramref name="channel"/> for <paramref name="consumingBackbone"/>.
+    /// Parses one delivery, handles a valid request, publishes a confirmed terminal response when required, and attempts settlement on <paramref name="channel"/>.
     /// </summary>
-    /// <param name="delivery">Consumed delivery.</param>
-    /// <param name="consumingBackbone">Queue backbone context.</param>
-    /// <param name="channel">Original consumer channel.</param>
+    /// <param name="delivery">Consumed manual-ack delivery.</param>
+    /// <param name="consumingBackbone">Queue backbone context passed to the parser.</param>
+    /// <param name="channel">Original consumer channel bound into the settlement lease.</param>
     /// <param name="channelStillCurrent">
-    /// Evaluated at settlement time. Must not be captured only at admission: a generation
+    /// Evaluated again before publication and settlement. Must not be captured only at admission: a generation
     /// can disappear while work is in flight.
     /// </param>
-    /// <param name="cancellationToken">Processing cancellation.</param>
-    /// <returns>The outcome that was settled (or attempted).</returns>
+    /// <param name="cancellationToken">
+    /// Processing cancellation. When it is already cancelled, a valid request becomes
+    /// <see cref="ArticleWorkOutcome.Cancelled"/> and the handler is not called.
+    /// <see cref="OperationCanceledException"/> from the handler is classified the same way when this token is cancelled.
+    /// The invalid-request path still publishes when replyable; this token only cancels that publication.
+    /// </param>
+    /// <returns>
+    /// The handler or parse outcome when that disposition was submitted for settlement, or when the channel was already stale and settlement was skipped.
+    /// Returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication is cancelled, or when publication fails for a disposition that requeues; those paths NACK requeue.
+    /// A handler result of <see cref="ArticleWorkOutcome.InvalidRequest"/> is treated as <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
+    /// When <see cref="IArticleWorkResponsePublisher.CompletesSuccessPublication"/> is <see langword="false"/>, Success is NACK-requeued without publication and this method still returns <see cref="ArticleWorkOutcome.Success"/>.
+    /// </returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="consumingBackbone"/> is null or whitespace.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="channel"/> or <paramref name="channelStillCurrent"/> is null.</exception>
+    /// <remarks>
+    /// Settlement calls use <see cref="CancellationToken.None"/>. A stale <paramref name="channelStillCurrent"/> result, or a lease that is not the original channel, returns without ACK or NACK.
+    /// After the handler returns, a cancelled token forces <see cref="ArticleWorkOutcome.Cancelled"/> settlement even when the handler outcome was terminal.
+    /// A non-cancellation publication failure still settles a disposition that does not requeue, including ACK.
+    /// Cancellation of the publish attempt always NACK-requeues and returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
+    /// Any <see cref="ArticleWorkHandlerResult.Article"/> is disposed before settlement. Other handler exceptions become
+    /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> and the error text is the exception type name.
+    /// </remarks>
     internal async Task<ArticleWorkOutcome> ProcessAsync(
         RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
@@ -187,6 +214,13 @@ internal sealed class ArticleWorkDeliveryPipeline
             .ConfigureAwait(false);
     }
 
+    /// <summary>NACK-requeues the lease when the original channel is still current.</summary>
+    /// <param name="lease">Settlement lease for this delivery.</param>
+    /// <param name="channel">Channel originally bound to <paramref name="lease"/>.</param>
+    /// <param name="channelStillCurrent">Rechecked immediately before the NACK.</param>
+    /// <returns>
+    /// A task that completes when the NACK attempt finishes. The lease swallows broker failures and does not retry them.
+    /// </returns>
     private async Task SettleRetryableAsync(
         ArticleWorkSettlementLease lease,
         IRabbitMqManualAckChannel channel,
@@ -200,9 +234,22 @@ internal sealed class ArticleWorkDeliveryPipeline
             .ConfigureAwait(false);
     }
 
-    // Execution disposition wins after a publication failure. Cancellation of the
-    // publishing attempt (shutdown or confirm timeout) keeps the existing retryable
-    // settlement so the in-flight stop is unchanged.
+    /// <summary>
+    /// Settles after a publication attempt. A non-cancellation failure keeps a non-requeue disposition; cancellation always NACK-requeues.
+    /// </summary>
+    /// <param name="published">Result of the publication attempt. <see cref="ArticleWorkPublishAttempt.Confirmed"/> includes attempts that were not required.</param>
+    /// <param name="disposition">Plan produced before publication.</param>
+    /// <param name="outcome">Outcome that <paramref name="disposition"/> was planned from.</param>
+    /// <param name="lease">Settlement lease for this delivery.</param>
+    /// <param name="channel">Channel originally bound to <paramref name="lease"/>.</param>
+    /// <param name="channelStillCurrent">Rechecked immediately before settlement.</param>
+    /// <returns>
+    /// <paramref name="outcome"/> when the original disposition is submitted.
+    /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication was cancelled, or failed and <paramref name="disposition"/> requeues.
+    /// </returns>
+    /// <remarks>
+    /// Broker RPCs use <see cref="CancellationToken.None"/>. A failed publish of an ACK disposition still ACKs.
+    /// </remarks>
     private async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
         ArticleWorkPublishAttempt published,
         ArticleWorkDisposition disposition,
@@ -226,6 +273,26 @@ internal sealed class ArticleWorkDeliveryPipeline
         return outcome;
     }
 
+    /// <summary>
+    /// Publishes when <paramref name="disposition"/> requires a terminal response.
+    /// </summary>
+    /// <param name="disposition">Settlement plan. When it does not publish, the publisher is not called.</param>
+    /// <param name="outcome">Outcome written into the response intent.</param>
+    /// <param name="requestId">Recovered request id. May be null for <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
+    /// <param name="messageId">Recovered Message-ID. May be null for <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
+    /// <param name="backbone">Recovered JSON backbone. May be null for <see cref="ArticleWorkOutcome.InvalidRequest"/>.</param>
+    /// <param name="correlationId">AMQP correlation id to echo. May be null when the delivery is not replyable.</param>
+    /// <param name="replyTo">AMQP reply destination. May be null when the delivery is not replyable.</param>
+    /// <param name="error">Failure text for a non-success outcome. Null for success.</param>
+    /// <param name="fqdn">Success FQDN. Ignored unless <paramref name="outcome"/> is <see cref="ArticleWorkOutcome.Success"/>.</param>
+    /// <param name="vatpPort">Success VATP port. Ignored unless <paramref name="outcome"/> is <see cref="ArticleWorkOutcome.Success"/>.</param>
+    /// <param name="articleIdHex">Success article id hex. Ignored unless <paramref name="outcome"/> is <see cref="ArticleWorkOutcome.Success"/>.</param>
+    /// <param name="cancellationToken">Cancellation passed to <see cref="IArticleWorkResponsePublisher.PublishAsync"/>.</param>
+    /// <returns>
+    /// <see cref="ArticleWorkPublishAttempt.Confirmed"/> when publication is not required or <see cref="IArticleWorkResponsePublisher.PublishAsync"/> completes.
+    /// <see cref="ArticleWorkPublishAttempt.Cancelled"/> when it throws <see cref="OperationCanceledException"/>.
+    /// <see cref="ArticleWorkPublishAttempt.Failed"/> when it throws any other exception. Exceptions are not propagated.
+    /// </returns>
     private async Task<ArticleWorkPublishAttempt> TryPublishIfRequiredAsync(
         ArticleWorkDisposition disposition,
         ArticleWorkOutcome outcome,
@@ -273,10 +340,16 @@ internal sealed class ArticleWorkDeliveryPipeline
         }
     }
 
+    /// <summary>Result of one terminal-response publication attempt inside this pipeline.</summary>
     private enum ArticleWorkPublishAttempt
     {
+        /// <summary>Publication was not required, or the publisher completed the attempt.</summary>
         Confirmed,
+
+        /// <summary>The publisher threw <see cref="OperationCanceledException"/>.</summary>
         Cancelled,
+
+        /// <summary>The publisher threw an exception other than <see cref="OperationCanceledException"/>.</summary>
         Failed,
     }
 }

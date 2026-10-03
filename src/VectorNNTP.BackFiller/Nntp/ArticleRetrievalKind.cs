@@ -10,9 +10,9 @@ internal enum ArticleRetrievalKind
     ArticleNotFound = 1,
 
     /// <summary>
-    /// Destuffed ARTICLE bytes are not a usable article (missing header/body separator,
-    /// exceeded <c>MaxArticleBytes</c>, or equivalent permanent payload rejection).
-    /// Distinct from transport/protocol failures that should be retried.
+    /// Destuffed ARTICLE bytes are not a usable article: the payload is empty or has no header/body separator,
+    /// or it exceeded <see cref="NntpSessionOptions.MaxArticleBytes"/>.
+    /// Distinct from transport, timeout, and protocol failures classified as <see cref="ProviderFailure"/>.
     /// </summary>
     InvalidArticle = 2,
 

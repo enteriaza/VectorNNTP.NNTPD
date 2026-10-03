@@ -12,24 +12,49 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// Startup fails if a publishing channel cannot be opened on the current generation.
 /// After start, connection replacement rebuilds the publisher channel. This type
 /// does not implement a second connection-recovery loop and never ACK/NACKs deliveries.
-/// Completing <see cref="PublishAsync"/> means the broker confirmed. Confirmation is
-/// not permission to ACK the original delivery.
+/// Completing <see cref="PublishAsync"/> means the broker confirmed and the publish generation was still current afterward.
+/// Confirmation is not permission to ACK the original delivery.
+/// One publication holds <see cref="_publishGate"/>. The confirm wait is cancelled by the caller token, disposal, or the configured confirm timeout.
 /// </remarks>
 internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher, IHostedService, IAsyncDisposable
 {
+    /// <summary>Process RabbitMQ connection owner. This publisher opens channels on it and does not open another connection.</summary>
     private readonly IRabbitMqService _connections;
+
+    /// <summary>Validated runtime snapshot. Supplies the publisher-confirm timeout.</summary>
     private readonly BackFillerRuntimeOptions _runtime;
+
+    /// <summary>Publisher logger. This type does not write response bodies or credentials.</summary>
     private readonly ILogger<ArticleWorkResponsePublisher> _logger;
+
+    /// <summary>Guards the publish channel, lifecycle state, the stopping flag, and the replacement task.</summary>
     private readonly object _gate = new();
+
+    /// <summary>Serializes confirmed publications. Disposal waits until the current holder releases it.</summary>
     private readonly SemaphoreSlim _publishGate = new(1, 1);
+
+    /// <summary>Serializes startup, channel replacement, and disposal of the publish channel.</summary>
     private readonly SemaphoreSlim _replaceGate = new(1, 1);
+
+    /// <summary>Cancelled when disposal begins. Linked into each confirm wait. Disposed with the publisher.</summary>
     private readonly CancellationTokenSource _runCts = new();
 
+    /// <summary>Installed confirm-enabled publish channel. Null before a successful install and after disposal clears it.</summary>
     private IRabbitMqPublishChannel? _channel;
+
+    /// <summary>Latest connection-replacement rebuild. Callers do not await a task that a later replacement overwrote.</summary>
     private Task _replaceTask = Task.CompletedTask;
+
+    /// <summary>Local lifecycle. Mutations are made under <see cref="_gate"/>.</summary>
     private ArticleWorkResponsePublisherState _state = ArticleWorkResponsePublisherState.Created;
+
+    /// <summary>One after <see cref="StartAsync"/> has entered startup. Reset to zero when that attempt fails.</summary>
     private int _started;
+
+    /// <summary>One after <see cref="DisposeAsync"/> has entered disposal.</summary>
     private int _disposed;
+
+    /// <summary>Set under <see cref="_gate"/> when disposal has begun. Blocks new publications and replacement scheduling.</summary>
     private bool _stopping;
 
     /// <summary>
@@ -38,6 +63,10 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
     /// <param name="connections">Sole connection owner.</param>
     /// <param name="runtime">Validated runtime snapshot.</param>
     /// <param name="logger">Publisher logger.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="connections"/>, <paramref name="runtime"/>, or <paramref name="logger"/> is null.
+    /// </exception>
+    /// <remarks>Does not open a channel. <see cref="State"/> remains <see cref="ArticleWorkResponsePublisherState.Created"/>.</remarks>
     internal ArticleWorkResponsePublisher(
         IRabbitMqService connections,
         BackFillerRuntimeOptions runtime,
@@ -90,7 +119,25 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Opens a confirm-enabled publish channel on the current connection and subscribes to connection replacement.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Cancels the replacement-gate wait and the initial channel open.
+    /// A second call returns without waiting for an in-progress start.
+    /// </param>
+    /// <returns>
+    /// A task that completes when the publisher is <see cref="ArticleWorkResponsePublisherState.Running"/>,
+    /// or immediately when start has already been entered.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the connection is not ready or the opened channel's generation is no longer current.
+    /// </exception>
+    /// <remarks>
+    /// On failure the replacement subscription is removed, any installed channel is disposed, state becomes
+    /// <see cref="ArticleWorkResponsePublisherState.Stopped"/>, the start flag is cleared so a later call can retry, and the exception propagates.
+    /// Other exceptions from channel creation propagate after that cleanup.
+    /// </remarks>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
@@ -134,13 +181,24 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>Disposes the publisher.</summary>
+    /// <param name="cancellationToken">Not observed. Shutdown uses the publisher's own disposal sequence.</param>
+    /// <returns>A task that completes when <see cref="DisposeAsync"/> completes.</returns>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Stops accepting publications, cancels in-flight confirm waits, disposes the publish channel, and releases the gates.
+    /// </summary>
+    /// <returns>A task that completes when the publisher is <see cref="ArticleWorkResponsePublisherState.Stopped"/>. A second call returns a completed task.</returns>
+    /// <remarks>
+    /// Waits for the tracked replacement task and logs its failure without rethrowing.
+    /// The replacement-gate wait is not cancellable. After the channel is disposed, disposal waits up to the confirm timeout
+    /// for <see cref="_publishGate"/> and then releases it. A timeout is ignored so disposal still finishes.
+    /// The stopped log reads <see cref="Generation"/> after the channel is cleared, so that value is zero.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
@@ -194,7 +252,36 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Publishes one terminal response to the default exchange and waits until the broker confirms.
+    /// </summary>
+    /// <param name="intent">Response identities and outcome. Correlation id and reply-to must both be non-whitespace.</param>
+    /// <param name="cancellationToken">
+    /// Cancels the gate wait and the confirm wait. Linked with disposal and cancelled again after
+    /// <see cref="BackFillerRabbitMqRuntimeOptions.PublishConfirmTimeoutSeconds"/>.
+    /// </param>
+    /// <returns>
+    /// A task that completes when the broker has confirmed and the same open channel is still the current generation.
+    /// Completion is not permission to ACK the original delivery.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="intent"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the publisher is not <see cref="ArticleWorkResponsePublisherState.Running"/>, correlation id or reply-to is missing,
+    /// no open publish channel is installed, the connection generation is no longer the channel generation, or that check fails again after confirmation.
+    /// <see cref="ArticleWorkResponseWireProtocol.SerializeV1"/> validation failures also propagate before the publish gate is taken.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">
+    /// Thrown when <paramref name="cancellationToken"/>, disposal, or the confirm timeout cancels the attempt.
+    /// That exception is not written as a publication-failed log.
+    /// </exception>
+    /// <remarks>
+    /// Publications on this instance are serialized by <see cref="_publishGate"/>.
+    /// The AMQP message id is a new GUID, not the request id. App id is null. Delivery is non-persistent and mandatory.
+    /// The routing key is <see cref="ArticleWorkResponseIntent.ReplyTo"/> and the exchange is empty.
+    /// Content type, expiration, and body come from <see cref="ArticleWorkResponseWireProtocol"/>.
+    /// The request-id header is the intent request id in <c>D</c> format, or null when the intent has no request id.
+    /// Any other publish exception is logged with <see cref="Exception.Message"/> and rethrown. This method does not ACK or NACK.
+    /// </remarks>
     public async Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(intent);
@@ -278,6 +365,16 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
     /// Installs <paramref name="candidate"/> only when it is not older than the current channel.
     /// A stale candidate is disposed and cannot replace or dispose of a newer channel.
     /// </summary>
+    /// <param name="candidate">Channel opened against a connection generation. The caller transfers ownership of it.</param>
+    /// <returns>
+    /// A task that completes after a rejected candidate or a replaced channel has been disposed.
+    /// Completes immediately when no channel is disposed.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="candidate"/> is null.</exception>
+    /// <remarks>
+    /// A candidate is stale only when its generation is strictly less than the installed channel's generation.
+    /// An equal or newer generation replaces the installed channel.
+    /// </remarks>
     internal async Task InstallPublishChannelAsync(IRabbitMqPublishChannel candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -308,6 +405,12 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Schedules a publish-channel rebuild when the event is a connection replacement and disposal has not started.</summary>
+    /// <param name="sender">Event sender. Not used.</param>
+    /// <param name="eventArgs">Replacement notice. Non-replacement events are ignored.</param>
+    /// <remarks>
+    /// The scheduled task replaces <see cref="_replaceTask"/>. An earlier rebuild that is still running is no longer tracked.
+    /// </remarks>
     private void OnConnectionReplaced(object? sender, RabbitMqConnectionReplacedEventArgs eventArgs)
     {
         if (!eventArgs.IsReplacement)
@@ -326,6 +429,11 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Rebuilds the publish channel after a connection replacement unless startup never succeeded or disposal has started.</summary>
+    /// <returns>A task that completes when the rebuild attempt finishes. Failures are logged and not rethrown.</returns>
+    /// <remarks>
+    /// Waits on <see cref="_replaceGate"/> without a cancellation token, then opens the channel with <see cref="_runCts"/>.
+    /// </remarks>
     private async Task RebuildAfterReplacementAsync()
     {
         await _replaceGate.WaitAsync().ConfigureAwait(false);
@@ -354,6 +462,17 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Opens a publish channel on the current connection and installs it when the generation is still current.</summary>
+    /// <param name="cancellationToken">Cancels channel creation.</param>
+    /// <param name="startup">
+    /// <see langword="true"/> when the caller is <see cref="StartAsync"/>. A missing connection then throws.
+    /// A missing connection during replacement returns and leaves the installed channel unchanged.
+    /// </param>
+    /// <returns>A task that completes when the candidate is installed or, on a non-startup miss, when the method returns without a channel.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown on startup when no current connection exists, or when the opened channel's generation does not match the current connection.
+    /// </exception>
+    /// <remarks>A channel that fails the generation check or installation is disposed before the exception propagates.</remarks>
     private async Task ReplaceChannelAsync(CancellationToken cancellationToken, bool startup)
     {
         if (!_connections.TryGetCurrent(out var handle))
@@ -386,6 +505,8 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Clears and disposes the installed publish channel.</summary>
+    /// <returns>A task that completes when the channel is disposed, or immediately when none is installed.</returns>
     private async Task DisposeChannelAsync()
     {
         IRabbitMqPublishChannel? channel;
@@ -401,6 +522,13 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>
+    /// Waits until <see cref="_publishGate"/> can be acquired, then releases it so disposal can dispose the semaphore.
+    /// </summary>
+    /// <returns>
+    /// A task that completes when the gate has been observed free. The wait is bounded by the confirm timeout, with a minimum of one second.
+    /// <see cref="OperationCanceledException"/> from that timeout is swallowed.
+    /// </returns>
     private async Task WaitForPublishGateReleaseAsync()
     {
         using var waitCts = new CancellationTokenSource(
@@ -415,6 +543,9 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Returns the installed channel when it reports itself open.</summary>
+    /// <returns>The current open publish channel.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no channel is installed or the installed channel is not open.</exception>
     private IRabbitMqPublishChannel CurrentOpenChannelOrThrow()
     {
         lock (_gate)
@@ -428,11 +559,18 @@ internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublish
         }
     }
 
+    /// <summary>Returns whether <paramref name="generation"/> is still the process's current connection generation.</summary>
+    /// <param name="generation">Publish-channel generation captured for the attempt.</param>
+    /// <returns>
+    /// <see langword="true"/> when a current connection handle exists, its generation equals <paramref name="generation"/>, and that handle is current.
+    /// </returns>
     private bool IsPublisherGenerationCurrent(long generation) =>
         _connections.TryGetCurrent(out var handle)
         && handle.Generation == generation
         && handle.IsCurrent;
 
+    /// <summary>Rejects publication when disposal has started or the state is not running.</summary>
+    /// <exception cref="InvalidOperationException">Thrown when the publisher is not accepting publications.</exception>
     private void ThrowIfNotRunning()
     {
         lock (_gate)

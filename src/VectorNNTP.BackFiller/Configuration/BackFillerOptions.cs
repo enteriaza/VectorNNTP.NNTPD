@@ -110,7 +110,11 @@ internal sealed class BackFillerOptions
     /// <summary>
     /// Gets the generated FQDN <c>backfiller{ServerId:00}.{DnsSuffix}</c>.
     /// </summary>
-    /// <remarks>Not independently configurable. The <c>backfiller</c> prefix is fixed.</remarks>
+    /// <remarks>
+    /// Not independently configurable. The <c>backfiller</c> prefix is fixed.
+    /// Returns an empty string when <see cref="ServerId"/> is missing or outside the accepted range,
+    /// or when <see cref="DnsSuffix"/> is empty or white space.
+    /// </remarks>
     internal string Fqdn =>
         ServerId is { } serverId
         && ServerIdRules.IsInRange(serverId)

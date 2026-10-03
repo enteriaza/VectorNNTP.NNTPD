@@ -12,6 +12,22 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// RabbitMQ broker connectivity settings live on Common <c>RabbitMqOptions</c> /
 /// <c>RabbitMqService</c>; this snapshot only carries Article Work application knobs.
 /// </remarks>
+/// <param name="ServerId">Validated BackFiller server id.</param>
+/// <param name="DnsSuffix">Canonical DNS suffix.</param>
+/// <param name="Fqdn">Generated FQDN taken from the bindable options.</param>
+/// <param name="BindAddressTokens">Trimmed non-empty bind tokens, including wildcards.</param>
+/// <param name="CanonicalBindAddresses">Parsed non-wildcard addresses. Unparseable tokens are omitted.</param>
+/// <param name="BindPortTls">TLS listener port.</param>
+/// <param name="LogDirectory">Resolved file-log directory, or empty when the file target directory is blank.</param>
+/// <param name="CertificateDirectory">Resolved ACME state directory.</param>
+/// <param name="Shutdown">Validated shutdown policy.</param>
+/// <param name="Listener">Validated listener bounds.</param>
+/// <param name="ArticleRetention">Validated retention policy.</param>
+/// <param name="RabbitMq">Article Work RabbitMQ knobs projected from Common options.</param>
+/// <param name="CertificateDomainNames">Certificate DNS identities for <paramref name="Fqdn"/>.</param>
+/// <param name="CertificatePassword">ACME PKCS#12 password. Secret.</param>
+/// <param name="NntpDb">NntpDB connection projection. <see cref="NntpDbRuntimeOptions.ConnectionString"/> is secret.</param>
+/// <param name="AccountRefreshInterval">MySQL account-refresh poll interval.</param>
 internal sealed record BackFillerRuntimeOptions(
     int ServerId,
     string DnsSuffix,
@@ -48,6 +64,12 @@ internal sealed record BackFillerShutdownRuntimeOptions(
     bool FinishActiveArticles);
 
 /// <summary>Validated listener bounds.</summary>
+/// <param name="ParserAccumulationMaxBytes">Maximum incomplete inbound protocol bytes per connection.</param>
+/// <param name="TlsHandshakeTimeout">TLS handshake timeout.</param>
+/// <param name="IoProgressTimeout">Per-operation I/O no-progress timeout.</param>
+/// <param name="AwaitingReceiptAckTimeout">ReceiptAck wait after a completed Found transfer.</param>
+/// <param name="MaxQueuedFoundPayloadBytes">Maximum queued Found payload bytes per connection.</param>
+/// <param name="MaxActiveConnections">Maximum concurrently active accepted connections.</param>
 internal sealed record BackFillerListenerRuntimeOptions(
     int ParserAccumulationMaxBytes,
     TimeSpan TlsHandshakeTimeout,
@@ -57,6 +79,10 @@ internal sealed record BackFillerListenerRuntimeOptions(
     int MaxActiveConnections);
 
 /// <summary>Validated retention policy.</summary>
+/// <param name="MaximumRetainedPayloadBytes">Maximum retained payload capacity in bytes.</param>
+/// <param name="RetentionTtl">Maximum retention lifetime from insertion.</param>
+/// <param name="SweepInterval">Retention sweep cadence.</param>
+/// <param name="MaxOpenableRequestIdsPerArticle">Maximum concurrently openable VATP RequestIds for one retained Message-ID.</param>
 internal sealed record BackFillerArticleRetentionRuntimeOptions(
     long MaximumRetainedPayloadBytes,
     TimeSpan RetentionTtl,

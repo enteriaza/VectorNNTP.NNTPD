@@ -15,11 +15,22 @@ internal readonly record struct ArticleRetentionResult(
     long RetainedPayloadBytes,
     long ReleasedPayloadBytes)
 {
-    /// <summary>Returns whether the article is available under the existing or new identity.</summary>
+    /// <summary>
+    /// Returns whether the article is available under the existing or new identity.
+    /// True for <see cref="ArticleRetentionKind.Retained"/> and <see cref="ArticleRetentionKind.AlreadyPresent"/>.
+    /// </summary>
     internal bool IsAvailable =>
         Kind is ArticleRetentionKind.Retained or ArticleRetentionKind.AlreadyPresent;
 
-    /// <summary>Returns whether admission failed because of capacity.</summary>
+    /// <summary>
+    /// Returns whether <see cref="Kind"/> is <see cref="ArticleRetentionKind.PayloadExceedsCapacity"/>,
+    /// <see cref="ArticleRetentionKind.CapacityUnavailable"/>, or
+    /// <see cref="ArticleRetentionKind.OpenableRequestIdLimitExceeded"/>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ArticleRetentionKind.OpenableRequestIdLimitExceeded"/> is the per-article RequestId bound,
+    /// not a payload-byte shortage. The property is still true for that kind.
+    /// </remarks>
     internal bool IsCapacityRejected =>
         Kind is ArticleRetentionKind.PayloadExceedsCapacity
             or ArticleRetentionKind.CapacityUnavailable

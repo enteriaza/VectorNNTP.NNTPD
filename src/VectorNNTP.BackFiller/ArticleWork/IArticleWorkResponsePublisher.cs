@@ -9,7 +9,7 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// The publisher must not encode them into a URI.
 /// </remarks>
 /// <param name="Outcome">Terminal protocol outcome.</param>
-/// <param name="RequestId">Logically request identity when recovered.</param>
+/// <param name="RequestId">Logical request identity when recovered; otherwise null.</param>
 /// <param name="MessageId">Exact Message-ID when recovered.</param>
 /// <param name="Backbone">JSON backbone when recovered.</param>
 /// <param name="CorrelationId">AMQP correlation to echo on the response.</param>

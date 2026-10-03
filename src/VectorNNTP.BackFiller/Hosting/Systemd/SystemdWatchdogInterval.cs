@@ -6,12 +6,19 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 internal static class SystemdWatchdogInterval
 {
     /// <summary>
-    /// Derives a heartbeat interval that leaves margin before the systemd watchdog deadline.
+    /// Derives a heartbeat interval from a fraction of the systemd watchdog deadline.
     /// </summary>
     /// <param name="watchdogTimeout">Deadline supplied by systemd (<c>WATCHDOG_USEC</c>).</param>
     /// <param name="fraction">Fraction of the deadline between heartbeats; must be in (0, 1).</param>
-    /// <returns>The heartbeat interval.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when inputs are invalid.</exception>
+    /// <returns>
+    /// The floored fraction of <paramref name="watchdogTimeout"/>, raised to at least one millisecond
+    /// and then limited to one millisecond before the deadline when that limit is at least one millisecond.
+    /// A one-millisecond deadline therefore yields a one-millisecond interval.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when <paramref name="watchdogTimeout"/> is not positive, or when <paramref name="fraction"/>
+    /// is NaN or outside the open interval (0, 1).
+    /// </exception>
     internal static TimeSpan Calculate(TimeSpan watchdogTimeout, double fraction = 0.5)
     {
         if (watchdogTimeout <= TimeSpan.Zero)
@@ -30,7 +37,7 @@ internal static class SystemdWatchdogInterval
             ticks = TimeSpan.TicksPerMillisecond;
         }
 
-        // Always leave at least 1ms margin before the deadline.
+        // Prefer a 1ms margin. A 1ms deadline cannot leave that margin, so the interval stays 1ms.
         var maxTicks = Math.Max(TimeSpan.TicksPerMillisecond, watchdogTimeout.Ticks - TimeSpan.TicksPerMillisecond);
         if (ticks > maxTicks)
         {

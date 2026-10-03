@@ -22,6 +22,11 @@ internal static class BackFillerIdentity
     /// </summary>
     /// <param name="label">Candidate label.</param>
     /// <returns><see langword="true"/> when the label is valid.</returns>
+    /// <remarks>
+    /// Length must be 1–63. Only <c>a-z</c>, <c>0-9</c>, and <c>-</c> are accepted.
+    /// A leading or trailing hyphen is rejected. Uppercase letters are rejected;
+    /// callers that need case-folding must canonicalize first.
+    /// </remarks>
     internal static bool IsValidDnsLabel(string label)
     {
         if (string.IsNullOrWhiteSpace(label) || label.Length > 63)

@@ -7,9 +7,19 @@ namespace VectorNNTP.BackFiller.ArticleWork;
 /// </summary>
 internal sealed class ArticleWorkSettlementLease
 {
+    /// <summary>Original consumer channel. Settlement never moves to a replacement channel.</summary>
     private readonly IRabbitMqManualAckChannel _channel;
+
+    /// <summary>Channel-scoped delivery tag passed to Basic.Ack or Basic.Nack.</summary>
     private readonly ulong _deliveryTag;
+
+    /// <summary>Connection generation the channel must still report for settlement to proceed.</summary>
     private readonly long _generation;
+
+    /// <summary>
+    /// One after this lease has claimed its only settlement attempt.
+    /// Stays set when the broker RPC then fails.
+    /// </summary>
     private int _settled;
 
     /// <summary>
@@ -18,6 +28,7 @@ internal sealed class ArticleWorkSettlementLease
     /// <param name="channel">Original consumer channel. Must not be a replacement channel.</param>
     /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
     /// <param name="generation">Connection generation captured at admission.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="channel"/> is null.</exception>
     internal ArticleWorkSettlementLease(IRabbitMqManualAckChannel channel, ulong deliveryTag, long generation)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -32,7 +43,10 @@ internal sealed class ArticleWorkSettlementLease
     /// <summary>Gets the connection generation captured at admission.</summary>
     internal long Generation => _generation;
 
-    /// <summary>Gets a value indicating whether this lease has already settled.</summary>
+    /// <summary>Gets whether this lease has claimed its single settlement attempt.</summary>
+    /// <remarks>
+    /// Set before the broker RPC. Remains <see langword="true"/> when that RPC throws, so the failed attempt is not retried on this lease.
+    /// </remarks>
     internal bool IsSettled => Volatile.Read(ref _settled) == 1;
 
     /// <summary>

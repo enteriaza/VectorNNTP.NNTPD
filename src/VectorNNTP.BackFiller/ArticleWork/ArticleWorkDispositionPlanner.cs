@@ -8,16 +8,18 @@ internal static class ArticleWorkDispositionPlanner
     /// <summary>
     /// Creates the settlement plan for one classified result.
     /// </summary>
-    /// <param name="outcome">Processing or parse an outcome.</param>
+    /// <param name="outcome">Processing or parse outcome.</param>
     /// <param name="replyable">
     /// Whether AMQP <c>CorrelationId</c> and <c>ReplyTo</c> are both present.
     /// Only <see cref="ArticleWorkOutcome.InvalidRequest"/> uses this to decide publication.
     /// </param>
     /// <param name="cancellationRequested">
     /// When <see langword="true"/>, forces <see cref="ArticleWorkOutcome.Cancelled"/> settlement
-    /// (NACK requeue, no terminal response).
+    /// (NACK requeue, no terminal response) and ignores <paramref name="outcome"/>.
     /// </param>
-    /// <returns>The disposition to apply.</returns>
+    /// <returns>
+    /// The disposition to apply. An unrecognized <paramref name="outcome"/> is NACK requeue without publication.
+    /// </returns>
     internal static ArticleWorkDisposition Create(
         ArticleWorkOutcome outcome,
         bool replyable,

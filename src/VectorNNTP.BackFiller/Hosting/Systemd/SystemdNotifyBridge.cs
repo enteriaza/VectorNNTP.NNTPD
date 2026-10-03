@@ -9,20 +9,33 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <remarks>
 /// Notification failures are logged and swallowed so a broken notify socket cannot crash
 /// BackFiller. Watchdog keep-alives remain best-effort; missing keep-alives still trip systemd
-/// when <c>WatchdogSec=</c> is configured.
+/// when <c>WatchdogSec=</c> is configured. When several notifiers are registered, only the first is used.
 /// </remarks>
 internal sealed class SystemdNotifyBridge : ISystemdNotifyBridge
 {
+    /// <summary>Cached <c>READY=1</c> state.</summary>
     private static readonly ServiceState Ready = ServiceState.Ready;
+
+    /// <summary>Cached <c>STOPPING=1</c> state.</summary>
     private static readonly ServiceState Stopping = ServiceState.Stopping;
+
+    /// <summary>Cached <c>WATCHDOG=1</c> state.</summary>
     private static readonly ServiceState Watchdog = new("WATCHDOG=1");
 
+    /// <summary>First registered notifier, or <see langword="null"/> when none was supplied.</summary>
     private readonly ISystemdNotifier? _notifier;
+
+    /// <summary>Logger for notification success and swallowed notification failures.</summary>
     private readonly ILogger<SystemdNotifyBridge> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SystemdNotifyBridge"/> class.
+    /// Retains the first registered systemd notifier.
     /// </summary>
+    /// <param name="systemdNotifiers">Registered notifiers. Only the first is used.</param>
+    /// <param name="logger">Logger for notification success and failure.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="systemdNotifiers"/> or <paramref name="logger"/> is <see langword="null"/>.
+    /// </exception>
     public SystemdNotifyBridge(
         IEnumerable<ISystemdNotifier> systemdNotifiers,
         ILogger<SystemdNotifyBridge> logger)
@@ -37,13 +50,30 @@ internal sealed class SystemdNotifyBridge : ISystemdNotifyBridge
     /// <inheritdoc />
     public bool IsEnabled => _notifier?.IsEnabled == true;
 
-    /// <inheritdoc />
+    /// <summary>Sends <c>READY=1</c> when <see cref="IsEnabled"/> is <see langword="true"/>.</summary>
+    /// <remarks>
+    /// Does nothing when no notifier is registered or the notifier is disabled.
+    /// Exceptions from <see cref="ISystemdNotifier.Notify"/> are logged and swallowed.
+    /// </remarks>
     public void NotifyReady() => Notify(Ready, "READY=1");
 
-    /// <inheritdoc />
+    /// <summary>Sends <c>STOPPING=1</c> when <see cref="IsEnabled"/> is <see langword="true"/>.</summary>
+    /// <remarks>
+    /// Does nothing when no notifier is registered or the notifier is disabled.
+    /// Exceptions from <see cref="ISystemdNotifier.Notify"/> are logged and swallowed.
+    /// </remarks>
     public void NotifyStopping() => Notify(Stopping, "STOPPING=1");
 
-    /// <inheritdoc />
+    /// <summary>Sends a <c>STATUS=</c> message when <see cref="IsEnabled"/> is <see langword="true"/>.</summary>
+    /// <param name="status">Human-readable status without newlines or NUL.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="status"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="status"/> is empty, whitespace, or contains a newline or a NUL character.
+    /// </exception>
+    /// <remarks>
+    /// Validation runs before the enabled check. When notify is disabled, a valid status is not sent.
+    /// Exceptions from <see cref="ISystemdNotifier.Notify"/> are logged and swallowed.
+    /// </remarks>
     public void NotifyStatus(string status)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(status);
@@ -55,9 +85,20 @@ internal sealed class SystemdNotifyBridge : ISystemdNotifyBridge
         Notify(new ServiceState("STATUS=" + status), "STATUS");
     }
 
-    /// <inheritdoc />
+    /// <summary>Sends <c>WATCHDOG=1</c> when <see cref="IsEnabled"/> is <see langword="true"/>.</summary>
+    /// <remarks>
+    /// Does nothing when no notifier is registered or the notifier is disabled.
+    /// Exceptions from <see cref="ISystemdNotifier.Notify"/> are logged and swallowed.
+    /// </remarks>
     public void NotifyWatchdog() => Notify(Watchdog, "WATCHDOG=1");
 
+    /// <summary>Sends <paramref name="state"/> when a notifier is registered and enabled.</summary>
+    /// <param name="state">State passed to <see cref="ISystemdNotifier.Notify"/>.</param>
+    /// <param name="label">Text written on the success or failure log. Not sent as the state payload.</param>
+    /// <remarks>
+    /// Returns without sending when <see cref="_notifier"/> is <see langword="null"/> or disabled.
+    /// Any exception from <see cref="ISystemdNotifier.Notify"/> is logged and swallowed.
+    /// </remarks>
     private void Notify(ServiceState state, string label)
     {
         if (_notifier is null || !_notifier.IsEnabled)

@@ -34,7 +34,8 @@ internal sealed record ArticleWorkParseResult(
 
     /// <summary>Creates a successful parse result.</summary>
     /// <param name="request">Validated request.</param>
-    /// <returns>A valid parse result.</returns>
+    /// <returns>A valid parse result whose failure is null.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="request"/> is null.</exception>
     internal static ArticleWorkParseResult Valid(ArticleWorkRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -42,9 +43,10 @@ internal sealed record ArticleWorkParseResult(
     }
 
     /// <summary>Creates an invalid-request parse result without inventing identities.</summary>
-    /// <param name="reason">Rejection reason.</param>
+    /// <param name="reason">Rejection reason. Must not be null or whitespace, and must not contain the raw payload.</param>
     /// <param name="identities">Recovered identities only.</param>
-    /// <returns>An invalid parse result.</returns>
+    /// <returns>An invalid parse result whose request is null.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="reason"/> is null or whitespace.</exception>
     internal static ArticleWorkParseResult Invalid(string reason, ArticleWorkParsedIdentities identities)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);

@@ -9,11 +9,19 @@ internal interface IArticleWorkConsumerReconciliation
     bool IsRunning { get; }
 
     /// <summary>Creates, keeps, or retires consume sessions to match desired membership.</summary>
+    /// <param name="cancellationToken">Cancellation for the reconcile attempt.</param>
+    /// <returns>A task that completes when the reconcile attempt finishes.</returns>
     Task ReconcileAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Retires consume sessions for <paramref name="backbone"/> whose connection number
     /// is greater than <paramref name="retainConnectionCount"/>.
     /// </summary>
+    /// <param name="backbone">Provider backbone whose excess consume slots are retired.</param>
+    /// <param name="retainConnectionCount">
+    /// Highest connection number to keep. Sessions with a greater connection number are retired.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation passed through to each retired session.</param>
+    /// <returns>A task that completes when each selected session has been retired and disposed.</returns>
     Task RetireCapacityAsync(string backbone, int retainConnectionCount, CancellationToken cancellationToken);
 }

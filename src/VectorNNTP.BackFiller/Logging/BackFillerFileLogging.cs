@@ -36,15 +36,21 @@ internal static class BackFillerFileLogging
         "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}";
 
     /// <summary>Restricted minimum level for sinks when the configured level is at least Debug.</summary>
+    /// <remarks>
+    /// When the configured minimum is below Debug, sinks use that lower level instead.
+    /// <see cref="ConfigureLogger"/> still sets the logger minimum to the configured level.
+    /// </remarks>
     internal const LogEventLevel SinkMinimumLevel = LogEventLevel.Debug;
 
-    /// <summary>Serilog.Sinks.Async buffer size.</summary>
+    /// <summary>Event buffer size passed to the async wrapper around the file and RabbitMQ sinks.</summary>
     internal const int AsyncBufferSize = 50000;
 
-    /// <summary>Serilog.Sinks.Async <c>blockWhenFull</c>.</summary>
+    /// <summary>
+    /// When true, the async file and RabbitMQ wrappers block once <see cref="AsyncBufferSize"/> events are queued.
+    /// </summary>
     internal const bool AsyncBlockWhenFull = true;
 
-    /// <summary>File sink buffering.</summary>
+    /// <summary>Passed as the File sink <c>buffered</c> flag. True leaves that sink buffered.</summary>
     internal const bool FileBuffered = true;
 
     /// <summary>
@@ -53,7 +59,10 @@ internal static class BackFillerFileLogging
     /// </summary>
     internal static readonly TimeSpan FileFlushToDiskInterval = TimeSpan.FromSeconds(1);
 
-    /// <summary>File sink size-based rolling.</summary>
+    /// <summary>
+    /// Passed as the File sink <c>rollOnFileSizeLimit</c> flag.
+    /// False leaves rolling to the daily interval, and no file size limit is set.
+    /// </summary>
     internal const bool RollOnFileSizeLimit = false;
 
     /// <summary>
@@ -62,6 +71,13 @@ internal static class BackFillerFileLogging
     /// <paramref name="applicationBaseDirectory"/> (default
     /// <see cref="AppContext.BaseDirectory"/>). Absolute paths stay absolute.
     /// </summary>
+    /// <param name="logDirectory">Configured directory. Null or whitespace is rejected. The value is trimmed before resolution.</param>
+    /// <param name="applicationBaseDirectory">
+    /// Application base passed to <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/>.
+    /// Null uses <see cref="AppContext.BaseDirectory"/>.
+    /// </param>
+    /// <returns>The fully qualified log directory.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="logDirectory"/> is null or whitespace.</exception>
     private static string ResolveDirectory(string logDirectory, string? applicationBaseDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
@@ -73,6 +89,10 @@ internal static class BackFillerFileLogging
     /// <summary>
     /// Builds the Serilog rolling path <c>{logDirectory}/{applicationName}-.log</c>.
     /// </summary>
+    /// <param name="logDirectory">Directory that will contain the rolling file.</param>
+    /// <param name="applicationName">Entry assembly name. Trimmed and suffixed with <see cref="RollingPathSuffix"/>.</param>
+    /// <returns>The path passed to the File sink, including the Serilog rolling token in <see cref="RollingPathSuffix"/>.</returns>
+    /// <exception cref="ArgumentException">Thrown when either argument is null or whitespace.</exception>
     private static string RollingFilePath(string logDirectory, string applicationName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
@@ -83,6 +103,11 @@ internal static class BackFillerFileLogging
     /// <summary>
     /// Creates the log directory and returns the rolling File sink path for the current configuration.
     /// </summary>
+    /// <param name="configuration">Application configuration. The file directory is read from <c>BackFiller:Logging</c>.</param>
+    /// <param name="applicationBaseDirectory">Base directory for a relative log directory. Null uses <see cref="AppContext.BaseDirectory"/>.</param>
+    /// <returns>The rolling file path after the log directory is created.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when file logging is disabled or <c>LogDir</c> is missing.</exception>
     private static string EnsureRollingFilePath(
         IConfiguration configuration,
         string? applicationBaseDirectory = null)
@@ -114,7 +139,12 @@ internal static class BackFillerFileLogging
     /// mutually exclusive. <paramref name="commandLine"/> enables the console sink and, when requested,
     /// ambient context enrichment. Those switches are not configuration settings.
     /// </remarks>
-    /// <exception cref="InvalidOperationException">Logging configuration is invalid.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="loggerConfiguration"/> or <paramref name="configuration"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when retention days are outside the accepted range, an enabled RabbitMQ or syslog target is incomplete,
+    /// or RabbitMQ logging is enabled and <see cref="IRabbitMqService"/> is not registered.
+    /// File-path resolution also throws when file logging is enabled without <c>LogDir</c>.
+    /// </exception>
     internal static void ConfigureLogger(
         LoggerConfiguration loggerConfiguration,
         IConfiguration configuration,
@@ -184,6 +214,11 @@ internal static class BackFillerFileLogging
     }
 
     /// <summary>Binds <c>BackFiller:Logging</c>. Missing keys keep the option defaults.</summary>
+    /// <param name="configuration">Application configuration.</param>
+    /// <returns>
+    /// Bound options. Null file, RabbitMQ, and syslog children are replaced with new default instances.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="configuration"/> is null.</exception>
     private static BackFillerLoggingOptions BindLogging(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -198,6 +233,9 @@ internal static class BackFillerFileLogging
     /// <summary>
     /// Reads retention from a bound logging section, or the default when the object uses the default.
     /// </summary>
+    /// <param name="logging">Bound logging options.</param>
+    /// <returns><see cref="BackFillerLoggingOptions.LogRetentionDays"/> when it is inside the accepted inclusive range.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="logging"/> is null.</exception>
     /// <exception cref="InvalidOperationException">The value is outside the accepted range.</exception>
     private static int ReadLogRetentionDays(BackFillerLoggingOptions logging)
     {
@@ -213,6 +251,10 @@ internal static class BackFillerFileLogging
         return days;
     }
 
+    /// <summary>Returns the trimmed file log directory when file logging is enabled.</summary>
+    /// <param name="logging">Bound logging options. A null file child is treated as a new default target.</param>
+    /// <returns>The trimmed <c>LogDir</c>.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when file logging is disabled or <c>LogDir</c> is null or whitespace.</exception>
     private static string ReadRequiredFileLogDir(BackFillerLoggingOptions logging)
     {
         var file = logging.File ?? new BackFillerFileLoggingTargetOptions();
@@ -230,6 +272,9 @@ internal static class BackFillerFileLogging
         return file.LogDir.Trim();
     }
 
+    /// <summary>Rejects an enabled RabbitMQ logging target that has no exchange or routing key.</summary>
+    /// <param name="rabbit">RabbitMQ target already known to be enabled.</param>
+    /// <exception cref="InvalidOperationException">Thrown when <c>Exchange</c> or <c>RoutingKey</c> is null or whitespace.</exception>
     private static void ValidateEnabledRabbitMq(BackFillerRabbitMqLoggingTargetOptions rabbit)
     {
         if (string.IsNullOrWhiteSpace(rabbit.Exchange))
@@ -245,6 +290,17 @@ internal static class BackFillerFileLogging
         }
     }
 
+    /// <summary>Adds an async RabbitMQ sink that publishes through the registered <see cref="IRabbitMqService"/>.</summary>
+    /// <param name="loggerConfiguration">Logger configuration that receives the sink.</param>
+    /// <param name="rabbit">Enabled target. Exchange and routing key are passed through.</param>
+    /// <param name="sinkLevel">Restricted minimum level for the sink.</param>
+    /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects the text template and text content type.</param>
+    /// <param name="services">Host services. Must resolve <see cref="IRabbitMqService"/>.</param>
+    /// <exception cref="InvalidOperationException">Thrown when <see cref="IRabbitMqService"/> is not registered.</exception>
+    /// <remarks>
+    /// The sink uses <see cref="AsyncBufferSize"/> and <see cref="AsyncBlockWhenFull"/>.
+    /// JSON uses <see cref="RabbitMqLogEventSink.JsonContentType"/>; text uses <see cref="RabbitMqLogEventSink.TextContentType"/>.
+    /// </remarks>
     private static void WriteRabbitMq(
         LoggerConfiguration loggerConfiguration,
         BackFillerRabbitMqLoggingTargetOptions rabbit,
@@ -270,6 +326,10 @@ internal static class BackFillerFileLogging
             blockWhenFull: AsyncBlockWhenFull);
     }
 
+    /// <summary>Rejects an enabled syslog target with a blank host, a port outside 1-65535, or a protocol other than UDP or TCP.</summary>
+    /// <param name="syslog">Syslog target already known to be enabled.</param>
+    /// <exception cref="InvalidOperationException">Thrown when host, port, or protocol is not acceptable.</exception>
+    /// <remarks>Protocol matching is trim plus <see cref="StringComparison.OrdinalIgnoreCase"/> against the UDP and TCP constants.</remarks>
     private static void ValidateEnabledSyslog(BackFillerSyslogLoggingTargetOptions syslog)
     {
         if (string.IsNullOrWhiteSpace(syslog.Host))
@@ -290,6 +350,10 @@ internal static class BackFillerFileLogging
         }
     }
 
+    /// <summary>Adds the console sink at <paramref name="sinkLevel"/>.</summary>
+    /// <param name="loggerConfiguration">Logger configuration that receives the sink.</param>
+    /// <param name="sinkLevel">Restricted minimum level.</param>
+    /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="SinkOutputTemplate"/>.</param>
     private static void WriteConsole(
         LoggerConfiguration loggerConfiguration,
         LogEventLevel sinkLevel,
@@ -306,6 +370,17 @@ internal static class BackFillerFileLogging
         loggerConfiguration.WriteTo.Console(jsonFormatter, restrictedToMinimumLevel: sinkLevel);
     }
 
+    /// <summary>Adds the daily rolling file sink, with or without the JSON formatter.</summary>
+    /// <param name="sink">Async wrapper configuration.</param>
+    /// <param name="path">Rolling path from <see cref="RollingFilePath"/>.</param>
+    /// <param name="sinkLevel">Restricted minimum level.</param>
+    /// <param name="retainedFileCountLimit">Retained file count from <see cref="BackFillerLoggingOptions.LogRetentionDays"/>.</param>
+    /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null selects <see cref="SinkOutputTemplate"/>.</param>
+    /// <remarks>
+    /// Both branches set <see cref="FileBuffered"/>, <see cref="FileFlushToDiskInterval"/>,
+    /// daily rolling, <see cref="RollOnFileSizeLimit"/>, a null file size limit,
+    /// and <see cref="BackFillerSerilogHooks.DailyGzipFastest"/>.
+    /// </remarks>
     private static void WriteFile(
         LoggerSinkConfiguration sink,
         string path,
@@ -342,6 +417,15 @@ internal static class BackFillerFileLogging
             hooks: BackFillerSerilogHooks.DailyGzipFastest);
     }
 
+    /// <summary>Adds a UDP or TCP syslog sink. TCP is opened with TLS off.</summary>
+    /// <param name="loggerConfiguration">Logger configuration that receives the sink.</param>
+    /// <param name="syslog">Enabled syslog target. Host is trimmed.</param>
+    /// <param name="sinkLevel">Restricted minimum level.</param>
+    /// <param name="jsonFormatter">JSON formatter when JSON logging is on; null leaves the syslog sink formatter unset.</param>
+    /// <remarks>
+    /// The application name is <see cref="ApplicationJsonConfiguration.EntryAssemblyName"/>.
+    /// UDP is chosen by <see cref="IsUdp"/>; any other protocol uses the TCP sink.
+    /// </remarks>
     private static void WriteSyslog(
         LoggerConfiguration loggerConfiguration,
         BackFillerSyslogLoggingTargetOptions syslog,
@@ -370,9 +454,15 @@ internal static class BackFillerFileLogging
             formatter: jsonFormatter);
     }
 
+    /// <summary>Reports whether <paramref name="protocol"/> is UDP after trim, ignoring case.</summary>
+    /// <param name="protocol">Configured protocol. Null is not UDP.</param>
+    /// <returns><see langword="true"/> when the trimmed value equals <see cref="BackFillerSyslogLoggingTargetOptions.UdpProtocol"/>.</returns>
     private static bool IsUdp(string? protocol) =>
         string.Equals(protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.UdpProtocol, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Reports whether <paramref name="protocol"/> is TCP after trim, ignoring case.</summary>
+    /// <param name="protocol">Configured protocol. Null is not TCP.</param>
+    /// <returns><see langword="true"/> when the trimmed value equals <see cref="BackFillerSyslogLoggingTargetOptions.TcpProtocol"/>.</returns>
     private static bool IsTcp(string? protocol) =>
         string.Equals(protocol?.Trim(), BackFillerSyslogLoggingTargetOptions.TcpProtocol, StringComparison.OrdinalIgnoreCase);
 }

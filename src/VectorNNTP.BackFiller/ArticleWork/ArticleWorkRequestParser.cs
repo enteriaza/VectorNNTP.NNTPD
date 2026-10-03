@@ -25,8 +25,10 @@ internal static class ArticleWorkRequestParser
     /// </summary>
     /// <param name="delivery">Consumed AMQP delivery.</param>
     /// <param name="consumingBackbone">Queue/session backbone context.</param>
-    /// <param name="maxPayloadBytes">Maximum accepted application body size.</param>
-    /// <returns>A valid request or an <see cref="ArticleWorkOutcome.InvalidRequest"/> failure.</returns>
+    /// <param name="maxPayloadBytes">Maximum accepted application body size. Must be at least 1.</param>
+    /// <returns>A valid request or an <see cref="ArticleWorkOutcome.InvalidRequest"/> failure. Does not throw for a rejected payload.</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="consumingBackbone"/> is null or whitespace.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxPayloadBytes"/> is less than 1.</exception>
     internal static ArticleWorkParseResult Parse(
         in RabbitMqManualAckDelivery delivery,
         string consumingBackbone,
@@ -169,6 +171,13 @@ internal static class ArticleWorkRequestParser
         }
     }
 
+    /// <summary>Reads a case-sensitive JSON number property as a 32-bit integer.</summary>
+    /// <param name="root">Payload object.</param>
+    /// <param name="name">Exact property name.</param>
+    /// <param name="value">Parsed value when the result is <see langword="true"/>; otherwise zero.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="name"/> exists, is a JSON number, and fits <see cref="int"/>.
+    /// </returns>
     private static bool TryReadInt32(JsonElement root, string name, out int value)
     {
         value = 0;
@@ -177,6 +186,13 @@ internal static class ArticleWorkRequestParser
                && property.TryGetInt32(out value);
     }
 
+    /// <summary>Reads a case-sensitive JSON string property without treating empty text as missing.</summary>
+    /// <param name="root">Payload object.</param>
+    /// <param name="name">Exact property name.</param>
+    /// <param name="value">The string when the result is <see langword="true"/>; otherwise null.</param>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="name"/> exists, is a JSON string, and is not JSON null.
+    /// </returns>
     private static bool TryReadString(JsonElement root, string name, out string? value)
     {
         value = null;
@@ -189,6 +205,13 @@ internal static class ArticleWorkRequestParser
         return value is not null;
     }
 
+    /// <summary>Reads a case-sensitive JSON string property as a non-empty GUID.</summary>
+    /// <param name="root">Payload object.</param>
+    /// <param name="name">Exact property name.</param>
+    /// <param name="value">The GUID when the result is <see langword="true"/>; otherwise null.</param>
+    /// <returns>
+    /// <see langword="false"/> when the property is missing, not a string, blank, not a GUID, or <see cref="Guid.Empty"/>.
+    /// </returns>
     private static bool TryReadGuid(JsonElement root, string name, out Guid? value)
     {
         value = null;

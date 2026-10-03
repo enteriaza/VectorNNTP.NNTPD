@@ -11,11 +11,19 @@ internal interface IBackboneUsableCapacityProvider
     event EventHandler? SnapshotPublished;
 
     /// <summary>
-    /// Returns whether <paramref name="backbone"/> currently has at least one ACTIVE NNTP session.
+    /// Returns whether the published count for <paramref name="backbone"/> is positive.
     /// </summary>
+    /// <param name="backbone">Backbone name compared with the snapshot's ordinal-ignore-case key comparer.</param>
+    /// <returns><see langword="true"/> when the snapshot contains a count greater than zero.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="backbone"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="backbone"/> is empty or white space.</exception>
     bool HasUsableCapacityForBackbone(string backbone);
 
-    /// <summary>Returns the published ACTIVE session count for <paramref name="backbone"/>.</summary>
+    /// <summary>Returns the published count for <paramref name="backbone"/>.</summary>
+    /// <param name="backbone">Backbone name compared with the snapshot's ordinal-ignore-case key comparer.</param>
+    /// <returns>The published count, or zero when <paramref name="backbone"/> is absent.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="backbone"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="backbone"/> is empty or white space.</exception>
     int GetUsableCapacityForBackbone(string backbone);
 }
 
@@ -26,15 +34,27 @@ internal interface IBackboneUsableCapacityStateWriter
     /// Replaces the current snapshot. Non-positive counts and blank names are excluded,
     /// matching the old control-plane publisher.
     /// </summary>
+    /// <param name="capacityByBackbone">
+    /// Candidate backbone counts. Blank names and counts less than or equal to zero are omitted.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="capacityByBackbone"/> is null.</exception>
+    /// <remarks>
+    /// <see cref="BackboneUsableCapacityState"/> stores keys with <see cref="StringComparer.OrdinalIgnoreCase"/>
+    /// and then raises <see cref="IBackboneUsableCapacityProvider.SnapshotPublished"/>.
+    /// </remarks>
     void PublishSnapshot(IReadOnlyDictionary<string, int> capacityByBackbone);
 }
 
 /// <summary>
-/// Holds the latest backbone-to-ACTIVE-session-count snapshot.
-/// Usable capacity is a positive ACTIVE count for that backbone.
+/// Holds the latest published backbone counts.
+/// Usable capacity is a positive count. The provider registry publishes ACTIVE session counts here.
 /// </summary>
 internal sealed class BackboneUsableCapacityState : IBackboneUsableCapacityProvider, IBackboneUsableCapacityStateWriter
 {
+    /// <summary>
+    /// Latest published counts. Empty until the first <see cref="PublishSnapshot"/>.
+    /// Keys use <see cref="StringComparer.OrdinalIgnoreCase"/>.
+    /// </summary>
     private ImmutableDictionary<string, int> _capacityByBackbone =
         ImmutableDictionary<string, int>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
@@ -55,7 +75,19 @@ internal sealed class BackboneUsableCapacityState : IBackboneUsableCapacityProvi
         return _capacityByBackbone.TryGetValue(backbone, out var usableCount) ? usableCount : 0;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Replaces <see cref="_capacityByBackbone"/> with the filtered counts, then raises <see cref="SnapshotPublished"/>.
+    /// </summary>
+    /// <param name="capacityByBackbone">
+    /// Candidate backbone counts. Blank names and counts less than or equal to zero are omitted.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="capacityByBackbone"/> is null.</exception>
+    /// <remarks>
+    /// The replacement uses <see cref="StringComparer.OrdinalIgnoreCase"/>, so a later entry replaces an earlier
+    /// entry that differs only by case. The event is invoked on the caller after the field is assigned,
+    /// with this instance and <see cref="EventArgs.Empty"/>, including when the filtered snapshot is empty.
+    /// A subscriber exception propagates after the field has already been replaced.
+    /// </remarks>
     public void PublishSnapshot(IReadOnlyDictionary<string, int> capacityByBackbone)
     {
         ArgumentNullException.ThrowIfNull(capacityByBackbone);

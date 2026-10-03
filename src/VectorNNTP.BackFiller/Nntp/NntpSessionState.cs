@@ -6,10 +6,13 @@ internal enum NntpSessionState
     /// <summary>Constructed, no socket.</summary>
     Created = 0,
 
-    /// <summary>TCP and optional TLS in progress.</summary>
+    /// <summary>TCP connect, including optional implicit TLS, is in progress.</summary>
     Connecting = 1,
 
-    /// <summary>Transport open; greeting not yet accepted.</summary>
+    /// <summary>
+    /// Transport is open and the session is not yet <see cref="Ready"/>.
+    /// Greeting, CAPABILITIES, and optional STARTTLS run in this state.
+    /// </summary>
     Connected = 2,
 
     /// <summary>AUTHINFO USER/PASS in progress.</summary>
@@ -18,10 +21,10 @@ internal enum NntpSessionState
     /// <summary>Idle and reusable.</summary>
     Ready = 4,
 
-    /// <summary>Leased for one ARTICLE.</summary>
+    /// <summary>Holds the exclusive command lock for one ARTICLE or DATE.</summary>
     Busy = 5,
 
-    /// <summary>Being closed; must not be leased.</summary>
+    /// <summary>Unusable. Set while closing and when a command leaves the session unhealthy. Must not be leased.</summary>
     Retiring = 6,
 
     /// <summary>Transport disposed.</summary>

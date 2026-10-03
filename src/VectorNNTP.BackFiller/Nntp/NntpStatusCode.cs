@@ -64,14 +64,28 @@ internal static class NntpStatusCode
     internal const int ProgramFault = 503;
 
     /// <summary>Returns whether <paramref name="code"/> is a usable NNTP greeting.</summary>
+    /// <param name="code">NNTP status code.</param>
+    /// <returns>
+    /// <see langword="true"/> for <see cref="ServiceReadyPostingAllowed"/> or <see cref="ServiceReadyPostingProhibited"/>.
+    /// </returns>
     internal static bool IsServiceReadyGreeting(int code) =>
         code is ServiceReadyPostingAllowed or ServiceReadyPostingProhibited;
 
     /// <summary>Returns whether <paramref name="code"/> is an AUTHINFO credential failure.</summary>
+    /// <param name="code">NNTP status code.</param>
+    /// <returns>
+    /// <see langword="true"/> for <see cref="AuthenticationRequired"/>, <see cref="AuthenticationRejected"/>,
+    /// or <see cref="AuthenticationOutOfSequence"/>.
+    /// </returns>
     internal static bool IsAuthenticationFailure(int code) =>
         code is AuthenticationRequired or AuthenticationRejected or AuthenticationOutOfSequence;
 
     /// <summary>Returns whether <paramref name="code"/> is a generic command rejection.</summary>
+    /// <param name="code">NNTP status code.</param>
+    /// <returns>
+    /// <see langword="true"/> for <see cref="CommandUnknown"/>, <see cref="CommandSyntaxError"/>,
+    /// <see cref="CommandNotPermitted"/>, or <see cref="ProgramFault"/>.
+    /// </returns>
     internal static bool IsCommandRejected(int code) =>
         code is CommandUnknown or CommandSyntaxError or CommandNotPermitted or ProgramFault;
 }

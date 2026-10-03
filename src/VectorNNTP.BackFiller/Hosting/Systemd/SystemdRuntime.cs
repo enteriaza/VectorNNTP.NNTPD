@@ -12,8 +12,9 @@ namespace VectorNNTP.BackFiller.Hosting.Systemd;
 /// <para>
 /// Detection distinguishes Linux from other OSes, and systemd-managed execution from ordinary
 /// Linux console sessions. <see cref="SystemdHelpers.IsSystemdService"/> is preferred for
-/// service detection; notify enablement uses the registered <see cref="ISystemdNotifier"/> when
-/// available (the hosting package clears <c>NOTIFY_SOCKET</c> after constructing the notifier).
+/// service detection; notify enablement uses the first registered <see cref="ISystemdNotifier"/>
+/// when one is present (the hosting package clears <c>NOTIFY_SOCKET</c> after constructing the notifier).
+/// Property values are fixed in the constructor and are not reread from the environment.
 /// </para>
 /// <para>
 /// Watchdog configuration is read from <c>WATCHDOG_USEC</c> and optionally <c>WATCHDOG_PID</c>.
@@ -28,11 +29,23 @@ internal sealed class SystemdRuntime : ISystemdRuntime
     /// <summary>Environment variable containing the PID expected to send watchdog keep-alives.</summary>
     internal const string WatchdogPidVariable = "WATCHDOG_PID";
 
+    /// <summary>Logger for watchdog-configuration warnings and the Linux detection event.</summary>
     private readonly ILogger<SystemdRuntime> _logger;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SystemdRuntime"/> class.
+    /// Reads the OS, systemd service, notifier, and watchdog environment once.
     /// </summary>
+    /// <param name="systemdNotifiers">
+    /// Registered notifiers. The first one, if any, supplies <see cref="IsNotifyEnabled"/>.
+    /// </param>
+    /// <param name="logger">Logger for detection and malformed watchdog configuration.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="systemdNotifiers"/> or <paramref name="logger"/> is <see langword="null"/>.
+    /// </exception>
+    /// <remarks>
+    /// The Linux detection event is written only when <see cref="IsLinux"/> is true.
+    /// A missing <c>WATCHDOG_USEC</c> disables the watchdog without a malformed-value warning.
+    /// </remarks>
     public SystemdRuntime(
         IEnumerable<ISystemdNotifier> systemdNotifiers,
         ILogger<SystemdRuntime> logger)
@@ -78,6 +91,22 @@ internal sealed class SystemdRuntime : ISystemdRuntime
     /// <inheritdoc />
     public bool IsWatchdogConfigured { get; }
 
+    /// <summary>Reads <c>WATCHDOG_USEC</c> and optional <c>WATCHDOG_PID</c> for this process.</summary>
+    /// <param name="reason">
+    /// Why the deadline was accepted or ignored. Always assigned, including
+    /// <c>non-Linux platform</c>, <c>WATCHDOG_USEC not set</c>, <c>WATCHDOG_USEC missing or invalid</c>,
+    /// <c>WATCHDOG_PID malformed</c>, <c>WATCHDOG_PID does not match current process</c>,
+    /// <c>WATCHDOG_USEC out of range</c>, and <c>WATCHDOG_USEC accepted</c>.
+    /// </param>
+    /// <returns>
+    /// The watchdog deadline, or <see langword="null"/> when keep-alives must stay disabled.
+    /// </returns>
+    /// <remarks>
+    /// A non-positive or non-integer <c>WATCHDOG_USEC</c> is logged and ignored. A present
+    /// <c>WATCHDOG_PID</c> must be an integer equal to <see cref="Environment.ProcessId"/>;
+    /// an absent PID does not disable the deadline. Values that do not fit in a
+    /// <see cref="TimeSpan"/> are logged and ignored. The accepted value is that many microseconds.
+    /// </remarks>
     private TimeSpan? TryReadWatchdogTimeout(out string reason)
     {
         if (!IsLinux)

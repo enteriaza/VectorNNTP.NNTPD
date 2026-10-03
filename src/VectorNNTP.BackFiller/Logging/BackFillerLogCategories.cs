@@ -5,6 +5,9 @@ namespace VectorNNTP.BackFiller.Logging;
 /// </summary>
 internal static class BackFillerLogCategories
 {
-    /// <summary>Category for host integration events.</summary>
+    /// <summary>
+    /// Category passed to <see cref="ILoggerFactory.CreateLogger(string)"/> for host integration events,
+    /// including the logging-initialized event from <see cref="BackFillerLoggingExtensions.WriteLoggingInitialized"/>.
+    /// </summary>
     internal const string Hosting = "VectorNNTP.BackFiller.Hosting";
 }

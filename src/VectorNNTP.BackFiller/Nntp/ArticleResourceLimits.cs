@@ -9,7 +9,10 @@ internal static class ArticleResourceLimits
     /// <summary>Maximum destuffed ARTICLE payload in bytes (5 MiB).</summary>
     internal const int MaxArticleBytes = 5 * 1024 * 1024;
 
-    /// <summary>Maximum physical article line length in wire bytes.</summary>
+    /// <summary>
+    /// Maximum physical article line length in wire bytes.
+    /// The NNTP reader in this assembly does not consult this constant.
+    /// </summary>
     internal const int MaxArticleLineBytes = 1024;
 
     /// <summary>

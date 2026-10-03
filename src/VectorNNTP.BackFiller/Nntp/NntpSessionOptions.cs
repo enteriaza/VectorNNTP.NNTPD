@@ -3,7 +3,9 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// Immutable acquisition guardrails. Defaults match the old BackFiller acquisition contract.
 /// </summary>
-/// <param name="ReceiveBufferBytes">Socket send/receive buffer size.</param>
+/// <param name="ReceiveBufferBytes">
+/// Socket send and receive buffer size. Also passed to the session reader as its read buffer.
+/// </param>
 /// <param name="MaxStatusLineBytes">Maximum accepted status-line length excluding CRLF.</param>
 /// <param name="MaxArticleBytes">Maximum destuffed ARTICLE payload. Defaults to the old 5 MiB contract.</param>
 /// <param name="ConnectTimeout">TCP connect and TLS handshake budget.</param>

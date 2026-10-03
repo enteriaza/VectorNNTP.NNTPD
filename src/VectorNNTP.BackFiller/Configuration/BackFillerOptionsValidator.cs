@@ -15,7 +15,10 @@ namespace VectorNNTP.BackFiller.Configuration;
 /// </remarks>
 internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOptions>
 {
+    /// <summary>Operating-system physical-memory source used by retention ceiling validation.</summary>
     private readonly IPhysicalMemoryProvider _physicalMemoryProvider;
+
+    /// <summary>Bound RabbitMQ options. Used only to compare shutdown grace with the drain timeout.</summary>
     private readonly IOptions<RabbitMqOptions> _rabbitMqOptions;
 
     /// <summary>
@@ -23,6 +26,7 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
     /// </summary>
     /// <param name="physicalMemoryProvider">Physical-memory probe for retention capacity.</param>
     /// <param name="rabbitMqOptions">Top-level RabbitMQ options used for grace-period cross-check.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
     public BackFillerOptionsValidator(
         IPhysicalMemoryProvider physicalMemoryProvider,
         IOptions<RabbitMqOptions> rabbitMqOptions)
@@ -31,7 +35,18 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         _rabbitMqOptions = rabbitMqOptions ?? throw new ArgumentNullException(nameof(rabbitMqOptions));
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Validates identity, TLS port, ACME, logging, shutdown, listener, account refresh, retention, systemd, and the RabbitMQ drain cross-check.
+    /// </summary>
+    /// <param name="name">Named-options name. Not consulted; every instance is validated the same way.</param>
+    /// <param name="options">Bound BackFiller options.</param>
+    /// <returns><see cref="ValidateOptionsResult.Success"/> when no failures were collected; otherwise <see cref="ValidateOptionsResult.Fail(IEnumerable{string})"/> with those messages.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is null, or the RabbitMQ options value passed to the drain cross-check is null.</exception>
+    /// <remarks>
+    /// Invalid configuration is returned as failure messages and is not thrown.
+    /// A physical-memory probe failure becomes one retention failure message.
+    /// This method does not bind sockets, create directories, or connect to MySQL, RabbitMQ, or Cloudflare.
+    /// </remarks>
     public ValidateOptionsResult Validate(string? name, BackFillerOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -53,6 +68,13 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
             : ValidateOptionsResult.Success;
     }
 
+    /// <summary>Appends a failure when systemd options are missing or the watchdog fraction is outside 0.05–0.9.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.Systemd"/> is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A null systemd object adds one message and returns. NaN, values at or outside (0, 1), and values inside that
+    /// interval but outside 0.05–0.9 each add one message. Other systemd flags are not checked.
+    /// </remarks>
     private static void ValidateSystemd(BackFillerOptions options, List<string> failures)
     {
         if (options.Systemd is null)
@@ -74,6 +96,13 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends the first identity failure and then returns, until the final FQDN check.</summary>
+    /// <param name="options">Options whose server id, DNS suffix, zone id, and generated FQDN are checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A missing or rejected server id, empty suffix, empty zone id, invalid suffix, or invalid host label
+    /// returns immediately. When those pass, either an over-long FQDN or a non-DNS hostname is recorded, not both.
+    /// </remarks>
     private static void ValidateIdentity(BackFillerOptions options, List<string> failures)
     {
         if (options.ServerId is not { } serverId)
@@ -126,6 +155,9 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends one failure when the TLS port is missing or outside 1–65535.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.BindPortTls"/> is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
     private static void ValidateBindPortTls(BackFillerOptions options, List<string> failures)
     {
         if (options.BindPortTls is null or < 1 or > 65535)
@@ -135,6 +167,15 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends failures for the ACME directory URL, renewal threshold, and state directory.</summary>
+    /// <param name="options">Options whose ACME fields are checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// The directory must be a non-empty absolute HTTPS URL. The renewal threshold must be 1–90.
+    /// State fails only when both <see cref="BackFillerOptions.AcmeStateDir"/> and
+    /// <see cref="BackFillerOptions.CertificateDirectory"/> are empty or white space.
+    /// These checks accumulate.
+    /// </remarks>
     private static void ValidateAcme(BackFillerOptions options, List<string> failures)
     {
         if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
@@ -159,6 +200,16 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends failures for log level, retention, and each enabled logging target.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.Logging"/> section is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A null logging section, file target, or RabbitMQ target is checked as a new default instance and is not written back.
+    /// Level must be a Serilog name accepted by <see cref="BackFillerLogLevelParser.TryParse"/>.
+    /// Retention must be inside <see cref="BackFillerLoggingOptions.MinimumLogRetentionDays"/>–<see cref="BackFillerLoggingOptions.MaximumLogRetentionDays"/>.
+    /// An enabled file target requires a non-white-space directory. An enabled RabbitMQ target requires exchange and routing key.
+    /// A disabled syslog target skips host, port, and protocol checks. An enabled one requires a host, a port in 1–65535, and protocol <c>Udp</c> or <c>Tcp</c> compared ordinal-ignore-case.
+    /// </remarks>
     private static void ValidateLogging(BackFillerOptions options, List<string> failures)
     {
         var logging = options.Logging ?? new BackFillerLoggingOptions();
@@ -218,6 +269,13 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends a failure when the shutdown grace period is outside 5–600 seconds.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.Shutdown"/> section is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A null shutdown object is checked as <see cref="BackFillerShutdownOptions"/> defaults and is not written back,
+    /// so the default grace period passes this method.
+    /// </remarks>
     private static void ValidateShutdown(BackFillerOptions options, List<string> failures)
     {
         var shutdown = options.Shutdown ?? new BackFillerShutdownOptions();
@@ -229,6 +287,15 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends failures for listener accumulation, timeouts, queued Found bytes, and connection capacity.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.Listener"/> section is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A null listener object is checked as <see cref="BackFillerListenerOptions"/> defaults and is not written back.
+    /// Accumulation must be at least 32768. TLS handshake and receipt-ack timeouts must be 1–300 seconds.
+    /// I/O progress timeout must be 1–600 seconds. Queued Found bytes and active connections must be at least 1.
+    /// The failure text also states an upper bound of <see cref="int.MaxValue"/>; values above that cannot be stored in these <see cref="int"/> properties.
+    /// </remarks>
     private static void ValidateListener(BackFillerOptions options, List<string> failures)
     {
         var listener = options.Listener ?? new BackFillerListenerOptions();
@@ -263,6 +330,9 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends a failure when the account poll interval is outside 5–3600 seconds.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.BackFillerAccountRefreshIntervalSeconds"/> is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
     private static void ValidateAccountRefresh(BackFillerOptions options, List<string> failures)
     {
         if (options.BackFillerAccountRefreshIntervalSeconds
@@ -274,6 +344,18 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends retention range failures and the physical-memory ceiling failure.</summary>
+    /// <param name="options">Options whose <see cref="BackFillerOptions.ArticleRetention"/> section is checked.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <remarks>
+    /// A null retention object is checked as <see cref="BackFillerArticleRetentionOptions"/> defaults and is not written back.
+    /// A maximum below 1 returns before the other checks. TTL and sweep must be 1–60 seconds.
+    /// Openable request ids must be 1–256. Those range checks run before the memory probe.
+    /// Any exception from <see cref="IPhysicalMemoryProvider.GetTotalPhysicalMemoryBytes"/> adds one message and returns.
+    /// Otherwise the configured gibibytes must not exceed 80 percent of total physical memory, rounded down to whole gibibytes
+    /// with a floor of 1, and must not exceed the largest <see cref="int"/> whose product with
+    /// <see cref="BackFillerArticleRetentionOptions.BytesPerGibibyte"/> fits in <see cref="long"/>.
+    /// </remarks>
     private void ValidateArticleRetention(BackFillerOptions options, List<string> failures)
     {
         var retention = options.ArticleRetention ?? new BackFillerArticleRetentionOptions();
@@ -326,6 +408,17 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>
+    /// Appends a failure when the RabbitMQ shutdown drain is longer than the BackFiller grace period.
+    /// </summary>
+    /// <param name="options">Options whose grace period is read. A null shutdown section is treated as zero seconds.</param>
+    /// <param name="rabbitMq">Top-level RabbitMQ options.</param>
+    /// <param name="failures">Failure list to append. Not cleared.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="rabbitMq"/> is null.</exception>
+    /// <remarks>
+    /// No failure is added when grace is not positive, or when
+    /// <see cref="RabbitMqOptions.MaximumShutdownDrainTimeoutSeconds"/> has no value.
+    /// </remarks>
     private static void ValidateRabbitMqDrainAgainstGrace(
         BackFillerOptions options,
         RabbitMqOptions rabbitMq,
@@ -343,6 +436,12 @@ internal sealed class BackFillerOptionsValidator : IValidateOptions<BackFillerOp
         }
     }
 
+    /// <summary>Appends a required or inclusive-range failure for one optional integer.</summary>
+    /// <param name="value">Configured value. Null is recorded as missing.</param>
+    /// <param name="min">Inclusive lower bound.</param>
+    /// <param name="max">Inclusive upper bound.</param>
+    /// <param name="key">Configuration key written into the failure message.</param>
+    /// <param name="failures">Failure list to append. Not cleared. At most one message is added.</param>
     private static void RequireRange(int? value, int min, int max, string key, List<string> failures)
     {
         if (value is null)

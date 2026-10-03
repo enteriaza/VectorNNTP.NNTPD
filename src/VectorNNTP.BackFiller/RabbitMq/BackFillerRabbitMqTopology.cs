@@ -16,8 +16,13 @@ internal static class BackFillerRabbitMqTopology
     internal const string Prefix = "backfiller";
 
     /// <summary>
-    /// Provider backbone labels used to compose <c>backfiller.&lt;backbone&gt;</c> entity names.
+    /// Canonical provider backbone labels. <see cref="ComposeProviderEntity"/> turns one label
+    /// into a <c>backfiller.{backbone}</c> entity name.
     /// </summary>
+    /// <remarks>
+    /// Account mapping matches these spellings case-insensitively. This type does not declare
+    /// the corresponding broker entities and does not enumerate this list at startup.
+    /// </remarks>
     internal static readonly IReadOnlyList<string> ProviderBackbones =
     [
         "Abavia",
@@ -39,6 +44,7 @@ internal static class BackFillerRabbitMqTopology
     /// </summary>
     /// <param name="entityName">Exchange, queue, routing-key, or backbone label.</param>
     /// <returns>The trimmed invariant-lowercase name.</returns>
+    /// <exception cref="ArgumentException"><paramref name="entityName"/> is null or whitespace.</exception>
     private static string Normalize(string entityName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(entityName);
@@ -48,8 +54,9 @@ internal static class BackFillerRabbitMqTopology
     /// <summary>
     /// Builds <c>backfiller.{backbone}</c> after normalizing both parts.
     /// </summary>
-    /// <param name="backbone">Unqualified provider backbone label.</param>
-    /// <returns>The composed entity name.</returns>
+    /// <param name="backbone">Unqualified provider backbone label. Not restricted to <see cref="ProviderBackbones"/>.</param>
+    /// <returns>The composed entity name, <c>backfiller.</c> plus the normalized backbone.</returns>
+    /// <exception cref="ArgumentException"><paramref name="backbone"/> is null or whitespace.</exception>
     internal static string ComposeProviderEntity(string backbone)
     {
         var normalized = Normalize(backbone);

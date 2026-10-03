@@ -25,6 +25,7 @@ internal static class BackFillerAcmeCloudflareOptionsAdapter
     /// <param name="destination">Common options instance to populate.</param>
     /// <param name="source">Validated BackFiller application options.</param>
     /// <param name="configuration">Full configuration root (secrets only).</param>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     internal static void Apply(
         AcmeCloudflareOptions destination,
         BackFillerOptions source,
@@ -56,6 +57,13 @@ internal static class BackFillerAcmeCloudflareOptionsAdapter
     /// </summary>
     /// <param name="destination">Common options instance to update.</param>
     /// <param name="configuration">Full configuration root.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <remarks>
+    /// Missing secret keys are stored as empty strings. <see cref="AcmeCloudflareOptions.OverlayAcmeAccountEmail"/>
+    /// applies the account email. A non-empty <see cref="AcmeCloudflareOptions.CloudFlareOperationTimeout"/>
+    /// value that <see cref="TimeSpan.TryParse(string, out TimeSpan)"/> accepts replaces the destination timeout;
+    /// a blank or unparseable value leaves it unchanged.
+    /// </remarks>
     private static void OverlaySecretsFromRoot(AcmeCloudflareOptions destination, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(destination);
@@ -74,6 +82,15 @@ internal static class BackFillerAcmeCloudflareOptionsAdapter
         }
     }
 
+    /// <summary>
+    /// Chooses the ACME state directory copied onto Common options.
+    /// </summary>
+    /// <param name="source">BackFiller options. The caller has already rejected null.</param>
+    /// <returns>
+    /// Trimmed <see cref="BackFillerOptions.AcmeStateDir"/> when it is not white space;
+    /// otherwise trimmed <see cref="BackFillerOptions.CertificateDirectory"/> when that is not white space;
+    /// otherwise <see cref="AcmeCloudflareOptions.DefaultAcmeStateDir"/>.
+    /// </returns>
     private static string ResolveAcmeStateDir(BackFillerOptions source)
     {
         if (!string.IsNullOrWhiteSpace(source.AcmeStateDir))

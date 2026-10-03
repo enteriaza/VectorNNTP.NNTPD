@@ -33,7 +33,9 @@ internal static class BackFillerServiceCollectionExtensions
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
     /// <remarks>
+    /// <para>
     /// Registers Common <see cref="RabbitMqService"/> via <see cref="RabbitMqServiceHostedAdapter"/>
     /// as an early <see cref="IHostedService"/>. Startup fails if the initial broker
     /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
@@ -48,6 +50,24 @@ internal static class BackFillerServiceCollectionExtensions
     /// is reconciled from usable NNTP capacity. Before consumers start for a usable
     /// backbone, BackFiller declares that backbone's quorum <c>backfiller.*</c> topology.
     /// RabbitMQ is not registered into BackFiller <see cref="VectorNNTP.BackFiller.Core.ApplicationServiceManager"/>.
+    /// </para>
+    /// <para>
+    /// Direct <c>AddSingleton</c>, <c>TryAddSingleton</c>, and <c>AddHostedService</c> registrations in this method are singletons.
+    /// <c>TryAddSingleton</c> leaves an existing registration in place.
+    /// <see cref="IHostedService"/> instances are registered in this order:
+    /// <see cref="SystemdLifecycleNotifier"/>, <see cref="SystemdWatchdogService"/>,
+    /// <see cref="RabbitMqServiceHostedAdapter"/>, <see cref="ProviderAccountConfigurationService"/>,
+    /// <see cref="NntpProviderRegistry"/>, <see cref="BackFillerApplicationHostedService"/>,
+    /// <see cref="ArticleRetentionSweepService"/>, <see cref="ArticleWorkResponsePublisher"/>,
+    /// then <see cref="ArticleWorkConsumerService"/>.
+    /// The notifier is first so it is constructed before later hosted services and can observe
+    /// <see cref="IHostApplicationLifetime.ApplicationStarted"/> and
+    /// <see cref="IHostApplicationLifetime.ApplicationStopping"/>.
+    /// <see cref="HostOptions.ShutdownTimeout"/> is set from
+    /// <see cref="BackFillerShutdownRuntimeOptions.GracePeriod"/>.
+    /// Bound <see cref="RabbitMqOptions"/>, <see cref="BackFillerOptions"/>, and
+    /// <see cref="AcmeCloudflareOptions"/> use <c>ValidateOnStart</c>.
+    /// </para>
     /// </remarks>
     internal static HostApplicationBuilder AddBackFillerHosting(this HostApplicationBuilder builder)
     {
@@ -226,6 +246,13 @@ internal static class BackFillerServiceCollectionExtensions
     /// </summary>
     /// <param name="builder">The host application builder.</param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
+    /// <remarks>
+    /// Adds <see cref="VectorEnvironment"/> variables, sets the Windows service name to the entry assembly name,
+    /// calls <c>AddSystemd()</c>, and removes Microsoft <see cref="ConsoleLoggerOptions"/> configurators that
+    /// <c>AddSystemd()</c> may add. Sets <see cref="HostOptions.BackgroundServiceExceptionBehavior"/> to
+    /// <see cref="BackgroundServiceExceptionBehavior.StopHost"/>.
+    /// </remarks>
     internal static HostApplicationBuilder ConfigureBackFillerPlatformHosting(this HostApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -252,6 +279,11 @@ internal static class BackFillerServiceCollectionExtensions
     /// Removes Microsoft console formatter options that <c>AddSystemd()</c> may register.
     /// </summary>
     /// <param name="services">The service collection to inspect.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is <see langword="null"/>.</exception>
+    /// <remarks>
+    /// Walks the collection from the end and removes descriptors selected by
+    /// <see cref="IsMicrosoftConsoleLoggerOptionsConfiguration"/>.
+    /// </remarks>
     private static void RemoveObsoleteMicrosoftConsoleFormatterConfiguration(IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -269,7 +301,12 @@ internal static class BackFillerServiceCollectionExtensions
     /// Returns whether a service descriptor configures Microsoft console logger options.
     /// </summary>
     /// <param name="descriptor">The descriptor to inspect.</param>
-    /// <returns><see langword="true"/> when the descriptor configures <see cref="ConsoleLoggerOptions"/>.</returns>
+    /// <returns>
+    /// <see langword="true"/> when <paramref name="descriptor"/> is
+    /// <see cref="IConfigureOptions{TOptions}"/>, <see cref="IPostConfigureOptions{TOptions}"/>, or
+    /// <see cref="IValidateOptions{TOptions}"/> of <see cref="ConsoleLoggerOptions"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="descriptor"/> is <see langword="null"/>.</exception>
     private static bool IsMicrosoftConsoleLoggerOptionsConfiguration(ServiceDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);

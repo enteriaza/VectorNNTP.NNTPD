@@ -24,11 +24,15 @@ internal static class BackFillerRuntimeOptionsFactory
     /// the process working directory or an IDE project content root.
     /// </param>
     /// <returns>Immutable snapshot.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is null. Other null arguments fail in the five-argument overload.</exception>
     /// <exception cref="InvalidOperationException">Thrown when a required value is missing after validation.</exception>
     /// <remarks>
     /// The three-argument overload maps leftover BackFiller bind/certificate fields only when
     /// a shared <see cref="AcmeCloudflareOptions"/> instance is not supplied (tests).
     /// RabbitMQ defaults are used when <see cref="RabbitMqOptions"/> is omitted.
+    /// The synthesized ACME options leave the certificate password, Cloudflare API key, and zone id empty,
+    /// and set <see cref="AcmeCloudflareOptions.IncludeNewsHostnameInCertificate"/> to <see langword="false"/>.
+    /// An empty bind-address list becomes a single <c>*</c> token.
     /// </remarks>
     internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
@@ -55,7 +59,18 @@ internal static class BackFillerRuntimeOptionsFactory
         return Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
     }
 
-    /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
+    /// <summary>
+    /// Projects validated options and a caller-supplied ACME snapshot, using a new <see cref="RabbitMqOptions"/> for Article Work knobs.
+    /// </summary>
+    /// <param name="options">Validated bindable options.</param>
+    /// <param name="nntpDb">Validated shared NntpDB options.</param>
+    /// <param name="acme">Shared ACME and bind snapshot. Its bind port, addresses, state directory, certificate password, and news-hostname flag are projected.</param>
+    /// <param name="contentRootPath">
+    /// Application base directory for relative log and certificate paths.
+    /// Null or white space resolves against <see cref="AppContext.BaseDirectory"/>.
+    /// </param>
+    /// <returns>Immutable snapshot.</returns>
+    /// <remarks>Null arguments fail in the five-argument overload. RabbitMQ null-coalescing is documented there.</remarks>
     internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         NntpDbOptions nntpDb,
@@ -63,7 +78,39 @@ internal static class BackFillerRuntimeOptionsFactory
         string? contentRootPath = null) =>
         Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
 
-    /// <inheritdoc cref="Create(BackFillerOptions,NntpDbOptions,string?)"/>
+    /// <summary>
+    /// Projects validated options, ACME settings, and RabbitMQ Article Work knobs into the immutable runtime snapshot.
+    /// </summary>
+    /// <param name="options">Validated bindable options. Server id, FQDN, DNS suffix, logging, retention, listener, shutdown, and account-refresh interval are read.</param>
+    /// <param name="nntpDb">Validated shared NntpDB options.</param>
+    /// <param name="acme">Bind addresses, TLS port, ACME state directory, certificate password, and news-hostname flag.</param>
+    /// <param name="rabbitMq">Article Work payload, confirm-timeout, and prefetch knobs.</param>
+    /// <param name="contentRootPath">
+    /// Application base directory for relative log and certificate paths.
+    /// Null or white space resolves against <see cref="AppContext.BaseDirectory"/>.
+    /// </param>
+    /// <returns>Immutable snapshot.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="options"/>, <paramref name="nntpDb"/>, <paramref name="acme"/>, or <paramref name="rabbitMq"/> is null.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// <see cref="BackFillerOptions.DnsSuffix"/> or <see cref="AcmeCloudflareOptions.AcmeStateDir"/> is null or white space.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Server id or FQDN is missing, <see cref="AcmeCloudflareOptions.BindPortTls"/> is outside 1–65535,
+    /// the NntpDB connection string is empty, or retention, listener, or shutdown options are null.
+    /// </exception>
+    /// <exception cref="OverflowException">
+    /// <see cref="BackFillerArticleRetentionOptions.MaximumRetainedPayloadGigabytes"/> times
+    /// <see cref="BackFillerArticleRetentionOptions.BytesPerGibibyte"/> overflows <see cref="long"/>.
+    /// </exception>
+    /// <remarks>
+    /// Wildcard bind tokens stay in the token list and are omitted from the parsed address list.
+    /// Tokens that are not wildcards and do not parse as IP addresses stay in the token list only.
+    /// A null RabbitMQ payload limit becomes 1024 bytes and a null confirm timeout becomes 10 seconds.
+    /// Prefetch is copied as supplied, including null. The NntpDB connection string is parsed with
+    /// <see cref="MySqlConnectionStringBuilder"/>; a string it cannot parse fails this call.
+    /// </remarks>
     internal static BackFillerRuntimeOptions Create(
         BackFillerOptions options,
         NntpDbOptions nntpDb,
@@ -161,6 +208,11 @@ internal static class BackFillerRuntimeOptionsFactory
             AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
     }
 
+    /// <summary>Resolves the file-log directory, or returns empty when that directory is blank.</summary>
+    /// <param name="options">Options whose logging file target is read. A null logging section or file target uses <see cref="BackFillerFileLoggingTargetOptions"/> defaults.</param>
+    /// <param name="contentRootPath">Base directory forwarded to <see cref="ApplicationLocalPath.ResolveApplicationLocalPath(string, string?)"/>.</param>
+    /// <returns>The resolved directory, or <see cref="string.Empty"/> when <see cref="BackFillerFileLoggingTargetOptions.LogDir"/> is white space.</returns>
+    /// <remarks>The default file target directory is not treated as blank, so a missing logging section still resolves <c>logs</c>.</remarks>
     private static string ResolveFileLogDirectory(BackFillerOptions options, string? contentRootPath)
     {
         var file = options.Logging?.File ?? new BackFillerFileLoggingTargetOptions();

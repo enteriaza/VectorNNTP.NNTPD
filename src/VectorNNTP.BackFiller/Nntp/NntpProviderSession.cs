@@ -6,18 +6,40 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <summary>
 /// One upstream NNTP session. ARTICLE and DATE share one exclusive busy lock.
 /// </summary>
+/// <remarks>
+/// Connect accepts a 200 or 201 greeting, always sends <c>CAPABILITIES</c>, sends <c>STARTTLS</c> only when that label is advertised and the provider is not already on implicit TLS, then sends <c>AUTHINFO</c> when credentials are required.
+/// The session owns the transport after connect, including when connect returns a failure. The caller disposes it.
+/// </remarks>
 internal sealed class NntpProviderSession : IAsyncDisposable
 {
+    /// <summary>Pre-encoded <c>QUIT</c> command written by <see cref="DisposeAsync"/>.</summary>
     private static readonly byte[] QuitCommand = "QUIT\r\n"u8.ToArray();
 
+    /// <summary>Provider identity, TLS mode, credentials, and keepalive interval captured at construction.</summary>
     private readonly BackFillerProviderDefinition _provider;
+
+    /// <summary>Timeouts, buffer size, and article ceiling used for this connection.</summary>
     private readonly NntpSessionOptions _options;
+
+    /// <summary>Session logger. Command and response traces are Debug.</summary>
     private readonly ILogger _logger;
+
+    /// <summary>Stable Debug prefix built by <see cref="FormatWireIdentity"/>.</summary>
     private readonly string _wireIdentity;
+
+    /// <summary>Serializes <see cref="DownloadArticleAsync"/> and <see cref="SendDateKeepAliveAsync"/>. Not held during connect or dispose.</summary>
     private readonly SemaphoreSlim _busy = new(1, 1);
+
+    /// <summary>Owned transport. Null until connect assigns it, and null again if a TLS upgrade fails after closing it.</summary>
     private Stream? _stream;
+
+    /// <summary>Reader over <see cref="_stream"/>. Replaced after a STARTTLS upgrade so leftover cleartext is not parsed as TLS.</summary>
     private NntpStreamReader? _reader;
+
+    /// <summary>Zero until <see cref="DisposeAsync"/> runs. A second dispose returns immediately.</summary>
     private int _disposed;
+
+    /// <summary>Set when a command failure must keep the session out of the idle pool. Sticky for the session lifetime.</summary>
     private bool _unhealthy;
 
     /// <summary>Initializes a session that is not yet connected.</summary>
@@ -55,10 +77,16 @@ internal sealed class NntpProviderSession : IAsyncDisposable
     /// </summary>
     internal string WireLogIdentity => _wireIdentity;
 
-    /// <summary>Gets the current local state.</summary>
+    /// <summary>
+    /// Gets the session lifecycle updated by connect, <c>ARTICLE</c>, <c>DATE</c>, and <see cref="DisposeAsync"/>.
+    /// </summary>
     internal NntpSessionState State { get; private set; }
 
     /// <summary>Gets a value indicating whether the session may return to the idle pool.</summary>
+    /// <remarks>
+    /// True only when the session has not been marked unhealthy, <see cref="State"/> is <see cref="NntpSessionState.Ready"/>, and <see cref="_stream"/> is assigned.
+    /// The read does not take <see cref="_busy"/>.
+    /// </remarks>
     internal bool IsReusable => !_unhealthy && State == NntpSessionState.Ready && _stream is not null;
 
     /// <summary>Gets the MySQL <c>keepalive</c> interval this session was constructed with.</summary>
@@ -66,9 +94,21 @@ internal sealed class NntpProviderSession : IAsyncDisposable
 
     /// <summary>
     /// Connects, validates the greeting, issues CAPABILITIES, upgrades via STARTTLS
-    /// when advertised, and authenticates when configured.
+    /// when that capability is advertised and the provider is not already using implicit TLS, and authenticates when configured.
     /// </summary>
+    /// <param name="transport">Opens the socket. Implicit TLS is applied by the transport when <see cref="BackFillerProviderDefinition.UseTls"/> is set.</param>
+    /// <param name="cancellationToken">
+    /// Cancels connect and later command I/O. Caller cancellation returns <see cref="ArticleRetrievalKind.Cancelled"/> and does not throw.
+    /// </param>
     /// <returns><see langword="null"/> when the session is <see cref="NntpSessionState.Ready"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="transport"/> is null.</exception>
+    /// <exception cref="ObjectDisposedException">The session was already disposed.</exception>
+    /// <remarks>
+    /// A 200 or 201 greeting is required. <c>CAPABILITIES</c> is always sent. <c>STARTTLS</c> is sent only when advertised and <see cref="BackFillerProviderDefinition.UseTls"/> is false.
+    /// Protocol, timeout, and I/O failures return a non-reusable <see cref="ArticleRetrievalResult"/> with <see cref="State"/> <see cref="NntpSessionState.Retiring"/>.
+    /// The transport connect budget is <see cref="NntpSessionOptions.ConnectTimeout"/>. The greeting and later status lines use <see cref="NntpSessionOptions.CommandTimeout"/>.
+    /// The caller still owns disposal of this session when a failure result is returned.
+    /// </remarks>
     internal async Task<ArticleRetrievalResult?> ConnectAsync(
         INntpTransportFactory transport,
         CancellationToken cancellationToken)
@@ -137,6 +177,25 @@ internal sealed class NntpProviderSession : IAsyncDisposable
     }
 
     /// <summary>Issues ARTICLE with the exact Message-ID bytes.</summary>
+    /// <param name="messageId">Argument appended to <c>ARTICLE </c>. Sent as ASCII with no angle-bracket check. CR and LF are not rejected.</param>
+    /// <param name="cancellationToken">
+    /// Cancellation while waiting for <see cref="_busy"/> throws <see cref="OperationCanceledException"/> and leaves the session unchanged.
+    /// After the lock is held, cancellation returns <see cref="ArticleRetrievalKind.Cancelled"/> and marks the session unhealthy.
+    /// </param>
+    /// <returns>
+    /// Status <see cref="NntpStatusCode.ArticleFollows"/> returns the destuffed payload when <see cref="NntpProtocolIo.HasHeaderBodySeparator"/> is true.
+    /// Status <see cref="NntpStatusCode.NoArticleWithMessageId"/> is <see cref="ArticleRetrievalKind.ArticleNotFound"/> and the session stays reusable.
+    /// A 220 payload with no header/body separator is <see cref="ArticleRetrievalKind.InvalidArticle"/> and stays reusable.
+    /// A payload that reaches <see cref="NntpSessionOptions.MaxArticleBytes"/> is <see cref="ArticleRetrievalKind.InvalidArticle"/> and the session is marked unhealthy because the multiline response is no longer synchronized.
+    /// <see cref="NntpStatusCode.IsAuthenticationFailure"/>, <see cref="NntpStatusCode.IsCommandRejected"/>, statuses 412, 420, and 423, and every other status mark the session unhealthy.
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="messageId"/> is null or whitespace.</exception>
+    /// <remarks>
+    /// A non-ASCII message-id fails before the lock is taken and leaves the session reusable.
+    /// A closed or retiring session, or one whose reader or stream is missing, returns a non-reusable provider failure without taking the lock and without setting <see cref="_unhealthy"/>.
+    /// A status-line timeout becomes <see cref="TimeoutException"/> inside <see cref="ReadStatusAsync"/> and is then classified as provider failure whose reason is that exception's type name.
+    /// A payload timeout is classified as provider failure with the reason <c>ARTICLE timed out.</c>
+    /// </remarks>
     internal async Task<ArticleRetrievalResult> DownloadArticleAsync(string messageId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
@@ -289,10 +348,24 @@ internal sealed class NntpProviderSession : IAsyncDisposable
     /// <see langword="false"/> and the session is already busy, DATE is skipped
     /// so article acquisition is not blocked.
     /// </summary>
+    /// <param name="cancellationToken">
+    /// When <paramref name="waitForIdle"/> is true, cancellation while waiting for <see cref="_busy"/> throws <see cref="OperationCanceledException"/>.
+    /// Cancellation after <c>DATE</c> is written marks the session unhealthy and returns <see langword="false"/>.
+    /// Cancellation before that write restores the previous <see cref="State"/> and returns <see langword="true"/>.
+    /// </param>
+    /// <param name="waitForIdle">
+    /// <see langword="true"/> waits for <see cref="_busy"/>.
+    /// <see langword="false"/> returns <see langword="true"/> immediately when the lock is already held, without writing <c>DATE</c>.
+    /// </param>
     /// <returns>
-    /// <see langword="true"/> when the session remains reusable (111, or DATE skipped).
-    /// <see langword="false"/> when the session was marked unhealthy.
+    /// <see langword="true"/> when the server returns <see cref="NntpStatusCode.DateFollows"/>, when DATE is skipped because the session is busy, or when cancellation happens before DATE is written.
+    /// <see langword="false"/> when the session is already unusable or this call marks it unhealthy.
     /// </returns>
+    /// <remarks>
+    /// Returns <see langword="false"/> immediately when the reader or stream is missing, the session is unhealthy, closed, retiring, or disposed.
+    /// Only <see cref="NntpStatusCode.DateFollows"/> is success. Any other parsed status marks the session unhealthy.
+    /// A command timeout is provider failure and marks the session unhealthy.
+    /// </remarks>
     internal async Task<bool> SendDateKeepAliveAsync(
         CancellationToken cancellationToken,
         bool waitForIdle = false)
@@ -375,7 +448,14 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Retires the session, best-effort writes <c>QUIT</c>, and disposes the transport.
+    /// A second call returns immediately.
+    /// </summary>
+    /// <remarks>
+    /// <c>QUIT</c> uses a two-second timeout and is not followed by a response read. Write and flush failures are ignored.
+    /// <see cref="_busy"/> is disposed. <see cref="State"/> ends as <see cref="NntpSessionState.Closed"/>.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
@@ -405,6 +485,18 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         State = NntpSessionState.Closed;
     }
 
+    /// <summary>
+    /// Sends <c>CAPABILITIES</c> and, when <c>STARTTLS</c> is advertised and implicit TLS is off, upgrades the existing transport.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the exchange. <see cref="ConnectAsync"/> classifies a propagated cancellation.</param>
+    /// <returns>
+    /// <see langword="null"/> when the list completed and no upgrade was required, or when the upgrade succeeded.
+    /// Otherwise a non-reusable failure.
+    /// </returns>
+    /// <remarks>
+    /// Requires status <see cref="NntpStatusCode.CapabilityListFollows"/> and a dot-terminated body of at most <see cref="NntpProtocolIo.MaxCapabilityLines"/> lines.
+    /// Only the <c>STARTTLS</c> label is recorded. An empty, malformed, non-101, unterminated, or over-long list fails closed.
+    /// </remarks>
     private async Task<ArticleRetrievalResult?> NegotiateCapabilitiesAndStartTlsAsync(
         CancellationToken cancellationToken)
     {
@@ -459,6 +551,15 @@ internal sealed class NntpProviderSession : IAsyncDisposable
             reusable: false);
     }
 
+    /// <summary>Sends <c>STARTTLS</c> and, on status 382 with no unread bytes, replaces the transport with TLS.</summary>
+    /// <param name="cancellationToken">Cancels the command and the handshake.</param>
+    /// <returns>
+    /// <see langword="null"/> when the handshake completed. Otherwise a non-reusable failure.
+    /// This method does not read a greeting after the handshake.
+    /// </returns>
+    /// <remarks>
+    /// <see cref="NntpStreamReader.BufferedByteCount"/> other than zero fails the session so negotiation does not start on a desynchronized stream.
+    /// </remarks>
     private async Task<ArticleRetrievalResult?> IssueStartTlsAndUpgradeAsync(CancellationToken cancellationToken)
     {
         await WriteCommandAsync("STARTTLS", NntpProtocolIo.StartTlsCommand, cancellationToken)
@@ -490,6 +591,14 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return await UpgradeExistingTransportToTlsAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Wraps <see cref="_stream"/> with TLS and installs a new reader over the encrypted stream.</summary>
+    /// <param name="cancellationToken">Cancels the handshake together with <see cref="NntpSessionOptions.ConnectTimeout"/>.</param>
+    /// <returns><see langword="null"/> when the handshake completed. A handshake exception other than cancellation returns a non-reusable provider failure.</returns>
+    /// <remarks>
+    /// There is no post-handshake greeting read. On failure the fields are cleared.
+    /// <see cref="NntpTlsClient.AuthenticateAsClientAsync"/> closes <see cref="_stream"/> when the handshake throws.
+    /// Cancellation is rethrown after the fields are cleared so <see cref="ConnectAsync"/> can classify it.
+    /// </remarks>
     private async Task<ArticleRetrievalResult?> UpgradeExistingTransportToTlsAsync(
         CancellationToken cancellationToken)
     {
@@ -535,6 +644,18 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Sends <c>AUTHINFO USER</c> and, when the server replies 381, <c>AUTHINFO PASS</c>.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the exchange. <see cref="ConnectAsync"/> classifies a propagated cancellation.</param>
+    /// <returns>
+    /// <see langword="null"/> when authentication is not required or the server accepts it with <see cref="NntpStatusCode.AuthenticationAccepted"/>.
+    /// Otherwise a non-reusable failure.
+    /// </returns>
+    /// <remarks>
+    /// <see cref="BackFillerProviderDefinition.RequiresAuthentication"/> is true when either credential is non-whitespace, but both must be present and ASCII or this returns <see cref="ArticleRetrievalKind.AuthenticationFailure"/> without writing a command.
+    /// Wire logs use <c>AUTHINFO USER ***</c> and <c>AUTHINFO PASS ***</c>. A 281 reply to USER does not send PASS.
+    /// </remarks>
     private async Task<ArticleRetrievalResult?> AuthenticateIfConfiguredAsync(CancellationToken cancellationToken)
     {
         if (!_provider.RequiresAuthentication)
@@ -599,6 +720,13 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return passCode == NntpStatusCode.AuthenticationAccepted ? null : ClassifyAuthFailure(passCode, passText);
     }
 
+    /// <summary>Maps an AUTHINFO rejection to authentication failure or a generic provider failure.</summary>
+    /// <param name="code">Status code from USER or PASS.</param>
+    /// <param name="text">Status text, stored on the result as the reason.</param>
+    /// <returns>
+    /// <see cref="ArticleRetrievalKind.AuthenticationFailure"/> for <see cref="NntpStatusCode.IsAuthenticationFailure"/> and <see cref="NntpStatusCode.IsCommandRejected"/>.
+    /// Every other code is <see cref="ArticleRetrievalKind.ProviderFailure"/>. The session is not reusable.
+    /// </returns>
     private ArticleRetrievalResult ClassifyAuthFailure(int code, string text)
     {
         if (NntpStatusCode.IsAuthenticationFailure(code) || NntpStatusCode.IsCommandRejected(code))
@@ -609,6 +737,16 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
     }
 
+    /// <summary>
+    /// Reads one status line with <see cref="NntpSessionOptions.MaxStatusLineBytes"/> and <see cref="NntpSessionOptions.CommandTimeout"/>, then logs the ASCII text at Debug.
+    /// </summary>
+    /// <param name="cancellationToken">Caller cancellation. Distinguished from the command timeout.</param>
+    /// <returns>The line without its delimiter, or <see langword="null"/> when <see cref="_reader"/> is missing or the peer closes before any byte.</returns>
+    /// <exception cref="TimeoutException">The command timeout elapses while <paramref name="cancellationToken"/> is not cancelled.</exception>
+    /// <remarks>
+    /// Caller cancellation propagates as <see cref="OperationCanceledException"/>.
+    /// <see cref="EndOfStreamException"/> and an over-long line propagate to the caller.
+    /// </remarks>
     private async Task<byte[]?> ReadStatusAsync(CancellationToken cancellationToken)
     {
         if (_reader is null)
@@ -634,6 +772,11 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Writes <paramref name="prefix"/>, <paramref name="argument"/>, and CRLF, logging <paramref name="wireCommand"/> instead of the argument.</summary>
+    /// <param name="prefix">Command prefix, such as <see cref="NntpProtocolIo.AuthInfoUserPrefix"/>.</param>
+    /// <param name="argument">ASCII field. Not written to the log.</param>
+    /// <param name="wireCommand">Debug TX text. Callers pass a redacted command for credentials.</param>
+    /// <param name="cancellationToken">Forwarded to <see cref="WriteCommandAsync"/>.</param>
     private async Task WritePrefixedAsync(
         byte[] prefix,
         byte[] argument,
@@ -655,6 +798,11 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Logs <paramref name="wireCommand"/> at Debug, then writes <paramref name="bytes"/> under <see cref="NntpSessionOptions.CommandTimeout"/>.</summary>
+    /// <param name="wireCommand">Text passed to <see cref="NntpLogMessages.WireTx"/>.</param>
+    /// <param name="bytes">Exact command bytes, including CRLF.</param>
+    /// <param name="cancellationToken">Linked with the command timeout.</param>
+    /// <returns>The write started by <see cref="WriteAsync"/>.</returns>
     private Task WriteCommandAsync(
         string wireCommand,
         ReadOnlyMemory<byte> bytes,
@@ -664,6 +812,12 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return WriteAsync(bytes, _options.CommandTimeout, cancellationToken);
     }
 
+    /// <summary>Writes and flushes <paramref name="bytes"/>, cancelling when <paramref name="timeout"/> elapses or <paramref name="cancellationToken"/> is cancelled.</summary>
+    /// <param name="bytes">Bytes to write.</param>
+    /// <param name="timeout">Linked budget. Not converted into <see cref="TimeoutException"/> here.</param>
+    /// <param name="cancellationToken">Caller cancellation, linked with <paramref name="timeout"/>.</param>
+    /// <exception cref="InvalidOperationException"><see cref="_stream"/> is null.</exception>
+    /// <remarks>Both the timeout and caller cancellation surface as <see cref="OperationCanceledException"/>.</remarks>
     private async Task WriteAsync(ReadOnlyMemory<byte> bytes, TimeSpan timeout, CancellationToken cancellationToken)
     {
         if (_stream is null)
@@ -677,6 +831,11 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         await _stream.FlushAsync(timeoutCts.Token).ConfigureAwait(false);
     }
 
+    /// <summary>Marks the session unhealthy and retiring, and returns a non-reusable failure.</summary>
+    /// <param name="kind">Classification stored on the result.</param>
+    /// <param name="code">Status code when one was parsed; otherwise null.</param>
+    /// <param name="reason">Diagnostic text stored on the result.</param>
+    /// <returns>A failed result with <see cref="ArticleRetrievalResult.SessionReusable"/> false.</returns>
     private ArticleRetrievalResult MarkUnhealthy(ArticleRetrievalKind kind, int? code, string reason)
     {
         _unhealthy = true;
@@ -684,6 +843,15 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return ArticleRetrievalResult.Failed(kind, code, reason, sessionReusable: false);
     }
 
+    /// <summary>Records whether <paramref name="reusable"/> may return to the pool and returns the matching failure.</summary>
+    /// <param name="kind">Classification stored on the result.</param>
+    /// <param name="code">Status code when one was parsed; otherwise null.</param>
+    /// <param name="reason">Diagnostic text stored on the result.</param>
+    /// <param name="reusable">
+    /// <see langword="false"/> sets <see cref="_unhealthy"/> and <see cref="NntpSessionState.Retiring"/>.
+    /// <see langword="true"/> leaves the session <see cref="NntpSessionState.Ready"/>.
+    /// </param>
+    /// <returns>A failed result whose reusable flag is <paramref name="reusable"/>.</returns>
     private ArticleRetrievalResult FailClosed(ArticleRetrievalKind kind, int? code, string reason, bool reusable)
     {
         _unhealthy = !reusable;
@@ -691,6 +859,14 @@ internal sealed class NntpProviderSession : IAsyncDisposable
         return ArticleRetrievalResult.Failed(kind, code, reason, reusable);
     }
 
+    /// <summary>
+    /// Builds <c>{Backbone}/{account}[{connectionNumber:000}/{MaxSessions}]</c>.
+    /// The account is the trimmed username, or <c>-</c> when the username is missing.
+    /// </summary>
+    /// <param name="provider">Provider whose backbone, username, and max sessions are formatted.</param>
+    /// <param name="connectionNumber">One-based slot written as three digits.</param>
+    /// <returns>The wire-log prefix stored for the session lifetime.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="provider"/> is null.</exception>
     private static string FormatWireIdentity(BackFillerProviderDefinition provider, int connectionNumber)
     {
         ArgumentNullException.ThrowIfNull(provider);

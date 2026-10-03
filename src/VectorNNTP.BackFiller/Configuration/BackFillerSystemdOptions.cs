@@ -47,7 +47,8 @@ internal sealed class BackFillerSystemdOptions
     /// Gets or sets the fraction of the systemd watchdog deadline used as the heartbeat interval.
     /// </summary>
     /// <remarks>
-    /// systemd recommends notifying at about half the watchdog timeout. Valid range is (0, 1).
+    /// systemd recommends notifying at about half the watchdog timeout.
+    /// Accepted values are 0.05 through 0.9 inclusive. NaN and values outside that interval fail validation.
     /// </remarks>
     [Range(0.05, 0.9)]
     public double WatchdogIntervalFraction { get; set; } = 0.5;

@@ -18,26 +18,81 @@ namespace VectorNNTP.BackFiller.Listener;
 /// Process-wide VATP TLS listener: binds configured endpoints, authenticates TLS, and serves retained
 /// CanonicalV1 articles over VATP only. Does not own retention, RabbitMQ, or Article Work settlement.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Start requires <see cref="IAcmeCertificateReadiness.IsReady"/> and
+/// <see cref="ITlsCertificateContextProvider.IsAvailable"/>. Bind plans come from
+/// <see cref="ListenEndpointPlanner.Plan"/>. Each admitted socket gets one TLS handshake
+/// (TLS 1.2 or 1.3, no client certificate, revocation checks off) and one
+/// <see cref="VatpListenerSession"/>. The certificate lease is acquired per connection and disposed
+/// with that connection. This service does not reload retired certificate generations.
+/// </para>
+/// <para>
+/// Admission is a compare-and-swap on <see cref="ActiveConnections"/> against
+/// <see cref="BackFillerListenerRuntimeOptions.MaxActiveConnections"/>. The handshake timeout and
+/// per-read/write no-progress timeout come from <see cref="BackFillerRuntimeOptions.Listener"/>.
+/// <see cref="StartAsync"/> and <see cref="StopAsync"/> do not observe their cancellation tokens.
+/// </para>
+/// </remarks>
 internal sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
 {
+    /// <summary>Validated runtime snapshot. Bind addresses, TLS port, certificate directory, and listener bounds are read from it.</summary>
     private readonly BackFillerRuntimeOptions _runtime;
+
+    /// <summary>Supplies the server certificate context for each handshake. Leases are taken per connection.</summary>
     private readonly ITlsCertificateContextProvider _certificates;
+
+    /// <summary>Retention authority passed to each <see cref="VatpListenerSession"/>. This service does not retain articles.</summary>
     private readonly IArticleRetentionAuthority _retention;
+
+    /// <summary>ACME readiness gate. Start throws when <see cref="IAcmeCertificateReadiness.IsReady"/> is false.</summary>
     private readonly IAcmeCertificateReadiness _readiness;
+
+    /// <summary>Startup journal. <see cref="BackFillerStartupStages.ListenerStarted"/> is recorded only after the running transition.</summary>
     private readonly IBackFillerStartupJournal _journal;
+
+    /// <summary>Logger for <see cref="CacheListenerLogMessages"/>.</summary>
     private readonly ILogger<CacheListenerService> _logger;
+
+    /// <summary>Guards <see cref="_state"/> and <see cref="_listenSockets"/>.</summary>
     private readonly object _gate = new();
+
+    /// <summary>Bound listen sockets. Mutated only while <see cref="_gate"/> is held.</summary>
     private readonly List<Socket> _listenSockets = [];
+
+    /// <summary>
+    /// In-flight connection tasks. The value is unused. Entries are removed when the task completes.
+    /// </summary>
     private readonly ConcurrentDictionary<Task, byte> _connections = new();
+
+    /// <summary>Cancels accept loops and admitted connection work. Disposed by <see cref="DisposeAsync"/>.</summary>
     private readonly CancellationTokenSource _runCts = new();
 
+    /// <summary>Accept loops for every bound socket. Null until start has bound sockets and published the running state.</summary>
     private Task? _acceptTask;
+
+    /// <summary>Lifecycle published under <see cref="_gate"/>. Starts at <see cref="CacheListenerState.Created"/>.</summary>
     private CacheListenerState _state = CacheListenerState.Created;
+
+    /// <summary>One after a start attempt begins. Cleared when that attempt fails. Not cleared by disposal.</summary>
     private int _started;
+
+    /// <summary>One after the first <see cref="DisposeAsync"/>. Later dispose and stop calls return immediately.</summary>
     private int _disposed;
+
+    /// <summary>Connections that passed <see cref="TryAdmit"/> and have not yet reached <see cref="ReleaseAdmit"/>.</summary>
     private int _activeConnections;
 
     /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
+    /// <param name="runtime">Runtime snapshot. Must not be null.</param>
+    /// <param name="certificates">Certificate provider. Must not be null.</param>
+    /// <param name="retention">Retention authority handed to VATP sessions. Must not be null.</param>
+    /// <param name="logger">Listener logger. Must not be null.</param>
+    /// <remarks>
+    /// Marks a new <see cref="AcmeCertificateReadiness"/> ready and uses a new
+    /// <see cref="BackFillerStartupJournal"/>. Null arguments throw from the chained constructor.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
     internal CacheListenerService(
         BackFillerRuntimeOptions runtime,
         ITlsCertificateContextProvider certificates,
@@ -48,6 +103,13 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
     }
 
     /// <summary>Initializes the Listener service.</summary>
+    /// <param name="runtime">Runtime snapshot. Must not be null.</param>
+    /// <param name="certificates">Certificate provider. Must not be null.</param>
+    /// <param name="retention">Retention authority handed to VATP sessions. Must not be null.</param>
+    /// <param name="readiness">Certificate readiness gate consulted by <see cref="StartAsync"/>.</param>
+    /// <param name="journal">Startup journal that records listener start.</param>
+    /// <param name="logger">Listener logger. Must not be null.</param>
+    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
     internal CacheListenerService(
         BackFillerRuntimeOptions runtime,
         ITlsCertificateContextProvider certificates,
@@ -70,6 +132,8 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         _logger = logger;
     }
 
+    /// <summary>Builds a readiness gate that is already marked ready for the test constructor.</summary>
+    /// <returns>A new <see cref="AcmeCertificateReadiness"/> after <c>MarkReady</c>.</returns>
     private static IAcmeCertificateReadiness CreateReadyGate()
     {
         var readiness = new AcmeCertificateReadiness();
@@ -77,13 +141,20 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         return readiness;
     }
 
-    /// <inheritdoc />
+    /// <summary>Gets the supervised-service name <c>CacheListener</c>.</summary>
     public string Name => "CacheListener";
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Gets the accept-loop task while the listener is running, or <see langword="null"/> before start and after the task is cleared.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ApplicationServiceManager"/> treats a faulted or unexpectedly completed task as termination.
+    /// The task is the loop started by <see cref="AcceptAllAsync"/>.
+    /// </remarks>
     public Task? Execution => _acceptTask;
 
     /// <summary>Gets the local lifecycle state.</summary>
+    /// <remarks>The read takes <see cref="_gate"/>. Concurrent start or dispose can change the value immediately afterward.</remarks>
     internal CacheListenerState State
     {
         get
@@ -96,9 +167,17 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
     }
 
     /// <summary>Gets currently admitted connections.</summary>
+    /// <remarks>
+    /// Incremented when <see cref="TryAdmit"/> wins the slot and decremented in the connection <c>finally</c>.
+    /// A rejected connection does not change the count.
+    /// </remarks>
     internal int ActiveConnections => Volatile.Read(ref _activeConnections);
 
     /// <summary>Gets bound listen endpoints (tests).</summary>
+    /// <remarks>
+    /// Copies <see cref="Socket.LocalEndPoint"/> for each socket currently in <see cref="_listenSockets"/>
+    /// while <see cref="_gate"/> is held. Entries can be null after a socket is closed.
+    /// </remarks>
     internal IReadOnlyList<EndPoint?> LocalEndPoints
     {
         get
@@ -110,7 +189,22 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Binds listen sockets and starts accept loops when the certificate gate and provider are ready.
+    /// </summary>
+    /// <param name="cancellationToken">Not observed.</param>
+    /// <returns>A task that completes when the accept loops have been started, or when start has failed.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the ACME certificate is not ready, no TLS certificate is available, the bind plan is empty,
+    /// or every bind attempt was skipped.
+    /// </exception>
+    /// <remarks>
+    /// A second call returns immediately while <see cref="_started"/> is set. A failed attempt clears that
+    /// flag, logs <see cref="CacheListenerLogMessages.StartFailed"/>, releases sockets, sets
+    /// <see cref="CacheListenerState.Stopped"/>, and rethrows. This method does not consult
+    /// <see cref="_disposed"/>. <see cref="BackFillerListenerRuntimeOptions.ParserAccumulationMaxBytes"/> and
+    /// <see cref="BackFillerListenerRuntimeOptions.AwaitingReceiptAckTimeout"/> are not read here.
+    /// </remarks>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _started, 1) == 1)
@@ -173,13 +267,25 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>Stops the listener by disposing it.</summary>
+    /// <param name="cancellationToken">Not observed. Drain is not bounded by this token.</param>
+    /// <returns>A task that completes when <see cref="DisposeAsync"/> completes.</returns>
+    /// <remarks>A second stop is a no-op because disposal is idempotent.</remarks>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Cancels accept and connection work, closes listen sockets, and waits for admitted connection tasks.
+    /// </summary>
+    /// <returns>A task that completes when drain and socket release finish. A second call completes immediately.</returns>
+    /// <remarks>
+    /// State moves to <see cref="CacheListenerState.Retiring"/> before cancel, then to
+    /// <see cref="CacheListenerState.Stopped"/> after drain. <see cref="OperationCanceledException"/> from the
+    /// accept task is ignored. Any other accept-task exception propagates. Connection-task exceptions are
+    /// ignored by <see cref="DrainConnectionsAsync"/>. The run token source is disposed before the stopped state.
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
@@ -219,6 +325,14 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         CacheListenerLogMessages.Stopped(_logger);
     }
 
+    /// <summary>Binds each planned endpoint, skipping unsupported implicit-wildcard families.</summary>
+    /// <param name="bindings">Plans from <see cref="ListenEndpointPlanner.Plan"/>.</param>
+    /// <remarks>
+    /// <see cref="SocketException"/> is swallowed only when <see cref="IsImplicitWildcard"/> is true and the
+    /// error is <see cref="SocketError.AddressFamilyNotSupported"/>, <see cref="SocketError.ProtocolNotSupported"/>,
+    /// or <see cref="SocketError.AddressNotAvailable"/>. Every other bind exception propagates to
+    /// <see cref="StartAsync"/>.
+    /// </remarks>
     private void BindEndpoints(IReadOnlyList<ListenBinding> bindings)
     {
         foreach (var binding in bindings)
@@ -242,6 +356,12 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Reports whether a failed wildcard bind may be skipped.</summary>
+    /// <param name="endpoint">Endpoint that failed to bind.</param>
+    /// <returns>
+    /// <see langword="true"/> when no bind-address tokens were configured, or when any configured token is a
+    /// wildcard and <paramref name="endpoint"/> is IPv4 any or IPv6 any.
+    /// </returns>
     private bool IsImplicitWildcard(IPEndPoint endpoint)
     {
         if (_runtime.BindAddressTokens.Count == 0)
@@ -253,6 +373,9 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
                && (endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any));
     }
 
+    /// <summary>Runs one accept loop per socket that was bound when this method sampled the list.</summary>
+    /// <param name="cancellationToken">Service run token. Cancelled by <see cref="DisposeAsync"/>.</param>
+    /// <returns>A task that completes when every sampled accept loop has exited. A fault in any loop faults the task.</returns>
     private async Task AcceptAllAsync(CancellationToken cancellationToken)
     {
         Socket[] sockets;
@@ -264,6 +387,16 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         await Task.WhenAll(sockets.Select(socket => AcceptLoopAsync(socket, cancellationToken))).ConfigureAwait(false);
     }
 
+    /// <summary>Accepts sockets until cancellation, disposal, or a non-transient socket error.</summary>
+    /// <param name="listenSocket">Bound socket sampled by <see cref="AcceptAllAsync"/>.</param>
+    /// <param name="cancellationToken">Service run token.</param>
+    /// <returns>A task that completes when the loop breaks.</returns>
+    /// <remarks>
+    /// Cancellation, <see cref="ObjectDisposedException"/>, and <see cref="SocketException"/> end the loop
+    /// when <paramref name="cancellationToken"/> is cancelled. A <see cref="SocketException"/> while the token
+    /// is still active is ignored and the loop continues. Over-capacity sockets are disposed and not processed.
+    /// Admitted work is tracked in <see cref="_connections"/> until the task completes.
+    /// </remarks>
     private async Task AcceptLoopAsync(Socket listenSocket, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -313,6 +446,21 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Handshakes one accepted socket and runs a single VATP session.</summary>
+    /// <param name="accepted">Accepted socket. Owned by the <see cref="NetworkStream"/> created here.</param>
+    /// <param name="remote">Remote endpoint text captured before processing, used only in logs.</param>
+    /// <param name="cancellationToken">Service run token passed to the handshake link and the VATP session.</param>
+    /// <returns>A task that completes when the connection has been released from the admission count.</returns>
+    /// <remarks>
+    /// The handshake uses a linked token cancelled after <see cref="BackFillerListenerRuntimeOptions.TlsHandshakeTimeout"/>.
+    /// That timeout becomes <see cref="TimeoutException"/> with message <c>tls-handshake</c>. After the handshake,
+    /// <see cref="StreamCacheListenerTransport"/> applies <see cref="BackFillerListenerRuntimeOptions.IoProgressTimeout"/>
+    /// and leaves the <see cref="SslStream"/> open so the network stream still owns the socket.
+    /// <see cref="OperationCanceledException"/> from the service token is ignored.
+    /// <see cref="AuthenticationException"/> and <see cref="TimeoutException"/> are logged.
+    /// <see cref="IOException"/> is not logged here. Other exceptions are logged as <see cref="CacheListenerLogMessages.ConnectionFailed"/>.
+    /// <see cref="ReleaseAdmit"/> always runs.
+    /// </remarks>
     private async Task ProcessAsync(Socket accepted, string remote, CancellationToken cancellationToken)
     {
         var handshakeCompleted = false;
@@ -381,6 +529,8 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Reserves one admission slot without exceeding the configured maximum.</summary>
+    /// <returns><see langword="true"/> when this call incremented <see cref="_activeConnections"/>.</returns>
     private bool TryAdmit()
     {
         while (true)
@@ -398,8 +548,10 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Releases one admission slot. Paired with a successful <see cref="TryAdmit"/> from <see cref="ProcessAsync"/>.</summary>
     private void ReleaseAdmit() => Interlocked.Decrement(ref _activeConnections);
 
+    /// <summary>Disposes every listen socket and clears the list. Dispose exceptions are ignored.</summary>
     private void CloseListenSockets()
     {
         lock (_gate)
@@ -419,6 +571,8 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Waits for connection tasks currently in <see cref="_connections"/>. Exceptions from those tasks are ignored.</summary>
+    /// <returns>A task that completes when the sampled tasks finish, or immediately when none are tracked.</returns>
     private async Task DrainConnectionsAsync()
     {
         var tasks = _connections.Keys.ToArray();
@@ -436,6 +590,12 @@ internal sealed class CacheListenerService : IHostedService, IApplicationService
         }
     }
 
+    /// <summary>Closes listen sockets. Certificate leases stay with the connections that acquired them.</summary>
+    /// <returns>A completed task after <see cref="CloseListenSockets"/>.</returns>
+    /// <remarks>
+    /// Certificate publication is owned by the Common TLS provider; outstanding leases
+    /// keep retired generations alive until each connection completes.
+    /// </remarks>
     private async Task DisposeBoundResourcesAsync()
     {
         CloseListenSockets();

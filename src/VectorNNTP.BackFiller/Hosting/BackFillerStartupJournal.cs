@@ -25,12 +25,21 @@ internal interface IBackFillerStartupJournal
 }
 
 /// <summary>Thread-safe in-process startup journal.</summary>
+/// <remarks>
+/// <see cref="Record"/> and <see cref="Stages"/> share <see cref="_gate"/>.
+/// Recorded names are kept in call order, including duplicates. There is no remove or reset operation.
+/// </remarks>
 internal sealed class BackFillerStartupJournal : IBackFillerStartupJournal
 {
+    /// <summary>Stage names in <see cref="Record"/> call order.</summary>
     private readonly List<string> _stages = [];
+
+    /// <summary>Lock for <see cref="_stages"/>.</summary>
     private readonly object _gate = new();
 
-    /// <inheritdoc />
+    /// <summary>Appends <paramref name="stage"/> under <see cref="_gate"/>.</summary>
+    /// <param name="stage">Stage identifier. Must not be null or whitespace.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="stage"/> is null or whitespace.</exception>
     public void Record(string stage)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(stage);
@@ -40,7 +49,8 @@ internal sealed class BackFillerStartupJournal : IBackFillerStartupJournal
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>Gets the recorded stages in order.</summary>
+    /// <value>A copy taken under <see cref="_gate"/>. Later <see cref="Record"/> calls do not mutate the returned list.</value>
     public IReadOnlyList<string> Stages
     {
         get

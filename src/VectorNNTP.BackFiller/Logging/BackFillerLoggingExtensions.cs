@@ -23,6 +23,11 @@ internal static partial class BackFillerLoggingExtensions
     /// <summary>
     /// Creates an early bootstrap logger used before the Generic Host is built.
     /// </summary>
+    /// <param name="commandLine">
+    /// When <see cref="BackFillerLoggingCommandLine.Console"/> is true, the bootstrap logger writes to the console
+    /// with <see cref="ConsoleOutputTemplate"/>. When <see cref="BackFillerLoggingCommandLine.EnrichFromLogContext"/>
+    /// is true, the logger enriches from the ambient log context. The default value enables neither.
+    /// </param>
     /// <returns>A bootstrap logger assigned to <see cref="Log.Logger"/>.</returns>
     internal static Serilog.ILogger CreateBootstrapLogger(BackFillerLoggingCommandLine commandLine = default)
     {
@@ -74,6 +79,7 @@ internal static partial class BackFillerLoggingExtensions
     /// Process switches that enable the console sink and ambient context enrichment.
     /// </param>
     /// <returns>The same <paramref name="builder"/> instance.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
     /// <remarks>
     /// <para>
     /// Call order: clear MEL providers, remove default <see cref="ILoggerFactory"/> registrations,
@@ -131,6 +137,10 @@ internal static partial class BackFillerLoggingExtensions
     /// <param name="services">The built host service provider.</param>
     /// <param name="environmentName">Host environment name (no secrets).</param>
     /// <param name="contentRootPath">Resolved content root used for <c>VectorNNTP.BackFiller.json</c>.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="services"/> is null.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="environmentName"/> or <paramref name="contentRootPath"/> is null or whitespace.
+    /// </exception>
     internal static void WriteLoggingInitialized(
         IServiceProvider services,
         string environmentName,
@@ -151,6 +161,15 @@ internal static partial class BackFillerLoggingExtensions
             contentRootPath);
     }
 
+    /// <summary>
+    /// Written by <see cref="WriteLoggingInitialized"/> after the host <see cref="ILoggerFactory"/> is available.
+    /// </summary>
+    /// <param name="logger">Host logger created for <see cref="BackFillerLogCategories.Hosting"/>.</param>
+    /// <param name="application">Entry assembly name from <see cref="ApplicationJsonConfiguration.EntryAssemblyName"/>.</param>
+    /// <param name="provider">Runtime type name of the host <see cref="ILoggerFactory"/>.</param>
+    /// <param name="category"><see cref="BackFillerLogCategories.Hosting"/>.</param>
+    /// <param name="environment">Host environment name. No secrets.</param>
+    /// <param name="contentRoot">Content root path passed to <see cref="WriteLoggingInitialized"/>.</param>
     [LoggerMessage(
         EventId = 1,
         Level = LogLevel.Information,

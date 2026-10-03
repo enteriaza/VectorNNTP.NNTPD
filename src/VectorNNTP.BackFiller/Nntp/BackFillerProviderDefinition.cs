@@ -10,7 +10,10 @@ namespace VectorNNTP.BackFiller.Nntp;
 /// <param name="UseTls">Whether the session uses implicit TLS from connect (old <c>usessl</c>).</param>
 /// <param name="Username">AUTHINFO USER value, or null when authentication is not configured.</param>
 /// <param name="Password">AUTHINFO PASS value, or null when authentication is not configured.</param>
-/// <param name="MinSessions">Leftover port field. Not used for spawn; MaxSessions is the eager desired count.</param>
+/// <param name="MinSessions">
+/// Unused leftover. Not used to decide how many sessions to spawn; <see cref="MaxSessions"/> is the eager desired count.
+/// The session pool rejects values outside <c>0</c> through <see cref="MaxSessions"/>.
+/// </param>
 /// <param name="MaxSessions">Desired eager NNTP session count and hard concurrent bound (MySQL maxconnections).</param>
 /// <param name="KeepAliveSeconds">
 /// Per-account idle interval from MySQL <c>nntpbackfilleraccounts.keepalive</c>.
@@ -39,6 +42,12 @@ internal sealed record BackFillerProviderDefinition(
     /// Returns whether <paramref name="previous"/> differs only by a lower <see cref="MaxSessions"/>.
     /// Host, port, TLS, credentials, and keepalive still require pool replacement.
     /// </summary>
+    /// <param name="previous">Earlier definition to compare.</param>
+    /// <returns>
+    /// <see langword="true"/> when this <see cref="MaxSessions"/> is positive, strictly less than
+    /// <paramref name="previous"/>'s <see cref="MaxSessions"/>, and <see cref="HasSameConnectionIdentity"/> is true.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="previous"/> is null.</exception>
     internal bool IsMaxSessionsShrinkOf(BackFillerProviderDefinition previous)
     {
         ArgumentNullException.ThrowIfNull(previous);
@@ -51,6 +60,15 @@ internal sealed record BackFillerProviderDefinition(
     /// Returns whether upstream connection identity matches <paramref name="other"/>.
     /// <see cref="MinSessions"/> and <see cref="MaxSessions"/> are ignored.
     /// </summary>
+    /// <param name="other">Definition to compare.</param>
+    /// <returns>
+    /// <see langword="true"/> when backbone, host, port, TLS, username, password, and keepalive match.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+    /// <remarks>
+    /// Backbone comparison is <see cref="StringComparison.OrdinalIgnoreCase"/>.
+    /// Host, username, and password use <see cref="StringComparison.Ordinal"/>.
+    /// </remarks>
     internal bool HasSameConnectionIdentity(BackFillerProviderDefinition other)
     {
         ArgumentNullException.ThrowIfNull(other);
