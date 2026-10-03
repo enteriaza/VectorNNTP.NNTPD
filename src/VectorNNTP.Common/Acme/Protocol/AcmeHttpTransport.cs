@@ -377,7 +377,7 @@ namespace VectorNNTP.Common.Acme.Protocol
             return header.Delta is { } delta ? _time.GetUtcNow() + delta : null;
         }
 
-        private static IReadOnlyList<AcmeLink> ParseLinks(HttpResponseMessage response)
+        private static List<AcmeLink> ParseLinks(HttpResponseMessage response)
         {
             if (!response.Headers.TryGetValues("Link", out IEnumerable<string>? values))
             {
