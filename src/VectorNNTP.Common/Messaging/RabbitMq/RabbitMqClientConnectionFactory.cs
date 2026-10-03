@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Authentication;
-using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using VectorNNTP.Common.Configuration;
 

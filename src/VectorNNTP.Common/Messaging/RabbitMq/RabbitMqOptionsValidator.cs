@@ -1,5 +1,4 @@
 using System.Net;
-using Microsoft.Extensions.Options;
 
 namespace VectorNNTP.Common.Messaging.RabbitMq
 {

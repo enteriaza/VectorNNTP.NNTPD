@@ -43,7 +43,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         private readonly IRabbitMqService _rabbitMq;
 
         /// <summary>Serializes <see cref="Emit"/> publication and channel disposal.</summary>
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
 
         /// <summary>
         /// Cached confirm channel for the current connection generation. Replaced when the generation changes or the channel is closed.

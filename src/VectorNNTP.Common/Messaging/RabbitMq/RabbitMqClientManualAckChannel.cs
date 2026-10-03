@@ -156,11 +156,8 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
                 return;
             }
 
-            if (_consumer is not null)
-            {
-                _consumer.ReceivedAsync -= OnReceivedAsync;
-                _consumer = null;
-            }
+            _consumer?.ReceivedAsync -= OnReceivedAsync;
+            _consumer = null;
 
             _onDelivery = null;
 
@@ -235,7 +232,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>Copies <paramref name="arguments"/> into a new ordinal dictionary for RabbitMQ.Client.</summary>
         /// <param name="arguments">Declare or bind arguments. Not mutated.</param>
         /// <returns><see langword="null"/> when <paramref name="arguments"/> is <see langword="null"/>; otherwise a new dictionary.</returns>
-        private static IDictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
+        private static Dictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
         {
             if (arguments is null)
             {

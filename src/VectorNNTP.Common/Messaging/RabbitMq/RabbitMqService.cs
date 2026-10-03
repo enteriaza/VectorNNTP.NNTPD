@@ -44,7 +44,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         private readonly CancellationTokenSource _runCts = new();
 
         /// <summary>Serializes publication, retirement, and handle checks. Not held across broker I/O.</summary>
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
 
         /// <summary>
         /// One-shot signal consumed by the watch loop. Replaced after each wait so a later loss is not dropped.
@@ -201,7 +201,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
             {
                 _runtime = _options.Value.ToRuntimeOptions();
                 _connectionName = _connectionNameProvider.GetConnectionName();
-                await ConnectAndInstallAsync(cancellationToken, startup: true, logConnect: true).ConfigureAwait(false);
+                await ConnectAndInstallAsync(startup: true, logConnect: true, cancellationToken).ConfigureAwait(false);
                 _execution = WatchConnectionAsync(_runCts.Token);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -313,7 +313,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
                 {
                     await Task.Delay(delay, _timeProvider, cancellationToken).ConfigureAwait(false);
                     await RetireCurrentAsync().ConfigureAwait(false);
-                    var generation = await ConnectAndInstallAsync(cancellationToken, startup: false, logConnect: announce)
+                    var generation = await ConnectAndInstallAsync(startup: false, logConnect: announce, cancellationToken)
                         .ConfigureAwait(false);
                     RabbitMqLogMessages.ReconnectSucceeded(_logger, attempt, generation);
                     return;
@@ -339,21 +339,21 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>
         /// Opens one connection, publishes it as the next generation, and disposes the generation it replaced.
         /// </summary>
-        /// <param name="cancellationToken">Cancels the broker connect. A cancelled connect disposes any connection not yet published.</param>
         /// <param name="startup">
         /// When <see langword="true"/>, a failure other than cancellation is logged as a connection failure.
         /// Reconnect failures are logged by <see cref="RecoverAsync"/> instead.
         /// </param>
         /// <param name="logConnect">When <see langword="true"/>, logs the connect attempt and the successful connect.</param>
+        /// <param name="cancellationToken">Cancels the broker connect. A cancelled connect disposes any connection not yet published.</param>
         /// <returns>The generation installed by <see cref="Publish"/>.</returns>
         /// <exception cref="InvalidOperationException">
         /// The service is stopping, runtime options were not projected, or the opened connection is not usable.
         /// The unusable connection is disposed before the exception is thrown.
         /// </exception>
         private async Task<long> ConnectAndInstallAsync(
-            CancellationToken cancellationToken,
             bool startup,
-            bool logConnect = true)
+            bool logConnect,
+            CancellationToken cancellationToken)
         {
             ThrowIfStopping();
 

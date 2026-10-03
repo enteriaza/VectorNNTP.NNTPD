@@ -102,7 +102,7 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// <summary>
         /// Copies immutable argument dictionaries into the mutable shape expected by RabbitMQ.Client.
         /// </summary>
-        private static IDictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
+        private static Dictionary<string, object?>? ToMutable(IReadOnlyDictionary<string, object?>? arguments)
         {
             if (arguments is null)
             {
