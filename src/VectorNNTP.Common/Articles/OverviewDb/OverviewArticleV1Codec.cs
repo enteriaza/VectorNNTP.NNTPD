@@ -1,5 +1,4 @@
 using System.Text;
-using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.Common.Articles.OverviewDb
 {

@@ -270,7 +270,7 @@ namespace VectorNNTP.Common.Articles
             if (at < 0)
             {
                 headers = artData;
-                body = ReadOnlySpan<byte>.Empty;
+                body = [];
                 return;
             }
 

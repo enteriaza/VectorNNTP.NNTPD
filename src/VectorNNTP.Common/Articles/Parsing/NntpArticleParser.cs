@@ -904,7 +904,7 @@ namespace VectorNNTP.Common.Articles.Parsing
 
             var rawPath = found
                 ? articleSpan.Slice(pathHeader.ValueOffset, pathHeader.ValueLength)
-                : ReadOnlySpan<byte>.Empty;
+                : [];
             if (!ArticlePathCanonicalizer.TryAnalyze(rawPath, localIdentity, found, out pathKind, out containsOrganizationalTracker, out failureCode))
             {
                 return false;

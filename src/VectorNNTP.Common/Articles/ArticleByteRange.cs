@@ -37,7 +37,7 @@ namespace VectorNNTP.Common.Articles
         {
             if (!IsPresent || Length == 0)
             {
-                return ReadOnlySpan<byte>.Empty;
+                return [];
             }
 
             return artData.Slice(Offset, Length);

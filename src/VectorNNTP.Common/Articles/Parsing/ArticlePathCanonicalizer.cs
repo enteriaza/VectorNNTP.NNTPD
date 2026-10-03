@@ -175,7 +175,7 @@ namespace VectorNNTP.Common.Articles.Parsing
             out int bytesWritten)
         {
             var remaining = kind is ArticlePathKind.Missing or ArticlePathKind.Empty
-                ? ReadOnlySpan<byte>.Empty
+                ? []
                 : TrimAscii(rawPath);
 
             var traverse = mode == ArticlePathMode.Traverse;
