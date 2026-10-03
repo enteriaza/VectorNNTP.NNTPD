@@ -20,10 +20,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         {
             ArgumentOutOfRangeException.ThrowIfNegative(initialCredit);
             ArgumentOutOfRangeException.ThrowIfLessThan(maxCredit, 1);
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (initialCredit > maxCredit)
             {
                 throw new ArgumentOutOfRangeException(nameof(initialCredit));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             _credit = initialCredit;
             _maxCredit = maxCredit;

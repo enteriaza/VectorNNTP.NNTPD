@@ -68,10 +68,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
                 throw new ArgumentException("Destination is smaller than OPEN payload.", nameof(destination));
             }
 
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (requestId == Guid.Empty)
             {
                 throw new ArgumentOutOfRangeException(nameof(requestId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             if (!requestId.TryWriteBytes(destination[..VatpProtocol.RequestIdLength]))
             {

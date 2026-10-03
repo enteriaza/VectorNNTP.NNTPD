@@ -63,10 +63,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
                 throw new ArgumentException("Destination is smaller than the HELLO payload.", nameof(destination));
             }
 
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (maxFramePayload == 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(maxFramePayload));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             VatpProtocol.HelloMagic.CopyTo(destination);
             BinaryPrimitives.WriteUInt32BigEndian(destination.Slice(8, 4), maxFramePayload);

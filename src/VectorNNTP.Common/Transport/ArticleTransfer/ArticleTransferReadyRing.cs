@@ -32,10 +32,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>Adds a stream to the ring tail when not already present.</summary>
         internal void Enqueue(uint streamId)
         {
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (streamId == VatpProtocol.ConnectionStreamId)
             {
                 throw new ArgumentOutOfRangeException(nameof(streamId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             if (_ring.Contains(streamId))
             {
@@ -95,10 +97,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         {
             ArgumentOutOfRangeException.ThrowIfNegative(remainingBytes);
             ArgumentOutOfRangeException.ThrowIfNegative(credit);
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (maxFramePayload == 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(maxFramePayload));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             if (remainingBytes == 0 || credit == 0)
             {

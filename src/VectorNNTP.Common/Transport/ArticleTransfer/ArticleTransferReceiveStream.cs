@@ -70,15 +70,19 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             ArticleId expectedArtId,
             ArticleTransferLimits? limits = null)
         {
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (streamId == VatpProtocol.ConnectionStreamId)
             {
                 throw new ArgumentOutOfRangeException(nameof(streamId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (requestId == Guid.Empty)
             {
                 throw new ArgumentOutOfRangeException(nameof(requestId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             _limits = limits ?? ArticleTransferLimits.Default;
             StreamId = streamId;

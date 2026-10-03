@@ -22,7 +22,7 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
             }
 
             errorCode = (VatpErrorCode)BinaryPrimitives.ReadUInt16BigEndian(payload[..2]);
-            reason = payload.Length > 2 ? payload[2..] : ReadOnlySpan<byte>.Empty;
+            reason = payload.Length > 2 ? payload[2..] : [];
             return true;
         }
 

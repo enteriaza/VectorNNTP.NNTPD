@@ -14,10 +14,12 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// <summary>Encodes a HELLO header+payload into caller buffers or returns owned memories.</summary>
         internal static EncodedFrame EncodeHello(uint maxFramePayload)
         {
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (maxFramePayload == 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(maxFramePayload));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             var payload = new byte[VatpProtocol.HelloPayloadLength];
             VatpProtocol.HelloMagic.CopyTo(payload);

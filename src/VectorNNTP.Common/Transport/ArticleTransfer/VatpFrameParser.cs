@@ -135,35 +135,29 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
         /// </summary>
         /// <param name="header">Header whose type and stream id are checked.</param>
         /// <returns><see cref="VatpErrorCode.InvalidStreamId"/>, <see cref="VatpErrorCode.InvalidFrameType"/>, or <see cref="VatpErrorCode.None"/>.</returns>
-        private static VatpErrorCode ValidateStreamId(in VatpFrameHeader header)
-        {
-            switch (header.Type)
+        private static VatpErrorCode ValidateStreamId(in VatpFrameHeader header) =>
+            header.Type switch
             {
-                case VatpFrameType.Hello:
-                    return header.StreamId == VatpProtocol.ConnectionStreamId
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidStreamId;
+                VatpFrameType.Hello => header.StreamId == VatpProtocol.ConnectionStreamId
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidStreamId,
 
-                case VatpFrameType.Fail:
-                    // Connection-level or stream-scoped FAIL is allowed.
-                    return VatpErrorCode.None;
+                // Connection-level or stream-scoped FAIL is allowed.
+                VatpFrameType.Fail => VatpErrorCode.None,
 
-                case VatpFrameType.Open:
-                case VatpFrameType.Meta:
-                case VatpFrameType.Data:
-                case VatpFrameType.End:
-                case VatpFrameType.Cancel:
-                case VatpFrameType.Window:
-                case VatpFrameType.Store:
-                case VatpFrameType.Result:
-                    return header.StreamId == VatpProtocol.ConnectionStreamId
-                        ? VatpErrorCode.InvalidStreamId
-                        : VatpErrorCode.None;
+                VatpFrameType.Open
+                    or VatpFrameType.Meta
+                    or VatpFrameType.Data
+                    or VatpFrameType.End
+                    or VatpFrameType.Cancel
+                    or VatpFrameType.Window
+                    or VatpFrameType.Store
+                    or VatpFrameType.Result => header.StreamId == VatpProtocol.ConnectionStreamId
+                    ? VatpErrorCode.InvalidStreamId
+                    : VatpErrorCode.None,
 
-                default:
-                    return VatpErrorCode.InvalidFrameType;
-            }
-        }
+                _ => VatpErrorCode.InvalidFrameType,
+            };
 
         /// <summary>Checks that the buffered payload length matches the header and the fixed size for that frame type.</summary>
         /// <param name="header">Header already accepted by <see cref="ValidateHeader"/>.</param>
@@ -183,56 +177,36 @@ namespace VectorNNTP.Common.Transport.ArticleTransfer
                 return VatpErrorCode.InvalidFrameLength;
             }
 
-            switch (header.Type)
+            return header.Type switch
             {
-                case VatpFrameType.Hello:
-                    return header.PayloadLength == VatpProtocol.HelloPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidHello;
-
-                case VatpFrameType.Open:
-                    return header.PayloadLength == VatpProtocol.OpenPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidOpen;
-
-                case VatpFrameType.Store:
-                    return header.PayloadLength == VatpProtocol.StorePayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidFrameLength;
-
-                case VatpFrameType.Result:
-                    return header.PayloadLength == VatpProtocol.ResultPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidFrameLength;
-
-                case VatpFrameType.Meta:
-                    return header.PayloadLength == VatpProtocol.MetaPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidMeta;
-
-                case VatpFrameType.Window:
-                    return header.PayloadLength == VatpProtocol.WindowPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidFrameLength;
-
-                case VatpFrameType.End:
-                case VatpFrameType.Cancel:
-                    return header.PayloadLength == VatpProtocol.EmptyPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidFrameLength;
-
-                case VatpFrameType.Fail:
-                    return header.PayloadLength is >= VatpProtocol.FailMinPayloadLength
-                           and <= VatpProtocol.FailMaxPayloadLength
-                        ? VatpErrorCode.None
-                        : VatpErrorCode.InvalidFrameLength;
-
-                case VatpFrameType.Data:
-                    return VatpErrorCode.None;
-
-                default:
-                    return VatpErrorCode.InvalidFrameType;
-            }
+                VatpFrameType.Hello => header.PayloadLength == VatpProtocol.HelloPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidHello,
+                VatpFrameType.Open => header.PayloadLength == VatpProtocol.OpenPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidOpen,
+                VatpFrameType.Store => header.PayloadLength == VatpProtocol.StorePayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength,
+                VatpFrameType.Result => header.PayloadLength == VatpProtocol.ResultPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength,
+                VatpFrameType.Meta => header.PayloadLength == VatpProtocol.MetaPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidMeta,
+                VatpFrameType.Window => header.PayloadLength == VatpProtocol.WindowPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength,
+                VatpFrameType.End or VatpFrameType.Cancel => header.PayloadLength == VatpProtocol.EmptyPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength,
+                VatpFrameType.Fail => header.PayloadLength is >= VatpProtocol.FailMinPayloadLength
+                    and <= VatpProtocol.FailMaxPayloadLength
+                    ? VatpErrorCode.None
+                    : VatpErrorCode.InvalidFrameLength,
+                VatpFrameType.Data => VatpErrorCode.None,
+                _ => VatpErrorCode.InvalidFrameType,
+            };
         }
     }
 }
