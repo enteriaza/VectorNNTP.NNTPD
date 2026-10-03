@@ -12,7 +12,7 @@ namespace VectorNNTP.BackFiller.Retention
         /// <param name="RetainedPayloadBytes">Owned payload bytes after that add.</param>
         [LoggerMessage(
             EventId = 5500,
-            Level = LogLevel.Information,
+            Level = LogLevel.Debug,
             Message = "Article retained articleId={ArticleIdHex} bytes={PayloadBytes} retainedBytes={RetainedPayloadBytes}")]
         internal static partial void Retained(ILogger logger, string ArticleIdHex, int PayloadBytes, long RetainedPayloadBytes);
 

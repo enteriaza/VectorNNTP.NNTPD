@@ -23,10 +23,10 @@ namespace VectorNNTP.BackFiller.Retention
     internal sealed class ArticleRetentionAuthority : IArticleRetentionAuthority, IAsyncDisposable
     {
         /// <summary>
-        /// Exclusive lock for the indexes, byte counters, admission flag, and reader acquire/release.
-        /// <see cref="SweepInterval"/> does not use it.
+        /// Non-recursive lock for the indexes, byte counters, admission flag, and reader acquire/release.
+        /// No caller enters it again on the same call stack. <see cref="SweepInterval"/> does not use it.
         /// </summary>
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
 
         /// <summary>Exact Message-ID to its live entry. Comparison is ordinal. At most one entry per Message-ID.</summary>
         private readonly Dictionary<string, RetainedEntry> _byMessageId = new(StringComparer.Ordinal);
@@ -41,7 +41,7 @@ namespace VectorNNTP.BackFiller.Retention
         /// Openable RequestId to the entry that holds it. A RequestId maps to at most one entry.
         /// Removed when that RequestId is consumed, cancelled, or cleared by unindex or dispose.
         /// </summary>
-        private readonly Dictionary<Guid, RetainedEntry> _byRequestId = new();
+        private readonly Dictionary<Guid, RetainedEntry> _byRequestId = [];
 
         /// <summary>
         /// Admission order, oldest at <see cref="LinkedList{T}.First"/>. FIFO reclaim and TTL sweep
@@ -272,10 +272,14 @@ namespace VectorNNTP.BackFiller.Retention
             NntpArticleHeaderName selectedDateHeaderName)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+            // ThrowIfEqual changes both the message and ActualValue, so replacing the existing ArgumentOutOfRangeException would be a
+            // behavioral change for no functional benefit
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (requestId == Guid.Empty)
             {
                 throw new ArgumentOutOfRangeException(nameof(requestId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             if (record.ParseStatus != ArticleParseStatus.CanonicalV1
                 || record.ArtSize <= 0
@@ -432,10 +436,14 @@ namespace VectorNNTP.BackFiller.Retention
             ArticleId expectedArticleId,
             Func<int, bool>? tryReserveOutboundBytes = null)
         {
+            // ThrowIfEqual changes both the message and ActualValue, so replacing the existing ArgumentOutOfRangeException would be a
+            // behavioral change for no functional benefit
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (requestId == Guid.Empty)
             {
                 throw new ArgumentOutOfRangeException(nameof(requestId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             lock (_gate)
             {
@@ -500,10 +508,14 @@ namespace VectorNNTP.BackFiller.Retention
         /// </remarks>
         public bool TryCancelPendingRequest(Guid requestId)
         {
+            // ThrowIfEqual changes both the message and ActualValue, so replacing the existing ArgumentOutOfRangeException would be a
+            // behavioral change for no functional benefit
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (requestId == Guid.Empty)
             {
                 throw new ArgumentOutOfRangeException(nameof(requestId));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             lock (_gate)
             {
@@ -735,7 +747,7 @@ namespace VectorNNTP.BackFiller.Retention
         /// <param name="entry">Indexed or previously indexed entry.</param>
         /// <param name="now">Clock reading. Equal to <see cref="RetainedEntry.ExpiresUtc"/> is expired.</param>
         /// <returns><see langword="true"/> when <see cref="RetainedEntry.ExpiresUtc"/> is less than or equal to <paramref name="now"/>.</returns>
-        private bool IsExpiredLocked(RetainedEntry entry, DateTimeOffset now) =>
+        private static bool IsExpiredLocked(RetainedEntry entry, DateTimeOffset now) =>
             entry.ExpiresUtc <= now;
 
         /// <summary>
