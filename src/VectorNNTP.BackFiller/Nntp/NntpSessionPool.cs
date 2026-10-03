@@ -53,8 +53,11 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Connection numbers currently allocated. Guarded by <see cref="_slotGate"/>.</summary>
         private readonly HashSet<int> _usedSlots = [];
 
-        /// <summary>Guards <see cref="_usedSlots"/>.</summary>
-        private readonly object _slotGate = new();
+        /// <summary>
+        /// Non-recursive lock for <see cref="_usedSlots"/>.
+        /// No caller enters it again on the same call stack.
+        /// </summary>
+        private readonly Lock _slotGate = new();
 
         /// <summary>Cancelled at the start of dispose. Linked into acquire waits and DATE loops.</summary>
         private readonly CancellationTokenSource _shutdown = new();
@@ -377,7 +380,7 @@ namespace VectorNNTP.BackFiller.Nntp
 
                 var permitHolders = _leaseCeiling - _leases.CurrentCount;
                 var desiredPermits = Math.Max(0, bound - permitHolders);
-                while (_leases.CurrentCount > desiredPermits && _leases.Wait(0))
+                while (_leases.CurrentCount > desiredPermits && _leases.Wait(0, CancellationToken.None))
                 {
                 }
             }
@@ -448,7 +451,7 @@ namespace VectorNNTP.BackFiller.Nntp
             {
                 if (forceAfterGrace)
                 {
-                    await _drained.Task.WaitAsync(_shutdownGrace).ConfigureAwait(false);
+                    await _drained.Task.WaitAsync(_shutdownGrace, CancellationToken.None).ConfigureAwait(false);
                 }
                 else
                 {
@@ -550,8 +553,10 @@ namespace VectorNNTP.BackFiller.Nntp
             }
 
             var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
-            var registration = new KeepAliveRegistration(cts);
-            registration.Task = RunKeepAliveAsync(session, cts);
+            var registration = new KeepAliveRegistration(cts)
+            {
+                Task = RunKeepAliveAsync(session, cts)
+            };
             if (!_keepAlives.TryAdd(session, registration))
             {
                 try
@@ -855,7 +860,7 @@ namespace VectorNNTP.BackFiller.Nntp
             /// <summary>
             /// Loop task. Starts as <see cref="Task.CompletedTask"/> and is replaced before the registration is published.
             /// </summary>
-            internal Task Task { get; set; } = Task.CompletedTask;
+            internal Task Task { get; init; } = Task.CompletedTask;
         }
     }
 

@@ -759,11 +759,13 @@ namespace VectorNNTP.BackFiller.Nntp
                 var line = await _reader
                     .ReadLineAsync(_options.MaxStatusLineBytes, _options.CommandTimeout, cancellationToken)
                     .ConfigureAwait(false);
-                if (line is not null)
+                if (line is null || !_logger.IsEnabled(LogLevel.Debug))
                 {
-                    NntpLogMessages.WireRx(_logger, _wireIdentity, Encoding.ASCII.GetString(line));
+                    return line;
                 }
 
+                var response = Encoding.ASCII.GetString(line);
+                NntpLogMessages.WireRx(_logger, _wireIdentity, response);
                 return line;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

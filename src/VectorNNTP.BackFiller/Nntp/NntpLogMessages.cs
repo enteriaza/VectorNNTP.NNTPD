@@ -47,7 +47,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <param name="Reason">Diagnostic text from the download result. Callers do not pass secrets.</param>
         [LoggerMessage(
             EventId = 5402,
-            Level = LogLevel.Warning,
+            Level = LogLevel.Information,
             Message = "NNTP provider retrieval failed backbone={Backbone} kind={Kind} status={StatusCode} reason={Reason}")]
         internal static partial void RetrievalFailed(ILogger logger, string Backbone, ArticleRetrievalKind Kind, int? StatusCode, string Reason);
 
