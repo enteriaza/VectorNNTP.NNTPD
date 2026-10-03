@@ -54,8 +54,11 @@ namespace VectorNNTP.BackFiller.Listener
         /// <summary>Logger for <see cref="CacheListenerLogMessages"/>.</summary>
         private readonly ILogger<CacheListenerService> _logger;
 
-        /// <summary>Guards <see cref="_state"/> and <see cref="_listenSockets"/>.</summary>
-        private readonly object _gate = new();
+        /// <summary>
+        /// Non-recursive lock for <see cref="_state"/> and <see cref="_listenSockets"/>.
+        /// No caller enters it again on the same call stack.
+        /// </summary>
+        private readonly Lock _gate = new();
 
         /// <summary>Bound listen sockets. Mutated only while <see cref="_gate"/> is held.</summary>
         private readonly List<Socket> _listenSockets = [];
@@ -134,7 +137,7 @@ namespace VectorNNTP.BackFiller.Listener
 
         /// <summary>Builds a readiness gate that is already marked ready for the test constructor.</summary>
         /// <returns>A new <see cref="AcmeCertificateReadiness"/> after <c>MarkReady</c>.</returns>
-        private static IAcmeCertificateReadiness CreateReadyGate()
+        private static AcmeCertificateReadiness CreateReadyGate()
         {
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
@@ -344,7 +347,14 @@ namespace VectorNNTP.BackFiller.Listener
                         _listenSockets.Add(socket);
                     }
 
-                    CacheListenerLogMessages.EndpointBound(_logger, binding.EndPoint.ToString(), binding.Address.AddressFamily.ToString());
+                    if (!_logger.IsEnabled(LogLevel.Information))
+                    {
+                        continue;
+                    }
+
+                    var endpoint = binding.EndPoint.ToString();
+                    var addressFamily = binding.Address.AddressFamily.ToString();
+                    CacheListenerLogMessages.EndpointBound(_logger, endpoint, addressFamily);
                 }
                 catch (SocketException ex) when (
                     IsImplicitWildcard(binding.EndPoint)

@@ -53,9 +53,12 @@ namespace VectorNNTP.BackFiller.Listener
         /// <summary>Stream ids eligible for another DATA frame. Mutated with the stream table under <see cref="_streamGate"/>.</summary>
         private readonly ArticleTransferReadyRing _readyRing = new();
         /// <summary>OPEN streams that have not been completed, cancelled, failed, or disposed. Guarded by <see cref="_streamGate"/>.</summary>
-        private readonly Dictionary<uint, SendStream> _streams = new();
-        /// <summary>Guards <see cref="_streams"/> and ready-ring updates that must observe the same stream phase.</summary>
-        private readonly object _streamGate = new();
+        private readonly Dictionary<uint, SendStream> _streams = [];
+        /// <summary>
+        /// Non-recursive lock for <see cref="_streams"/> and ready-ring updates that must observe the same stream phase.
+        /// No caller enters it again on the same call stack.
+        /// </summary>
+        private readonly Lock _streamGate = new();
         /// <summary>Cap copied from <see cref="BackFillerListenerRuntimeOptions.MaxQueuedFoundPayloadBytes"/>.</summary>
         private readonly int _maxQueuedFoundPayloadBytes;
         /// <summary>Sum of article sizes reserved for streams that still hold a found-byte reservation.</summary>
