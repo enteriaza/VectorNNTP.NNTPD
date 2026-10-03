@@ -60,7 +60,7 @@ namespace VectorNNTP.Common.Acme
 
                 var material = new CertificateMaterial(
                     PfxBytes: pfxBytes.ToArray(),
-                    Domains: domains.OrderBy(static d => d, StringComparer.Ordinal).ToArray(),
+                    Domains: (string[])[.. domains.OrderBy(static d => d, StringComparer.Ordinal)],
                     NotBefore: leaf.NotBefore.ToUniversalTime(),
                     NotAfter: leaf.NotAfter.ToUniversalTime());
 
@@ -114,11 +114,8 @@ namespace VectorNNTP.Common.Acme
         /// <returns>The DNS names, compared case-insensitively.</returns>
         private static HashSet<string> GetDnsNames(X509Certificate2 cert)
         {
-            var extension = cert.Extensions.OfType<X509SubjectAlternativeNameExtension>().FirstOrDefault();
-            if (extension is null)
-            {
-                throw new AcmeCertificateException("missing_san", "no_san_extension");
-            }
+            var extension = cert.Extensions.OfType<X509SubjectAlternativeNameExtension>().FirstOrDefault()
+                ?? throw new AcmeCertificateException("missing_san", "no_san_extension");
 
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var dnsName in extension.EnumerateDnsNames())

@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.Common.Configuration;
 
@@ -22,7 +21,7 @@ namespace VectorNNTP.Common.Acme
         private readonly ILoggerFactory _loggerFactory;
 
         /// <summary>Guards one-time construction of <see cref="_manager"/> and <see cref="_provider"/>.</summary>
-        private readonly object _sync = new();
+        private readonly Lock _sync = new();
 
         /// <summary>Manager created on the first TLS-enabled request. <see langword="null"/> until then.</summary>
         private CertificateManager? _manager;

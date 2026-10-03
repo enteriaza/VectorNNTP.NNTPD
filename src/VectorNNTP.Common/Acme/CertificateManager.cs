@@ -79,10 +79,12 @@ namespace VectorNNTP.Common.Acme
             ArgumentNullException.ThrowIfNull(issuer);
             ArgumentNullException.ThrowIfNull(pfxPassword);
             ArgumentNullException.ThrowIfNull(logger);
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (renewalThreshold <= TimeSpan.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(renewalThreshold));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
             _stateDir = stateDir;
@@ -232,7 +234,11 @@ namespace VectorNNTP.Common.Acme
         /// <exception cref="AcmeCertificateException">Thrown with category <c>invalid_certificate</c> when the issued PFX fails validation.</exception>
         private async Task<CertificateMaterial> IssueAndPersistAsync(CancellationToken cancellationToken)
         {
-            var transactionId = _journal.BeginTransaction(_domains, _acmeDirectoryUrl, DateTimeOffset.UtcNow);
+            var transactionId = _journal.BeginTransaction(
+                _domains,
+                _acmeDirectoryUrl,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
             try
             {
                 var material = await _issuer.IssueAsync(_domains, cancellationToken).ConfigureAwait(false);

@@ -7,10 +7,12 @@ namespace VectorNNTP.Common.Acme
     /// and a <c>current</c> pointer.
     /// Persists the TLS credential as PKCS#12/PFX (<c>certificate.pfx</c>).
     /// </summary>
-    internal sealed class CertificateStore
+    internal sealed partial class CertificateStore
     {
         /// <summary>32 lowercase hex characters, the <c>N</c> format of a <see cref="Guid"/>.</summary>
-        private static readonly Regex GenerationIdRegex = new("^[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        /// <returns>The culture-invariant matcher for a generation id.</returns>
+        [GeneratedRegex("^[0-9a-f]{32}$", RegexOptions.CultureInvariant)]
+        private static partial Regex GenerationIdRegex();
 
         /// <summary>Shared ACME state root.</summary>
         private readonly string _stateDir;
@@ -43,10 +45,12 @@ namespace VectorNNTP.Common.Acme
             ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
             ArgumentNullException.ThrowIfNull(pfxPassword);
             ArgumentNullException.ThrowIfNull(requiredDomains);
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (renewalThreshold <= TimeSpan.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(renewalThreshold));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             _stateDir = stateDir;
             _fqdn = CertificateIdentities.NormalizeFqdn(fqdn);
@@ -231,7 +235,7 @@ namespace VectorNNTP.Common.Acme
             try
             {
                 var raw = File.ReadAllText(path).Trim();
-                return GenerationIdRegex.IsMatch(raw) ? raw : null;
+                return GenerationIdRegex().IsMatch(raw) ? raw : null;
             }
             catch (IOException)
             {
@@ -246,7 +250,7 @@ namespace VectorNNTP.Common.Acme
         /// <returns><see langword="false"/> when any of those checks fail, including an <see cref="IOException"/> reading the length.</returns>
         private bool GenerationIsComplete(string generationId)
         {
-            if (!GenerationIdRegex.IsMatch(generationId))
+            if (!GenerationIdRegex().IsMatch(generationId))
             {
                 return false;
             }

@@ -130,7 +130,7 @@ namespace VectorNNTP.Common.Acme
                 return [];
             }
 
-            return intersection.ToArray();
+            return (string[])[.. intersection];
         }
 
         /// <summary>Resolves apex NS addresses and returns them as port-53 endpoints. An empty set throws category <c>ns_discovery_failed</c>.</summary>

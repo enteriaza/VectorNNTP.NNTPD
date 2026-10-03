@@ -42,7 +42,7 @@ namespace VectorNNTP.BackFiller.Acme
         }
 
         /// <inheritdoc />
-        public string Name => _inner.Name;
+        public string Name => AcmeCertificateService.Name;
 
         /// <inheritdoc />
         public Task? Execution => _inner.Execution;

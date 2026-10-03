@@ -73,7 +73,7 @@ namespace VectorNNTP.Common.Acme
         }
 
         /// <summary>Stable service name <c>AcmeCertificate</c> read by the host application-service adapter.</summary>
-        internal string Name => "AcmeCertificate";
+        internal static string Name => "AcmeCertificate";
 
         /// <summary>
         /// Renewal-loop task after a successful TLS-enabled start.

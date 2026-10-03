@@ -102,15 +102,19 @@ namespace VectorNNTP.Common.Acme
             Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
         {
             ArgumentNullException.ThrowIfNull(pollAsync);
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (timeout <= TimeSpan.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(timeout));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
+#pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
             if (interval <= TimeSpan.Zero)
             {
                 throw new ArgumentOutOfRangeException(nameof(interval));
             }
+#pragma warning restore CA1512 // Use ArgumentOutOfRangeException throw helper
 
             delayAsync ??= static (delay, token) => Task.Delay(delay, token);
             var deadline = DateTimeOffset.UtcNow + timeout;

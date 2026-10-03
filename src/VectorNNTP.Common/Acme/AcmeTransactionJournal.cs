@@ -598,7 +598,7 @@ namespace VectorNNTP.Common.Acme
         /// </summary>
         /// <param name="root">One element of <c>transactions</c>.</param>
         /// <returns>The in-memory transaction.</returns>
-        private AcmeJournalTransaction ParseTransaction(JsonElement root)
+        private static AcmeJournalTransaction ParseTransaction(JsonElement root)
         {
             var identifiers = new List<string>();
             if (root.TryGetProperty("identifiers", out var identifiersElement)
@@ -670,11 +670,8 @@ namespace VectorNNTP.Common.Acme
         private AcmeJournalTransaction RequireTransaction(AcmeJournalDocument document, string transactionId)
         {
             var transaction = document.Transactions.FirstOrDefault(
-                item => string.Equals(item.Id, transactionId, StringComparison.Ordinal));
-            if (transaction is null)
-            {
-                throw new AcmeStorageException("missing_journal_transaction", transactionId);
-            }
+                item => string.Equals(item.Id, transactionId, StringComparison.Ordinal))
+                ?? throw new AcmeStorageException("missing_journal_transaction", transactionId);
 
             if (!string.Equals(document.Fqdn, _fqdn, StringComparison.Ordinal))
             {
