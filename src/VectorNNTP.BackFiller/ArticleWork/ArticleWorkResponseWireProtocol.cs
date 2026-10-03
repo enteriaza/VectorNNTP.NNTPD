@@ -4,229 +4,230 @@ using System.Text.Json;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Messaging.Cache;
 
-namespace VectorNNTP.BackFiller.ArticleWork;
-
-/// <summary>
-/// Compact UTF-8 JSON contract for Article Work v1 responses.
-/// Property names are exact: version, requestId, messageId, backbone, outcome, fqdn, vatpPort, articleId, error.
-/// </summary>
-internal static class ArticleWorkResponseWireProtocol
+namespace VectorNNTP.BackFiller.ArticleWork
 {
-    /// <summary>Application protocol version.</summary>
-    private const int CurrentVersion = 1;
-
-    /// <summary>AMQP content type.</summary>
-    internal const string JsonContentType = "application/json";
-
-    /// <summary>AMQP header carrying the logical request UUID.</summary>
-    internal const string RequestIdHeaderName = "RequestId";
-
     /// <summary>
-    /// Worker response TTL in milliseconds. Locked NNTPD architecture uses the same value
-    /// on requests and accepted responses. Old BackFiller publisher did not set Expiration.
+    /// Compact UTF-8 JSON contract for Article Work v1 responses.
+    /// Property names are exact: version, requestId, messageId, backbone, outcome, fqdn, vatpPort, articleId, error.
     /// </summary>
-    internal const string ExpirationMilliseconds = "1000";
-
-    /// <summary>Serializes one validated v1 response. Does not embed article bytes.</summary>
-    /// <param name="intent">
-    /// Pipeline intent. Success carries <c>fqdn</c>, <c>vatpPort</c>, and <c>articleId</c>.
-    /// Other publishable outcomes carry <c>error</c> and omit those success fields.
-    /// </param>
-    /// <returns>Compact UTF-8 JSON with the property names declared by this type.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="intent"/> is null.</exception>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when <paramref name="intent"/> is not a publishable v1 response.
-    /// <see cref="ArticleWorkOutcome.ProviderFailure"/>, <see cref="ArticleWorkOutcome.Cancelled"/>,
-    /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, and <see cref="ArticleWorkOutcome.RetentionRejected"/>
-    /// are rejected. Success requires a canonical FQDN, a port in 1–65535, and a 64-character lowercase
-    /// hexadecimal article id, and must not include <c>error</c>. Other publishable outcomes require a
-    /// non-empty <c>error</c> and must not include success fields.
-    /// </exception>
-    internal static byte[] SerializeV1(ArticleWorkResponseIntent intent)
+    internal static class ArticleWorkResponseWireProtocol
     {
-        ArgumentNullException.ThrowIfNull(intent);
-        Validate(intent);
+        /// <summary>Application protocol version.</summary>
+        private const int CurrentVersion = 1;
 
-        var writer = new ArrayBufferWriter<byte>();
-        using var json = new Utf8JsonWriter(writer, new JsonWriterOptions
+        /// <summary>AMQP content type.</summary>
+        internal const string JsonContentType = "application/json";
+
+        /// <summary>AMQP header carrying the logical request UUID.</summary>
+        internal const string RequestIdHeaderName = "RequestId";
+
+        /// <summary>
+        /// Worker response TTL in milliseconds. Locked NNTPD architecture uses the same value
+        /// on requests and accepted responses. Old BackFiller publisher did not set Expiration.
+        /// </summary>
+        internal const string ExpirationMilliseconds = "1000";
+
+        /// <summary>Serializes one validated v1 response. Does not embed article bytes.</summary>
+        /// <param name="intent">
+        /// Pipeline intent. Success carries <c>fqdn</c>, <c>vatpPort</c>, and <c>articleId</c>.
+        /// Other publishable outcomes carry <c>error</c> and omit those success fields.
+        /// </param>
+        /// <returns>Compact UTF-8 JSON with the property names declared by this type.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="intent"/> is null.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when <paramref name="intent"/> is not a publishable v1 response.
+        /// <see cref="ArticleWorkOutcome.ProviderFailure"/>, <see cref="ArticleWorkOutcome.Cancelled"/>,
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, and <see cref="ArticleWorkOutcome.RetentionRejected"/>
+        /// are rejected. Success requires a canonical FQDN, a port in 1–65535, and a 64-character lowercase
+        /// hexadecimal article id, and must not include <c>error</c>. Other publishable outcomes require a
+        /// non-empty <c>error</c> and must not include success fields.
+        /// </exception>
+        internal static byte[] SerializeV1(ArticleWorkResponseIntent intent)
         {
-            Indented = false,
-            SkipValidation = false,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        });
+            ArgumentNullException.ThrowIfNull(intent);
+            Validate(intent);
 
-        json.WriteStartObject();
-        json.WriteNumber("version", CurrentVersion);
-        if (intent.RequestId.HasValue)
-        {
-            json.WriteString("requestId", intent.RequestId.Value);
-        }
-        else
-        {
-            json.WriteNull("requestId");
-        }
+            var writer = new ArrayBufferWriter<byte>();
+            using var json = new Utf8JsonWriter(writer, new JsonWriterOptions
+            {
+                Indented = false,
+                SkipValidation = false,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
 
-        if (intent.MessageId is null)
-        {
-            json.WriteNull("messageId");
-        }
-        else
-        {
-            json.WriteString("messageId", intent.MessageId);
-        }
+            json.WriteStartObject();
+            json.WriteNumber("version", CurrentVersion);
+            if (intent.RequestId.HasValue)
+            {
+                json.WriteString("requestId", intent.RequestId.Value);
+            }
+            else
+            {
+                json.WriteNull("requestId");
+            }
 
-        if (intent.Backbone is null)
-        {
-            json.WriteNull("backbone");
-        }
-        else
-        {
-            json.WriteString("backbone", intent.Backbone);
-        }
+            if (intent.MessageId is null)
+            {
+                json.WriteNull("messageId");
+            }
+            else
+            {
+                json.WriteString("messageId", intent.MessageId);
+            }
 
-        json.WriteString("outcome", OutcomeName(intent.Outcome));
-        if (intent.Outcome == ArticleWorkOutcome.Success)
-        {
-            json.WriteString("fqdn", intent.Fqdn);
-            json.WriteNumber("vatpPort", intent.VatpPort!.Value);
-            json.WriteString("articleId", intent.ArticleIdHex);
-        }
-        else
-        {
-            json.WriteString("error", intent.Error);
-        }
+            if (intent.Backbone is null)
+            {
+                json.WriteNull("backbone");
+            }
+            else
+            {
+                json.WriteString("backbone", intent.Backbone);
+            }
 
-        json.WriteEndObject();
-        json.Flush();
-        return writer.WrittenSpan.ToArray();
-    }
+            json.WriteString("outcome", OutcomeName(intent.Outcome));
+            if (intent.Outcome == ArticleWorkOutcome.Success)
+            {
+                json.WriteString("fqdn", intent.Fqdn);
+                json.WriteNumber("vatpPort", intent.VatpPort!.Value);
+                json.WriteString("articleId", intent.ArticleIdHex);
+            }
+            else
+            {
+                json.WriteString("error", intent.Error);
+            }
 
-    /// <summary>Returns the protocol outcome name written to the <c>outcome</c> property.</summary>
-    /// <param name="outcome">Classified outcome to encode.</param>
-    /// <returns>
-    /// <c>Success</c>, <c>ArticleNotFound</c>, <c>InvalidArticle</c>, or <c>InvalidRequest</c>.
-    /// </returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when <paramref name="outcome"/> is not a publishable terminal response.
-    /// </exception>
-    internal static string OutcomeName(ArticleWorkOutcome outcome) =>
-        outcome switch
-        {
-            ArticleWorkOutcome.Success => "Success",
-            ArticleWorkOutcome.ArticleNotFound => "ArticleNotFound",
-            ArticleWorkOutcome.InvalidArticle => "InvalidArticle",
-            ArticleWorkOutcome.InvalidRequest => "InvalidRequest",
-            _ => throw new InvalidOperationException($"Outcome '{outcome}' is not a publishable terminal response."),
-        };
-
-    /// <summary>
-    /// Rejects an intent that <see cref="SerializeV1"/> must not write.
-    /// </summary>
-    /// <param name="intent">Intent already known to be non-null.</param>
-    /// <exception cref="InvalidOperationException">Thrown when a required field is missing or a forbidden field is present.</exception>
-    /// <remarks>
-    /// Does not inspect AMQP <c>CorrelationId</c> or <c>ReplyTo</c>. Those are enforced by the publisher.
-    /// <see cref="ArticleWorkOutcome.InvalidRequest"/> may omit request id, message id, and backbone.
-    /// A present request id must not be <see cref="Guid.Empty"/>.
-    /// </remarks>
-    private static void Validate(ArticleWorkResponseIntent intent)
-    {
-        switch (intent.Outcome)
-        {
-            case ArticleWorkOutcome.Success:
-                RequireIdentity(intent);
-                if (!VatpEndpointFields.IsCanonicalFqdn(intent.Fqdn))
-                {
-                    throw new InvalidOperationException("Success response requires a lowercase dotted DNS fqdn.");
-                }
-
-                if (intent.VatpPort is not int vatpPort || !VatpEndpointFields.IsCanonicalPort(vatpPort))
-                {
-                    throw new InvalidOperationException("Success response requires a vatpPort in the range 1–65535.");
-                }
-
-                if (string.IsNullOrWhiteSpace(intent.ArticleIdHex)
-                    || !ArticleId.TryParseLowerHex(intent.ArticleIdHex, out _))
-                {
-                    throw new InvalidOperationException(
-                        "Success response requires a 64-character lowercase hexadecimal articleId.");
-                }
-
-                if (intent.Error is not null)
-                {
-                    throw new InvalidOperationException("Success response must not include error.");
-                }
-
-                return;
-
-            case ArticleWorkOutcome.ArticleNotFound:
-            case ArticleWorkOutcome.InvalidArticle:
-                RequireIdentity(intent);
-                if (intent.Fqdn is not null || intent.VatpPort is not null)
-                {
-                    throw new InvalidOperationException("Terminal failure response must not include fqdn or vatpPort.");
-                }
-
-                if (intent.ArticleIdHex is not null)
-                {
-                    throw new InvalidOperationException("Terminal failure response must not include articleId.");
-                }
-
-                if (string.IsNullOrWhiteSpace(intent.Error))
-                {
-                    throw new InvalidOperationException("Terminal failure response requires a non-empty error.");
-                }
-
-                return;
-
-            case ArticleWorkOutcome.InvalidRequest:
-                if (intent.RequestId is { } empty && empty == Guid.Empty)
-                {
-                    throw new InvalidOperationException("InvalidRequest must not use Guid.Empty.");
-                }
-
-                if (intent.Fqdn is not null || intent.VatpPort is not null)
-                {
-                    throw new InvalidOperationException("InvalidRequest must not include fqdn or vatpPort.");
-                }
-
-                if (intent.ArticleIdHex is not null)
-                {
-                    throw new InvalidOperationException("InvalidRequest must not include articleId.");
-                }
-
-                if (string.IsNullOrWhiteSpace(intent.Error))
-                {
-                    throw new InvalidOperationException("InvalidRequest requires a non-empty error.");
-                }
-
-                return;
-
-            default:
-                throw new InvalidOperationException($"Outcome '{intent.Outcome}' is not a publishable terminal response.");
-        }
-    }
-
-    /// <summary>
-    /// Requires a non-empty request id, message id, and backbone for outcomes other than <see cref="ArticleWorkOutcome.InvalidRequest"/>.
-    /// </summary>
-    /// <param name="intent">Success, article-not-found, or invalid-article intent.</param>
-    /// <exception cref="InvalidOperationException">Thrown when any of those identities is missing or the request id is <see cref="Guid.Empty"/>.</exception>
-    private static void RequireIdentity(ArticleWorkResponseIntent intent)
-    {
-        if (intent.RequestId is not { } requestId || requestId == Guid.Empty)
-        {
-            throw new InvalidOperationException("Terminal non-InvalidRequest response requires requestId.");
+            json.WriteEndObject();
+            json.Flush();
+            return writer.WrittenSpan.ToArray();
         }
 
-        if (string.IsNullOrWhiteSpace(intent.MessageId))
+        /// <summary>Returns the protocol outcome name written to the <c>outcome</c> property.</summary>
+        /// <param name="outcome">Classified outcome to encode.</param>
+        /// <returns>
+        /// <c>Success</c>, <c>ArticleNotFound</c>, <c>InvalidArticle</c>, or <c>InvalidRequest</c>.
+        /// </returns>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when <paramref name="outcome"/> is not a publishable terminal response.
+        /// </exception>
+        internal static string OutcomeName(ArticleWorkOutcome outcome) =>
+            outcome switch
+            {
+                ArticleWorkOutcome.Success => "Success",
+                ArticleWorkOutcome.ArticleNotFound => "ArticleNotFound",
+                ArticleWorkOutcome.InvalidArticle => "InvalidArticle",
+                ArticleWorkOutcome.InvalidRequest => "InvalidRequest",
+                _ => throw new InvalidOperationException($"Outcome '{outcome}' is not a publishable terminal response."),
+            };
+
+        /// <summary>
+        /// Rejects an intent that <see cref="SerializeV1"/> must not write.
+        /// </summary>
+        /// <param name="intent">Intent already known to be non-null.</param>
+        /// <exception cref="InvalidOperationException">Thrown when a required field is missing or a forbidden field is present.</exception>
+        /// <remarks>
+        /// Does not inspect AMQP <c>CorrelationId</c> or <c>ReplyTo</c>. Those are enforced by the publisher.
+        /// <see cref="ArticleWorkOutcome.InvalidRequest"/> may omit request id, message id, and backbone.
+        /// A present request id must not be <see cref="Guid.Empty"/>.
+        /// </remarks>
+        private static void Validate(ArticleWorkResponseIntent intent)
         {
-            throw new InvalidOperationException("Terminal non-InvalidRequest response requires messageId.");
+            switch (intent.Outcome)
+            {
+                case ArticleWorkOutcome.Success:
+                    RequireIdentity(intent);
+                    if (!VatpEndpointFields.IsCanonicalFqdn(intent.Fqdn))
+                    {
+                        throw new InvalidOperationException("Success response requires a lowercase dotted DNS fqdn.");
+                    }
+
+                    if (intent.VatpPort is not { } vatpPort || !VatpEndpointFields.IsCanonicalPort(vatpPort))
+                    {
+                        throw new InvalidOperationException("Success response requires a vatpPort in the range 1–65535.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(intent.ArticleIdHex)
+                        || !ArticleId.TryParseLowerHex(intent.ArticleIdHex, out _))
+                    {
+                        throw new InvalidOperationException(
+                            "Success response requires a 64-character lowercase hexadecimal articleId.");
+                    }
+
+                    if (intent.Error is not null)
+                    {
+                        throw new InvalidOperationException("Success response must not include error.");
+                    }
+
+                    return;
+
+                case ArticleWorkOutcome.ArticleNotFound:
+                case ArticleWorkOutcome.InvalidArticle:
+                    RequireIdentity(intent);
+                    if (intent.Fqdn is not null || intent.VatpPort is not null)
+                    {
+                        throw new InvalidOperationException("Terminal failure response must not include fqdn or vatpPort.");
+                    }
+
+                    if (intent.ArticleIdHex is not null)
+                    {
+                        throw new InvalidOperationException("Terminal failure response must not include articleId.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(intent.Error))
+                    {
+                        throw new InvalidOperationException("Terminal failure response requires a non-empty error.");
+                    }
+
+                    return;
+
+                case ArticleWorkOutcome.InvalidRequest:
+                    if (intent.RequestId is { } empty && empty == Guid.Empty)
+                    {
+                        throw new InvalidOperationException("InvalidRequest must not use Guid.Empty.");
+                    }
+
+                    if (intent.Fqdn is not null || intent.VatpPort is not null)
+                    {
+                        throw new InvalidOperationException("InvalidRequest must not include fqdn or vatpPort.");
+                    }
+
+                    if (intent.ArticleIdHex is not null)
+                    {
+                        throw new InvalidOperationException("InvalidRequest must not include articleId.");
+                    }
+
+                    if (string.IsNullOrWhiteSpace(intent.Error))
+                    {
+                        throw new InvalidOperationException("InvalidRequest requires a non-empty error.");
+                    }
+
+                    return;
+
+                default:
+                    throw new InvalidOperationException($"Outcome '{intent.Outcome}' is not a publishable terminal response.");
+            }
         }
 
-        if (string.IsNullOrWhiteSpace(intent.Backbone))
+        /// <summary>
+        /// Requires a non-empty request id, message id, and backbone for outcomes other than <see cref="ArticleWorkOutcome.InvalidRequest"/>.
+        /// </summary>
+        /// <param name="intent">Success, article-not-found, or invalid-article intent.</param>
+        /// <exception cref="InvalidOperationException">Thrown when any of those identities is missing or the request id is <see cref="Guid.Empty"/>.</exception>
+        private static void RequireIdentity(ArticleWorkResponseIntent intent)
         {
-            throw new InvalidOperationException("Terminal non-InvalidRequest response requires backbone.");
+            if (intent.RequestId is not { } requestId || requestId == Guid.Empty)
+            {
+                throw new InvalidOperationException("Terminal non-InvalidRequest response requires requestId.");
+            }
+
+            if (string.IsNullOrWhiteSpace(intent.MessageId))
+            {
+                throw new InvalidOperationException("Terminal non-InvalidRequest response requires messageId.");
+            }
+
+            if (string.IsNullOrWhiteSpace(intent.Backbone))
+            {
+                throw new InvalidOperationException("Terminal non-InvalidRequest response requires backbone.");
+            }
         }
     }
 }

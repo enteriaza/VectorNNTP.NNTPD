@@ -1,59 +1,60 @@
 using VectorNNTP.BackFiller.ArticleWork;
 
-namespace VectorNNTP.BackFiller.Tests.TestDoubles;
-
-/// <summary>
-/// Publisher seam that exposes deterministic publish/confirm holds for shutdown races.
-/// </summary>
-internal sealed class GatedArticleWorkResponsePublisher : IArticleWorkResponsePublisher
+namespace VectorNNTP.BackFiller.Tests.TestDoubles
 {
-    private readonly List<ArticleWorkResponseIntent> _published = [];
-
-    public bool CompletesSuccessPublication { get; set; } = true;
-
-    public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    public TaskCompletionSource? Gate { get; set; }
-
-    public TaskCompletionSource? AfterConfirmHold { get; set; }
-
-    public Exception? PublishException { get; set; }
-
-    public IReadOnlyList<ArticleWorkResponseIntent> Published
+    /// <summary>
+    /// Publisher seam that exposes deterministic publish/confirm holds for shutdown races.
+    /// </summary>
+    internal sealed class GatedArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     {
-        get
+        private readonly List<ArticleWorkResponseIntent> _published = [];
+
+        public bool CompletesSuccessPublication { get; set; } = true;
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource? Gate { get; set; }
+
+        public TaskCompletionSource? AfterConfirmHold { get; set; }
+
+        public Exception? PublishException { get; set; }
+
+        public IReadOnlyList<ArticleWorkResponseIntent> Published
         {
-            lock (_published)
+            get
             {
-                return [.. _published];
+                lock (_published)
+                {
+                    return [.. _published];
+                }
             }
         }
-    }
 
-    public async Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(intent);
-        cancellationToken.ThrowIfCancellationRequested();
-        Started.TrySetResult();
-        if (Gate is not null)
+        public async Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
         {
-            await Gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
+            ArgumentNullException.ThrowIfNull(intent);
+            cancellationToken.ThrowIfCancellationRequested();
+            Started.TrySetResult();
+            if (Gate is not null)
+            {
+                await Gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        if (PublishException is not null)
-        {
-            throw PublishException;
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PublishException is not null)
+            {
+                throw PublishException;
+            }
 
-        lock (_published)
-        {
-            _published.Add(intent);
-        }
+            lock (_published)
+            {
+                _published.Add(intent);
+            }
 
-        if (AfterConfirmHold is not null)
-        {
-            await AfterConfirmHold.Task.ConfigureAwait(false);
+            if (AfterConfirmHold is not null)
+            {
+                await AfterConfirmHold.Task.ConfigureAwait(false);
+            }
         }
     }
 }

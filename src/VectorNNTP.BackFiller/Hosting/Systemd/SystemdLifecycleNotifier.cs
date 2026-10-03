@@ -2,289 +2,293 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Logging;
 using Microsoft.Extensions.Options;
 
-namespace VectorNNTP.BackFiller.Hosting.Systemd;
-
-/// <summary>
-/// Publishes systemd readiness and status notifications from Generic Host lifetime events.
-/// </summary>
-/// <remarks>
-/// <para>
-/// BackFiller does not use NNTPD's <c>ApplicationLifecycle</c> state machine. Ready is reported
-/// at most once after <see cref="IHostApplicationLifetime.ApplicationStarted"/> (all hosted
-/// services started successfully). Startup failure never reports ready. Once shutdown begins,
-/// further readiness notifications are suppressed.
-/// </para>
-/// <para>
-/// <see cref="StartAsync"/> and <see cref="StopAsync"/> do not observe their cancellation tokens.
-/// Lifetime callbacks are registered with <see cref="CancellationToken.Register(Action)"/>,
-/// which runs the delegate inline when that token is already canceled. The returned registrations
-/// are not stored. <see cref="OnApplicationStarted"/> returns immediately unless <see cref="_subscribed"/>
-/// is already true, and that flag is set only after both callbacks are registered.
-/// </para>
-/// </remarks>
-internal sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
+namespace VectorNNTP.BackFiller.Hosting.Systemd
 {
-    /// <summary>Host lifetime whose started and stopping tokens are observed.</summary>
-    private readonly IHostApplicationLifetime _hostLifetime;
-
-    /// <summary>Watchdog health marked started or stopping from the lifetime callbacks.</summary>
-    private readonly BackFillerApplicationHealth _health;
-
-    /// <summary>Bridge that receives <c>READY=1</c>, <c>STOPPING=1</c>, and <c>STATUS=</c>.</summary>
-    private readonly ISystemdNotifyBridge _notify;
-
-    /// <summary>Platform snapshot used only to decide whether activation is logged.</summary>
-    private readonly ISystemdRuntime _runtime;
-
-    /// <summary>Options that enable or suppress ready, stopping, and status notifications.</summary>
-    private readonly IOptions<BackFillerOptions> _options;
-
-    /// <summary>Logger for activation, readiness, stopping, status, and swallowed notify failures.</summary>
-    private readonly ILogger<SystemdLifecycleNotifier> _logger;
-
-    /// <summary>Lock for duplicate <c>STATUS=</c> suppression. Ready and stopping use separate interlocked flags.</summary>
-    private readonly object _sync = new();
-
-    /// <summary>Non-zero after a ready notification is sent or after stopping suppresses a later ready.</summary>
-    private int _readySent;
-
-    /// <summary>Non-zero after <c>STOPPING=1</c> has been sent once.</summary>
-    private int _stoppingSent;
-
     /// <summary>
-    /// Last status text accepted for send, including when that send later throws. Compared ordinally.
+    /// Publishes systemd readiness and status notifications from Generic Host lifetime events.
     /// </summary>
-    private string? _lastStatus;
-
-    /// <summary>
-    /// Set after both lifetime callbacks are registered. Gates <see cref="OnApplicationStarted"/> only.
-    /// </summary>
-    private bool _subscribed;
-
-    /// <summary>
-    /// Retains the host lifetime, health flags, notify bridge, and systemd options.
-    /// </summary>
-    /// <param name="hostLifetime">Lifetime whose started and stopping callbacks are registered by <see cref="StartAsync"/>.</param>
-    /// <param name="health">Health updated when the host starts and when it begins stopping.</param>
-    /// <param name="notify">Bridge used for ready, stopping, and status notifications.</param>
-    /// <param name="runtime">Platform snapshot. Used to decide whether activation is logged.</param>
-    /// <param name="options">BackFiller options whose <see cref="BackFillerOptions.Systemd"/> flags gate each notification.</param>
-    /// <param name="logger">Logger for lifecycle notification events.</param>
-    /// <exception cref="ArgumentNullException">Thrown when any argument is <see langword="null"/>.</exception>
-    public SystemdLifecycleNotifier(
-        IHostApplicationLifetime hostLifetime,
-        BackFillerApplicationHealth health,
-        ISystemdNotifyBridge notify,
-        ISystemdRuntime runtime,
-        IOptions<BackFillerOptions> options,
-        ILogger<SystemdLifecycleNotifier> logger)
-    {
-        ArgumentNullException.ThrowIfNull(hostLifetime);
-        ArgumentNullException.ThrowIfNull(health);
-        ArgumentNullException.ThrowIfNull(notify);
-        ArgumentNullException.ThrowIfNull(runtime);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(logger);
-
-        _hostLifetime = hostLifetime;
-        _health = health;
-        _notify = notify;
-        _runtime = runtime;
-        _options = options;
-        _logger = logger;
-    }
-
-    /// <summary>
-    /// Registers host started and stopping callbacks and publishes the starting status.
-    /// </summary>
-    /// <param name="cancellationToken">Not observed.</param>
-    /// <returns>A completed task. Ready is not sent from this method.</returns>
     /// <remarks>
-    /// Activation is logged only when <see cref="ISystemdRuntime.IsLinux"/> is true and either
-    /// <see cref="ISystemdRuntime.IsSystemdService"/> or <see cref="ISystemdNotifyBridge.IsEnabled"/> is true.
-    /// Callbacks are registered even when that log is skipped. If <see cref="IHostApplicationLifetime.ApplicationStopping"/>
-    /// is already canceled, <see cref="OnApplicationStopping"/> runs inside registration, before the starting status is sent.
+    /// <para>
+    /// BackFiller does not use NNTPD's <c>ApplicationLifecycle</c> state machine. Ready is reported
+    /// at most once after <see cref="IHostApplicationLifetime.ApplicationStarted"/> (all hosted
+    /// services started successfully). Startup failure never reports ready. Once shutdown begins,
+    /// further readiness notifications are suppressed.
+    /// </para>
+    /// <para>
+    /// <see cref="StartAsync"/> and <see cref="StopAsync"/> do not observe their cancellation tokens.
+    /// Lifetime callbacks are registered with <see cref="CancellationToken.Register(Action)"/>,
+    /// which runs the delegate inline when that token is already canceled. The returned registrations
+    /// are not stored. <see cref="OnApplicationStarted"/> returns immediately unless <see cref="_subscribed"/>
+    /// is already true, and that flag is set only after both callbacks are registered.
+    /// </para>
     /// </remarks>
-    public Task StartAsync(CancellationToken cancellationToken)
+    internal sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
     {
-        if (_runtime.IsLinux && (_runtime.IsSystemdService || _notify.IsEnabled))
+        /// <summary>Host lifetime whose started and stopping tokens are observed.</summary>
+        private readonly IHostApplicationLifetime _hostLifetime;
+
+        /// <summary>Watchdog health marked started or stopping from the lifetime callbacks.</summary>
+        private readonly BackFillerApplicationHealth _health;
+
+        /// <summary>Bridge that receives <c>READY=1</c>, <c>STOPPING=1</c>, and <c>STATUS=</c>.</summary>
+        private readonly ISystemdNotifyBridge _notify;
+
+        /// <summary>Platform snapshot used only to decide whether activation is logged.</summary>
+        private readonly ISystemdRuntime _runtime;
+
+        /// <summary>Options that enable or suppress ready, stopping, and status notifications.</summary>
+        private readonly IOptions<BackFillerOptions> _options;
+
+        /// <summary>Logger for activation, readiness, stopping, status, and swallowed notify failures.</summary>
+        private readonly ILogger<SystemdLifecycleNotifier> _logger;
+
+        /// <summary>
+        /// Non-recursive lock for duplicate <c>STATUS=</c> suppression. Ready and stopping use separate interlocked flags.
+        /// No caller enters it again on the same call stack.
+        /// </summary>
+        private readonly Lock _sync = new();
+
+        /// <summary>Non-zero after a ready notification is sent or after stopping suppresses a later ready.</summary>
+        private int _readySent;
+
+        /// <summary>Non-zero after <c>STOPPING=1</c> has been sent once.</summary>
+        private int _stoppingSent;
+
+        /// <summary>
+        /// Last status text accepted for send, including when that send later throws. Compared ordinally.
+        /// </summary>
+        private string? _lastStatus;
+
+        /// <summary>
+        /// Set after both lifetime callbacks are registered. Gates <see cref="OnApplicationStarted"/> only.
+        /// </summary>
+        private bool _subscribed;
+
+        /// <summary>
+        /// Retains the host lifetime, health flags, notify bridge, and systemd options.
+        /// </summary>
+        /// <param name="hostLifetime">Lifetime whose started and stopping callbacks are registered by <see cref="StartAsync"/>.</param>
+        /// <param name="health">Health updated when the host starts and when it begins stopping.</param>
+        /// <param name="notify">Bridge used for ready, stopping, and status notifications.</param>
+        /// <param name="runtime">Platform snapshot. Used to decide whether activation is logged.</param>
+        /// <param name="options">BackFiller options whose <see cref="BackFillerOptions.Systemd"/> flags gate each notification.</param>
+        /// <param name="logger">Logger for lifecycle notification events.</param>
+        /// <exception cref="ArgumentNullException">Thrown when any argument is <see langword="null"/>.</exception>
+        public SystemdLifecycleNotifier(
+            IHostApplicationLifetime hostLifetime,
+            BackFillerApplicationHealth health,
+            ISystemdNotifyBridge notify,
+            ISystemdRuntime runtime,
+            IOptions<BackFillerOptions> options,
+            ILogger<SystemdLifecycleNotifier> logger)
         {
-            SystemdLogMessages.LifecycleNotificationsActivated(
-                _logger,
-                _notify.IsEnabled,
-                _runtime.IsSystemdService);
+            ArgumentNullException.ThrowIfNull(hostLifetime);
+            ArgumentNullException.ThrowIfNull(health);
+            ArgumentNullException.ThrowIfNull(notify);
+            ArgumentNullException.ThrowIfNull(runtime);
+            ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(logger);
+
+            _hostLifetime = hostLifetime;
+            _health = health;
+            _notify = notify;
+            _runtime = runtime;
+            _options = options;
+            _logger = logger;
         }
 
-        _hostLifetime.ApplicationStarted.Register(OnApplicationStarted);
-        _hostLifetime.ApplicationStopping.Register(OnApplicationStopping);
-        _subscribed = true;
-
-        TryNotifyStatus("Starting: initializing BackFiller hosted services");
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Sends stopping at most once, including when the stopping callback has not run yet.</summary>
-    /// <param name="cancellationToken">Not observed.</param>
-    /// <returns>A completed task.</returns>
-    /// <remarks>
-    /// Calls <see cref="OnApplicationStopping"/> directly. A second stop does not send another
-    /// <c>STOPPING=1</c> or another copy of the same stopping status.
-    /// </remarks>
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        // STOPPING is emitted from ApplicationStopping. Ensure it was observed even if
-        // registration raced with an already-stopping host.
-        OnApplicationStopping();
-        return Task.CompletedTask;
-    }
-
-    /// <summary>Stops a later <see cref="OnApplicationStarted"/> from marking health or sending ready.</summary>
-    /// <remarks>
-    /// Sets <see cref="_subscribed"/> to <see langword="false"/> and does not dispose the lifetime registrations.
-    /// <see cref="OnApplicationStopping"/> does not consult that flag.
-    /// </remarks>
-    public void Dispose()
-    {
-        _subscribed = false;
-    }
-
-    /// <summary>Marks health started, publishes the running status, then attempts <c>READY=1</c>.</summary>
-    /// <remarks>Returns without those side effects when <see cref="Dispose"/> has cleared <see cref="_subscribed"/>.</remarks>
-    private void OnApplicationStarted()
-    {
-        if (!_subscribed)
+        /// <summary>
+        /// Registers host started and stopping callbacks and publishes the starting status.
+        /// </summary>
+        /// <param name="cancellationToken">Not observed.</param>
+        /// <returns>A completed task. Ready is not sent from this method.</returns>
+        /// <remarks>
+        /// Activation is logged only when <see cref="ISystemdRuntime.IsLinux"/> is true and either
+        /// <see cref="ISystemdRuntime.IsSystemdService"/> or <see cref="ISystemdNotifyBridge.IsEnabled"/> is true.
+        /// Callbacks are registered even when that log is skipped. If <see cref="IHostApplicationLifetime.ApplicationStopping"/>
+        /// is already canceled, <see cref="OnApplicationStopping"/> runs inside registration, before the starting status is sent.
+        /// </remarks>
+        public Task StartAsync(CancellationToken cancellationToken)
         {
-            return;
+            if (_runtime.IsLinux && (_runtime.IsSystemdService || _notify.IsEnabled))
+            {
+                SystemdLogMessages.LifecycleNotificationsActivated(
+                    _logger,
+                    _notify.IsEnabled,
+                    _runtime.IsSystemdService);
+            }
+
+            _hostLifetime.ApplicationStarted.Register(OnApplicationStarted);
+            _hostLifetime.ApplicationStopping.Register(OnApplicationStopping);
+            _subscribed = true;
+
+            TryNotifyStatus("Starting: initializing BackFiller hosted services");
+            return Task.CompletedTask;
         }
 
-        _health.MarkStarted();
-        TryNotifyStatus("Running: BackFiller hosted services started");
-        TryNotifyReady();
-    }
-
-    /// <summary>Marks health stopping, attempts <c>STOPPING=1</c>, then publishes the stopping status.</summary>
-    /// <remarks>
-    /// Does not consult <see cref="_subscribed"/>. Safe to call from both the lifetime callback and <see cref="StopAsync"/>.
-    /// </remarks>
-    private void OnApplicationStopping()
-    {
-        _health.MarkStopping();
-        TryNotifyStopping();
-        TryNotifyStatus("Stopping: graceful shutdown in progress");
-    }
-
-    /// <summary>Sends <c>READY=1</c> at most once when options, notify, and watchdog health allow it.</summary>
-    /// <remarks>
-    /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyReadyOnApplicationRunning"/>
-    /// is false, <see cref="ISystemdNotifyBridge.IsEnabled"/> is false, or
-    /// <see cref="IApplicationHealth.IsHealthyForWatchdog"/> is false.
-    /// The once-only flag is set before the send. Exceptions from <see cref="ISystemdNotifyBridge.NotifyReady"/>
-    /// are logged and swallowed, and the flag stays set.
-    /// </remarks>
-    private void TryNotifyReady()
-    {
-        if (!_options.Value.Systemd.NotifyReadyOnApplicationRunning)
+        /// <summary>Sends stopping at most once, including when the stopping callback has not run yet.</summary>
+        /// <param name="cancellationToken">Not observed.</param>
+        /// <returns>A completed task.</returns>
+        /// <remarks>
+        /// Calls <see cref="OnApplicationStopping"/> directly. A second stop does not send another
+        /// <c>STOPPING=1</c> or another copy of the same stopping status.
+        /// </remarks>
+        public Task StopAsync(CancellationToken cancellationToken)
         {
-            return;
+            // STOPPING is emitted from ApplicationStopping. Ensure it was observed even if
+            // registration raced with an already-stopping host.
+            OnApplicationStopping();
+            return Task.CompletedTask;
         }
 
-        if (!_notify.IsEnabled)
+        /// <summary>Stops a later <see cref="OnApplicationStarted"/> from marking health or sending ready.</summary>
+        /// <remarks>
+        /// Sets <see cref="_subscribed"/> to <see langword="false"/> and does not dispose the lifetime registrations.
+        /// <see cref="OnApplicationStopping"/> does not consult that flag.
+        /// </remarks>
+        public void Dispose()
         {
-            return;
+            _subscribed = false;
         }
 
-        if (!_health.IsHealthyForWatchdog)
+        /// <summary>Marks health started, publishes the running status, then attempts <c>READY=1</c>.</summary>
+        /// <remarks>Returns without those side effects when <see cref="Dispose"/> has cleared <see cref="_subscribed"/>.</remarks>
+        private void OnApplicationStarted()
         {
-            return;
-        }
-
-        if (Interlocked.Exchange(ref _readySent, 1) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            _notify.NotifyReady();
-            SystemdLogMessages.ReadinessReported(_logger);
-        }
-        catch (Exception ex)
-        {
-            SystemdLogMessages.NotificationFailed(_logger, ex, "READY=1");
-        }
-    }
-
-    /// <summary>Sends <c>STOPPING=1</c> at most once and suppresses any later ready notification.</summary>
-    /// <remarks>
-    /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyStoppingOnApplicationShutdown"/>
-    /// is false or notify is disabled. After the once-only flag is claimed, <see cref="_readySent"/> is set
-    /// so a later <see cref="TryNotifyReady"/> returns immediately. Exceptions from
-    /// <see cref="ISystemdNotifyBridge.NotifyStopping"/> are logged and swallowed.
-    /// </remarks>
-    private void TryNotifyStopping()
-    {
-        if (!_options.Value.Systemd.NotifyStoppingOnApplicationShutdown)
-        {
-            return;
-        }
-
-        if (!_notify.IsEnabled)
-        {
-            return;
-        }
-
-        if (Interlocked.Exchange(ref _stoppingSent, 1) != 0)
-        {
-            return;
-        }
-
-        // Once stopping, readiness must not be reported later.
-        Interlocked.Exchange(ref _readySent, 1);
-
-        try
-        {
-            _notify.NotifyStopping();
-            SystemdLogMessages.StoppingReported(_logger);
-        }
-        catch (Exception ex)
-        {
-            SystemdLogMessages.NotificationFailed(_logger, ex, "STOPPING=1");
-        }
-    }
-
-    /// <summary>Sends <paramref name="status"/> when lifecycle status is enabled and the text changed.</summary>
-    /// <param name="status">Status text passed to <see cref="ISystemdNotifyBridge.NotifyStatus"/>.</param>
-    /// <remarks>
-    /// Returns without sending when <see cref="BackFillerSystemdOptions.ReportLifecycleStatus"/> is false
-    /// or notify is disabled. An equal ordinal status is suppressed under <see cref="_sync"/>.
-    /// The remembered text is updated before the send, so a thrown notification is not retried for the same text.
-    /// Exceptions from <see cref="ISystemdNotifyBridge.NotifyStatus"/> are logged and swallowed.
-    /// </remarks>
-    private void TryNotifyStatus(string status)
-    {
-        if (!_options.Value.Systemd.ReportLifecycleStatus || !_notify.IsEnabled)
-        {
-            return;
-        }
-
-        lock (_sync)
-        {
-            if (string.Equals(_lastStatus, status, StringComparison.Ordinal))
+            if (!_subscribed)
             {
                 return;
             }
 
-            _lastStatus = status;
+            _health.MarkStarted();
+            TryNotifyStatus("Running: BackFiller hosted services started");
+            TryNotifyReady();
         }
 
-        try
+        /// <summary>Marks health stopping, attempts <c>STOPPING=1</c>, then publishes the stopping status.</summary>
+        /// <remarks>
+        /// Does not consult <see cref="_subscribed"/>. Safe to call from both the lifetime callback and <see cref="StopAsync"/>.
+        /// </remarks>
+        private void OnApplicationStopping()
         {
-            _notify.NotifyStatus(status);
-            SystemdLogMessages.StatusReported(_logger, status);
+            _health.MarkStopping();
+            TryNotifyStopping();
+            TryNotifyStatus("Stopping: graceful shutdown in progress");
         }
-        catch (Exception ex)
+
+        /// <summary>Sends <c>READY=1</c> at most once when options, notify, and watchdog health allow it.</summary>
+        /// <remarks>
+        /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyReadyOnApplicationRunning"/>
+        /// is false, <see cref="ISystemdNotifyBridge.IsEnabled"/> is false, or
+        /// <see cref="IApplicationHealth.IsHealthyForWatchdog"/> is false.
+        /// The once-only flag is set before the send. Exceptions from <see cref="ISystemdNotifyBridge.NotifyReady"/>
+        /// are logged and swallowed, and the flag stays set.
+        /// </remarks>
+        private void TryNotifyReady()
         {
-            SystemdLogMessages.NotificationFailed(_logger, ex, "STATUS");
+            if (!_options.Value.Systemd.NotifyReadyOnApplicationRunning)
+            {
+                return;
+            }
+
+            if (!_notify.IsEnabled)
+            {
+                return;
+            }
+
+            if (!_health.IsHealthyForWatchdog)
+            {
+                return;
+            }
+
+            if (Interlocked.Exchange(ref _readySent, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                _notify.NotifyReady();
+                SystemdLogMessages.ReadinessReported(_logger);
+            }
+            catch (Exception ex)
+            {
+                SystemdLogMessages.NotificationFailed(_logger, ex, "READY=1");
+            }
+        }
+
+        /// <summary>Sends <c>STOPPING=1</c> at most once and suppresses any later ready notification.</summary>
+        /// <remarks>
+        /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyStoppingOnApplicationShutdown"/>
+        /// is false or notify is disabled. After the once-only flag is claimed, <see cref="_readySent"/> is set
+        /// so a later <see cref="TryNotifyReady"/> returns immediately. Exceptions from
+        /// <see cref="ISystemdNotifyBridge.NotifyStopping"/> are logged and swallowed.
+        /// </remarks>
+        private void TryNotifyStopping()
+        {
+            if (!_options.Value.Systemd.NotifyStoppingOnApplicationShutdown)
+            {
+                return;
+            }
+
+            if (!_notify.IsEnabled)
+            {
+                return;
+            }
+
+            if (Interlocked.Exchange(ref _stoppingSent, 1) != 0)
+            {
+                return;
+            }
+
+            // Once stopping, readiness must not be reported later.
+            Interlocked.Exchange(ref _readySent, 1);
+
+            try
+            {
+                _notify.NotifyStopping();
+                SystemdLogMessages.StoppingReported(_logger);
+            }
+            catch (Exception ex)
+            {
+                SystemdLogMessages.NotificationFailed(_logger, ex, "STOPPING=1");
+            }
+        }
+
+        /// <summary>Sends <paramref name="status"/> when lifecycle status is enabled and the text changed.</summary>
+        /// <param name="status">Status text passed to <see cref="ISystemdNotifyBridge.NotifyStatus"/>.</param>
+        /// <remarks>
+        /// Returns without sending when <see cref="BackFillerSystemdOptions.ReportLifecycleStatus"/> is false
+        /// or notify is disabled. An equal ordinal status is suppressed under <see cref="_sync"/>.
+        /// The remembered text is updated before the send, so a thrown notification is not retried for the same text.
+        /// Exceptions from <see cref="ISystemdNotifyBridge.NotifyStatus"/> are logged and swallowed.
+        /// </remarks>
+        private void TryNotifyStatus(string status)
+        {
+            if (!_options.Value.Systemd.ReportLifecycleStatus || !_notify.IsEnabled)
+            {
+                return;
+            }
+
+            lock (_sync)
+            {
+                if (string.Equals(_lastStatus, status, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _lastStatus = status;
+            }
+
+            try
+            {
+                _notify.NotifyStatus(status);
+                SystemdLogMessages.StatusReported(_logger, status);
+            }
+            catch (Exception ex)
+            {
+                SystemdLogMessages.NotificationFailed(_logger, ex, "STATUS");
+            }
         }
     }
 }

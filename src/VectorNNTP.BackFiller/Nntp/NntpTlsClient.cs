@@ -1,90 +1,91 @@
 using System.Net.Security;
 using System.Security.Authentication;
 
-namespace VectorNNTP.BackFiller.Nntp;
-
-/// <summary>
-/// Shared outbound TLS client options and handshake used by implicit TLS connect
-/// and STARTTLS upgrade. Platform certificate validation is the default.
-/// </summary>
-internal static class NntpTlsClient
+namespace VectorNNTP.BackFiller.Nntp
 {
-    /// <summary>Builds the production client TLS options for <paramref name="host"/>.</summary>
-    /// <param name="host">SNI and certificate target host.</param>
-    /// <param name="serverCertificateValidationCallback">
-    /// Callback assigned when non-null. A null callback leaves platform validation in place.
-    /// </param>
-    /// <returns>
-    /// Options with <see cref="SslClientAuthenticationOptions.TargetHost"/> set to <paramref name="host"/>
-    /// and protocols TLS 1.2 and TLS 1.3.
-    /// </returns>
-    /// <exception cref="ArgumentNullException"><paramref name="host"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="host"/> is empty or white space.</exception>
-    private static SslClientAuthenticationOptions CreateClientOptions(
-        string host,
-        RemoteCertificateValidationCallback? serverCertificateValidationCallback)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(host);
-        var options = new SslClientAuthenticationOptions
-        {
-            TargetHost = host,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-        };
-        if (serverCertificateValidationCallback is not null)
-        {
-            options.RemoteCertificateValidationCallback = serverCertificateValidationCallback;
-        }
-
-        return options;
-    }
-
     /// <summary>
-    /// Wraps <paramref name="inner"/> in <see cref="SslStream"/> and authenticates as client.
-    /// On failure the wrapper is disposed and owns (closes) <paramref name="inner"/>.
+    /// Shared outbound TLS client options and handshake used by implicit TLS connect
+    /// and STARTTLS upgrade. Platform certificate validation is the default.
     /// </summary>
-    /// <param name="inner">
-    /// Stream to wrap. Ownership transfers to the returned <see cref="SslStream"/>, including when authentication fails.
-    /// </param>
-    /// <param name="host">Target host passed to <see cref="CreateClientOptions"/>.</param>
-    /// <param name="timeout">
-    /// Handshake budget applied with <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>
-    /// on a token linked to <paramref name="cancellationToken"/>.
-    /// </param>
-    /// <param name="serverCertificateValidationCallback">
-    /// Optional certificate callback. Null uses platform validation.
-    /// </param>
-    /// <param name="cancellationToken">Cancels the handshake. Combined with <paramref name="timeout"/>.</param>
-    /// <returns>The authenticated stream. It owns <paramref name="inner"/>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="inner"/> is null.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="host"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="host"/> is empty or white space.</exception>
-    /// <remarks>
-    /// Any exception from client authentication disposes the <see cref="SslStream"/> and therefore
-    /// <paramref name="inner"/>, then propagates.
-    /// </remarks>
-    internal static async Task<SslStream> AuthenticateAsClientAsync(
-        Stream inner,
-        string host,
-        TimeSpan timeout,
-        RemoteCertificateValidationCallback? serverCertificateValidationCallback,
-        CancellationToken cancellationToken)
+    internal static class NntpTlsClient
     {
-        ArgumentNullException.ThrowIfNull(inner);
-        var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
-        try
+        /// <summary>Builds the production client TLS options for <paramref name="host"/>.</summary>
+        /// <param name="host">SNI and certificate target host.</param>
+        /// <param name="serverCertificateValidationCallback">
+        /// Callback assigned when non-null. A null callback leaves platform validation in place.
+        /// </param>
+        /// <returns>
+        /// Options with <see cref="SslClientAuthenticationOptions.TargetHost"/> set to <paramref name="host"/>
+        /// and protocols TLS 1.2 and TLS 1.3.
+        /// </returns>
+        /// <exception cref="ArgumentNullException"><paramref name="host"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="host"/> is empty or white space.</exception>
+        private static SslClientAuthenticationOptions CreateClientOptions(
+            string host,
+            RemoteCertificateValidationCallback? serverCertificateValidationCallback)
         {
-            using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            tlsCts.CancelAfter(timeout);
-            await ssl.AuthenticateAsClientAsync(
-                    CreateClientOptions(host, serverCertificateValidationCallback),
-                    tlsCts.Token)
-                .ConfigureAwait(false);
-            return ssl;
+            ArgumentException.ThrowIfNullOrWhiteSpace(host);
+            var options = new SslClientAuthenticationOptions
+            {
+                TargetHost = host,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            };
+            if (serverCertificateValidationCallback is not null)
+            {
+                options.RemoteCertificateValidationCallback = serverCertificateValidationCallback;
+            }
+
+            return options;
         }
-        catch
+
+        /// <summary>
+        /// Wraps <paramref name="inner"/> in <see cref="SslStream"/> and authenticates as client.
+        /// On failure the wrapper is disposed and owns (closes) <paramref name="inner"/>.
+        /// </summary>
+        /// <param name="inner">
+        /// Stream to wrap. Ownership transfers to the returned <see cref="SslStream"/>, including when authentication fails.
+        /// </param>
+        /// <param name="host">Target host passed to <see cref="CreateClientOptions"/>.</param>
+        /// <param name="timeout">
+        /// Handshake budget applied with <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>
+        /// on a token linked to <paramref name="cancellationToken"/>.
+        /// </param>
+        /// <param name="serverCertificateValidationCallback">
+        /// Optional certificate callback. Null uses platform validation.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the handshake. Combined with <paramref name="timeout"/>.</param>
+        /// <returns>The authenticated stream. It owns <paramref name="inner"/>.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="inner"/> is null.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="host"/> is null.</exception>
+        /// <exception cref="ArgumentException"><paramref name="host"/> is empty or white space.</exception>
+        /// <remarks>
+        /// Any exception from client authentication disposes the <see cref="SslStream"/> and therefore
+        /// <paramref name="inner"/>, then propagates.
+        /// </remarks>
+        internal static async Task<SslStream> AuthenticateAsClientAsync(
+            Stream inner,
+            string host,
+            TimeSpan timeout,
+            RemoteCertificateValidationCallback? serverCertificateValidationCallback,
+            CancellationToken cancellationToken)
         {
-            await ssl.DisposeAsync().ConfigureAwait(false);
-            throw;
+            ArgumentNullException.ThrowIfNull(inner);
+            var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
+            try
+            {
+                using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                tlsCts.CancelAfter(timeout);
+                await ssl.AuthenticateAsClientAsync(
+                        CreateClientOptions(host, serverCertificateValidationCallback),
+                        tlsCts.Token)
+                    .ConfigureAwait(false);
+                return ssl;
+            }
+            catch
+            {
+                await ssl.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
     }
 }

@@ -3,158 +3,159 @@ using System.Text.Json;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 
-namespace VectorNNTP.BackFiller.Tests.ArticleWork;
-
-public sealed class ArticleWorkResponseWireProtocolTests
+namespace VectorNNTP.BackFiller.Tests.ArticleWork
 {
-    [Fact]
-    public void Success_json_matches_the_canonical_protocol_example()
+    public sealed class ArticleWorkResponseWireProtocolTests
     {
-        var json = ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent());
+        [Fact]
+        public void Success_json_matches_the_canonical_protocol_example()
+        {
+            var json = ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent());
 
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalSuccessResponseJson, Encoding.UTF8.GetString(json));
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        Assert.Equal(JsonValueKind.Object, root.ValueKind);
-        Assert.Equal(1, root.GetProperty("version").GetInt32());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalRequestId, root.GetProperty("requestId").GetString());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, root.GetProperty("messageId").GetString());
-        Assert.Equal("Giganews", root.GetProperty("backbone").GetString());
-        Assert.Equal("Success", root.GetProperty("outcome").GetString());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalFqdn, root.GetProperty("fqdn").GetString());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalVatpPort, root.GetProperty("vatpPort").GetInt32());
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, root.GetProperty("articleId").GetString());
-        Assert.False(root.TryGetProperty("uri", out _));
-        Assert.False(root.TryGetProperty("error", out _));
-        Assert.DoesNotContain("payload", Encoding.UTF8.GetString(json), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalSuccessResponseJson, Encoding.UTF8.GetString(json));
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            Assert.Equal(JsonValueKind.Object, root.ValueKind);
+            Assert.Equal(1, root.GetProperty("version").GetInt32());
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalRequestId, root.GetProperty("requestId").GetString());
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, root.GetProperty("messageId").GetString());
+            Assert.Equal("Giganews", root.GetProperty("backbone").GetString());
+            Assert.Equal("Success", root.GetProperty("outcome").GetString());
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalFqdn, root.GetProperty("fqdn").GetString());
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalVatpPort, root.GetProperty("vatpPort").GetInt32());
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, root.GetProperty("articleId").GetString());
+            Assert.False(root.TryGetProperty("uri", out _));
+            Assert.False(root.TryGetProperty("error", out _));
+            Assert.DoesNotContain("payload", Encoding.UTF8.GetString(json), StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void Terminal_failure_json_matches_the_canonical_protocol_example()
+        {
+            var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
+                ArticleWorkOutcome.ArticleNotFound,
+                Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
+                ArticleWorkTestDeliveries.CanonicalMessageId,
+                "Giganews",
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                "No article with that message-id"));
+
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalNotFoundResponseJson, Encoding.UTF8.GetString(json));
+            using var document = JsonDocument.Parse(json);
+            Assert.False(document.RootElement.TryGetProperty("uri", out _));
+            Assert.False(document.RootElement.TryGetProperty("fqdn", out _));
+            Assert.False(document.RootElement.TryGetProperty("vatpPort", out _));
+            Assert.False(document.RootElement.TryGetProperty("articleId", out _));
+            Assert.Equal("No article with that message-id", document.RootElement.GetProperty("error").GetString());
+        }
+
+        [Fact]
+        public void InvalidRequest_may_emit_null_identities_and_never_includes_endpoint_fields()
+        {
+            var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
+                ArticleWorkOutcome.InvalidRequest,
+                null,
+                null,
+                null,
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                "Malformed JSON."));
+
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("requestId").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("messageId").ValueKind);
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("backbone").ValueKind);
+            Assert.Equal("InvalidRequest", root.GetProperty("outcome").GetString());
+            Assert.False(root.TryGetProperty("uri", out _));
+            Assert.False(root.TryGetProperty("fqdn", out _));
+            Assert.False(root.TryGetProperty("vatpPort", out _));
+            Assert.Equal("Malformed JSON.", root.GetProperty("error").GetString());
+        }
+
+        [Fact]
+        public void Property_names_are_exact_camelCase_protocol_fields()
+        {
+            using var document = JsonDocument.Parse(ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent()));
+            var names = document.RootElement.EnumerateObject().Select(static property => property.Name).ToArray();
+            Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "fqdn", "vatpPort", "articleId"], names);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("nodots")]
+        [InlineData("Backfiller01.usenet.ninja")]
+        [InlineData("vatp" + "://" + "backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14")]
+        public void Success_rejects_invalid_fqdn(string? fqdn)
+        {
+            var intent = SuccessIntent() with { Fqdn = fqdn };
+            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(65536)]
+        public void Success_rejects_invalid_vatp_port(int? port)
+        {
+            var intent = SuccessIntent() with { VatpPort = port };
+            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+        }
+
+        [Fact]
+        public void Success_rejects_missing_article_id()
+        {
+            var intent = SuccessIntent() with { ArticleIdHex = null };
+            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+        }
+
+        [Fact]
+        public void Success_article_id_round_trips_exactly()
+        {
+            var json = ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent());
+            using var document = JsonDocument.Parse(json);
+            var hex = document.RootElement.GetProperty("articleId").GetString();
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, hex);
+            Assert.True(VectorNNTP.Common.Articles.ArticleId.TryParseLowerHex(hex, out var parsed));
+            Assert.Equal(
+                VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex),
+                parsed);
+        }
+
+        [Theory]
+        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
+        [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
+        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
+        [InlineData(nameof(ArticleWorkOutcome.RetentionRejected))]
+        public void Retryable_outcomes_are_not_serializable_terminal_responses(string outcomeName)
+        {
+            var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
+            var intent = new ArticleWorkResponseIntent(
+                outcome,
+                Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
+                ArticleWorkTestDeliveries.CanonicalMessageId,
+                "Giganews",
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                "retry");
+
+            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+        }
+
+        private static ArticleWorkResponseIntent SuccessIntent() =>
+            new(
+                ArticleWorkOutcome.Success,
+                Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
+                ArticleWorkTestDeliveries.CanonicalMessageId,
+                "Giganews",
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                Error: null,
+                ArticleWorkTestDeliveries.CanonicalFqdn,
+                ArticleWorkTestDeliveries.CanonicalVatpPort,
+                ArticleWorkTestDeliveries.CanonicalArticleIdHex);
     }
-
-    [Fact]
-    public void Terminal_failure_json_matches_the_canonical_protocol_example()
-    {
-        var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
-            ArticleWorkOutcome.ArticleNotFound,
-            Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
-            ArticleWorkTestDeliveries.CanonicalMessageId,
-            "Giganews",
-            ArticleWorkTestDeliveries.CanonicalCorrelationId,
-            ArticleWorkTestDeliveries.CanonicalReplyTo,
-            "No article with that message-id"));
-
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalNotFoundResponseJson, Encoding.UTF8.GetString(json));
-        using var document = JsonDocument.Parse(json);
-        Assert.False(document.RootElement.TryGetProperty("uri", out _));
-        Assert.False(document.RootElement.TryGetProperty("fqdn", out _));
-        Assert.False(document.RootElement.TryGetProperty("vatpPort", out _));
-        Assert.False(document.RootElement.TryGetProperty("articleId", out _));
-        Assert.Equal("No article with that message-id", document.RootElement.GetProperty("error").GetString());
-    }
-
-    [Fact]
-    public void InvalidRequest_may_emit_null_identities_and_never_includes_endpoint_fields()
-    {
-        var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
-            ArticleWorkOutcome.InvalidRequest,
-            null,
-            null,
-            null,
-            ArticleWorkTestDeliveries.CanonicalCorrelationId,
-            ArticleWorkTestDeliveries.CanonicalReplyTo,
-            "Malformed JSON."));
-
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("requestId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("messageId").ValueKind);
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("backbone").ValueKind);
-        Assert.Equal("InvalidRequest", root.GetProperty("outcome").GetString());
-        Assert.False(root.TryGetProperty("uri", out _));
-        Assert.False(root.TryGetProperty("fqdn", out _));
-        Assert.False(root.TryGetProperty("vatpPort", out _));
-        Assert.Equal("Malformed JSON.", root.GetProperty("error").GetString());
-    }
-
-    [Fact]
-    public void Property_names_are_exact_camelCase_protocol_fields()
-    {
-        using var document = JsonDocument.Parse(ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent()));
-        var names = document.RootElement.EnumerateObject().Select(static property => property.Name).ToArray();
-        Assert.Equal(["version", "requestId", "messageId", "backbone", "outcome", "fqdn", "vatpPort", "articleId"], names);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("nodots")]
-    [InlineData("Backfiller01.usenet.ninja")]
-    [InlineData("vatp" + "://" + "backfiller01.usenet.ninja:119/dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14")]
-    public void Success_rejects_invalid_fqdn(string? fqdn)
-    {
-        var intent = SuccessIntent() with { Fqdn = fqdn };
-        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData(0)]
-    [InlineData(-1)]
-    [InlineData(65536)]
-    public void Success_rejects_invalid_vatp_port(int? port)
-    {
-        var intent = SuccessIntent() with { VatpPort = port };
-        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
-    }
-
-    [Fact]
-    public void Success_rejects_missing_article_id()
-    {
-        var intent = SuccessIntent() with { ArticleIdHex = null };
-        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
-    }
-
-    [Fact]
-    public void Success_article_id_round_trips_exactly()
-    {
-        var json = ArticleWorkResponseWireProtocol.SerializeV1(SuccessIntent());
-        using var document = JsonDocument.Parse(json);
-        var hex = document.RootElement.GetProperty("articleId").GetString();
-        Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, hex);
-        Assert.True(VectorNNTP.Common.Articles.ArticleId.TryParseLowerHex(hex, out var parsed));
-        Assert.Equal(
-            VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex),
-            parsed);
-    }
-
-    [Theory]
-    [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
-    [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
-    [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
-    [InlineData(nameof(ArticleWorkOutcome.RetentionRejected))]
-    public void Retryable_outcomes_are_not_serializable_terminal_responses(string outcomeName)
-    {
-        var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
-        var intent = new ArticleWorkResponseIntent(
-            outcome,
-            Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
-            ArticleWorkTestDeliveries.CanonicalMessageId,
-            "Giganews",
-            ArticleWorkTestDeliveries.CanonicalCorrelationId,
-            ArticleWorkTestDeliveries.CanonicalReplyTo,
-            "retry");
-
-        Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
-    }
-
-    private static ArticleWorkResponseIntent SuccessIntent() =>
-        new(
-            ArticleWorkOutcome.Success,
-            Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
-            ArticleWorkTestDeliveries.CanonicalMessageId,
-            "Giganews",
-            ArticleWorkTestDeliveries.CanonicalCorrelationId,
-            ArticleWorkTestDeliveries.CanonicalReplyTo,
-            Error: null,
-            ArticleWorkTestDeliveries.CanonicalFqdn,
-            ArticleWorkTestDeliveries.CanonicalVatpPort,
-            ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 }

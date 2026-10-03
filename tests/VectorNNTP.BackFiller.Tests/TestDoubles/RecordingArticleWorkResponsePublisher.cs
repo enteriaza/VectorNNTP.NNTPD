@@ -1,47 +1,48 @@
 using VectorNNTP.BackFiller.ArticleWork;
 
-namespace VectorNNTP.BackFiller.Tests.TestDoubles;
-
-/// <summary>
-/// In-process recorder used by tests that do not exercise broker publication.
-/// </summary>
-internal sealed class RecordingArticleWorkResponsePublisher : IArticleWorkResponsePublisher
+namespace VectorNNTP.BackFiller.Tests.TestDoubles
 {
-    private readonly List<ArticleWorkResponseIntent> _published = [];
-
-    /// <summary>Gets recorded publish intents in admission order.</summary>
-    public IReadOnlyList<ArticleWorkResponseIntent> Published
+    /// <summary>
+    /// In-process recorder used by tests that do not exercise broker publication.
+    /// </summary>
+    internal sealed class RecordingArticleWorkResponsePublisher : IArticleWorkResponsePublisher
     {
-        get
+        private readonly List<ArticleWorkResponseIntent> _published = [];
+
+        /// <summary>Gets recorded publish intents in admission order.</summary>
+        public IReadOnlyList<ArticleWorkResponseIntent> Published
         {
-            lock (_published)
+            get
             {
-                return [.. _published];
+                lock (_published)
+                {
+                    return [.. _published];
+                }
             }
         }
-    }
 
-    /// <inheritdoc />
-    public bool CompletesSuccessPublication { get; set; }
+        /// <inheritdoc />
+        public bool CompletesSuccessPublication { get; set; }
 
-    /// <summary>When set, the next publication throws this exception.</summary>
-    public Exception? PublishException { get; set; }
+        /// <summary>When set, the next publication throws this exception.</summary>
+        public Exception? PublishException { get; set; }
 
-    /// <inheritdoc />
-    public Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(intent);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (PublishException is not null)
+        /// <inheritdoc />
+        public Task PublishAsync(ArticleWorkResponseIntent intent, CancellationToken cancellationToken)
         {
-            throw PublishException;
-        }
+            ArgumentNullException.ThrowIfNull(intent);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PublishException is not null)
+            {
+                throw PublishException;
+            }
 
-        lock (_published)
-        {
-            _published.Add(intent);
-        }
+            lock (_published)
+            {
+                _published.Add(intent);
+            }
 
-        return Task.CompletedTask;
+            return Task.CompletedTask;
+        }
     }
 }

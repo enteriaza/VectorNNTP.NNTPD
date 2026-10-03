@@ -1,55 +1,56 @@
 using VectorNNTP.BackFiller.Accounts;
 
-namespace VectorNNTP.BackFiller.Tests.TestDoubles;
-
-internal sealed class FakeProviderAccountSource : IProviderAccountSource
+namespace VectorNNTP.BackFiller.Tests.TestDoubles
 {
-    private readonly object _gate = new();
-    private IReadOnlyList<ProviderAccountRow> _rows = [];
-    private int _queryCount;
-
-    public Exception? QueryException { get; set; }
-
-    public TaskCompletionSource? Block { get; set; }
-
-    public int BlockAfterQueryCount { get; set; } = 1;
-
-    public int QueryCount => Volatile.Read(ref _queryCount);
-
-    public IReadOnlyList<ProviderAccountRow> Rows
+    internal sealed class FakeProviderAccountSource : IProviderAccountSource
     {
-        get
+        private readonly object _gate = new();
+        private IReadOnlyList<ProviderAccountRow> _rows = [];
+        private int _queryCount;
+
+        public Exception? QueryException { get; set; }
+
+        public TaskCompletionSource? Block { get; set; }
+
+        public int BlockAfterQueryCount { get; set; } = 1;
+
+        public int QueryCount => Volatile.Read(ref _queryCount);
+
+        public IReadOnlyList<ProviderAccountRow> Rows
         {
-            lock (_gate)
+            get
             {
-                return _rows;
+                lock (_gate)
+                {
+                    return _rows;
+                }
+            }
+
+            set
+            {
+                ArgumentNullException.ThrowIfNull(value);
+                lock (_gate)
+                {
+                    _rows = value;
+                }
             }
         }
 
-        set
+        public async Task<IReadOnlyList<ProviderAccountRow>> QueryAsync(CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(value);
-            lock (_gate)
+            var queryCount = Interlocked.Increment(ref _queryCount);
+            if (Block is not null && queryCount >= BlockAfterQueryCount)
             {
-                _rows = value;
+                await Block.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-        }
-    }
 
-    public async Task<IReadOnlyList<ProviderAccountRow>> QueryAsync(CancellationToken cancellationToken)
-    {
-        var queryCount = Interlocked.Increment(ref _queryCount);
-        if (Block is not null && queryCount >= BlockAfterQueryCount)
-        {
-            await Block.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (QueryException is not null)
+            {
+                throw QueryException;
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        if (QueryException is not null)
-        {
-            throw QueryException;
+            return Rows;
         }
-
-        return Rows;
     }
 }

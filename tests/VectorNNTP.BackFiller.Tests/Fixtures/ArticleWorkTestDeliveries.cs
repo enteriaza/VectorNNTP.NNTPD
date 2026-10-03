@@ -4,68 +4,69 @@ using VectorNNTP.BackFiller.RabbitMq;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
 
-namespace VectorNNTP.BackFiller.Tests.Fixtures;
-
-internal static class ArticleWorkTestDeliveries
+namespace VectorNNTP.BackFiller.Tests.Fixtures
 {
-    internal const string CanonicalRequestJson =
-        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews"}""";
-
-    internal const string ProtocolValidExampleJson =
-        """{"version":1,"requestId":"d0648b54-b1b8-4717-95e1-7b31bf7fd1bd","messageId":"<abc@example.invalid>","backbone":"Eweka"}""";
-
-    internal const string ProtocolInvalidExampleJson =
-        """{"version":2,"requestId":"not-a-guid","messageId":"","backbone":"WrongBackbone"}""";
-
-    internal const string CanonicalRequestId = "7c1cb8a0-95f9-4c13-8e53-339773e3afaa";
-    internal const string CanonicalCorrelationId = "61d4b5f6-8b24-4c14-8d40-741a378abfc8";
-    internal const string CanonicalReplyTo = "nnrpd.rpc.responses";
-    internal const string CanonicalMessageId = "<12345@example.invalid>";
-    internal const string CanonicalFqdn = "backfiller01.usenet.ninja";
-    internal const int CanonicalVatpPort = 119;
-    /// <summary>BLAKE3 ArticleId hex for <see cref="CanonicalMessageId"/>.</summary>
-    internal const string CanonicalArticleIdHex =
-        "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
-    internal const string CanonicalSuccessResponseJson =
-        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""";
-    internal const string CanonicalNotFoundResponseJson =
-        """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}""";
-
-    internal static RabbitMqManualAckDelivery Create(
-        string json,
-        string? correlationId = CanonicalCorrelationId,
-        string? replyTo = CanonicalReplyTo,
-        string? contentType = ArticleWorkRequestParser.JsonContentType,
-        string? requestIdHeader = CanonicalRequestId,
-        ulong deliveryTag = 7,
-        long generation = 1)
+    internal static class ArticleWorkTestDeliveries
     {
-        return new RabbitMqManualAckDelivery(
-            deliveryTag,
-            Encoding.UTF8.GetBytes(json),
-            correlationId,
-            replyTo,
-            contentType,
-            requestIdHeader,
-            Redelivered: false,
-            RoutingKey: "backfiller.giganews",
-            Exchange: "backfiller.giganews",
-            ConsumerTag: "ctag-test",
-            generation);
-    }
+        internal const string CanonicalRequestJson =
+            """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews"}""";
 
-    internal static RabbitMqManualAckDelivery Canonical(
-        ulong deliveryTag = 7,
-        long generation = 1,
-        string? requestIdHeader = CanonicalRequestId) =>
-        Create(CanonicalRequestJson, deliveryTag: deliveryTag, generation: generation, requestIdHeader: requestIdHeader);
+        internal const string ProtocolValidExampleJson =
+            """{"version":1,"requestId":"d0648b54-b1b8-4717-95e1-7b31bf7fd1bd","messageId":"<abc@example.invalid>","backbone":"Eweka"}""";
 
-    internal static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
-    {
-        using var safety = new CancellationTokenSource(timeout);
-        while (!predicate())
+        internal const string ProtocolInvalidExampleJson =
+            """{"version":2,"requestId":"not-a-guid","messageId":"","backbone":"WrongBackbone"}""";
+
+        internal const string CanonicalRequestId = "7c1cb8a0-95f9-4c13-8e53-339773e3afaa";
+        internal const string CanonicalCorrelationId = "61d4b5f6-8b24-4c14-8d40-741a378abfc8";
+        internal const string CanonicalReplyTo = "nnrpd.rpc.responses";
+        internal const string CanonicalMessageId = "<12345@example.invalid>";
+        internal const string CanonicalFqdn = "backfiller01.usenet.ninja";
+        internal const int CanonicalVatpPort = 119;
+        /// <summary>BLAKE3 ArticleId hex for <see cref="CanonicalMessageId"/>.</summary>
+        internal const string CanonicalArticleIdHex =
+            "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14";
+        internal const string CanonicalSuccessResponseJson =
+            """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"Success","fqdn":"backfiller01.usenet.ninja","vatpPort":119,"articleId":"dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"}""";
+        internal const string CanonicalNotFoundResponseJson =
+            """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews","outcome":"ArticleNotFound","error":"No article with that message-id"}""";
+
+        internal static RabbitMqManualAckDelivery Create(
+            string json,
+            string? correlationId = CanonicalCorrelationId,
+            string? replyTo = CanonicalReplyTo,
+            string? contentType = ArticleWorkRequestParser.JsonContentType,
+            string? requestIdHeader = CanonicalRequestId,
+            ulong deliveryTag = 7,
+            long generation = 1)
         {
-            await Task.Delay(10, safety.Token).ConfigureAwait(false);
+            return new RabbitMqManualAckDelivery(
+                deliveryTag,
+                Encoding.UTF8.GetBytes(json),
+                correlationId,
+                replyTo,
+                contentType,
+                requestIdHeader,
+                Redelivered: false,
+                RoutingKey: "backfiller.giganews",
+                Exchange: "backfiller.giganews",
+                ConsumerTag: "ctag-test",
+                generation);
+        }
+
+        internal static RabbitMqManualAckDelivery Canonical(
+            ulong deliveryTag = 7,
+            long generation = 1,
+            string? requestIdHeader = CanonicalRequestId) =>
+            Create(CanonicalRequestJson, deliveryTag: deliveryTag, generation: generation, requestIdHeader: requestIdHeader);
+
+        internal static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
+        {
+            using var safety = new CancellationTokenSource(timeout);
+            while (!predicate())
+            {
+                await Task.Delay(10, safety.Token).ConfigureAwait(false);
+            }
         }
     }
 }

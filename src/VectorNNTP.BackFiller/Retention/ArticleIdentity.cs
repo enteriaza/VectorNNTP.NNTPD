@@ -1,32 +1,33 @@
 using VectorNNTP.Common.Articles;
 
-namespace VectorNNTP.BackFiller.Retention;
-
-/// <summary>
-/// Message-ID plus its canonical <see cref="ArticleId"/> hex used in Article Work Success
-/// metadata and retention collision checks.
-/// Not a VATP transfer key (VATP uses RequestId + ArticleId).
-/// </summary>
-/// <param name="MessageId">Exact Message-ID string. Not normalized.</param>
-/// <param name="ArticleIdHex">64-character lowercase hexadecimal <see cref="ArticleId"/>.</param>
-internal readonly record struct ArticleIdentity(string MessageId, string ArticleIdHex)
+namespace VectorNNTP.BackFiller.Retention
 {
-    /// <summary>Length of <see cref="ArticleIdHex"/>. Equals <see cref="ArticleId.HexLength"/>.</summary>
-    internal const int ArticleIdHexLength = ArticleId.HexLength;
-
     /// <summary>
-    /// Creates an identity from the exact Message-ID and an already-computed <see cref="ArticleId"/>.
-    /// Does not hash the Message-ID.
+    /// Message-ID plus its canonical <see cref="ArticleId"/> hex used in Article Work Success
+    /// metadata and retention collision checks.
+    /// Not a VATP transfer key (VATP uses RequestId + ArticleId).
     /// </summary>
-    /// <param name="messageId">Exact Message-ID string. Not normalized. Must not be <see langword="null"/>.</param>
-    /// <param name="artId">ArticleId already computed for <paramref name="messageId"/>.</param>
-    /// <returns>
-    /// An identity whose <see cref="ArticleIdHex"/> is <paramref name="artId"/> in lowercase hexadecimal.
-    /// </returns>
-    /// <exception cref="ArgumentNullException"><paramref name="messageId"/> is <see langword="null"/>.</exception>
-    internal static ArticleIdentity From(string messageId, ArticleId artId)
+    /// <param name="MessageId">Exact Message-ID string. Not normalized.</param>
+    /// <param name="ArticleIdHex">64-character lowercase hexadecimal <see cref="ArticleId"/>.</param>
+    internal readonly record struct ArticleIdentity(string MessageId, string ArticleIdHex)
     {
-        ArgumentNullException.ThrowIfNull(messageId);
-        return new ArticleIdentity(messageId, artId.ToLowerHexString());
+        /// <summary>Length of <see cref="ArticleIdHex"/>. Equals <see cref="ArticleId.HexLength"/>.</summary>
+        internal const int ArticleIdHexLength = ArticleId.HexLength;
+
+        /// <summary>
+        /// Creates an identity from the exact Message-ID and an already-computed <see cref="ArticleId"/>.
+        /// Does not hash the Message-ID.
+        /// </summary>
+        /// <param name="messageId">Exact Message-ID string. Not normalized. Must not be <see langword="null"/>.</param>
+        /// <param name="artId">ArticleId already computed for <paramref name="messageId"/>.</param>
+        /// <returns>
+        /// An identity whose <see cref="ArticleIdHex"/> is <paramref name="artId"/> in lowercase hexadecimal.
+        /// </returns>
+        /// <exception cref="ArgumentNullException"><paramref name="messageId"/> is <see langword="null"/>.</exception>
+        internal static ArticleIdentity From(string messageId, ArticleId artId)
+        {
+            ArgumentNullException.ThrowIfNull(messageId);
+            return new ArticleIdentity(messageId, artId.ToLowerHexString());
+        }
     }
 }

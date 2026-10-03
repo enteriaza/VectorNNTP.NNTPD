@@ -8,368 +8,369 @@ using VectorNNTP.BackFiller.Tests.TestDoubles;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
 
-namespace VectorNNTP.BackFiller.Tests.ArticleWork;
-
-public sealed class ArticleWorkConsumerLifecycleTests
+namespace VectorNNTP.BackFiller.Tests.ArticleWork
 {
-    [Fact]
-    public async Task Session_starts_running_on_the_current_generation()
+    public sealed class ArticleWorkConsumerLifecycleTests
     {
-        await using var context = await ConsumerContext.StartSessionAsync();
-
-        Assert.Equal(ArticleWorkConsumerState.Running, context.Session.State);
-        Assert.Equal(1, context.Session.Generation);
-        Assert.Equal("backfiller.giganews", context.Session.Queue);
-        var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
-        Assert.Equal(1, channel.ConsumeCount);
-        Assert.Equal((ushort)1, channel.LastPrefetch);
-        Assert.Equal("backfiller.giganews", channel.LastQueue);
-        Assert.Equal(1, context.Factory.ConnectCount);
-    }
-
-    [Fact]
-    public async Task Startup_fails_when_the_connection_is_not_ready()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        var session = CreateSession(connections, new DeferredArticleWorkHandler());
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartAsync(CancellationToken.None));
-        Assert.Equal(ArticleWorkConsumerState.Stopped, session.State);
-        Assert.Equal(0, factory.ConnectCount);
-    }
-
-    [Fact]
-    public async Task Startup_fails_when_consume_cannot_be_established()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        await connections.StartAsync(CancellationToken.None);
-        factory.LastConnection!.CreateChannelException = new InvalidOperationException("channel refused");
-        var session = CreateSession(connections, new DeferredArticleWorkHandler());
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartAsync(CancellationToken.None));
-        Assert.Equal(ArticleWorkConsumerState.Stopped, session.State);
-        await connections.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Retirement_cancels_the_consumer_disposes_the_channel_and_stops()
-    {
-        await using var context = await ConsumerContext.StartSessionAsync();
-        var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
-
-        await context.Session.RetireAsync();
-
-        Assert.Equal(ArticleWorkConsumerState.Stopped, context.Session.State);
-        Assert.Equal(1, channel.CancelCount);
-        Assert.Equal(1, channel.DisposeCount);
-        Assert.False(channel.IsOpen);
-        Assert.Null(context.Session.Channel);
-        Assert.Equal(0, context.Factory.LastConnection!.DisposeCount);
-    }
-
-    [Fact]
-    public async Task Shutdown_drains_admitted_work_on_the_original_channel()
-    {
-        var handler = new ControllableArticleWorkHandler
+        [Fact]
+        public async Task Session_starts_running_on_the_current_generation()
         {
-            Outcome = ArticleWorkOutcome.ArticleNotFound,
-            Error = "missing",
-            Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-            Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-        };
-        await using var context = await ConsumerContext.StartSessionAsync(handler);
-        var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
-        var processing = channel.DeliverAsync(ArticleWorkTestDeliveries.Canonical());
-        await handler.Started!.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await using var context = await ConsumerContext.StartSessionAsync();
 
-        var retire = context.Session.RetireAsync();
-        handler.Gate!.TrySetResult();
-        await processing.WaitAsync(TimeSpan.FromSeconds(2));
-        await retire.WaitAsync(TimeSpan.FromSeconds(2));
-
-        var settlement = Assert.Single(channel.Settlements);
-        Assert.True(settlement.Acknowledge);
-        Assert.False(settlement.Requeue);
-        Assert.Equal(1, channel.DisposeCount);
-        Assert.Equal(ArticleWorkConsumerState.Stopped, context.Session.State);
-    }
-
-    [Fact]
-    public async Task Delivery_arriving_after_retirement_is_not_admitted()
-    {
-        var handler = new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Success };
-        await using var context = await ConsumerContext.StartSessionAsync(handler);
-        var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
-        await context.Session.RetireAsync();
-
-        await channel.DeliverAsync(ArticleWorkTestDeliveries.Canonical());
-
-        Assert.Equal(0, handler.HandleCount);
-        Assert.Empty(channel.Settlements);
-        Assert.Empty(context.Publisher.Published);
-    }
-
-    [Fact]
-    public async Task Consumer_service_starts_one_session_per_desired_nntp_slot_when_capacity_exists()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        await connections.StartAsync(CancellationToken.None);
-        var consumer = CreateConsumerService(
-            connections,
-            new DeferredArticleWorkHandler(),
-            catalog: CreateCatalog("Giganews", maxSessions: 2),
-            capacity: CreateCapacity("Giganews", active: 1));
-
-        await consumer.StartAsync(CancellationToken.None);
-
-        Assert.Equal(2, consumer.Sessions.Count);
-        Assert.Equal(new[] { 1, 2 }, consumer.Sessions.Select(static session => session.ConnectionNumber).OrderBy(static n => n));
-        Assert.All(consumer.Sessions, static session => Assert.Equal(ArticleWorkConsumerState.Running, session.State));
-        Assert.All(consumer.Sessions, static session => Assert.Equal("Giganews", session.Backbone));
-        Assert.Equal(3, factory.LastConnection!.Channels.Count);
-        var topologyChannel = factory.LastConnection.Channels[0];
-        Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.ExchangeDeclarations).Name);
-        Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.QueueDeclarations).Name);
-        Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Durable);
-        Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.TryGetValue(
-            BackFillerArticleWorkTopology.QueueTypeArgumentName,
-            out var queueType));
-        Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
-        Assert.Equal(1, topologyChannel.DisposeCount);
-        Assert.Equal(0, topologyChannel.ConsumeCount);
-        Assert.Equal(1, factory.ConnectCount);
-        Assert.All(
-            factory.LastConnection.Channels.Skip(1),
-            static channel => Assert.Equal("backfiller.giganews", channel.LastQueue));
-
-        await consumer.DisposeAsync();
-        Assert.All(factory.LastConnection.Channels, static channel => Assert.Equal(1, channel.DisposeCount));
-        Assert.Equal(0, factory.LastConnection.DisposeCount);
-        await connections.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Consumer_service_does_not_start_topology_backbones_without_capacity()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        await connections.StartAsync(CancellationToken.None);
-        var consumer = CreateConsumerService(connections, new DeferredArticleWorkHandler());
-
-        await consumer.StartAsync(CancellationToken.None);
-
-        Assert.Empty(consumer.Sessions);
-        Assert.Empty(factory.LastConnection!.Channels);
-
-        await consumer.DisposeAsync();
-        await connections.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Consumer_service_rebuilds_after_generation_loss_without_opening_a_competing_connection()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        await connections.StartAsync(CancellationToken.None);
-        var consumer = CreateConsumerService(
-            connections,
-            new DeferredArticleWorkHandler(),
-            catalog: CreateCatalog("Giganews", maxSessions: 1),
-            capacity: CreateCapacity("Giganews", active: 1));
-        await consumer.StartAsync(CancellationToken.None);
-        var firstChannels = factory.LastConnection!.Channels.ToArray();
-
-        var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        factory.Connected = secondConnected;
-        factory.LastConnection.SimulateLost();
-        await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await ArticleWorkTestDeliveries.WaitUntilAsync(
-            () => consumer.Sessions.Count == 1
-                  && consumer.Sessions.All(static session => session.Generation == 2),
-            TimeSpan.FromSeconds(2));
-
-        Assert.Equal(2, factory.ConnectCount);
-        Assert.Equal(2, connections.ConnectionGeneration);
-        Assert.All(consumer.Sessions, static session => Assert.Equal(ArticleWorkConsumerState.Running, session.State));
-        Assert.All(firstChannels, static channel => Assert.Equal(1, channel.DisposeCount));
-
-        await consumer.DisposeAsync();
-        await connections.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Stale_session_does_not_mutate_a_newer_generation()
-    {
-        var factory = new FakeBackFillerRabbitMqConnectionFactory();
-        var connections = RabbitMqServiceTests.CreateService(factory);
-        await connections.StartAsync(CancellationToken.None);
-        var handler = new ControllableArticleWorkHandler
-        {
-            Outcome = ArticleWorkOutcome.Success,
-            Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-            Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-        };
-        var consumer = CreateConsumerService(
-            connections,
-            handler,
-            catalog: CreateCatalog("Giganews", maxSessions: 1),
-            capacity: CreateCapacity("Giganews", active: 1));
-        await consumer.StartAsync(CancellationToken.None);
-        var giganews = consumer.Sessions.Single(static session => session.Backbone == "Giganews");
-        var staleChannel = Assert.IsType<FakeBackFillerRabbitMqChannel>(giganews.Channel);
-        var processing = staleChannel.DeliverAsync(ArticleWorkTestDeliveries.Canonical(generation: 1));
-        await handler.Started!.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-        var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        factory.Connected = secondConnected;
-        factory.LastConnection!.SimulateLost();
-        await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        handler.Gate!.TrySetResult();
-        await processing.WaitAsync(TimeSpan.FromSeconds(2));
-        await ArticleWorkTestDeliveries.WaitUntilAsync(
-            () => consumer.Sessions.Count == 1
-                  && consumer.Sessions.All(static session => session.Generation == 2),
-            TimeSpan.FromSeconds(2));
-
-        var current = Assert.IsType<FakeBackFillerRabbitMqChannel>(
-            consumer.Sessions.Single(static session => session.Backbone == "Giganews").Channel);
-        Assert.Empty(staleChannel.Settlements);
-        Assert.Empty(current.Settlements);
-        Assert.Equal(2, factory.ConnectCount);
-
-        await consumer.DisposeAsync();
-        await connections.DisposeAsync();
-    }
-
-    [Fact]
-    public void Production_article_work_code_does_not_block_synchronously()
-    {
-        var directory = FindArticleWorkSourceDirectory();
-        Assert.True(Directory.Exists(directory), directory);
-        foreach (var file in Directory.GetFiles(directory, "*.cs"))
-        {
-            var text = File.ReadAllText(file);
-            Assert.DoesNotContain("Thread.Sleep", text, StringComparison.Ordinal);
-            Assert.DoesNotContain(".GetAwaiter().GetResult()", text, StringComparison.Ordinal);
-            Assert.DoesNotContain(".Wait();", text, StringComparison.Ordinal);
-            Assert.DoesNotContain(".Result;", text, StringComparison.Ordinal);
-        }
-    }
-
-    private static ArticleWorkConsumerSession CreateSession(
-        IRabbitMqService connections,
-        IArticleWorkHandler handler,
-        RecordingArticleWorkResponsePublisher? publisher = null)
-    {
-        return new ArticleWorkConsumerSession(
-            "Giganews",
-            1,
-            new ArticleWorkDeliveryPipeline(handler, publisher ?? new RecordingArticleWorkResponsePublisher(), 1024),
-            connections,
-            NullLogger.Instance);
-    }
-
-    private static ArticleWorkConsumerService CreateConsumerService(
-        IRabbitMqService connections,
-        IArticleWorkHandler handler,
-        IBackFillerProviderCatalog? catalog = null,
-        IBackboneUsableCapacityProvider? capacity = null)
-    {
-        return new ArticleWorkConsumerService(
-            connections,
-            RabbitMqServiceTests.CreateFastRuntime(),
-            handler,
-            new RecordingArticleWorkResponsePublisher(),
-            NullLogger<ArticleWorkConsumerService>.Instance,
-            catalog,
-            capacity);
-    }
-
-    private static StaticBackFillerProviderCatalog CreateCatalog(string backbone, int maxSessions) =>
-        new(
-        [
-            new BackFiller.Nntp.BackFillerProviderDefinition(
-                backbone,
-                "127.0.0.1",
-                119,
-                false,
-                "nntp-user",
-                "p",
-                0,
-                maxSessions),
-        ]);
-
-    private static BackboneUsableCapacityState CreateCapacity(string backbone, int active)
-    {
-        var capacity = new BackboneUsableCapacityState();
-        if (active > 0)
-        {
-            capacity.PublishSnapshot(new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-            {
-                [backbone] = active,
-            });
+            Assert.Equal(ArticleWorkConsumerState.Running, context.Session.State);
+            Assert.Equal(1, context.Session.Generation);
+            Assert.Equal("backfiller.giganews", context.Session.Queue);
+            var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
+            Assert.Equal(1, channel.ConsumeCount);
+            Assert.Equal((ushort)1, channel.LastPrefetch);
+            Assert.Equal("backfiller.giganews", channel.LastQueue);
+            Assert.Equal(1, context.Factory.ConnectCount);
         }
 
-        return capacity;
-    }
-
-    private static string FindArticleWorkSourceDirectory()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
+        [Fact]
+        public async Task Startup_fails_when_the_connection_is_not_ready()
         {
-            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "ArticleWork");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            var session = CreateSession(connections, new DeferredArticleWorkHandler());
 
-            directory = directory.Parent;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartAsync(CancellationToken.None));
+            Assert.Equal(ArticleWorkConsumerState.Stopped, session.State);
+            Assert.Equal(0, factory.ConnectCount);
         }
 
-        throw new DirectoryNotFoundException("Could not locate src/VectorNNTP.BackFiller/ArticleWork.");
-    }
-
-    private sealed class ConsumerContext : IAsyncDisposable
-    {
-        private ConsumerContext(
-            FakeBackFillerRabbitMqConnectionFactory factory,
-            RabbitMqService connections,
-            ArticleWorkConsumerSession session,
-            RecordingArticleWorkResponsePublisher publisher)
-        {
-            Factory = factory;
-            Connections = connections;
-            Session = session;
-            Publisher = publisher;
-        }
-
-        public FakeBackFillerRabbitMqConnectionFactory Factory { get; }
-
-        public RabbitMqService Connections { get; }
-
-        public ArticleWorkConsumerSession Session { get; }
-
-        public RecordingArticleWorkResponsePublisher Publisher { get; }
-
-        public static async Task<ConsumerContext> StartSessionAsync(IArticleWorkHandler? handler = null)
+        [Fact]
+        public async Task Startup_fails_when_consume_cannot_be_established()
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
             var connections = RabbitMqServiceTests.CreateService(factory);
             await connections.StartAsync(CancellationToken.None);
-            var publisher = new RecordingArticleWorkResponsePublisher();
-            var session = CreateSession(connections, handler ?? new DeferredArticleWorkHandler(), publisher);
-            await session.StartAsync(CancellationToken.None);
-            return new ConsumerContext(factory, connections, session, publisher);
+            factory.LastConnection!.CreateChannelException = new InvalidOperationException("channel refused");
+            var session = CreateSession(connections, new DeferredArticleWorkHandler());
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.StartAsync(CancellationToken.None));
+            Assert.Equal(ArticleWorkConsumerState.Stopped, session.State);
+            await connections.DisposeAsync();
         }
 
-        public async ValueTask DisposeAsync()
+        [Fact]
+        public async Task Retirement_cancels_the_consumer_disposes_the_channel_and_stops()
         {
-            await Session.DisposeAsync();
-            await Connections.DisposeAsync();
+            await using var context = await ConsumerContext.StartSessionAsync();
+            var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
+
+            await context.Session.RetireAsync();
+
+            Assert.Equal(ArticleWorkConsumerState.Stopped, context.Session.State);
+            Assert.Equal(1, channel.CancelCount);
+            Assert.Equal(1, channel.DisposeCount);
+            Assert.False(channel.IsOpen);
+            Assert.Null(context.Session.Channel);
+            Assert.Equal(0, context.Factory.LastConnection!.DisposeCount);
+        }
+
+        [Fact]
+        public async Task Shutdown_drains_admitted_work_on_the_original_channel()
+        {
+            var handler = new ControllableArticleWorkHandler
+            {
+                Outcome = ArticleWorkOutcome.ArticleNotFound,
+                Error = "missing",
+                Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            await using var context = await ConsumerContext.StartSessionAsync(handler);
+            var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
+            var processing = channel.DeliverAsync(ArticleWorkTestDeliveries.Canonical());
+            await handler.Started!.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var retire = context.Session.RetireAsync();
+            handler.Gate!.TrySetResult();
+            await processing.WaitAsync(TimeSpan.FromSeconds(2));
+            await retire.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.True(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
+            Assert.Equal(1, channel.DisposeCount);
+            Assert.Equal(ArticleWorkConsumerState.Stopped, context.Session.State);
+        }
+
+        [Fact]
+        public async Task Delivery_arriving_after_retirement_is_not_admitted()
+        {
+            var handler = new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Success };
+            await using var context = await ConsumerContext.StartSessionAsync(handler);
+            var channel = Assert.IsType<FakeBackFillerRabbitMqChannel>(context.Session.Channel);
+            await context.Session.RetireAsync();
+
+            await channel.DeliverAsync(ArticleWorkTestDeliveries.Canonical());
+
+            Assert.Equal(0, handler.HandleCount);
+            Assert.Empty(channel.Settlements);
+            Assert.Empty(context.Publisher.Published);
+        }
+
+        [Fact]
+        public async Task Consumer_service_starts_one_session_per_desired_nntp_slot_when_capacity_exists()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumerService(
+                connections,
+                new DeferredArticleWorkHandler(),
+                catalog: CreateCatalog("Giganews", maxSessions: 2),
+                capacity: CreateCapacity("Giganews", active: 1));
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            Assert.Equal(2, consumer.Sessions.Count);
+            Assert.Equal(new[] { 1, 2 }, consumer.Sessions.Select(static session => session.ConnectionNumber).OrderBy(static n => n));
+            Assert.All(consumer.Sessions, static session => Assert.Equal(ArticleWorkConsumerState.Running, session.State));
+            Assert.All(consumer.Sessions, static session => Assert.Equal("Giganews", session.Backbone));
+            Assert.Equal(3, factory.LastConnection!.Channels.Count);
+            var topologyChannel = factory.LastConnection.Channels[0];
+            Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.ExchangeDeclarations).Name);
+            Assert.Equal("backfiller.giganews", Assert.Single(topologyChannel.QueueDeclarations).Name);
+            Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Durable);
+            Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.TryGetValue(
+                BackFillerArticleWorkTopology.QueueTypeArgumentName,
+                out var queueType));
+            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+            Assert.Equal(1, topologyChannel.DisposeCount);
+            Assert.Equal(0, topologyChannel.ConsumeCount);
+            Assert.Equal(1, factory.ConnectCount);
+            Assert.All(
+                factory.LastConnection.Channels.Skip(1),
+                static channel => Assert.Equal("backfiller.giganews", channel.LastQueue));
+
+            await consumer.DisposeAsync();
+            Assert.All(factory.LastConnection.Channels, static channel => Assert.Equal(1, channel.DisposeCount));
+            Assert.Equal(0, factory.LastConnection.DisposeCount);
+            await connections.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Consumer_service_does_not_start_topology_backbones_without_capacity()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumerService(connections, new DeferredArticleWorkHandler());
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            Assert.Empty(consumer.Sessions);
+            Assert.Empty(factory.LastConnection!.Channels);
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Consumer_service_rebuilds_after_generation_loss_without_opening_a_competing_connection()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumerService(
+                connections,
+                new DeferredArticleWorkHandler(),
+                catalog: CreateCatalog("Giganews", maxSessions: 1),
+                capacity: CreateCapacity("Giganews", active: 1));
+            await consumer.StartAsync(CancellationToken.None);
+            var firstChannels = factory.LastConnection!.Channels.ToArray();
+
+            var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            factory.Connected = secondConnected;
+            factory.LastConnection.SimulateLost();
+            await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(
+                () => consumer.Sessions.Count == 1
+                      && consumer.Sessions.All(static session => session.Generation == 2),
+                TimeSpan.FromSeconds(2));
+
+            Assert.Equal(2, factory.ConnectCount);
+            Assert.Equal(2, connections.ConnectionGeneration);
+            Assert.All(consumer.Sessions, static session => Assert.Equal(ArticleWorkConsumerState.Running, session.State));
+            Assert.All(firstChannels, static channel => Assert.Equal(1, channel.DisposeCount));
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Stale_session_does_not_mutate_a_newer_generation()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var handler = new ControllableArticleWorkHandler
+            {
+                Outcome = ArticleWorkOutcome.Success,
+                Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var consumer = CreateConsumerService(
+                connections,
+                handler,
+                catalog: CreateCatalog("Giganews", maxSessions: 1),
+                capacity: CreateCapacity("Giganews", active: 1));
+            await consumer.StartAsync(CancellationToken.None);
+            var giganews = consumer.Sessions.Single(static session => session.Backbone == "Giganews");
+            var staleChannel = Assert.IsType<FakeBackFillerRabbitMqChannel>(giganews.Channel);
+            var processing = staleChannel.DeliverAsync(ArticleWorkTestDeliveries.Canonical(generation: 1));
+            await handler.Started!.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            factory.Connected = secondConnected;
+            factory.LastConnection!.SimulateLost();
+            await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            handler.Gate!.TrySetResult();
+            await processing.WaitAsync(TimeSpan.FromSeconds(2));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(
+                () => consumer.Sessions.Count == 1
+                      && consumer.Sessions.All(static session => session.Generation == 2),
+                TimeSpan.FromSeconds(2));
+
+            var current = Assert.IsType<FakeBackFillerRabbitMqChannel>(
+                consumer.Sessions.Single(static session => session.Backbone == "Giganews").Channel);
+            Assert.Empty(staleChannel.Settlements);
+            Assert.Empty(current.Settlements);
+            Assert.Equal(2, factory.ConnectCount);
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        [Fact]
+        public void Production_article_work_code_does_not_block_synchronously()
+        {
+            var directory = FindArticleWorkSourceDirectory();
+            Assert.True(Directory.Exists(directory), directory);
+            foreach (var file in Directory.GetFiles(directory, "*.cs"))
+            {
+                var text = File.ReadAllText(file);
+                Assert.DoesNotContain("Thread.Sleep", text, StringComparison.Ordinal);
+                Assert.DoesNotContain(".GetAwaiter().GetResult()", text, StringComparison.Ordinal);
+                Assert.DoesNotContain(".Wait();", text, StringComparison.Ordinal);
+                Assert.DoesNotContain(".Result;", text, StringComparison.Ordinal);
+            }
+        }
+
+        private static ArticleWorkConsumerSession CreateSession(
+            IRabbitMqService connections,
+            IArticleWorkHandler handler,
+            RecordingArticleWorkResponsePublisher? publisher = null)
+        {
+            return new ArticleWorkConsumerSession(
+                "Giganews",
+                1,
+                new ArticleWorkDeliveryPipeline(handler, publisher ?? new RecordingArticleWorkResponsePublisher(), 1024),
+                connections,
+                NullLogger.Instance);
+        }
+
+        private static ArticleWorkConsumerService CreateConsumerService(
+            IRabbitMqService connections,
+            IArticleWorkHandler handler,
+            IBackFillerProviderCatalog? catalog = null,
+            IBackboneUsableCapacityProvider? capacity = null)
+        {
+            return new ArticleWorkConsumerService(
+                connections,
+                RabbitMqServiceTests.CreateFastRuntime(),
+                handler,
+                new RecordingArticleWorkResponsePublisher(),
+                NullLogger<ArticleWorkConsumerService>.Instance,
+                catalog,
+                capacity);
+        }
+
+        private static StaticBackFillerProviderCatalog CreateCatalog(string backbone, int maxSessions) =>
+            new(
+            [
+                new BackFiller.Nntp.BackFillerProviderDefinition(
+                    backbone,
+                    "127.0.0.1",
+                    119,
+                    false,
+                    "nntp-user",
+                    "p",
+                    0,
+                    maxSessions),
+            ]);
+
+        private static BackboneUsableCapacityState CreateCapacity(string backbone, int active)
+        {
+            var capacity = new BackboneUsableCapacityState();
+            if (active > 0)
+            {
+                capacity.PublishSnapshot(new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [backbone] = active,
+                });
+            }
+
+            return capacity;
+        }
+
+        private static string FindArticleWorkSourceDirectory()
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null)
+            {
+                var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", "ArticleWork");
+                if (Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new DirectoryNotFoundException("Could not locate src/VectorNNTP.BackFiller/ArticleWork.");
+        }
+
+        private sealed class ConsumerContext : IAsyncDisposable
+        {
+            private ConsumerContext(
+                FakeBackFillerRabbitMqConnectionFactory factory,
+                RabbitMqService connections,
+                ArticleWorkConsumerSession session,
+                RecordingArticleWorkResponsePublisher publisher)
+            {
+                Factory = factory;
+                Connections = connections;
+                Session = session;
+                Publisher = publisher;
+            }
+
+            public FakeBackFillerRabbitMqConnectionFactory Factory { get; }
+
+            public RabbitMqService Connections { get; }
+
+            public ArticleWorkConsumerSession Session { get; }
+
+            public RecordingArticleWorkResponsePublisher Publisher { get; }
+
+            public static async Task<ConsumerContext> StartSessionAsync(IArticleWorkHandler? handler = null)
+            {
+                var factory = new FakeBackFillerRabbitMqConnectionFactory();
+                var connections = RabbitMqServiceTests.CreateService(factory);
+                await connections.StartAsync(CancellationToken.None);
+                var publisher = new RecordingArticleWorkResponsePublisher();
+                var session = CreateSession(connections, handler ?? new DeferredArticleWorkHandler(), publisher);
+                await session.StartAsync(CancellationToken.None);
+                return new ConsumerContext(factory, connections, session, publisher);
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                await Session.DisposeAsync();
+                await Connections.DisposeAsync();
+            }
         }
     }
 }

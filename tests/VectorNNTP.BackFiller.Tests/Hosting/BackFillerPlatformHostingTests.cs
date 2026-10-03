@@ -13,130 +13,131 @@ using VectorNNTP.NNTPD.Configuration;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
 
-namespace VectorNNTP.BackFiller.Tests.Hosting;
-
-public sealed class BackFillerPlatformHostingTests
+namespace VectorNNTP.BackFiller.Tests.Hosting
 {
-    [Fact]
-    public void Program_pins_content_root_to_the_application_base()
+    public sealed class BackFillerPlatformHostingTests
     {
-        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        [Fact]
+        public void Program_pins_content_root_to_the_application_base()
         {
-            Args = [],
-            ContentRootPath = AppContext.BaseDirectory,
-        });
-        builder.Environment.ContentRootPath = AppContext.BaseDirectory;
-        Assert.Equal(
-            Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            Path.GetFullPath(builder.Environment.ContentRootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        Assert.Contains(
-            "ContentRootPath = AppContext.BaseDirectory",
-            File.ReadAllText(FindSource("Program.cs")),
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Platform_hosting_sets_the_windows_service_name_and_strips_console_formatters()
-    {
-        var builder = Host.CreateApplicationBuilder([]);
-        builder.ConfigureBackFillerPlatformHosting();
-
-        Assert.Contains(
-            "options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName",
-            File.ReadAllText(FindPlatformHostingSource()),
-            StringComparison.Ordinal);
-        Assert.False(
-            WindowsServiceHelpers.IsWindowsService(),
-            "This testhost is not a Windows Service; AddWindowsService activates the lifetime only under SCM.");
-        Assert.DoesNotContain(builder.Services, static descriptor =>
-        {
-            var serviceType = descriptor.ServiceType;
-            if (!serviceType.IsGenericType)
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
             {
-                return false;
-            }
-
-            var definition = serviceType.GetGenericTypeDefinition();
-            if (definition != typeof(IConfigureOptions<>)
-                && definition != typeof(IPostConfigureOptions<>)
-                && definition != typeof(IValidateOptions<>))
-            {
-                return false;
-            }
-
-            return serviceType.GenericTypeArguments[0] == typeof(ConsoleLoggerOptions);
-        });
-    }
-
-    private static string FindPlatformHostingSource() =>
-        FindSource(Path.Combine("Hosting", "BackFillerServiceCollectionExtensions.cs"));
-
-    private static string FindSource(string relativePath)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", relativePath);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException($"Could not locate {relativePath}.");
-    }
-
-    [Fact]
-    public void Runtime_options_resolve_relative_paths_from_the_application_base_not_content_root()
-    {
-        var decoyContentRoot = Directory.CreateTempSubdirectory("bf-host-decoy-").FullName;
-        try
-        {
-            using var host = CreateHost(decoyContentRoot);
-            var runtime = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
-            var expectedLogs = ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory);
-            var expectedCerts = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir("certs/", AppContext.BaseDirectory);
-            Assert.Equal(expectedLogs, runtime.LogDirectory);
-            Assert.Equal(expectedCerts, runtime.CertificateDirectory);
-            Assert.DoesNotContain(
-                Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                runtime.LogDirectory,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(
-                Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                runtime.CertificateDirectory,
-                StringComparison.OrdinalIgnoreCase);
+                Args = [],
+                ContentRootPath = AppContext.BaseDirectory,
+            });
+            builder.Environment.ContentRootPath = AppContext.BaseDirectory;
             Assert.Equal(
-                runtime.Shutdown.GracePeriod,
-                host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+                Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(builder.Environment.ContentRootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            Assert.Contains(
+                "ContentRootPath = AppContext.BaseDirectory",
+                File.ReadAllText(FindSource("Program.cs")),
+                StringComparison.Ordinal);
         }
-        finally
+
+        [Fact]
+        public void Platform_hosting_sets_the_windows_service_name_and_strips_console_formatters()
         {
+            var builder = Host.CreateApplicationBuilder([]);
+            builder.ConfigureBackFillerPlatformHosting();
+
+            Assert.Contains(
+                "options.ServiceName = ApplicationJsonConfiguration.EntryAssemblyName",
+                File.ReadAllText(FindPlatformHostingSource()),
+                StringComparison.Ordinal);
+            Assert.False(
+                WindowsServiceHelpers.IsWindowsService(),
+                "This testhost is not a Windows Service; AddWindowsService activates the lifetime only under SCM.");
+            Assert.DoesNotContain(builder.Services, static descriptor =>
+            {
+                var serviceType = descriptor.ServiceType;
+                if (!serviceType.IsGenericType)
+                {
+                    return false;
+                }
+
+                var definition = serviceType.GetGenericTypeDefinition();
+                if (definition != typeof(IConfigureOptions<>)
+                    && definition != typeof(IPostConfigureOptions<>)
+                    && definition != typeof(IValidateOptions<>))
+                {
+                    return false;
+                }
+
+                return serviceType.GenericTypeArguments[0] == typeof(ConsoleLoggerOptions);
+            });
+        }
+
+        private static string FindPlatformHostingSource() =>
+            FindSource(Path.Combine("Hosting", "BackFillerServiceCollectionExtensions.cs"));
+
+        private static string FindSource(string relativePath)
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null)
+            {
+                var candidate = Path.Combine(directory.FullName, "src", "VectorNNTP.BackFiller", relativePath);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new FileNotFoundException($"Could not locate {relativePath}.");
+        }
+
+        [Fact]
+        public void Runtime_options_resolve_relative_paths_from_the_application_base_not_content_root()
+        {
+            var decoyContentRoot = Directory.CreateTempSubdirectory("bf-host-decoy-").FullName;
             try
             {
-                Directory.Delete(decoyContentRoot, recursive: true);
+                using var host = CreateHost(decoyContentRoot);
+                var runtime = host.Services.GetRequiredService<BackFillerRuntimeOptions>();
+                var expectedLogs = ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory);
+                var expectedCerts = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir("certs/", AppContext.BaseDirectory);
+                Assert.Equal(expectedLogs, runtime.LogDirectory);
+                Assert.Equal(expectedCerts, runtime.CertificateDirectory);
+                Assert.DoesNotContain(
+                    Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    runtime.LogDirectory,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(
+                    Path.GetFullPath(decoyContentRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    runtime.CertificateDirectory,
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(
+                    runtime.Shutdown.GracePeriod,
+                    host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
             }
-            catch (IOException)
+            finally
             {
+                try
+                {
+                    Directory.Delete(decoyContentRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                }
             }
         }
-    }
 
-    private static IHost CreateHost(string contentRoot)
-    {
-        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        private static IHost CreateHost(string contentRoot)
         {
-            Args = [],
-            ContentRootPath = contentRoot,
-        });
-        builder.Configuration.AddInMemoryCollection(BackFillerTestOptions.CreateValidConfigurationPairs());
-        builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-        builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-        builder.Services.AddSingleton<IRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
-        builder.ConfigureBackFillerPlatformHosting();
-        builder.AddBackFillerHosting();
-        return builder.Build();
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                Args = [],
+                ContentRootPath = contentRoot,
+            });
+            builder.Configuration.AddInMemoryCollection(BackFillerTestOptions.CreateValidConfigurationPairs());
+            builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
+            builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
+            builder.Services.AddSingleton<IRabbitMqConnectionFactory>(new FakeBackFillerRabbitMqConnectionFactory());
+            builder.ConfigureBackFillerPlatformHosting();
+            builder.AddBackFillerHosting();
+            return builder.Build();
+        }
     }
 }

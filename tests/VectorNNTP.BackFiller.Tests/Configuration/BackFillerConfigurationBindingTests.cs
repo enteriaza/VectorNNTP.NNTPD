@@ -6,332 +6,333 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 
-namespace VectorNNTP.BackFiller.Tests.Configuration;
-
-public sealed class BackFillerConfigurationBindingTests
+namespace VectorNNTP.BackFiller.Tests.Configuration
 {
-    [Fact]
-    public void Shared_acme_cloudflare_environment_variables_are_vector_names()
+    public sealed class BackFillerConfigurationBindingTests
     {
-        Assert.Equal("CLOUDFLAREAPIKEY", StripVectorPrefix("VECTOR__CLOUDFLAREAPIKEY"));
-        Assert.Equal("ACMECERTIFICATEPASSWORD", StripVectorPrefix("VECTOR__ACMECERTIFICATEPASSWORD"));
-        Assert.Equal("CLOUDFLAREZONEID", StripVectorPrefix("VECTOR__CLOUDFLAREZONEID"));
-        Assert.Equal("BINDPORT", StripVectorPrefix("VECTOR__BINDPORT"));
+        [Fact]
+        public void Shared_acme_cloudflare_environment_variables_are_vector_names()
+        {
+            Assert.Equal("CLOUDFLAREAPIKEY", StripVectorPrefix("VECTOR__CLOUDFLAREAPIKEY"));
+            Assert.Equal("ACMECERTIFICATEPASSWORD", StripVectorPrefix("VECTOR__ACMECERTIFICATEPASSWORD"));
+            Assert.Equal("CLOUDFLAREZONEID", StripVectorPrefix("VECTOR__CLOUDFLAREZONEID"));
+            Assert.Equal("BINDPORT", StripVectorPrefix("VECTOR__BINDPORT"));
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["CloudFlareApiKey"] = BackFillerTestOptions.SecretToken,
+                    ["AcmeCertificatePassword"] = BackFillerTestOptions.SecretPfx,
+                    ["CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
+                })
+                .Build();
+
+            var options = new AcmeCloudflareOptions();
+            configuration.Bind(options);
+            Assert.Equal(BackFillerTestOptions.SecretToken, options.CloudFlareApiKey);
+            Assert.Equal(BackFillerTestOptions.SecretPfx, options.AcmeCertificatePassword);
+            Assert.Equal("0123456789abcdef0123456789abcdef", options.CloudFlareZoneId);
+        }
+
+        [Fact]
+        public void Canonical_environment_variable_names_map_to_root_configuration_paths()
+        {
+            Assert.Equal(VectorEnvironment.Prefix, BackFillerOptions.EnvironmentVariablePrefix);
+            Assert.Equal("BackFiller", BackFillerOptions.SectionName);
+            Assert.Equal("NntpDB", NntpDbOptions.ConnectionStringName);
+            Assert.Equal("ConnectionStrings__NntpDB", NntpDbOptions.ConnectionStringEnvironmentVariable);
+            Assert.Null(typeof(BackFillerOptions).GetField(
+                "GrabberDbEnvironmentVariable",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
+
+            Assert.Null(typeof(BackFillerOptions).GetField(
+                "NameEnvironmentVariable",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
+            Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
+            Assert.Equal("RABBITMQ:USERNAME", ToConfigurationPath(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
+            Assert.Equal("RABBITMQ:PASSWORD", ToConfigurationPath(BackFillerOptions.RabbitMqPasswordEnvironmentVariable));
+            Assert.True(VectorEnvironment.IsCanonicalName(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
+        }
+
+        [Fact]
+        public void Bind_populates_options_from_canonical_prefixed_paths()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddConfiguration(ConfigurationFromEnvironmentVariables(
+                    (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "canonical-user"),
+                    (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
+                    (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
+                    (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
+                    (NntpDbOptions.ConnectionStringEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz")))
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["BackFiller:ServerId"] = "8",
+                    ["BackFiller:DnsSuffix"] = "usenet.ninja",
+                })
+                .Build();
+
+            var options = new BackFillerOptions();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+            var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
+            configuration.GetSection("RabbitMQ").Bind(rabbit);
+            var acme = new AcmeCloudflareOptions();
+            configuration.Bind(acme);
+            var nntpDb = BindNntpDb(configuration);
+
+            Assert.Equal(8, options.ServerId);
+            Assert.Equal("backfiller08.usenet.ninja", options.Fqdn);
+            Assert.Equal(
+                ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, 8, "usenet.ninja"),
+                options.Fqdn);
+            Assert.Equal("canonical-user", rabbit.Username);
+            Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
+            Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
+            Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
+            Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);
+        }
+
+        [Theory]
+        [InlineData("nntpd__RabbitMQ__Username", "nntpd__RabbitMQ__Password")]
+        [InlineData("backfiller__RabbitMQ__Username", "backfiller__RabbitMQ__Password")]
+        [InlineData("backfiller__LetsEncrypt__CloudFlareApiToken", "backfiller__LetsEncrypt__PfxExportPassword")]
+        public void Bind_does_not_accept_obsolete_application_prefixes(string usernameOrToken, string passwordOrPfx)
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [usernameOrToken.Replace("__", ":", StringComparison.Ordinal)] = "short-form-user-or-token",
+                    [passwordOrPfx.Replace("__", ":", StringComparison.Ordinal)] = BackFillerTestOptions.SecretPassword,
+                })
+                .Build();
+
+            var options = new BackFillerOptions();
+            configuration.Bind(options);
+            var acme = new AcmeCloudflareOptions();
+            configuration.Bind(acme);
+
+            Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
+            Assert.True(string.IsNullOrWhiteSpace(acme.CloudFlareApiKey));
+            Assert.True(string.IsNullOrWhiteSpace(acme.AcmeCertificatePassword));
+        }
+
+        [Fact]
+        public void Bind_does_not_map_legacy_id_key_to_server_id()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["BackFiller:Id"] = "7",
+                })
+                .Build();
+
+            var options = new BackFillerOptions();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+            Assert.Null(options.ServerId);
+        }
+
+        [Fact]
+        public void Nntp_db_validation_failures_do_not_include_the_connection_string()
+        {
+            var options = new NntpDbOptions
             {
-                ["CloudFlareApiKey"] = BackFillerTestOptions.SecretToken,
-                ["AcmeCertificatePassword"] = BackFillerTestOptions.SecretPfx,
-                ["CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
-            })
-            .Build();
+                ConnectionString = "Server=127.0.0.1;Database=nntp;User ID=nntpd;Password=\"db-secret-xyz;",
+            };
 
-        var options = new AcmeCloudflareOptions();
-        configuration.Bind(options);
-        Assert.Equal(BackFillerTestOptions.SecretToken, options.CloudFlareApiKey);
-        Assert.Equal(BackFillerTestOptions.SecretPfx, options.AcmeCertificatePassword);
-        Assert.Equal("0123456789abcdef0123456789abcdef", options.CloudFlareZoneId);
-    }
+            var result = new NntpDbOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            var raw = options.ConnectionString;
+            Assert.All(
+                result.Failures!,
+                failure =>
+                {
+                    Assert.DoesNotContain("db-secret-xyz", failure, StringComparison.Ordinal);
+                    Assert.DoesNotContain(raw, failure, StringComparison.Ordinal);
+                });
+        }
 
-    [Fact]
-    public void Canonical_environment_variable_names_map_to_root_configuration_paths()
-    {
-        Assert.Equal(VectorEnvironment.Prefix, BackFillerOptions.EnvironmentVariablePrefix);
-        Assert.Equal("BackFiller", BackFillerOptions.SectionName);
-        Assert.Equal("NntpDB", NntpDbOptions.ConnectionStringName);
-        Assert.Equal("ConnectionStrings__NntpDB", NntpDbOptions.ConnectionStringEnvironmentVariable);
-        Assert.Null(typeof(BackFillerOptions).GetField(
-            "GrabberDbEnvironmentVariable",
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
-
-        Assert.Null(typeof(BackFillerOptions).GetField(
-            "NameEnvironmentVariable",
-            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
-        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
-        Assert.Equal("RABBITMQ:USERNAME", ToConfigurationPath(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
-        Assert.Equal("RABBITMQ:PASSWORD", ToConfigurationPath(BackFillerOptions.RabbitMqPasswordEnvironmentVariable));
-        Assert.True(VectorEnvironment.IsCanonicalName(BackFillerOptions.RabbitMqUsernameEnvironmentVariable));
-    }
-
-    [Fact]
-    public void Bind_populates_options_from_canonical_prefixed_paths()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddConfiguration(ConfigurationFromEnvironmentVariables(
-                (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "canonical-user"),
+        [Fact]
+        public void Prefixed_environment_variables_reach_runtime_options()
+        {
+            using var environment = new IsolatedEnvironment(
+                (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "env-user"),
                 (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
                 (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
+                (AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable, "0123456789abcdef0123456789abcdef"),
                 (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
-                (NntpDbOptions.ConnectionStringEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz")))
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["BackFiller:ServerId"] = "8",
-                ["BackFiller:DnsSuffix"] = "usenet.ninja",
-            })
-            .Build();
+                (NntpDbOptions.ConnectionStringEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
 
-        var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
-        configuration.GetSection("RabbitMQ").Bind(rabbit);
-        var acme = new AcmeCloudflareOptions();
-        configuration.Bind(acme);
-        var nntpDb = BindNntpDb(configuration);
+            var configuration = new ConfigurationBuilder()
+                .AddConfiguration(environment.BuildHostConfiguration())
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["BackFiller:ServerId"] = "8",
+                })
+                .Build();
+            var options = new BackFillerOptions();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+            var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
+            configuration.GetSection("RabbitMQ").Bind(rabbit);
+            var acme = new AcmeCloudflareOptions();
+            configuration.Bind(acme);
+            var nntpDb = BindNntpDb(configuration);
 
-        Assert.Equal(8, options.ServerId);
-        Assert.Equal("backfiller08.usenet.ninja", options.Fqdn);
-        Assert.Equal(
-            ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, 8, "usenet.ninja"),
-            options.Fqdn);
-        Assert.Equal("canonical-user", rabbit.Username);
-        Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
-        Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
-        Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
-        Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);
-    }
-
-    [Theory]
-    [InlineData("nntpd__RabbitMQ__Username", "nntpd__RabbitMQ__Password")]
-    [InlineData("backfiller__RabbitMQ__Username", "backfiller__RabbitMQ__Password")]
-    [InlineData("backfiller__LetsEncrypt__CloudFlareApiToken", "backfiller__LetsEncrypt__PfxExportPassword")]
-    public void Bind_does_not_accept_obsolete_application_prefixes(string usernameOrToken, string passwordOrPfx)
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [usernameOrToken.Replace("__", ":", StringComparison.Ordinal)] = "short-form-user-or-token",
-                [passwordOrPfx.Replace("__", ":", StringComparison.Ordinal)] = BackFillerTestOptions.SecretPassword,
-            })
-            .Build();
-
-        var options = new BackFillerOptions();
-        configuration.Bind(options);
-        var acme = new AcmeCloudflareOptions();
-        configuration.Bind(acme);
-
-        Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
-        Assert.True(string.IsNullOrWhiteSpace(acme.CloudFlareApiKey));
-        Assert.True(string.IsNullOrWhiteSpace(acme.AcmeCertificatePassword));
-    }
-
-    [Fact]
-    public void Bind_does_not_map_legacy_id_key_to_server_id()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["BackFiller:Id"] = "7",
-            })
-            .Build();
-
-        var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        Assert.Null(options.ServerId);
-    }
-
-    [Fact]
-    public void Nntp_db_validation_failures_do_not_include_the_connection_string()
-    {
-        var options = new NntpDbOptions
-        {
-            ConnectionString = "Server=127.0.0.1;Database=nntp;User ID=nntpd;Password=\"db-secret-xyz;",
-        };
-
-        var result = new NntpDbOptionsValidator().Validate(null, options);
-        Assert.True(result.Failed);
-        var raw = options.ConnectionString;
-        Assert.All(
-            result.Failures!,
-            failure =>
-            {
-                Assert.DoesNotContain("db-secret-xyz", failure, StringComparison.Ordinal);
-                Assert.DoesNotContain(raw, failure, StringComparison.Ordinal);
-            });
-    }
-
-    [Fact]
-    public void Prefixed_environment_variables_reach_runtime_options()
-    {
-        using var environment = new IsolatedEnvironment(
-            (BackFillerOptions.RabbitMqUsernameEnvironmentVariable, "env-user"),
-            (BackFillerOptions.RabbitMqPasswordEnvironmentVariable, BackFillerTestOptions.SecretPassword),
-            (AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable, BackFillerTestOptions.SecretToken),
-            (AcmeCloudflareOptions.CloudFlareZoneIdEnvironmentVariable, "0123456789abcdef0123456789abcdef"),
-            (AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable, BackFillerTestOptions.SecretPfx),
-            (NntpDbOptions.ConnectionStringEnvironmentVariable, "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz"));
-
-        var configuration = new ConfigurationBuilder()
-            .AddConfiguration(environment.BuildHostConfiguration())
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["BackFiller:ServerId"] = "8",
-            })
-            .Build();
-        var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        var rabbit = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqOptions();
-        configuration.GetSection("RabbitMQ").Bind(rabbit);
-        var acme = new AcmeCloudflareOptions();
-        configuration.Bind(acme);
-        var nntpDb = BindNntpDb(configuration);
-
-        Assert.Equal(8, options.ServerId);
-        Assert.Equal("env-user", rabbit.Username);
-        Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
-        Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
-        Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
-        Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);
-    }
-
-    [Fact]
-    public void Leftover_name_environment_variable_does_not_bind_or_change_fqdn()
-    {
-        using var environment = new IsolatedEnvironment(
-            ("BACKFILLER__NAME", "cache"));
-
-        var configuration = environment.BuildHostConfiguration();
-        var options = BackFillerTestOptions.CreateValid();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-
-        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
-        Assert.Equal("backfiller01.usenet.ninja", options.Fqdn);
-        var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
-        Assert.True(result.Succeeded);
-    }
-
-    [Fact]
-    public void Malformed_server_id_from_the_section_fails_at_bind()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["BackFiller:ServerId"] = "not-an-integer",
-            })
-            .Build();
-        var options = BackFillerTestOptions.CreateValid();
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => configuration.GetSection(BackFillerOptions.SectionName).Bind(options));
-        Assert.Contains("ServerId", ex.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Obsolete_prefixes_do_not_bind_through_the_vector_provider()
-    {
-        using var environment = new IsolatedEnvironment(
-            ("nntpd__RabbitMQ__Username", "obsolete-user"),
-            ("backfiller__RabbitMQ__Password", BackFillerTestOptions.SecretPassword));
-
-        var configuration = environment.BuildPrefixedConfiguration();
-        Assert.NotEqual("obsolete-user", configuration["RabbitMQ:Username"]);
-        Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["RabbitMQ:Password"]);
-        Assert.NotEqual("obsolete-user", configuration["BackFiller:RabbitMQ:Username"]);
-        Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["BackFiller:RabbitMQ:Password"]);
-    }
-
-    [Fact]
-    public void Vector_prefix_does_not_bind_application_identity()
-    {
-        using var environment = new IsolatedEnvironment(
-            ("VECTOR__NAME", "vector-must-not-bind"),
-            ("VECTOR__SERVERID", "77"));
-
-        var configuration = environment.BuildHostConfiguration();
-        var options = new BackFillerOptions();
-        configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-        Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
-        Assert.Null(options.ServerId);
-    }
-
-    private static IConfiguration ConfigurationFromEnvironmentVariables(params (string Name, string Value)[] variables)
-    {
-        var pairs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (name, value) in variables)
-        {
-            pairs[ToAnyConfigurationPath(name)] = value;
+            Assert.Equal(8, options.ServerId);
+            Assert.Equal("env-user", rabbit.Username);
+            Assert.Equal(BackFillerTestOptions.SecretPassword, rabbit.Password);
+            Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
+            Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
+            Assert.Equal("Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=db-secret-xyz", nntpDb.ConnectionString);
         }
 
-        return new ConfigurationBuilder()
-            .AddInMemoryCollection(pairs)
-            .Build();
-    }
-
-    private static string ToConfigurationPath(string environmentVariable)
-    {
-        Assert.True(VectorEnvironment.IsCanonicalName(environmentVariable));
-        return environmentVariable[VectorEnvironment.Prefix.Length..]
-            .Replace("__", ":", StringComparison.Ordinal);
-    }
-
-    private static string ToApplicationConfigurationPath(string environmentVariable)
-    {
-        Assert.StartsWith("BACKFILLER__", environmentVariable, StringComparison.Ordinal);
-        var remainder = environmentVariable["BACKFILLER__".Length..];
-        return "BackFiller:" + remainder;
-    }
-
-    private static NntpDbOptions BindNntpDb(IConfiguration configuration)
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton(configuration);
-        services.AddNntpDbOptions();
-        using var provider = services.BuildServiceProvider();
-        return provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
-    }
-
-    private static string ToAnyConfigurationPath(string environmentVariable)
-    {
-        if (VectorEnvironment.IsCanonicalName(environmentVariable))
+        [Fact]
+        public void Leftover_name_environment_variable_does_not_bind_or_change_fqdn()
         {
-            return ToConfigurationPath(environmentVariable);
+            using var environment = new IsolatedEnvironment(
+                ("BACKFILLER__NAME", "cache"));
+
+            var configuration = environment.BuildHostConfiguration();
+            var options = BackFillerTestOptions.CreateValid();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+
+            Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
+            Assert.Equal("backfiller01.usenet.ninja", options.Fqdn);
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
         }
 
-        if (string.Equals(
-                environmentVariable,
-                NntpDbOptions.ConnectionStringEnvironmentVariable,
-                StringComparison.Ordinal))
+        [Fact]
+        public void Malformed_server_id_from_the_section_fails_at_bind()
         {
-            return $"ConnectionStrings:{NntpDbOptions.ConnectionStringName}";
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["BackFiller:ServerId"] = "not-an-integer",
+                })
+                .Build();
+            var options = BackFillerTestOptions.CreateValid();
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => configuration.GetSection(BackFillerOptions.SectionName).Bind(options));
+            Assert.Contains("ServerId", ex.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(BackFillerTestOptions.SecretPassword, ex.Message, StringComparison.Ordinal);
         }
 
-        return ToApplicationConfigurationPath(environmentVariable);
-    }
-
-    private static string StripVectorPrefix(string environmentVariable) =>
-        ToConfigurationPath(environmentVariable);
-
-    private sealed class IsolatedEnvironment : IDisposable
-    {
-        private readonly (string Name, string? Previous)[] _previous;
-
-        public IsolatedEnvironment(params (string Name, string Value)[] variables)
+        [Fact]
+        public void Obsolete_prefixes_do_not_bind_through_the_vector_provider()
         {
-            _previous = variables
-                .Select(static pair => (pair.Name, Environment.GetEnvironmentVariable(pair.Name)))
-                .ToArray();
+            using var environment = new IsolatedEnvironment(
+                ("nntpd__RabbitMQ__Username", "obsolete-user"),
+                ("backfiller__RabbitMQ__Password", BackFillerTestOptions.SecretPassword));
+
+            var configuration = environment.BuildPrefixedConfiguration();
+            Assert.NotEqual("obsolete-user", configuration["RabbitMQ:Username"]);
+            Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["RabbitMQ:Password"]);
+            Assert.NotEqual("obsolete-user", configuration["BackFiller:RabbitMQ:Username"]);
+            Assert.NotEqual(BackFillerTestOptions.SecretPassword, configuration["BackFiller:RabbitMQ:Password"]);
+        }
+
+        [Fact]
+        public void Vector_prefix_does_not_bind_application_identity()
+        {
+            using var environment = new IsolatedEnvironment(
+                ("VECTOR__NAME", "vector-must-not-bind"),
+                ("VECTOR__SERVERID", "77"));
+
+            var configuration = environment.BuildHostConfiguration();
+            var options = new BackFillerOptions();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
+            Assert.Null(typeof(BackFillerOptions).GetProperty("Name"));
+            Assert.Null(options.ServerId);
+        }
+
+        private static IConfiguration ConfigurationFromEnvironmentVariables(params (string Name, string Value)[] variables)
+        {
+            var pairs = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, value) in variables)
             {
-                Environment.SetEnvironmentVariable(name, value);
+                pairs[ToAnyConfigurationPath(name)] = value;
             }
+
+            return new ConfigurationBuilder()
+                .AddInMemoryCollection(pairs)
+                .Build();
         }
 
-        public IConfiguration BuildPrefixedConfiguration() =>
-            new ConfigurationBuilder()
-                .AddVectorEnvironmentVariables()
-                .Build();
-
-        public IConfiguration BuildHostConfiguration() =>
-            new ConfigurationBuilder()
-                .AddEnvironmentVariables()
-                .AddVectorEnvironmentVariables()
-                .Build();
-
-        public void Dispose()
+        private static string ToConfigurationPath(string environmentVariable)
         {
-            foreach (var (name, previous) in _previous)
+            Assert.True(VectorEnvironment.IsCanonicalName(environmentVariable));
+            return environmentVariable[VectorEnvironment.Prefix.Length..]
+                .Replace("__", ":", StringComparison.Ordinal);
+        }
+
+        private static string ToApplicationConfigurationPath(string environmentVariable)
+        {
+            Assert.StartsWith("BACKFILLER__", environmentVariable, StringComparison.Ordinal);
+            var remainder = environmentVariable["BACKFILLER__".Length..];
+            return "BackFiller:" + remainder;
+        }
+
+        private static NntpDbOptions BindNntpDb(IConfiguration configuration)
+        {
+            var services = new ServiceCollection();
+            services.AddSingleton(configuration);
+            services.AddNntpDbOptions();
+            using var provider = services.BuildServiceProvider();
+            return provider.GetRequiredService<IOptions<NntpDbOptions>>().Value;
+        }
+
+        private static string ToAnyConfigurationPath(string environmentVariable)
+        {
+            if (VectorEnvironment.IsCanonicalName(environmentVariable))
             {
-                Environment.SetEnvironmentVariable(name, previous);
+                return ToConfigurationPath(environmentVariable);
+            }
+
+            if (string.Equals(
+                    environmentVariable,
+                    NntpDbOptions.ConnectionStringEnvironmentVariable,
+                    StringComparison.Ordinal))
+            {
+                return $"ConnectionStrings:{NntpDbOptions.ConnectionStringName}";
+            }
+
+            return ToApplicationConfigurationPath(environmentVariable);
+        }
+
+        private static string StripVectorPrefix(string environmentVariable) =>
+            ToConfigurationPath(environmentVariable);
+
+        private sealed class IsolatedEnvironment : IDisposable
+        {
+            private readonly (string Name, string? Previous)[] _previous;
+
+            public IsolatedEnvironment(params (string Name, string Value)[] variables)
+            {
+                _previous = variables
+                    .Select(static pair => (pair.Name, Environment.GetEnvironmentVariable(pair.Name)))
+                    .ToArray();
+                foreach (var (name, value) in variables)
+                {
+                    Environment.SetEnvironmentVariable(name, value);
+                }
+            }
+
+            public IConfiguration BuildPrefixedConfiguration() =>
+                new ConfigurationBuilder()
+                    .AddVectorEnvironmentVariables()
+                    .Build();
+
+            public IConfiguration BuildHostConfiguration() =>
+                new ConfigurationBuilder()
+                    .AddEnvironmentVariables()
+                    .AddVectorEnvironmentVariables()
+                    .Build();
+
+            public void Dispose()
+            {
+                foreach (var (name, previous) in _previous)
+                {
+                    Environment.SetEnvironmentVariable(name, previous);
+                }
             }
         }
     }

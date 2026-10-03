@@ -23,6 +23,12 @@ alwaysApply: true
 - NNTP standards library: `docs/standards/rfcs/` — read applicable RFC text before protocol work
 - Experimental/historical material: `.artifacts/` (index: `.artifacts/ARTIFACT-INDEX.md`; policy: `.artifacts/REPOSITORY-ARTIFACT-POLICY.md`). Does not override `src/` / `tests/` / accepted `docs/`.
 
+## BackFiller code style
+
+All C# namespaces must be block-scoped; file-scoped namespaces are not permitted.
+
+This applies to `src/VectorNNTP.BackFiller` and `tests/VectorNNTP.BackFiller.Tests`. Both projects set `csharp_style_namespace_declarations = block_scoped`.
+
 ## Evidence and honesty
 
 - Never claim builds, tests, format checks, benchmarks, or runtime verification succeeded unless they ran and succeeded here.

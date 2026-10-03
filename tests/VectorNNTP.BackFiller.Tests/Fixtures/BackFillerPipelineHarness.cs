@@ -14,234 +14,234 @@ using VectorNNTP.Common.Articles.Parsing;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
 
-namespace VectorNNTP.BackFiller.Tests.Fixtures;
-
-/// <summary>
-/// Composes the real production Article Work path with fakes only at external boundaries.
-/// </summary>
-internal sealed class BackFillerPipelineHarness : IAsyncDisposable
+namespace VectorNNTP.BackFiller.Tests.Fixtures
 {
-    private bool _accountsStarted;
-
-    private BackFillerPipelineHarness(
-        FakeProviderAccountSource accounts,
-        ProviderConfigurationCatalog catalog,
-        ProviderAccountConfigurationService accountService,
-        NntpProviderRegistry registry,
-        ScriptedNntpTransportFactory nntp,
-        ArticleRetentionAuthority retention,
-        ManualTimeProvider time,
-        ProviderArticleWorkHandler handler,
-        FakeBackFillerRabbitMqConnectionFactory rabbitFactory,
-        RabbitMqService connections,
-        ArticleWorkResponsePublisher publisher,
-        ArticleWorkDeliveryPipeline pipeline)
+    /// <summary>
+    /// Composes the real production Article Work path with fakes only at external boundaries.
+    /// </summary>
+    internal sealed class BackFillerPipelineHarness : IAsyncDisposable
     {
-        Accounts = accounts;
-        Catalog = catalog;
-        AccountService = accountService;
-        Registry = registry;
-        Nntp = nntp;
-        Retention = retention;
-        Time = time;
-        Handler = handler;
-        RabbitFactory = rabbitFactory;
-        Connections = connections;
-        Publisher = publisher;
-        Pipeline = pipeline;
-    }
+        private bool _accountsStarted;
 
-    public FakeProviderAccountSource Accounts { get; }
-
-    public ProviderConfigurationCatalog Catalog { get; }
-
-    public ProviderAccountConfigurationService AccountService { get; }
-
-    public NntpProviderRegistry Registry { get; }
-
-    public ScriptedNntpTransportFactory Nntp { get; }
-
-    public ArticleRetentionAuthority Retention { get; }
-
-    public ManualTimeProvider Time { get; }
-
-    public ProviderArticleWorkHandler Handler { get; }
-
-    public FakeBackFillerRabbitMqConnectionFactory RabbitFactory { get; }
-
-    public RabbitMqService Connections { get; }
-
-    public ArticleWorkResponsePublisher Publisher { get; }
-
-    public ArticleWorkDeliveryPipeline Pipeline { get; }
-
-    public FakeBackFillerRabbitMqPublishChannel PublishChannel =>
-        Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(Publisher.Channel);
-
-    public static async Task<BackFillerPipelineHarness> StartAsync(
-        FakePublishConfirmBehavior confirm = FakePublishConfirmBehavior.Confirm,
-        TimeSpan? retentionTtl = null,
-        int? maxArticleBytes = null,
-        int? maxRetainedPayloadBytes = null)
-    {
-        var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero));
-        var retention = ArticleRetentionAuthorityTests.Create(
-            time,
-            maxBytes: maxRetainedPayloadBytes ?? (1024 * 1024),
-            ttl: retentionTtl ?? TimeSpan.FromSeconds(60));
-        var accounts = new FakeProviderAccountSource();
-        var catalog = new ProviderConfigurationCatalog();
-        var nntp = new ScriptedNntpTransportFactory();
-        var options = BackFillerTestOptions.CreateValid();
-        options.BackFillerAccountRefreshIntervalSeconds = 3600;
-        var runtime = BackFillerRuntimeOptionsFactory.Create(
-            options,
-            BackFillerTestOptions.CreateValidNntpDb()) with
+        private BackFillerPipelineHarness(
+            FakeProviderAccountSource accounts,
+            ProviderConfigurationCatalog catalog,
+            ProviderAccountConfigurationService accountService,
+            NntpProviderRegistry registry,
+            ScriptedNntpTransportFactory nntp,
+            ArticleRetentionAuthority retention,
+            ManualTimeProvider time,
+            ProviderArticleWorkHandler handler,
+            FakeBackFillerRabbitMqConnectionFactory rabbitFactory,
+            RabbitMqService connections,
+            ArticleWorkResponsePublisher publisher,
+            ArticleWorkDeliveryPipeline pipeline)
         {
-            RabbitMq = RabbitMqServiceTests.CreateFastRuntime().RabbitMq,
-        };
-
-        var sessionOptions = NntpSessionOptions.Default with
-        {
-            ConnectTimeout = TimeSpan.FromSeconds(2),
-            CommandTimeout = TimeSpan.FromSeconds(2),
-            ReceiveTimeout = TimeSpan.FromSeconds(2),
-        };
-        if (maxArticleBytes is { } configuredMax)
-        {
-            ArgumentOutOfRangeException.ThrowIfLessThan(configuredMax, 1);
-            sessionOptions = sessionOptions with { MaxArticleBytes = configuredMax };
+            Accounts = accounts;
+            Catalog = catalog;
+            AccountService = accountService;
+            Registry = registry;
+            Nntp = nntp;
+            Retention = retention;
+            Time = time;
+            Handler = handler;
+            RabbitFactory = rabbitFactory;
+            Connections = connections;
+            Publisher = publisher;
+            Pipeline = pipeline;
         }
 
-        var registry = new NntpProviderRegistry(
-            catalog,
-            nntp,
-            sessionOptions,
-            TimeSpan.FromSeconds(2),
-            NullLogger<NntpProviderRegistry>.Instance);
-        var accountService = new ProviderAccountConfigurationService(
-            accounts,
-            catalog,
-            registry,
-            runtime,
-            NullLogger<ProviderAccountConfigurationService>.Instance);
-        var handler = new ProviderArticleWorkHandler(
-            new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
-            retention,
-            new NntpArticleParser(runtime.Fqdn));
+        public FakeProviderAccountSource Accounts { get; }
 
-        var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory
+        public ProviderConfigurationCatalog Catalog { get; }
+
+        public ProviderAccountConfigurationService AccountService { get; }
+
+        public NntpProviderRegistry Registry { get; }
+
+        public ScriptedNntpTransportFactory Nntp { get; }
+
+        public ArticleRetentionAuthority Retention { get; }
+
+        public ManualTimeProvider Time { get; }
+
+        public ProviderArticleWorkHandler Handler { get; }
+
+        public FakeBackFillerRabbitMqConnectionFactory RabbitFactory { get; }
+
+        public RabbitMqService Connections { get; }
+
+        public ArticleWorkResponsePublisher Publisher { get; }
+
+        public ArticleWorkDeliveryPipeline Pipeline { get; }
+
+        public FakeBackFillerRabbitMqPublishChannel PublishChannel =>
+            Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(Publisher.Channel);
+
+        public static async Task<BackFillerPipelineHarness> StartAsync(
+            FakePublishConfirmBehavior confirm = FakePublishConfirmBehavior.Confirm,
+            TimeSpan? retentionTtl = null,
+            int? maxArticleBytes = null,
+            int? maxRetainedPayloadBytes = null)
         {
-            DefaultPublishConfirmBehavior = confirm,
-        };
-        var connections = RabbitMqServiceTests.CreateService(rabbitFactory);
-        await connections.StartAsync(CancellationToken.None).ConfigureAwait(false);
-        var publisher = new ArticleWorkResponsePublisher(
-            connections,
-            runtime,
-            NullLogger<ArticleWorkResponsePublisher>.Instance);
-        await publisher.StartAsync(CancellationToken.None).ConfigureAwait(false);
-        var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
+            var time = new ManualTimeProvider(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero));
+            var retention = ArticleRetentionAuthorityTests.Create(
+                time,
+                maxBytes: maxRetainedPayloadBytes ?? (1024 * 1024),
+                ttl: retentionTtl ?? TimeSpan.FromSeconds(60));
+            var accounts = new FakeProviderAccountSource();
+            var catalog = new ProviderConfigurationCatalog();
+            var nntp = new ScriptedNntpTransportFactory();
+            var options = BackFillerTestOptions.CreateValid();
+            options.BackFillerAccountRefreshIntervalSeconds = 3600;
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidNntpDb()) with
+            {
+                RabbitMq = RabbitMqServiceTests.CreateFastRuntime().RabbitMq,
+            };
 
-        var harness = new BackFillerPipelineHarness(
-            accounts,
-            catalog,
-            accountService,
-            registry,
-            nntp,
-            retention,
-            time,
-            handler,
-            rabbitFactory,
-            connections,
-            publisher,
-            pipeline);
-        await harness.LoadProviderAsync().ConfigureAwait(false);
-        return harness;
-    }
+            var sessionOptions = NntpSessionOptions.Default with
+            {
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                CommandTimeout = TimeSpan.FromSeconds(2),
+                ReceiveTimeout = TimeSpan.FromSeconds(2),
+            };
+            if (maxArticleBytes is { } configuredMax)
+            {
+                ArgumentOutOfRangeException.ThrowIfLessThan(configuredMax, 1);
+                sessionOptions = sessionOptions with { MaxArticleBytes = configuredMax };
+            }
 
-    public async Task LoadProviderAsync(
-        string backbone = "Giganews",
-        string hostname = "news.example.test",
-        int port = 563,
-        string useSsl = "y",
-        string username = "nntp-user",
-        string password = ProviderAccountTestRows.SecretPassword,
-        int maxConnections = 4)
-    {
-        Accounts.Rows =
-        [
-            ProviderAccountTestRows.Create(
-                backbone: backbone,
-                hostname: hostname,
-                port: port,
-                useSsl: useSsl,
-                username: username,
-                password: password,
-                maxConnections: maxConnections),
-        ];
-        if (!_accountsStarted)
-        {
-            await AccountService.StartAsync(CancellationToken.None).ConfigureAwait(false);
-            _accountsStarted = true;
-            return;
+            var registry = new NntpProviderRegistry(
+                catalog,
+                nntp,
+                sessionOptions,
+                TimeSpan.FromSeconds(2),
+                NullLogger<NntpProviderRegistry>.Instance);
+            var accountService = new ProviderAccountConfigurationService(
+                accounts,
+                registry,
+                runtime,
+                NullLogger<ProviderAccountConfigurationService>.Instance);
+            var handler = new ProviderArticleWorkHandler(
+                new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
+                retention,
+                new NntpArticleParser(runtime.Fqdn));
+
+            var rabbitFactory = new FakeBackFillerRabbitMqConnectionFactory
+            {
+                DefaultPublishConfirmBehavior = confirm,
+            };
+            var connections = RabbitMqServiceTests.CreateService(rabbitFactory);
+            await connections.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            var publisher = new ArticleWorkResponsePublisher(
+                connections,
+                runtime,
+                NullLogger<ArticleWorkResponsePublisher>.Instance);
+            await publisher.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
+
+            var harness = new BackFillerPipelineHarness(
+                accounts,
+                catalog,
+                accountService,
+                registry,
+                nntp,
+                retention,
+                time,
+                handler,
+                rabbitFactory,
+                connections,
+                publisher,
+                pipeline);
+            await harness.LoadProviderAsync().ConfigureAwait(false);
+            return harness;
         }
 
-        Assert.True(await AccountService.RefreshOnceAsync(CancellationToken.None).ConfigureAwait(false));
-    }
-
-    public ScriptedNntpServer EnqueueArticle(byte[] payload, TaskCompletionSource? blockArticle = null)
-    {
-        var server = CreateArticleServer(payload, blockArticle);
-        Nntp.Enqueue(server);
-        return server;
-    }
-
-    public static ScriptedNntpServer CreateArticleServer(byte[] payload, TaskCompletionSource? blockArticle = null)
-    {
-        var server = new ScriptedNntpServer
+        public async Task LoadProviderAsync(
+            string backbone = "Giganews",
+            string hostname = "news.example.test",
+            int port = 563,
+            string useSsl = "y",
+            string username = "nntp-user",
+            string password = ProviderAccountTestRows.SecretPassword,
+            int maxConnections = 4)
         {
-            BlockArticle = blockArticle,
-            ArticleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-        };
-        var wire = "220 follows\r\n" + Encoding.ASCII.GetString(payload) + "\r\n.\r\n";
-        server.Respond(command =>
-            command.StartsWith("AUTHINFO", StringComparison.OrdinalIgnoreCase)
-                ? "281 authentication accepted\r\n"
-                : wire);
-        return server;
-    }
+            Accounts.Rows =
+            [
+                ProviderAccountTestRows.Create(
+                    backbone: backbone,
+                    hostname: hostname,
+                    port: port,
+                    useSsl: useSsl,
+                    username: username,
+                    password: password,
+                    maxConnections: maxConnections),
+            ];
+            if (!_accountsStarted)
+            {
+                await AccountService.StartAsync(CancellationToken.None).ConfigureAwait(false);
+                _accountsStarted = true;
+                return;
+            }
 
-    public Task<ArticleWorkOutcome> ProcessAsync(
-        RabbitMqManualAckDelivery delivery,
-        FakeBackFillerRabbitMqChannel channel,
-        Func<bool>? channelStillCurrent = null,
-        CancellationToken cancellationToken = default) =>
-        Pipeline.ProcessAsync(
-            delivery,
-            "Giganews",
-            channel,
-            channelStillCurrent ?? (static () => true),
-            cancellationToken);
+            Assert.True(await AccountService.RefreshOnceAsync(CancellationToken.None).ConfigureAwait(false));
+        }
 
-    public Task<ArticleWorkOutcome> ProcessCanonicalAsync(
-        FakeBackFillerRabbitMqChannel channel,
-        ulong deliveryTag = 7,
-        long generation = 1,
-        Func<bool>? channelStillCurrent = null,
-        CancellationToken cancellationToken = default) =>
-        ProcessAsync(
-            ArticleWorkTestDeliveries.Canonical(deliveryTag, generation),
-            channel,
-            channelStillCurrent,
-            cancellationToken);
+        public ScriptedNntpServer EnqueueArticle(byte[] payload, TaskCompletionSource? blockArticle = null)
+        {
+            var server = CreateArticleServer(payload, blockArticle);
+            Nntp.Enqueue(server);
+            return server;
+        }
 
-    public async ValueTask DisposeAsync()
-    {
-        await Publisher.DisposeAsync().ConfigureAwait(false);
-        await Connections.DisposeAsync().ConfigureAwait(false);
-        await AccountService.DisposeAsync().ConfigureAwait(false);
-        await Registry.DisposeAsync().ConfigureAwait(false);
-        await Retention.DisposeAsync().ConfigureAwait(false);
+        public static ScriptedNntpServer CreateArticleServer(byte[] payload, TaskCompletionSource? blockArticle = null)
+        {
+            var server = new ScriptedNntpServer
+            {
+                BlockArticle = blockArticle,
+                ArticleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var wire = "220 follows\r\n" + Encoding.ASCII.GetString(payload) + "\r\n.\r\n";
+            server.Respond(command =>
+                command.StartsWith("AUTHINFO", StringComparison.OrdinalIgnoreCase)
+                    ? "281 authentication accepted\r\n"
+                    : wire);
+            return server;
+        }
+
+        public Task<ArticleWorkOutcome> ProcessAsync(
+            RabbitMqManualAckDelivery delivery,
+            FakeBackFillerRabbitMqChannel channel,
+            Func<bool>? channelStillCurrent = null,
+            CancellationToken cancellationToken = default) =>
+            Pipeline.ProcessAsync(
+                delivery,
+                "Giganews",
+                channel,
+                channelStillCurrent ?? (static () => true),
+                cancellationToken);
+
+        public Task<ArticleWorkOutcome> ProcessCanonicalAsync(
+            FakeBackFillerRabbitMqChannel channel,
+            ulong deliveryTag = 7,
+            long generation = 1,
+            Func<bool>? channelStillCurrent = null,
+            CancellationToken cancellationToken = default) =>
+            ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(deliveryTag, generation),
+                channel,
+                channelStillCurrent,
+                cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            await Publisher.DisposeAsync().ConfigureAwait(false);
+            await Connections.DisposeAsync().ConfigureAwait(false);
+            await AccountService.DisposeAsync().ConfigureAwait(false);
+            await Registry.DisposeAsync().ConfigureAwait(false);
+            await Retention.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }
