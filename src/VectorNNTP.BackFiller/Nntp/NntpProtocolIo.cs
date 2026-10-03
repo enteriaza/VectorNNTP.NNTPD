@@ -220,6 +220,25 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Count of unread bytes beginning at <see cref="_offset"/>.</summary>
         private int _count;
 
+        /// <summary>
+        /// Reused destuff scratch. Not returned to callers.
+        /// The measured corpus median is 740,474 bytes and p95 is 793,113, so the first
+        /// allocation is 1 MiB when <c>maxBytes</c> allows it. A common article then needs
+        /// no growth copy. Larger articles double until they fit, and growth stops at the
+        /// caller's max instead of allocating that max up front. Each article is then copied
+        /// into an exact <c>byte[]</c>.
+        /// </summary>
+        private byte[] _payloadScratch = [];
+
+        /// <summary>Valid prefix of <see cref="_payloadScratch"/> for the article being read.</summary>
+        private int _payloadCount;
+
+        /// <summary>
+        /// First scratch size when the caller allows at least this many destuffed bytes.
+        /// Chosen so a typical ~740 KiB article fits once. Not <c>MaxArticleBytes</c>.
+        /// </summary>
+        private const int PayloadScratchInitialBytes = 1024 * 1024;
+
         /// <summary>Creates a reader over an already connected stream.</summary>
         /// <param name="stream">Transport to read. Ownership stays with the caller.</param>
         /// <param name="receiveBufferBytes">Requested buffer size. Values below 1024 are raised to 1024.</param>
@@ -309,6 +328,8 @@ namespace VectorNNTP.BackFiller.Nntp
         /// A line that begins with <c>..</c> stores one <c>.</c>. A line whose first byte is <c>.</c> and whose next byte is LF, or CR LF, ends the payload.
         /// A leading <c>.</c> followed by any other byte is stored, including the dot.
         /// When the buffer ends before a leading dot can be classified, the unread tail is kept and another read is issued.
+        /// Ordinary runs are copied in bulk into a reader-owned scratch. The returned array is an exact copy of the
+        /// written prefix, so unused scratch capacity is not visible to the caller.
         /// Caller cancellation and the timeout both surface as <see cref="OperationCanceledException"/>.
         /// </remarks>
         internal async Task<byte[]> ReadArticlePayloadAsync(
@@ -316,83 +337,95 @@ namespace VectorNNTP.BackFiller.Nntp
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
-            var builder = new ArrayBufferWriter<byte>(4096);
+            _payloadCount = 0;
             var atLineStart = true;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(timeout);
 
-            while (true)
+            try
             {
-                if (_count == 0)
+                while (true)
                 {
-                    _offset = 0;
-                    _count = await _stream.ReadAsync(_buffer.AsMemory(), timeoutCts.Token).ConfigureAwait(false);
                     if (_count == 0)
                     {
-                        throw new EndOfStreamException("NNTP article response ended before terminator line.");
+                        _offset = 0;
+                        _count = await _stream.ReadAsync(_buffer.AsMemory(), timeoutCts.Token).ConfigureAwait(false);
+                        if (_count == 0)
+                        {
+                            throw new EndOfStreamException("NNTP article response ended before terminator line.");
+                        }
                     }
-                }
 
-                var span = _buffer.AsSpan(_offset, _count);
-                var index = 0;
-                var needMore = false;
-                while (index < span.Length)
-                {
-                    var current = span[index];
-                    if (atLineStart && current == (byte)'.')
+                    var span = _buffer.AsSpan(_offset, _count);
+                    var index = 0;
+                    var needMore = false;
+                    while (index < span.Length)
                     {
-                        if (index + 1 >= span.Length
-                            || (span[index + 1] == (byte)'\r' && index + 2 >= span.Length))
+                        if (atLineStart && span[index] == (byte)'.')
                         {
-                            needMore = true;
-                            break;
-                        }
-
-                        var next = span[index + 1];
-                        if (next == (byte)'.')
-                        {
-                            Append(builder, (byte)'.', maxBytes);
-                            atLineStart = false;
-                            index += 2;
-                            continue;
-                        }
-
-                        if (next == (byte)'\n')
-                        {
-                            Consume(index + 2);
-                            return builder.WrittenSpan.ToArray();
-                        }
-
-                        if (next == (byte)'\r')
-                        {
-                            if (span[index + 2] == (byte)'\n')
+                            if (index + 1 >= span.Length
+                                || (span[index + 1] == (byte)'\r' && index + 2 >= span.Length))
                             {
-                                Consume(index + 3);
-                                return builder.WrittenSpan.ToArray();
+                                needMore = true;
+                                break;
                             }
 
-                            Append(builder, (byte)'.', maxBytes);
+                            var next = span[index + 1];
+                            if (next == (byte)'.')
+                            {
+                                AppendPayload((byte)'.', maxBytes);
+                                atLineStart = false;
+                                index += 2;
+                                continue;
+                            }
+
+                            if (next == (byte)'\n')
+                            {
+                                Consume(index + 2);
+                                return DetachExactPayload();
+                            }
+
+                            if (next == (byte)'\r')
+                            {
+                                if (span[index + 2] == (byte)'\n')
+                                {
+                                    Consume(index + 3);
+                                    return DetachExactPayload();
+                                }
+
+                                AppendPayload((byte)'.', maxBytes);
+                                atLineStart = false;
+                                index += 1;
+                                continue;
+                            }
+
+                            AppendPayload((byte)'.', maxBytes);
                             atLineStart = false;
                             index += 1;
                             continue;
                         }
 
-                        Append(builder, (byte)'.', maxBytes);
-                        atLineStart = false;
-                        index += 1;
-                        continue;
+                        var start = index;
+                        do
+                        {
+                            var current = span[index++];
+                            atLineStart = current is (byte)'\r' or (byte)'\n';
+                        }
+                        while (index < span.Length && !(atLineStart && span[index] == (byte)'.'));
+
+                        AppendPayload(span.Slice(start, index - start), maxBytes);
                     }
 
-                    Append(builder, current, maxBytes);
-                    atLineStart = current is (byte)'\r' or (byte)'\n';
-                    index++;
+                    Consume(index);
+                    if (needMore)
+                    {
+                        await ReadMorePreservingLeftoverAsync(timeoutCts.Token).ConfigureAwait(false);
+                    }
                 }
-
-                Consume(index);
-                if (needMore)
-                {
-                    await ReadMorePreservingLeftoverAsync(timeoutCts.Token).ConfigureAwait(false);
-                }
+            }
+            finally
+            {
+                _payloadCount = 0;
             }
         }
 
@@ -433,19 +466,101 @@ namespace VectorNNTP.BackFiller.Nntp
         }
 
         /// <summary>Appends one destuffed payload byte, or throws when the payload is already at the ceiling.</summary>
-        /// <param name="builder">Payload accumulator.</param>
         /// <param name="value">Byte to store.</param>
-        /// <param name="maxBytes">Length that <paramref name="builder"/> must stay below.</param>
-        /// <exception cref="InvalidOperationException"><paramref name="builder"/> already contains <paramref name="maxBytes"/> bytes.</exception>
-        private static void Append(ArrayBufferWriter<byte> builder, byte value, int maxBytes)
+        /// <param name="maxBytes">Length the scratch prefix must stay at or below.</param>
+        /// <exception cref="InvalidOperationException">The prefix already contains <paramref name="maxBytes"/> bytes.</exception>
+        private void AppendPayload(byte value, int maxBytes)
         {
-            if (builder.WrittenCount >= maxBytes)
+            if (_payloadCount >= maxBytes)
             {
                 throw new InvalidOperationException("NNTP article exceeded MaxArticleBytes.");
             }
 
-            builder.GetSpan(1)[0] = value;
-            builder.Advance(1);
+            EnsurePayloadCapacity(_payloadCount + 1, maxBytes);
+            _payloadScratch[_payloadCount++] = value;
+        }
+
+        /// <summary>Appends a destuffed run, or throws when the run would pass the ceiling.</summary>
+        /// <param name="data">Bytes to store. A prefix that fits is stored before the exception.</param>
+        /// <param name="maxBytes">Length the scratch prefix must stay at or below.</param>
+        /// <exception cref="InvalidOperationException">Storing <paramref name="data"/> would pass <paramref name="maxBytes"/>.</exception>
+        private void AppendPayload(ReadOnlySpan<byte> data, int maxBytes)
+        {
+            if (data.IsEmpty)
+            {
+                return;
+            }
+
+            var room = maxBytes - _payloadCount;
+            if ((uint)data.Length > (uint)room)
+            {
+                if (room > 0)
+                {
+                    EnsurePayloadCapacity(_payloadCount + room, maxBytes);
+                    data[..room].CopyTo(_payloadScratch.AsSpan(_payloadCount));
+                    _payloadCount += room;
+                }
+
+                throw new InvalidOperationException("NNTP article exceeded MaxArticleBytes.");
+            }
+
+            EnsurePayloadCapacity(_payloadCount + data.Length, maxBytes);
+            data.CopyTo(_payloadScratch.AsSpan(_payloadCount));
+            _payloadCount += data.Length;
+        }
+
+        /// <summary>
+        /// Grows <see cref="_payloadScratch"/> to at least <paramref name="needed"/> and at most <paramref name="maxBytes"/>.
+        /// </summary>
+        /// <param name="needed">Required valid-prefix capacity. Never above <paramref name="maxBytes"/>.</param>
+        /// <param name="maxBytes">Caller ceiling.</param>
+        private void EnsurePayloadCapacity(int needed, int maxBytes)
+        {
+            if ((uint)needed <= (uint)_payloadScratch.Length)
+            {
+                return;
+            }
+
+            var size = _payloadScratch.Length == 0
+                ? Math.Min(maxBytes, PayloadScratchInitialBytes)
+                : _payloadScratch.Length;
+            while (size < needed)
+            {
+                if (size >= maxBytes || size > int.MaxValue / 2)
+                {
+                    size = maxBytes;
+                    break;
+                }
+
+                var doubled = size * 2;
+                size = doubled > maxBytes ? maxBytes : doubled;
+            }
+
+            if (size < needed)
+            {
+                size = needed;
+            }
+
+            var next = GC.AllocateUninitializedArray<byte>(size);
+            if (_payloadCount > 0)
+            {
+                _payloadScratch.AsSpan(0, _payloadCount).CopyTo(next);
+            }
+
+            _payloadScratch = next;
+        }
+
+        /// <summary>Copies the written prefix into an exact array. Unused scratch capacity is not included.</summary>
+        /// <returns>The destuffed payload.</returns>
+        private byte[] DetachExactPayload()
+        {
+            var exact = GC.AllocateUninitializedArray<byte>(_payloadCount);
+            if (_payloadCount > 0)
+            {
+                _payloadScratch.AsSpan(0, _payloadCount).CopyTo(exact);
+            }
+
+            return exact;
         }
     }
 }
