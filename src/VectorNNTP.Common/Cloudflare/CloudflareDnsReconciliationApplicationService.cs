@@ -25,10 +25,10 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <inheritdoc />
-        public string Name => _inner.Name;
+        public string Name => CloudflareDnsReconciliationService.Name;
 
         /// <inheritdoc />
-        public Task? Execution => _inner.Execution;
+        public Task? Execution => CloudflareDnsReconciliationService.Execution;
 
         /// <inheritdoc />
         public Task StartAsync(CancellationToken cancellationToken) => _inner.StartAsync(cancellationToken);

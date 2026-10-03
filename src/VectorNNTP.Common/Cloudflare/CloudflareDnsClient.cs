@@ -84,10 +84,7 @@ namespace VectorNNTP.Common.Cloudflare
             _options = options;
             _logger = logger;
 
-            if (_httpClient.BaseAddress is null)
-            {
-                _httpClient.BaseAddress = ApiBaseAddress;
-            }
+            _httpClient.BaseAddress ??= ApiBaseAddress;
         }
 
         /// <inheritdoc />

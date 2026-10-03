@@ -67,10 +67,10 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <summary>Gets the stable service name recorded by the application service manager.</summary>
-        internal string Name => "CloudflareDnsReconciliation";
+        internal static string Name => "CloudflareDnsReconciliation";
 
         /// <summary>Gets null. This service has no background execution after <see cref="StartAsync"/> returns.</summary>
-        internal Task? Execution => null;
+        internal static Task? Execution => null;
 
         /// <summary>
         /// Publishes A and AAAA records for the resolved bind addresses and marks FQDN ownership active only after verification.

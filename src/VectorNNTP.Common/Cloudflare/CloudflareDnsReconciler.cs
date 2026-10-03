@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Sockets;
-using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Networking;
 using VectorNNTP.Common.Configuration;
 

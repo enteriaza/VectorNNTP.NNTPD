@@ -158,7 +158,7 @@ namespace VectorNNTP.Common.Tests.Hosting
                 NullLogger<CloudflareDnsReconciliationService>.Instance);
             var adapter = new CloudflareDnsReconciliationApplicationService(inner);
 
-            Assert.Equal(inner.Name, adapter.Name);
+            Assert.Equal(CloudflareDnsReconciliationService.Name, adapter.Name);
             Assert.Equal("CloudflareDnsReconciliation", adapter.Name);
             Assert.Null(adapter.Execution);
         }
