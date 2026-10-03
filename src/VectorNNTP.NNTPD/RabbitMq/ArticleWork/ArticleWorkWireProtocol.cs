@@ -3,7 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Messaging.Cache;
-using VectorNNTP.NNTPD.Session;
+using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
@@ -41,7 +41,7 @@ internal static partial class ArticleWorkWireProtocol
             throw new InvalidOperationException("Canonical request serialization requires a concrete non-empty requestId.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.MessageId) || !NntpMessageId.IsWellFormed(request.MessageId))
+        if (string.IsNullOrWhiteSpace(request.MessageId))
         {
             throw new InvalidOperationException("Canonical request serialization requires a canonical non-empty messageId.");
         }
@@ -137,7 +137,7 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            if (!TryReadOptionalString(root, "messageId", out var messageId, out reason))
+            if (!TryReadMessageId(payload, out var messageId, out reason))
             {
                 return false;
             }
@@ -258,7 +258,7 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(messageId) || !NntpMessageId.IsWellFormed(messageId))
+            if (string.IsNullOrWhiteSpace(messageId))
             {
                 reason = "Success response payload requires a canonical non-empty 'messageId'.";
                 return false;
@@ -305,7 +305,7 @@ internal static partial class ArticleWorkWireProtocol
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(messageId) || !NntpMessageId.IsWellFormed(messageId))
+            if (string.IsNullOrWhiteSpace(messageId))
             {
                 reason = "Terminal non-invalid-request response payload requires a canonical non-empty 'messageId'.";
                 return false;
@@ -344,7 +344,7 @@ internal static partial class ArticleWorkWireProtocol
             return false;
         }
 
-        if (messageId is not null && (string.IsNullOrWhiteSpace(messageId) || !NntpMessageId.IsWellFormed(messageId)))
+        if (messageId is not null && string.IsNullOrWhiteSpace(messageId))
         {
             reason = "InvalidRequest payload messageId, when provided, must be canonical and non-empty.";
             return false;
@@ -449,6 +449,136 @@ internal static partial class ArticleWorkWireProtocol
 
         value = parsed;
         return true;
+    }
+
+    /// <summary>
+    /// Reads the top-level <c>messageId</c> property from the original UTF-8 payload and validates those bytes.
+    /// </summary>
+    /// <param name="json">Response payload. Already known to be a JSON object.</param>
+    /// <param name="messageId">ASCII text of a valid Message-ID, or null when the property is JSON null.</param>
+    /// <param name="reason">Rejection text when the result is <see langword="false"/>.</param>
+    /// <returns><see langword="false"/> when the property is missing, not a string, or not a valid Message-ID.</returns>
+    private static bool TryReadMessageId(ReadOnlySpan<byte> json, out string? messageId, out string reason)
+    {
+        messageId = null;
+        reason = string.Empty;
+        Span<byte> buffer = stackalloc byte[NntpMessageIdValidation.MaxMessageIdLength];
+        switch (TryCopyTopLevelJsonString(json, "messageId"u8, buffer, out var length))
+        {
+            case TopLevelJsonString.Missing:
+                reason = "Response payload is missing required 'messageId'.";
+                return false;
+            case TopLevelJsonString.Null:
+                return true;
+            case TopLevelJsonString.NotString:
+                reason = "Response payload property 'messageId' must be a JSON string or null.";
+                return false;
+            case TopLevelJsonString.TooLong:
+                reason = "Response payload property 'messageId' must be a canonical Message-ID.";
+                return false;
+            case TopLevelJsonString.Copied:
+                var token = buffer[..length];
+                if (length == 0 || !NntpMessageIdValidation.IsValidMessageId(token))
+                {
+                    reason = "Response payload property 'messageId' must be a canonical Message-ID.";
+                    return false;
+                }
+
+                messageId = System.Text.Encoding.ASCII.GetString(token);
+                return true;
+            default:
+                reason = "Response payload is missing required 'messageId'.";
+                return false;
+        }
+    }
+
+    private enum TopLevelJsonString
+    {
+        Missing,
+        Null,
+        NotString,
+        TooLong,
+        Copied,
+    }
+
+    /// <summary>Copies one top-level JSON string property into <paramref name="destination"/> without allocating.</summary>
+    private static TopLevelJsonString TryCopyTopLevelJsonString(
+        ReadOnlySpan<byte> json,
+        ReadOnlySpan<byte> propertyName,
+        Span<byte> destination,
+        out int written)
+    {
+        written = 0;
+        var reader = new Utf8JsonReader(json);
+        if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+        {
+            return TopLevelJsonString.Missing;
+        }
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+            {
+                return TopLevelJsonString.Missing;
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+            {
+                continue;
+            }
+
+            var match = reader.ValueTextEquals(propertyName);
+            if (!reader.Read())
+            {
+                return TopLevelJsonString.Missing;
+            }
+
+            if (!match)
+            {
+                if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                {
+                    reader.Skip();
+                }
+
+                continue;
+            }
+
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return TopLevelJsonString.Null;
+            }
+
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                return TopLevelJsonString.NotString;
+            }
+
+            if (!reader.ValueIsEscaped)
+            {
+                var value = reader.ValueSpan;
+                if (value.Length > destination.Length)
+                {
+                    return TopLevelJsonString.TooLong;
+                }
+
+                value.CopyTo(destination);
+                written = value.Length;
+                return TopLevelJsonString.Copied;
+            }
+
+            try
+            {
+                written = reader.CopyString(destination);
+                return TopLevelJsonString.Copied;
+            }
+            catch (ArgumentException)
+            {
+                written = 0;
+                return TopLevelJsonString.TooLong;
+            }
+        }
+
+        return TopLevelJsonString.Missing;
     }
 
     private static bool TryReadOptionalString(

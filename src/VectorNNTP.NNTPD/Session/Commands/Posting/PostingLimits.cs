@@ -23,7 +23,4 @@ internal static class PostingLimits
 
     /// <summary>Articles whose <c>Date:</c> is older than this relative to injection time are rejected.</summary>
     public static readonly TimeSpan MaxDateAge = TimeSpan.FromDays(14);
-
-    /// <summary>NNTP Message-ID maximum length (RFC 3977 §3.6).</summary>
-    public const int MaxMessageIdOctets = 250;
 }

@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using VectorNNTP.Common.Articles.Validation;
 using VectorNNTP.Common.Messaging.RabbitMq;
 
 namespace VectorNNTP.BackFiller.ArticleWork
@@ -76,12 +78,10 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 }
 
                 _ = TryReadGuid(root, "requestId", out var requestId);
-                _ = TryReadString(root, "messageId", out var rawMessageId);
+                var messageIdRead = TryReadValidatedMessageId(delivery.Body.Span);
+                var messageId = messageIdRead.MessageId;
+                var rawMessageId = messageIdRead.PropertySeen ? messageId ?? "\u0001" : null;
                 _ = TryReadString(root, "backbone", out var rawBackbone);
-
-                var messageId = !string.IsNullOrWhiteSpace(rawMessageId) && ArticleWorkMessageId.IsWellFormed(rawMessageId)
-                    ? rawMessageId
-                    : null;
                 var backbone = !string.IsNullOrWhiteSpace(rawBackbone) ? rawBackbone : null;
                 var identities = new ArticleWorkParsedIdentities(requestId, messageId, backbone);
 
@@ -169,6 +169,120 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     messageId,
                     backbone));
             }
+        }
+
+        /// <summary>
+        /// Validates the top-level <c>messageId</c> JSON string from the original payload bytes.
+        /// </summary>
+        /// <param name="json">Article-work request body.</param>
+        /// <returns>The accepted ASCII Message-ID when the property is a valid token.</returns>
+        private static MessageIdRead TryReadValidatedMessageId(ReadOnlySpan<byte> json)
+        {
+            Span<byte> buffer = stackalloc byte[NntpMessageIdValidation.MaxMessageIdLength];
+            switch (TryCopyTopLevelJsonString(json, "messageId"u8, buffer, out var length))
+            {
+                case TopLevelJsonString.Copied:
+                    var token = buffer[..length];
+                    return NntpMessageIdValidation.IsValidMessageId(token)
+                        ? new MessageIdRead(true, Encoding.ASCII.GetString(token))
+                        : new MessageIdRead(true, null);
+                case TopLevelJsonString.NotString:
+                case TopLevelJsonString.TooLong:
+                    return new MessageIdRead(true, null);
+                default:
+                    return new MessageIdRead(false, null);
+            }
+        }
+
+        private readonly record struct MessageIdRead(bool PropertySeen, string? MessageId);
+
+        private enum TopLevelJsonString
+        {
+            Missing,
+            Null,
+            NotString,
+            TooLong,
+            Copied,
+        }
+
+        /// <summary>Copies one top-level JSON string property into <paramref name="destination"/> without a heap allocation.</summary>
+        private static TopLevelJsonString TryCopyTopLevelJsonString(
+            ReadOnlySpan<byte> json,
+            ReadOnlySpan<byte> propertyName,
+            Span<byte> destination,
+            out int written)
+        {
+            written = 0;
+            var reader = new Utf8JsonReader(json);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            {
+                return TopLevelJsonString.Missing;
+            }
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
+                {
+                    return TopLevelJsonString.Missing;
+                }
+
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
+                {
+                    continue;
+                }
+
+                var match = reader.ValueTextEquals(propertyName);
+                if (!reader.Read())
+                {
+                    return TopLevelJsonString.Missing;
+                }
+
+                if (!match)
+                {
+                    if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                    {
+                        reader.Skip();
+                    }
+
+                    continue;
+                }
+
+                if (reader.TokenType == JsonTokenType.Null)
+                {
+                    return TopLevelJsonString.Null;
+                }
+
+                if (reader.TokenType != JsonTokenType.String)
+                {
+                    return TopLevelJsonString.NotString;
+                }
+
+                if (!reader.ValueIsEscaped)
+                {
+                    var value = reader.ValueSpan;
+                    if (value.Length > destination.Length)
+                    {
+                        return TopLevelJsonString.TooLong;
+                    }
+
+                    value.CopyTo(destination);
+                    written = value.Length;
+                    return TopLevelJsonString.Copied;
+                }
+
+                try
+                {
+                    written = reader.CopyString(destination);
+                    return TopLevelJsonString.Copied;
+                }
+                catch (ArgumentException)
+                {
+                    written = 0;
+                    return TopLevelJsonString.TooLong;
+                }
+            }
+
+            return TopLevelJsonString.Missing;
         }
 
         /// <summary>Reads a case-sensitive JSON number property as a 32-bit integer.</summary>

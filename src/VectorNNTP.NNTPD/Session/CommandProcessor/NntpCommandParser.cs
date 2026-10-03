@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Articles.Validation;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Newsgroups;
 
@@ -113,7 +114,7 @@ public static class NntpCommandParser
                     return NntpParseStatus.ExtraArgument;
                 }
 
-                return NntpMessageId.IsBasicWellFormed(argument)
+                return NntpMessageIdValidation.IsValidMessageId(argument)
                     ? NntpParseStatus.Ok
                     : NntpParseStatus.InvalidArgument;
 
@@ -172,7 +173,7 @@ public static class NntpCommandParser
                     return NntpParseStatus.ExtraArgument;
                 }
 
-                return NntpMessageId.IsBasicWellFormed(argument) || NntpArticleNumber.IsSyntax(argument)
+                return NntpMessageIdValidation.IsValidMessageId(argument) || NntpArticleNumber.IsSyntax(argument)
                     ? NntpParseStatus.Ok
                     : NntpParseStatus.InvalidArgument;
 

@@ -97,7 +97,7 @@ Not on the wire: ArtId, ArtType, CanonicalUtc, ParseStatus, header/body split.
 ArticleRecordFactory.TryCreateFromCanonicalTransfer(artData, meta, expectedArtId)
 ```
 
-Validates size, ranges, ArtId binding, ArtHash, Locate equality, Date → CanonicalUtc,
+Validates size, ranges, RFC 5536 Message-ID syntax, ArtId binding, ArtHash, Locate equality, Date → CanonicalUtc,
 and ArtLines sanity; classifies ArtType cheaply; assigns `ParseStatus = CanonicalV1`.
 Does **not** destuff, parse, rematerialize Path, or recount body lines.
 

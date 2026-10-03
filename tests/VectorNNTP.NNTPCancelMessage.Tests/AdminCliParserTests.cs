@@ -48,10 +48,14 @@ public sealed class AdminCliParserTests
     }
 
     [Theory]
-    [InlineData("not-an-id")]
     [InlineData("<<abc@example.com>>")]
     [InlineData("<>")]
+    [InlineData("<x>")]
+    [InlineData("<@>")]
     [InlineData("<no-at>")]
+    [InlineData("not-an-id")]
+    [InlineData("<a b@c>")]
+    [InlineData("<a>b@c>")]
     public void InvalidMessageId_Fails(string raw)
     {
         Assert.False(AdminCliParser.TryParse([raw], out _, out var error));

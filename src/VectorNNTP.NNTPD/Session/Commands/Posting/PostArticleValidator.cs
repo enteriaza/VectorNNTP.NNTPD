@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Articles.Validation;
+
 namespace VectorNNTP.NNTPD.Session.Commands.Posting;
 
 /// <summary>Strict POST header-field validation after one structural parse.</summary>
@@ -88,7 +90,7 @@ internal static class PostArticleValidator
 
         if (article.TryGetHeader("MESSAGE-ID"u8, out var messageIdHeader))
         {
-            if (!PostFieldSyntax.IsMessageId(messageIdHeader.UnfoldedValue.Span))
+            if (!NntpMessageIdValidation.IsValidMessageId(messageIdHeader.UnfoldedValue.Span))
             {
                 failure = new PostingFailure(PostingFailureCategory.InvalidMessageId, "malformed Message-ID");
                 return false;
@@ -337,7 +339,7 @@ internal static class PostArticleValidator
             i++;
         }
 
-        return i == value.Length && PostFieldSyntax.IsMessageId(messageId);
+        return i == value.Length && NntpMessageIdValidation.IsValidMessageId(messageId);
     }
 
     private static bool TryRequire(

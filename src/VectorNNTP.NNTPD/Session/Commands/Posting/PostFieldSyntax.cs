@@ -1,4 +1,4 @@
-using VectorNNTP.NNTPD.Session;
+using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.NNTPD.Session.Commands.Posting;
 
@@ -39,43 +39,6 @@ internal static class PostFieldSyntax
         return componentLength > 0;
     }
 
-    /// <summary>RFC 3977 §3.6 Message-ID with an interior <c>@</c> and NNTP length limit.</summary>
-    public static bool IsMessageId(ReadOnlySpan<byte> value)
-    {
-        if (value.Length is < 5 or > PostingLimits.MaxMessageIdOctets)
-        {
-            return false;
-        }
-
-        if (!NntpMessageId.IsWellFormed(value))
-        {
-            return false;
-        }
-
-        if (value[0] != (byte)'<' || value[^1] != (byte)'>')
-        {
-            return false;
-        }
-
-        var inner = value[1..^1];
-        var at = inner.IndexOf((byte)'@');
-        if (at <= 0 || at != inner.LastIndexOf((byte)'@') || at == inner.Length - 1)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < inner.Length; i++)
-        {
-            var b = inner[i];
-            if (b is < 33 or > 126 || b == (byte)'<' || b == (byte)'>' || b == (byte)' ')
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     /// <summary>One or more Message-IDs separated by WSP.</summary>
     public static bool TryParseMessageIdList(
         ReadOnlySpan<byte> value,
@@ -108,7 +71,7 @@ internal static class PostFieldSyntax
             }
 
             var token = value.Slice(i, end + 1);
-            if (!IsMessageId(token))
+            if (!NntpMessageIdValidation.IsValidMessageId(token))
             {
                 return false;
             }

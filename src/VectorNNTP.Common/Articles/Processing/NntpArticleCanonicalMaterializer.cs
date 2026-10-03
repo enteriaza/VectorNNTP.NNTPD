@@ -50,7 +50,7 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <summary>Canonical transfer: a FieldTable range is invalid or out of bounds.</summary>
         TransferInvalidFieldRange = 102,
 
-        /// <summary>Canonical transfer: Message-ID range is absent or empty.</summary>
+        /// <summary>Canonical transfer: Message-ID range is absent, empty, or not an RFC 5536 msg-id.</summary>
         TransferMissingMessageId = 103,
 
         /// <summary>Canonical transfer: Message-ID-derived ArtId does not match expected OPEN ArtId.</summary>

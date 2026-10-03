@@ -36,13 +36,13 @@ namespace VectorNNTP.Common.Tests.Articles
         }
 
         [Fact]
-        public void Message_id_char_span_does_not_allocate_after_warmup()
+        public void Message_id_byte_span_does_not_allocate_after_warmup()
         {
-            const string messageId = "<part.one+tag@news-server.example.net>";
-            _ = NntpMessageIdValidation.IsValidMessageId(messageId.AsSpan());
+            var messageId = "<part.one+tag@news-server.example.net>"u8.ToArray();
+            _ = NntpMessageIdValidation.IsValidMessageId(messageId);
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            _ = NntpMessageIdValidation.IsValidMessageId(messageId.AsSpan());
+            _ = NntpMessageIdValidation.IsValidMessageId(messageId);
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Equal(0, allocated);
         }

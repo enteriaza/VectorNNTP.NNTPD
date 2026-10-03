@@ -1,5 +1,4 @@
-using VectorNNTP.NNTPD.Session;
-using VectorNNTP.NNTPD.Session.Commands.Posting;
+using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.NNTPCancelMessage;
 
@@ -279,24 +278,62 @@ internal static class MessageIdArgument
             return false;
         }
 
-        var trimmed = raw.Trim();
+        var trimmed = raw.AsSpan().Trim();
+        Span<byte> bytes = stackalloc byte[NntpMessageIdValidation.MaxMessageIdLength];
+        int length;
         if (trimmed.Length >= 2 && trimmed[0] == '<' && trimmed[^1] == '>')
         {
-            messageId = trimmed;
+            if (!TryTranscodeAscii(trimmed, bytes, out length))
+            {
+                error = "Message-ID is not well-formed.";
+                return false;
+            }
         }
         else
         {
-            messageId = "<" + trimmed + ">";
+            if (trimmed.Length + 2 > bytes.Length || !TryTranscodeAscii(trimmed, bytes[1..], out var inner))
+            {
+                error = "Message-ID is not well-formed.";
+                return false;
+            }
+
+            bytes[0] = (byte)'<';
+            bytes[inner + 1] = (byte)'>';
+            length = inner + 2;
         }
 
-        var bytes = System.Text.Encoding.ASCII.GetBytes(messageId);
-        if (!NntpMessageId.IsWellFormed(bytes) || !PostFieldSyntax.IsMessageId(bytes))
+        var token = bytes[..length];
+        if (!NntpMessageIdValidation.IsValidMessageId(token))
         {
             error = "Message-ID is not well-formed.";
-            messageId = string.Empty;
             return false;
         }
 
+        messageId = System.Text.Encoding.ASCII.GetString(token);
+        return true;
+    }
+
+    /// <summary>Copies ASCII characters into <paramref name="destination"/> without allocating.</summary>
+    private static bool TryTranscodeAscii(ReadOnlySpan<char> text, Span<byte> destination, out int written)
+    {
+        written = 0;
+        if (text.Length > destination.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var value = text[i];
+            if (value > 0x7F)
+            {
+                return false;
+            }
+
+            destination[i] = (byte)value;
+        }
+
+        written = text.Length;
         return true;
     }
 }

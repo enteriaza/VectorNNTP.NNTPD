@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text;
+using VectorNNTP.Common.Articles.Validation;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
@@ -33,9 +34,9 @@ public sealed class NntpCommandParserTests
     [InlineData("STAT 300256", NntpVerb.Stat, NntpVerb.None)]
     [InlineData("CAPABILITIES", NntpVerb.Capabilities, NntpVerb.None)]
     [InlineData("CHECK <a@b.c>", NntpVerb.Check, NntpVerb.None)]
-    [InlineData("CHECK <x>", NntpVerb.Check, NntpVerb.None)]
-    [InlineData("CHECK <>", NntpVerb.Check, NntpVerb.None)]
-    [InlineData("CHECK <@b>", NntpVerb.Check, NntpVerb.None)]
+    [InlineData("CHECK <x@example>", NntpVerb.Check, NntpVerb.None)]
+    [InlineData("CHECK <a@b>", NntpVerb.Check, NntpVerb.None)]
+    [InlineData("CHECK <ab@c>", NntpVerb.Check, NntpVerb.None)]
     [InlineData("check <a@b.c>", NntpVerb.Check, NntpVerb.None)]
     [InlineData("cHeCk <a@b.c>", NntpVerb.Check, NntpVerb.None)]
     [InlineData("COMPRESS DEFLATE", NntpVerb.Compress, NntpVerb.None)]
@@ -327,7 +328,7 @@ public sealed class NntpCommandParserTests
     }
 
     [Fact]
-    public async Task Ihave_BasicEnvelope_ReachesHandler_NotAnIdInteriorIsNotRejectedByParser()
+    public async Task Ihave_ValidMessageId_ReachesHandler()
     {
         await using var duplex = await ParserDuplex.CreateAsync();
         var session = duplex.CreateSession(new ArticleIngestionQueue(new ArticleIngestionOptions()));
@@ -340,56 +341,51 @@ public sealed class NntpCommandParserTests
         var dispatcher = new NntpCommandDispatcher();
         var writer = new NntpResponseWriter(duplex.ServerOutput);
 
-        var parsed = NntpCommandTestParse.ParseCommand("IHAVE <x>");
+        var parsed = NntpCommandTestParse.ParseCommand("IHAVE <x@example>");
         Assert.True(parsed.IsValid);
-        var dispatch = NntpCommandTestParse.DispatchAsync(dispatcher, session, writer, "IHAVE <x>").AsTask();
+        var dispatch = NntpCommandTestParse.DispatchAsync(dispatcher, session, writer, "IHAVE <x@example>").AsTask();
         Assert.Contains("335 Send article to be transferred", await duplex.ReadClientLineAsync(), StringComparison.Ordinal);
         await duplex.WriteClientAsync(".\r\n");
         await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
-    public void MessageId_BasicWellFormed_UsesOnlyEnvelopeRules()
+    public void MessageId_CommandArgument_UsesCommonValidator_AndFieldLimit()
     {
-        Assert.True(NntpMessageId.IsBasicWellFormed("<x>"u8));
-        Assert.True(NntpMessageId.IsBasicWellFormed("<x>"));
-        Assert.True(NntpMessageId.IsBasicWellFormed("<>"u8));
-        Assert.True(NntpMessageId.IsBasicWellFormed("<@>"u8));
+        Assert.True(NntpCommandParser.Parse("CHECK <x@example>"u8).IsValid);
+        Assert.False(NntpCommandParser.Parse("CHECK <x>"u8).IsValid);
+        Assert.False(NntpCommandParser.Parse("CHECK <@>"u8).IsValid);
+        Assert.True(NntpCommandParser.Parse("ARTICLE <x@example>"u8).IsValid);
 
-        var exact250 = new byte[250];
-        exact250[0] = (byte)'<';
-        exact250[^1] = (byte)'>';
-        exact250.AsSpan(1, 248).Fill((byte)'x');
-        Assert.True(NntpMessageId.IsBasicWellFormed(exact250));
-        Assert.True(NntpCommandParser.Parse(BuildCommand("CHECK ", exact250)).IsValid);
+        var exactField = BuildMessageId(NntpMessageIdValidation.MaxMessageIdLength);
+        Assert.True(NntpMessageIdValidation.IsValidMessageId(exactField));
+        Assert.True(NntpCommandParser.Parse(BuildCommand("CHECK ", exactField)).IsValid);
 
-        var tooLong = new byte[251];
-        tooLong[0] = (byte)'<';
-        tooLong[^1] = (byte)'>';
-        tooLong.AsSpan(1, 249).Fill((byte)'x');
-        Assert.False(NntpMessageId.IsBasicWellFormed(tooLong));
-        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse(BuildCommand("CHECK ", tooLong)).Status);
+        var overField = BuildMessageId(NntpMessageIdValidation.MaxMessageIdLength + 1);
+        Assert.False(NntpMessageIdValidation.IsValidMessageId(overField));
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse(BuildCommand("CHECK ", overField)).Status);
 
-        Assert.False(NntpMessageId.IsBasicWellFormed(ReadOnlySpan<byte>.Empty));
-        Assert.False(NntpMessageId.IsBasicWellFormed(""));
-        Assert.False(NntpMessageId.IsBasicWellFormed("x>"u8));
-        Assert.False(NntpMessageId.IsBasicWellFormed("<x"u8));
-        Assert.False(NntpMessageId.IsBasicWellFormed("x"u8));
-        Assert.False(NntpMessageId.IsBasicWellFormed(">x<"u8));
-        Assert.False(NntpMessageId.IsBasicWellFormed("not-an-id"u8));
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse("CHECK <>"u8).Status);
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse("CHECK <x>"u8).Status);
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse("CHECK <x@"u8).Status);
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse("CHECK not-an-id"u8).Status);
+        Assert.Equal(NntpParseStatus.ExtraArgument, NntpCommandParser.Parse("CHECK <a b@c>"u8).Status);
+        Assert.Equal(NntpParseStatus.InvalidArgument, NntpCommandParser.Parse("CHECK <a>b@c>"u8).Status);
     }
 
-    [Fact]
-    public void MessageId_WellFormed_RemainsStricterThanParserEnvelope()
+    private static byte[] BuildMessageId(int totalLength)
     {
-        Assert.True(NntpMessageId.IsWellFormed("<a@b.c>"));
-        Assert.True(NntpMessageId.IsWellFormed("<a@b.c>"u8));
-        Assert.False(NntpMessageId.IsWellFormed("<x>"));
-        Assert.False(NntpMessageId.IsWellFormed("<x>"u8));
-        Assert.False(NntpMessageId.IsWellFormed("not-an-id"));
-        Assert.False(NntpMessageId.IsWellFormed("not-an-id"u8));
-        Assert.False(NntpMessageId.IsWellFormed(""));
-        Assert.False(NntpMessageId.IsWellFormed(ReadOnlySpan<byte>.Empty));
+        var bytes = new byte[totalLength];
+        bytes[0] = (byte)'<';
+        bytes[1] = (byte)'a';
+        bytes[2] = (byte)'@';
+        bytes[^1] = (byte)'>';
+        if (totalLength > 4)
+        {
+            bytes.AsSpan(3, totalLength - 4).Fill((byte)'b');
+        }
+
+        return bytes;
     }
 
     private static byte[] BuildCommand(string prefix, ReadOnlySpan<byte> argument)

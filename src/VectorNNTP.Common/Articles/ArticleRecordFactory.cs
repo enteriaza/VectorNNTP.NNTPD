@@ -2,6 +2,7 @@ using System.IO.Hashing;
 using VectorNNTP.Common.Articles.DateParser;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
+using VectorNNTP.Common.Articles.Validation;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 
 namespace VectorNNTP.Common.Articles
@@ -92,8 +93,9 @@ namespace VectorNNTP.Common.Articles
         /// rejection via <see cref="ArticleRecordCreateResult.MaterializeFailure"/>.
         /// </returns>
         /// <remarks>
-        /// Validates ArtSize, FieldTable bounds, Message-ID → ArtId binding, ArtHash, Locate
-        /// equality, CanonicalUtc from the Date range, and ArtLines sanity. Recomputes ArtType
+        /// Validates ArtSize, FieldTable bounds, RFC 5536 Message-ID syntax on the raw value
+        /// octets, Message-ID → ArtId binding, ArtHash, Locate equality, CanonicalUtc from the
+        /// Date range, and ArtLines sanity. Recomputes ArtType
         /// via <see cref="ArticleTypeClassifier"/> (header + ≤8 KiB body prefix). Does not
         /// recount body lines.
         /// </remarks>
@@ -128,7 +130,14 @@ namespace VectorNNTP.Common.Articles
                     NntpArticleCanonicalFailureCode.TransferMissingMessageId);
             }
 
-            var artId = ArticleId.FromMessageId(meta.Fields.MessageId.Slice(artData));
+            var messageId = meta.Fields.MessageId.Slice(artData);
+            if (!NntpMessageIdValidation.IsValidMessageId(messageId))
+            {
+                return ArticleRecordCreateResult.RejectedMaterialize(
+                    NntpArticleCanonicalFailureCode.TransferMissingMessageId);
+            }
+
+            var artId = ArticleId.FromMessageId(messageId);
             if (artId != expectedArtId)
             {
                 return ArticleRecordCreateResult.RejectedMaterialize(

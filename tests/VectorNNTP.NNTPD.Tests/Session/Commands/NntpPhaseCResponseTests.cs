@@ -48,8 +48,8 @@ public sealed class NntpPhaseCResponseTests
     public void Check_Compose_NearMaximumMessageId()
     {
         var mid = NearMaxMessageId();
-        Assert.Equal(NntpMessageId.MaxBasicLength, mid.Length);
-        Assert.True(NntpMessageId.IsBasicWellFormed(mid));
+        Assert.Equal(VectorNNTP.Common.Articles.Validation.NntpMessageIdValidation.MaxMessageIdLength, mid.Length);
+        Assert.True(VectorNNTP.Common.Articles.Validation.NntpMessageIdValidation.IsValidMessageId(mid));
 
         var wire = NntpResponseCompose.Concat(
             NntpResponses.CheckPrefix.Span,
@@ -298,7 +298,7 @@ public sealed class NntpPhaseCResponseTests
 
     private static byte[] NearMaxMessageId()
     {
-        var mid = new byte[NntpMessageId.MaxBasicLength];
+        var mid = new byte[VectorNNTP.Common.Articles.Validation.NntpMessageIdValidation.MaxMessageIdLength];
         mid[0] = (byte)'<';
         for (var i = 1; i < mid.Length - 3; i++)
         {

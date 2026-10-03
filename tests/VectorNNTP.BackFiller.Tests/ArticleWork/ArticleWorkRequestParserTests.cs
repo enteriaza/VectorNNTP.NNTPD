@@ -347,12 +347,21 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
         }
 
         [Fact]
-        public void Message_id_length_bounds_match_article_command_envelope()
+        public void Message_id_uses_common_validator()
         {
-            Assert.True(ArticleWorkMessageId.IsWellFormed("<a@b>"));
-            Assert.False(ArticleWorkMessageId.IsWellFormed("<@b>"));
-            Assert.True(ArticleWorkMessageId.IsWellFormed("<" + new string('a', 246) + "@b>"));
-            Assert.False(ArticleWorkMessageId.IsWellFormed("<" + new string('a', 247) + "@b>"));
+            Assert.True(ParseMessageId("<a@b>").IsValid);
+            Assert.True(ParseMessageId("<foo.bar@example.com>").IsValid);
+            Assert.True(ParseMessageId("<foo@[IPv6:2001:db8::1]>").IsValid);
+            Assert.Equal("<a@b>", ParseMessageId("<a@b>").Request!.MessageId);
+            Assert.True(ParseMessageId("<" + new string('a', 246) + "@b>").IsValid);
+
+            Assert.False(ParseMessageId("<x>").IsValid);
+            Assert.False(ParseMessageId("<@>").IsValid);
+            Assert.False(ParseMessageId("<@b>").IsValid);
+            Assert.False(ParseMessageId("<x@@y>").IsValid);
+            Assert.False(ParseMessageId("<double..dot@example.com>").IsValid);
+            Assert.False(ParseMessageId("<a b@c>").IsValid);
+            Assert.False(ParseMessageId("<" + new string('a', 247) + "@b>").IsValid);
         }
 
         [Fact]
@@ -375,6 +384,14 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
             var parsed = ArticleWorkRequestParser.Parse(delivery, "Giganews", MaxPayload);
             Assert.True(parsed.IsValid);
             Assert.Equal(body.Length, delivery.Body.Length);
+        }
+
+        private static ArticleWorkParseResult ParseMessageId(string messageId)
+        {
+            var json = "{\"version\":1,\"requestId\":\"7c1cb8a0-95f9-4c13-8e53-339773e3afaa\",\"messageId\":\""
+                + messageId
+                + "\",\"backbone\":\"Giganews\"}";
+            return ArticleWorkRequestParser.Parse(ArticleWorkTestDeliveries.Create(json), "Giganews", 8192);
         }
     }
 }

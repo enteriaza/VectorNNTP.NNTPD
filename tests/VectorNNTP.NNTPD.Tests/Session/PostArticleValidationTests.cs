@@ -67,6 +67,31 @@ public sealed class PostArticleValidationTests
     public void MalformedMessageId_IsRejected()
     {
         AssertRejected(Build(messageId: "not-an-id"), PostingFailureCategory.InvalidMessageId);
+        AssertRejected(Build(messageId: "<a b>"), PostingFailureCategory.InvalidMessageId);
+        AssertRejected(Build(messageId: "<a>b>"), PostingFailureCategory.InvalidMessageId);
+    }
+
+    [Fact]
+    public void Rfc5536MessageId_IsAccepted()
+    {
+        AssertRejected(Build(messageId: "<x>"), PostingFailureCategory.InvalidMessageId);
+        AssertRejected(Build(messageId: "<\"quoted\"@example.com>"), PostingFailureCategory.InvalidMessageId);
+        AssertRejected(Build(messageId: "<double..dot@example.com>"), PostingFailureCategory.InvalidMessageId);
+        var parsed = Parse(Build(messageId: "<foo.bar@example.com>"));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _));
+        Assert.Equal("<foo.bar@example.com>", parsed.MessageId);
+
+        parsed = Parse(Build(messageId: "<foo@[1.2.3.4]>"));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _));
+        Assert.Equal("<foo@[1.2.3.4]>", parsed.MessageId);
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
-using VectorNNTP.NNTPD.Session;
+using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 
@@ -289,7 +289,7 @@ internal sealed class ArticleWorkRpcClient : IArticleWorkRpcClient
     /// </summary>
     internal static string DecodeMessageId(ReadOnlyMemory<byte> messageId)
     {
-        if (messageId.IsEmpty || !NntpMessageId.IsWellFormed(messageId.Span))
+        if (messageId.IsEmpty || !NntpMessageIdValidation.IsValidMessageId(messageId.Span))
         {
             throw new ArgumentException("Article-work RPC requires a well-formed Message-ID.", nameof(messageId));
         }

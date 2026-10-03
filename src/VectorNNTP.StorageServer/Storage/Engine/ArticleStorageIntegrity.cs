@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.StorageServer.Storage.Engine;
 
@@ -97,7 +98,7 @@ public static class ArticleStorageIntegrity
                     value = value[1..];
                 }
 
-                if (value.IsEmpty)
+                if (!NntpMessageIdValidation.IsValidMessageId(value))
                 {
                     return false;
                 }

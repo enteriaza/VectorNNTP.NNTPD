@@ -622,7 +622,8 @@ namespace VectorNNTP.Common.Articles.Parsing
                                                                     : NntpArticleHeaderName.Unknown;
 
         /// <summary>
-        /// Requires exactly one Message-ID whose unfolded value passes <see cref="NntpMessageIdValidation.IsValidMessageId(ReadOnlySpan{byte}, bool)"/>.
+        /// Requires exactly one Message-ID whose unfolded bytes pass <see cref="NntpMessageIdValidation.IsValidMessageId(ReadOnlySpan{byte})"/>.
+        /// Unfolding is header parsing. Validity is only the Common Message-ID contract.
         /// </summary>
         /// <param name="articleSpan">Article bytes.</param>
         /// <param name="headers">Parsed headers in wire order.</param>
@@ -631,10 +632,10 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="failureCode">
         /// <see cref="NntpArticleParseFailureCode.DuplicateMessageId"/>,
         /// <see cref="NntpArticleParseFailureCode.MissingMessageId"/>,
-        /// <see cref="NntpArticleParseFailureCode.InvalidMessageId"/> when unfolding fails or the grammar rejects the value,
+        /// <see cref="NntpArticleParseFailureCode.InvalidMessageId"/> when unfolding fails or the canonical validator rejects the value,
         /// or <see cref="NntpArticleParseFailureCode.None"/>.
         /// </param>
-        /// <returns><see langword="true"/> only for a single valid Message-ID. Whitespace is not stripped before the grammar check.</returns>
+        /// <returns><see langword="true"/> only for a single valid Message-ID. Whitespace is not stripped before validation.</returns>
         private static bool TryValidateMessageId(
             ReadOnlySpan<byte> articleSpan,
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
