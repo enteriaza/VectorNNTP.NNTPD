@@ -282,7 +282,6 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         var held = CreateRecord("<p5f2-g-held@seg.test>");
         var retired = CreateRecord("<p5f2-g-ret@seg.test>");
         var heldBytes = SegmentRecordCodec.RecordLengthForArtSize(held.ArtSize);
-        var retiredBytes = SegmentRecordCodec.RecordLengthForArtSize(retired.ArtSize);
         var capacity = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 10_000_000, otherUsed: 0);
         await using var engine = FileArticleStorageEngine.Open(
             WithCapacity(dir.Options, maximumUtilization: 50, compactionHeadroom: 10),
@@ -293,7 +292,7 @@ public sealed class CapacityAdmissionPressureMaintenanceTests
         engine.SuspendBackgroundPersist = true;
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(held, CancellationToken.None)).Outcome);
         var articleRes = engine.ProcessLocalArticleReservedBytes;
-        Assert.Equal(retiredBytes + heldBytes, articleRes);
+        Assert.Equal(heldBytes, articleRes);
 
         capacity.OtherUsed = 6_000_000;
         var observed = engine.ObserveCapacityAdmissionPressure();

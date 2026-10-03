@@ -10,8 +10,8 @@ using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
-/// Written article segment-copy reservations stay held after Flush and are released
-/// only when the segment that holds those copies is physically reclaimed.
+/// Written article copies leave admission after Flush and stay tracked until the segment
+/// that holds them is physically reclaimed.
 /// </summary>
 public sealed class ArticleSegmentCopyReservationReclamationTests
 {
@@ -35,7 +35,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         engine.SuspendBackgroundPersist = false;
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.True(engine.TryGetSoleWrittenArticleSegment(accepted.Sequence, out var bound));
         Assert.Equal(meta.Location.SegmentId, bound);
@@ -53,13 +53,13 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         var physical = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var accepted = await AcceptDurableAsync(engine, record);
 
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         var segmentId = meta.Location.SegmentId;
 
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(segmentId));
         Assert.Equal(physical, reader.Read().UsedBytes);
         Assert.True(engine.TryGetSoleWrittenArticleSegment(accepted.Sequence, out var still));
@@ -77,7 +77,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         var accepted = await AcceptDurableAsync(engine, record);
         var segmentId = await RetireClosedSegmentAsync(engine, record.ArtId);
 
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(segmentId));
         Assert.Equal(physical, reader.Read().UsedBytes);
         Assert.True(File.Exists(RetiredPath(dir, segmentId)));
@@ -113,12 +113,12 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         _ = await AcceptDurableAsync(engine, first);
         _ = await AcceptDurableAsync(engine, second);
         _ = await AcceptDurableAsync(engine, third);
-        Assert.Equal(total, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(total, reader.Read().UsedBytes);
 
         var segmentId = await RetireClosedSegmentAsync(engine, first.ArtId, second.ArtId, third.ArtId);
         Assert.Equal(total, engine.ProcessLocalWrittenArticleBytesOnSegment(segmentId));
-        Assert.Equal(total, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
 
         var reclaimed = await engine.ReclaimRetiredSegmentAsync(segmentId, CancellationToken.None);
         Assert.Equal(ArticleSegmentReclamationOutcome.Reclaimed, reclaimed.Outcome);
@@ -148,7 +148,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         var leftId = leftMeta.Location.SegmentId;
         var rightId = rightMeta.Location.SegmentId;
         Assert.NotEqual(leftId, rightId);
-        Assert.Equal(leftBytes + rightBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(leftBytes, engine.ProcessLocalWrittenArticleBytesOnSegment(leftId));
         Assert.Equal(rightBytes, engine.ProcessLocalWrittenArticleBytesOnSegment(rightId));
 
@@ -158,7 +158,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
 
         var reclaimLeft = await engine.ReclaimRetiredSegmentAsync(leftId, CancellationToken.None);
         Assert.Equal(ArticleSegmentReclamationOutcome.Reclaimed, reclaimLeft.Outcome);
-        Assert.Equal(rightBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.ProcessLocalWrittenArticleBytesOnSegment(leftId));
         Assert.Equal(rightBytes, engine.ProcessLocalWrittenArticleBytesOnSegment(rightId));
         Assert.Equal((0, 0), engine.ProcessLocalArticleCopyCounts(leftAccepted.Sequence));
@@ -188,7 +188,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
             engine.ReclaimRetiredSegmentAsync(segmentId, CancellationToken.None));
         Assert.True(File.Exists(RetiredPath(dir, segmentId)));
         Assert.Equal(physical, reader.Read().UsedBytes);
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(segmentId));
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
 
@@ -248,7 +248,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         engine.Segments.TestAfterWriteBeforeFlush = null;
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.True(engine.TryGetSoleWrittenArticleSegment(accepted.Sequence, out var bound));
@@ -292,7 +292,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
             _ = await AcceptDurableAsync(engine, record);
             Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
             segmentId = meta.Location.SegmentId;
-            Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+            Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
             Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(segmentId));
         }
 
@@ -325,10 +325,11 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         Assert.True(engine.Index.TryGet(record.ArtId, out var moved));
         var destinationId = moved.Location.SegmentId;
         Assert.NotEqual(sourceId, destinationId);
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(sourceId));
         Assert.Equal(0, engine.ProcessLocalWrittenArticleBytesOnSegment(destinationId));
-        Assert.Equal(physical, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
         var retired = await engine.RetireCompactedSegmentAsync(compact.CompactionId, CancellationToken.None);
         Assert.Equal(ArticleSegmentRetirementOutcome.Retired, retired.Outcome);
@@ -337,7 +338,7 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         Assert.Equal(ArticleSegmentReclamationOutcome.Reclaimed, reclaimSource.Outcome);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.ProcessLocalWrittenArticleBytesOnSegment(sourceId));
-        Assert.Equal(physical, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(usedBefore - physical, reader.Read().UsedBytes);
 
@@ -346,7 +347,8 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         engine.CompleteUnreferencedExtentAccounting();
         var compactDestination = await engine.CompactClosedSegmentAsync(destinationId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compactDestination.Outcome);
-        Assert.Equal(physical, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         var retireDestination = await engine.RetireCompactedSegmentAsync(
             compactDestination.CompactionId,
@@ -373,12 +375,12 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         var used = reader.Read().UsedBytes;
 
         Assert.True(engine.CheckpointTruncateCommitted() >= 0);
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(meta.Location.SegmentId));
 
         Assert.True(engine.CheckpointIndex() >= 0);
-        Assert.Equal(physical, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.Equal(physical, engine.ProcessLocalWrittenArticleBytesOnSegment(meta.Location.SegmentId));
         Assert.Equal(used, reader.Read().UsedBytes);

@@ -14,8 +14,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <param name="UsedBytes">DriveInfo used bytes from the capacity snapshot.</param>
 /// <param name="TotalBytes">DriveInfo total bytes from the capacity snapshot.</param>
 /// <param name="AvailableBytes">DriveInfo available bytes from the capacity snapshot.</param>
-/// <param name="ArticleReservedBytes">Process-local segment-copy reservations on this volume's ledger.</param>
-/// <param name="CompactionReservedBytes">Process-local compaction destination reservations.</param>
+/// <param name="ArticleReservedBytes">Unwritten segment-copy bytes on this volume's ledger. Written copies contribute zero.</param>
+/// <param name="CompactionReservedBytes">Unflushed compaction destination bytes. Bound destinations contribute zero.</param>
 /// <param name="MaximumUtilization">Article admission ceiling as an integer percent of TotalBytes.</param>
 /// <param name="CompactionHeadroom">Additional percentage points allowed for compaction destinations.</param>
 /// <param name="MaximumUsageCapacity">Physical usage percent that latches pressure recovery.</param>

@@ -12,8 +12,8 @@ using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
-/// Destination reservations stay until the destination segment is reclaimed, and checkpoint
-/// reservations stay while the extra physical file still exists.
+/// A bound compaction destination leaves admission and stays tracked until that segment is
+/// reclaimed. Checkpoint reservations stay while the extra physical file still exists.
 /// </summary>
 public sealed class CapacityReservationLifetimeTests
 {
@@ -26,7 +26,6 @@ public sealed class CapacityReservationLifetimeTests
             WithCapacity(dir.Options),
             capacityReader: capacity);
         var record = CreateRecord("<life-dest@seg.test>");
-        var copyBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var source));
@@ -38,41 +37,45 @@ public sealed class CapacityReservationLifetimeTests
         Assert.True(engine.Index.TryGet(record.ArtId, out var moved));
         var destinationId = moved.Location.SegmentId;
         Assert.NotEqual(source.Location.SegmentId, destinationId);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
         var retireSource = await engine.RetireCompactedSegmentAsync(compact.CompactionId, CancellationToken.None);
         Assert.Equal(ArticleSegmentRetirementOutcome.Retired, retireSource.Outcome);
         var reclaimSource = await engine.ReclaimRetiredSegmentAsync(source.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleSegmentReclamationOutcome.Reclaimed, reclaimSource.Outcome);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
         var probe = CreateRecord("<life-dest-probe@seg.test>");
         var probeBytes = AcceptFootprint(probe);
-        PinUsedAgainstMargin(capacity, engine, copyBytes, probeBytes);
+        PinUsedAgainstMargin(capacity, engine, marginBytes: 0, probeBytes);
         Assert.Equal(
-            ArticleAcceptOutcome.RejectedCapacity,
+            ArticleAcceptOutcome.Accepted,
             (await engine.AcceptAsync(probe, CancellationToken.None)).Outcome);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
         engine.CompleteUnreferencedExtentAccounting();
         var compactDestination = await engine.CompactClosedSegmentAsync(destinationId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compactDestination.Outcome);
-        Assert.Equal(copyBytes * 2, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(2, engine.ProcessLocalCompactionReservationCount);
         var retireDestination = await engine.RetireCompactedSegmentAsync(
             compactDestination.CompactionId,
             CancellationToken.None);
         Assert.Equal(ArticleSegmentRetirementOutcome.Retired, retireDestination.Outcome);
         var reclaimDestination = await engine.ReclaimRetiredSegmentAsync(destinationId, CancellationToken.None);
         Assert.Equal(ArticleSegmentReclamationOutcome.Reclaimed, reclaimDestination.Outcome);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
-        PinUsedAgainstMargin(capacity, engine, marginBytes: 0, probeBytes);
+        var later = CreateRecord("<life-dest-later@seg.test>");
+        PinUsedAgainstMargin(capacity, engine, marginBytes: 0, AcceptFootprint(later));
         Assert.Equal(
             ArticleAcceptOutcome.Accepted,
-            (await engine.AcceptAsync(probe, CancellationToken.None)).Outcome);
+            (await engine.AcceptAsync(later, CancellationToken.None)).Outcome);
     }
 
     [Fact]
@@ -106,7 +109,7 @@ public sealed class CapacityReservationLifetimeTests
                 info.Generation,
                 record.ArtId,
                 CancellationToken.None));
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         var appends = engine.PhysicalAppendCount;
 
@@ -119,7 +122,7 @@ public sealed class CapacityReservationLifetimeTests
             record.ArtId,
             CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, relocated.Outcome);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
         Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(appends, engine.PhysicalAppendCount);
     }

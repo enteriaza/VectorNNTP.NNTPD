@@ -17,7 +17,7 @@ using VectorNNTP.StorageServer.Tests.Logging;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
-/// Segment-copy reservations stay on the segment ledger after PhysicalWritten.
+/// A segment copy contributes to admission until its durable flush returns, then stays tracked.
 /// Each physical append reserves ArtSize+56 before the write. Adoption does not.
 /// </summary>
 public sealed class SegmentCopyCapacityReservationTests
@@ -35,7 +35,7 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.RecoverAsync(CancellationToken.None);
 
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.Equal(1, engine.PhysicalAppendCount);
@@ -58,11 +58,12 @@ public sealed class SegmentCopyCapacityReservationTests
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        capacity.UsedBytes += required;
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
 
         var second = await engine.AcceptAsync(CreateRecord("<seg-fit-2@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, second.Outcome);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
     }
 
@@ -80,7 +81,7 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Equal(ArticleAcceptOutcome.Duplicate, (await engine.AcceptAsync(first, CancellationToken.None)).Outcome);
         var conflict = await engine.AcceptAsync(CreateRecord("<seg-dup@seg.test>", "b\r\n"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Conflict, conflict.Outcome);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(1, engine.PhysicalAppendCount);
     }
@@ -122,11 +123,11 @@ public sealed class SegmentCopyCapacityReservationTests
 
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.AfterSataAppend;
         _ = await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.PhysicalAppendCount);
 
         await engine.RecoverAsync(CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(1, engine.PhysicalAppendCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
@@ -148,7 +149,7 @@ public sealed class SegmentCopyCapacityReservationTests
 
         Assert.Equal(2, engine.PhysicalAppendCount);
         Assert.Equal(2, engine.ProcessLocalSegmentCopyCount);
-        Assert.Equal(required * 2, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalReservationCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
@@ -195,7 +196,7 @@ public sealed class SegmentCopyCapacityReservationTests
         _ = await engine.AcceptAsync(record, CancellationToken.None);
 
         await WaitUntilAsync(() => engine.PersistBlockedRetryScheduledCount >= 1);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(1, engine.PhysicalAppendCount);
         Assert.False(engine.TryRead(record.ArtId, out _));
@@ -223,7 +224,7 @@ public sealed class SegmentCopyCapacityReservationTests
 
         Assert.Equal(3, engine.PhysicalAppendCount);
         Assert.Equal(3, engine.ProcessLocalSegmentCopyCount);
-        Assert.Equal(required * 3, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
     }
 
     [Fact]
@@ -241,6 +242,7 @@ public sealed class SegmentCopyCapacityReservationTests
         await using var engine = Open(dir, capacity, 80);
         engine.SuspendBackgroundPersist = true;
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
+        capacity.UsedBytes += 1;
         SealNextAppends(engine, count: int.MaxValue);
 
         var denied = await Assert.ThrowsAsync<PersistCompletionDeferredException>(
@@ -248,7 +250,7 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Contains("cannot reserve", denied.Message, StringComparison.Ordinal);
         Assert.Equal(1, engine.PhysicalAppendCount);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.False(engine.TryRead(record.ArtId, out _));
     }
 
@@ -268,9 +270,7 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Contains("could not register", failed.Message, StringComparison.Ordinal);
         Assert.Equal(FileArticleStorageEngine.MaxPrePhysicalWrittenAppendAttempts, engine.PhysicalAppendCount);
         Assert.Equal(FileArticleStorageEngine.MaxPrePhysicalWrittenAppendAttempts, engine.ProcessLocalSegmentCopyCount);
-        Assert.Equal(
-            required * FileArticleStorageEngine.MaxPrePhysicalWrittenAppendAttempts,
-            engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
     }
 
     [Fact]
@@ -319,7 +319,7 @@ public sealed class SegmentCopyCapacityReservationTests
         await engineB.RecoverAsync(CancellationToken.None);
 
         Assert.Equal(1, engineB.PhysicalAppendCount);
-        Assert.Equal(required, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engineB.ProcessLocalSegmentCopyCount);
     }
 
@@ -359,11 +359,12 @@ public sealed class SegmentCopyCapacityReservationTests
 
         Assert.True(engine.CheckpointTruncateCommitted() > 0);
         Assert.NotSame(engine.SegmentCapacity, engine.ControlCapacity);
-        Assert.Equal(required, segmentArticle);
+        Assert.Equal(0, segmentArticle);
         Assert.Equal(0, controlArticle);
         Assert.Equal(0, segmentCheckpoint);
         Assert.True(controlCheckpoint > 0);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(0, engine.ControlCapacity!.WithLedger(static ledger => ledger.ArticleReservedBytes));
         Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
     }

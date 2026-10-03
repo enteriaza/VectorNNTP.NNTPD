@@ -401,7 +401,8 @@ public sealed partial class FileArticleStorageEngine
                 destination = reported.Location;
                 _ = Interlocked.Increment(ref _physicalAppendCount);
                 BindCompactionDestination(intent.CompactionId, intent.RelocationId, destination);
-                // Flush(true) has returned. The reservation stays until this segment is reclaimed.
+                // Flush(true) has returned. Admission no longer counts this destination.
+                // The tracking record stays until this segment is reclaimed.
                 reservedCompaction = false;
             }
 

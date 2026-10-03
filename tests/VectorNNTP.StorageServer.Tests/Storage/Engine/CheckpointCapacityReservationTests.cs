@@ -229,7 +229,8 @@ public sealed class CheckpointCapacityReservationTests
 
         var rejected = await engine.AcceptAsync(CreateRecord("<ckpt-adm-2@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, rejected.Outcome);
-        Assert.Equal(firstRequired, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
 
         releaseSnapshot.TrySetResult();
         var snapshot = await snapshotTask;

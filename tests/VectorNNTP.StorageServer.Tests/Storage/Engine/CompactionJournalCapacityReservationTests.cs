@@ -315,9 +315,8 @@ public sealed class CompactionJournalCapacityReservationTests
             engine.Journal.JournalPhysicalBytes);
         Assert.True(engine.Journal.TryGetCompaction(compactionId, out var snap));
         Assert.Null(Assert.Single(snap.Relocations).Written);
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
 
         var length = engine.Journal.JournalPhysicalBytes;
         var again = await engine.RelocateArticleAsync(

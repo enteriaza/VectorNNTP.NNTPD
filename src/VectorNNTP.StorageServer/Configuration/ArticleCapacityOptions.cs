@@ -32,8 +32,8 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// The segment ledger reserves one segment copy of
 /// <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>.
 /// Each later physical append reserves another copy of that size before it writes.
-/// Those reservations stay after durable PhysicalWritten, bound to the written segment, until
-/// that segment is physically reclaimed.
+/// A copy contributes to admission until its durable segment flush returns. After that flush
+/// the written binding stays until physical reclaim and contributes zero to admission.
 /// The control ledger reserves the journal sequence <c>ArtSize + 132</c>
 /// (Accept + PhysicalWritten + IndexCommitted). That reservation stays through
 /// IndexCommitted and is released only after a successful journal checkpoint installs a
@@ -53,7 +53,8 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// Reaching <see cref="MaximumUsageCapacity"/> does not reject the article.
 /// </item>
 /// <item>
-/// Compaction relocation destination append, on the segment ledger:
+/// Compaction relocation destination append, on the segment ledger, counts a destination only
+/// until its durable flush returns:
 /// <c>(Used + ArticleReserved + CompactionReserved + CheckpointReserved + Required) ≤ (MaximumUtilization + CompactionHeadroom) percent of Total</c>
 /// </item>
 /// <item>

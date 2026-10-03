@@ -91,14 +91,14 @@ public sealed class IndexEntryCapacityReservationTests
         engine.SuspendBackgroundPersist = true;
         var record = CreateRecord("<idx-append-fail@seg.test>");
         var journal = JournalBytes(record);
-        var segment = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         _ = await engine.AcceptAsync(record, CancellationToken.None);
         engine.Index.TestBeforeDurableAppend = () => throw new IOException("index-before-write");
 
         _ = await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
         Assert.Equal(0, engine.ProcessLocalIndexReservedBytes);
         Assert.Equal(journal, engine.ProcessLocalJournalReservedBytes);
-        Assert.Equal(segment, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
 
         engine.Index.TestBeforeDurableAppend = null;
         await engine.RecoverAsync(CancellationToken.None);
@@ -121,7 +121,8 @@ public sealed class IndexEntryCapacityReservationTests
         await WaitUntilAsync(() => engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.ProcessLocalIndexReservedBytes);
         Assert.Equal(JournalBytes(record), engine.ProcessLocalJournalReservedBytes);
-        Assert.Equal(SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize), engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
@@ -247,6 +248,7 @@ public sealed class IndexEntryCapacityReservationTests
         await using var engine = Open(dir, capacity, maximumUtilization: 80);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
+        capacity.UsedBytes += SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var length = engine.Index.DurableLength;
 
         Assert.False(engine.TryEvict(record.ArtId));
@@ -255,7 +257,7 @@ public sealed class IndexEntryCapacityReservationTests
         Assert.Equal(length, engine.Index.DurableLength);
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
         Assert.Equal(1, engine.ProcessLocalIndexFrameCount);
-        Assert.Equal(ceiling - admit, capacity.UsedBytes);
+        Assert.Equal(ceiling - JournalBytes(record) - IndexBytes, capacity.UsedBytes);
         Assert.True(capacity.UsedBytes <= ceiling);
     }
 
@@ -271,6 +273,7 @@ public sealed class IndexEntryCapacityReservationTests
         await using var engine = Open(dir, capacity, maximumUtilization: 80);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
+        capacity.UsedBytes += SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var length = engine.Index.DurableLength;
 
         Assert.False(engine.TryInvalidate(record.ArtId));
@@ -278,7 +281,7 @@ public sealed class IndexEntryCapacityReservationTests
         Assert.Equal(ArticleStorageState.Present, meta.State);
         Assert.Equal(length, engine.Index.DurableLength);
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
-        Assert.Equal(ceiling - admit, capacity.UsedBytes);
+        Assert.Equal(ceiling - JournalBytes(record) - IndexBytes, capacity.UsedBytes);
     }
 
     [Fact]
@@ -585,10 +588,9 @@ public sealed class IndexEntryCapacityReservationTests
         _ = await engine.AcceptAsync(record, CancellationToken.None);
         await engine.DrainPendingAsync(CancellationToken.None);
 
-        var segment = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var journal = JournalBytes(record);
         Assert.Same(engine.SegmentCapacity, engine.ControlCapacity);
-        Assert.Equal(segment + journal + IndexBytes, engine.ProcessLocalReservedBytes);
+        Assert.Equal(journal + IndexBytes, engine.ProcessLocalReservedBytes);
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
     }
 
@@ -607,14 +609,14 @@ public sealed class IndexEntryCapacityReservationTests
         _ = await engine.AcceptAsync(record, CancellationToken.None);
         await engine.DrainPendingAsync(CancellationToken.None);
 
-        var segment = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         Assert.NotSame(engine.SegmentCapacity, engine.ControlCapacity);
-        Assert.Equal(segment, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(0, engine.SegmentCapacity!.WithLedger(static ledger => ledger.IndexReservedBytes));
         Assert.Equal(0, engine.SegmentCapacity.WithLedger(static ledger => ledger.JournalReservedBytes));
         Assert.Equal(JournalBytes(record) + IndexBytes, engine.ControlCapacity!.WithLedger(static ledger => ledger.ReservedBytes));
         Assert.Equal(IndexBytes, engine.ProcessLocalIndexReservedBytes);
-        Assert.Equal(segment, engine.ProcessLocalReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalReservedBytes);
     }
 
     [Fact]
@@ -649,7 +651,8 @@ public sealed class IndexEntryCapacityReservationTests
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.ProcessLocalIndexReservedBytes > 0);
         Assert.True(engine.ProcessLocalJournalReservedBytes > 0);
-        Assert.True(engine.ProcessLocalArticleReservedBytes > 0);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.NotNull(engine.SegmentCapacity);
         Assert.NotNull(engine.ControlCapacity);
     }

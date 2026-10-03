@@ -34,6 +34,8 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </remarks>
 public sealed class IncomingSpoolWriterService : IApplicationService
 {
+    private static readonly TimeSpan RejectedPressureRetryDelay = TimeSpan.FromSeconds(5);
+
     private readonly IArticleIngestionQueue _queue;
     private readonly IIncomingArticlePersister _persister;
     private readonly INewsLogWriter _newsLog;
@@ -92,6 +94,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         _samplePressure = samplePressure;
         _placement = placement;
         _placementRegistry = placementRegistry;
+        PressureRetryDelay = (delay, cancellationToken) => Task.Delay(delay, _time, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -102,6 +105,12 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
     /// <summary>Gets the active article worker pool (tests).</summary>
     internal IngestionWorkerPool? Pool => _pool;
+
+    /// <summary>
+    /// Wait between a <see cref="ArticlePlacementKind.RejectedPressure"/> result and the one retry.
+    /// Production waits five seconds on <see cref="TimeProvider"/>.
+    /// </summary>
+    internal Func<TimeSpan, CancellationToken, Task> PressureRetryDelay { get; set; }
 
     /// <summary>Gets the OverviewDB work queue (tests).</summary>
     internal IOverviewDbWorkQueue? OverviewWorkQueue => _overviewWorkQueue;
@@ -286,7 +295,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// <see cref="StorageServerFleetEntry.ServerId"/>, then ordinal FQDN. Advertised free
     /// space is ignored. This method does not call
     /// <see cref="StorageServerPlacementSelector"/> or <see cref="PlaceAfterPersistAsync"/>.
-    /// Accepted and Duplicate are terminal success. Every other
+    /// Accepted and Duplicate are terminal success.
+    /// <see cref="ArticlePlacementKind.RejectedPressure"/> is logged and retried once,
+    /// after five seconds, against the same server and the same article. Every other
     /// <see cref="ArticlePlacementKind"/> is logged once and not retried. NNTPD does not
     /// place a second copy.
     /// </remarks>
@@ -303,66 +314,23 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started), Attempt: 1);
                 return;
             }
 
             if (!TrySelectBackFillerTarget(_placementRegistry.GetActive(_time.GetUtcNow()), out var target)
                 || target.VatpPort is not int port)
             {
-                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started));
+                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started), Attempt: 1);
                 return;
             }
 
-            var result = await _placement.PlaceAsync(article.Record, target, cancellationToken).ConfigureAwait(false);
-            var elapsed = Elapsed(started);
-            switch (result.Kind)
-            {
-                case ArticlePlacementKind.Accepted:
-                    ArticlePlacementLogMessages.Accepted(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Duplicate:
-                    ArticlePlacementLogMessages.Duplicate(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Conflict:
-                    ArticlePlacementLogMessages.Conflict(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedCapacity:
-                    ArticlePlacementLogMessages.RejectedCapacity(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedPressure:
-                    ArticlePlacementLogMessages.RejectedPressure(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedInvalid:
-                    ArticlePlacementLogMessages.RejectedInvalid(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Cancelled:
-                    ArticlePlacementLogMessages.Cancelled(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.AcknowledgementNotObserved:
-                    ArticlePlacementLogMessages.AcknowledgementNotObserved(
-                        _logger,
-                        artId,
-                        target.ServerId,
-                        port,
-                        target.Fqdn,
-                        elapsed);
-                    break;
-                default:
-                    ArticlePlacementLogMessages.TransportFailed(
-                        _logger,
-                        artId,
-                        target.ServerId,
-                        port,
-                        target.Fqdn,
-                        result.Failure ?? result.Kind.ToString(),
-                        elapsed);
-                    break;
-            }
+            await PlaceOnSelectedTargetAsync(article.Record, target, port, artId, started, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started), Attempt: 1);
         }
         catch (Exception ex)
         {
@@ -373,7 +341,8 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 0,
                 string.Empty,
                 ex.GetType().Name,
-                Elapsed(started));
+                Elapsed(started),
+                Attempt: 1);
         }
     }
 
@@ -414,8 +383,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
     /// <summary>
     /// One STORE after persist. Accepted and Duplicate complete placement.
-    /// Failures stay in this method so they cannot requeue OverviewDB work or undo persistence.
-    /// NNTPD does not select or store a second copy.
+    /// <see cref="ArticlePlacementKind.RejectedPressure"/> is retried once against the same
+    /// target and article. Failures stay in this method so they cannot requeue OverviewDB
+    /// work or undo persistence. NNTPD does not select or store a second copy.
     /// </summary>
     private async Task PlaceAfterPersistAsync(InboundArticle article, CancellationToken cancellationToken)
     {
@@ -438,67 +408,23 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+                ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started), Attempt: 1);
                 return;
             }
 
             var active = _placementRegistry.GetActive(_time.GetUtcNow());
             if (!StorageServerPlacementSelector.TrySelect(active, out var target) || target.VatpPort is not int port)
             {
-                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started));
+                ArticlePlacementLogMessages.NoActiveServer(_logger, artId, Elapsed(started), Attempt: 1);
                 return;
             }
 
-            var result = await _placement.PlaceAsync(article.Record, target, cancellationToken).ConfigureAwait(false);
-            var elapsed = Elapsed(started);
-            switch (result.Kind)
-            {
-                case ArticlePlacementKind.Accepted:
-                    ArticlePlacementLogMessages.Accepted(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Duplicate:
-                    ArticlePlacementLogMessages.Duplicate(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Conflict:
-                    ArticlePlacementLogMessages.Conflict(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedCapacity:
-                    ArticlePlacementLogMessages.RejectedCapacity(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedPressure:
-                    ArticlePlacementLogMessages.RejectedPressure(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.RejectedInvalid:
-                    ArticlePlacementLogMessages.RejectedInvalid(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.Cancelled:
-                    ArticlePlacementLogMessages.Cancelled(_logger, artId, target.ServerId, port, target.Fqdn, elapsed);
-                    break;
-                case ArticlePlacementKind.AcknowledgementNotObserved:
-                    ArticlePlacementLogMessages.AcknowledgementNotObserved(
-                        _logger,
-                        artId,
-                        target.ServerId,
-                        port,
-                        target.Fqdn,
-                        elapsed);
-                    break;
-                default:
-                    ArticlePlacementLogMessages.TransportFailed(
-                        _logger,
-                        artId,
-                        target.ServerId,
-                        port,
-                        target.Fqdn,
-                        result.Failure ?? result.Kind.ToString(),
-                        elapsed);
-                    break;
-            }
-
+            await PlaceOnSelectedTargetAsync(article.Record, target, port, artId, started, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started));
+            ArticlePlacementLogMessages.Cancelled(_logger, artId, 0, 0, string.Empty, Elapsed(started), Attempt: 1);
         }
         catch (Exception ex)
         {
@@ -509,7 +435,92 @@ public sealed class IncomingSpoolWriterService : IApplicationService
                 0,
                 string.Empty,
                 ex.GetType().Name,
-                Elapsed(started));
+                Elapsed(started),
+                Attempt: 1);
+        }
+    }
+
+    /// <summary>
+    /// Stores <paramref name="record"/> on <paramref name="target"/>.
+    /// <see cref="ArticlePlacementKind.RejectedPressure"/> is logged as attempt 1 and
+    /// retried once, after <see cref="RejectedPressureRetryDelay"/>, with the same record
+    /// and target. The second result is settled by <see cref="LogPlacementResult"/>.
+    /// </summary>
+    private async Task PlaceOnSelectedTargetAsync(
+        ArticleRecord record,
+        StorageServerFleetEntry target,
+        int port,
+        string artId,
+        long started,
+        CancellationToken cancellationToken)
+    {
+        var result = await _placement!.PlaceAsync(record, target, cancellationToken).ConfigureAwait(false);
+        if (result.Kind != ArticlePlacementKind.RejectedPressure)
+        {
+            LogPlacementResult(result, artId, target, port, Elapsed(started), attempt: 1);
+            return;
+        }
+
+        LogPlacementResult(result, artId, target, port, Elapsed(started), attempt: 1);
+        await PressureRetryDelay(RejectedPressureRetryDelay, cancellationToken).ConfigureAwait(false);
+        var retryStarted = Stopwatch.GetTimestamp();
+        result = await _placement.PlaceAsync(record, target, cancellationToken).ConfigureAwait(false);
+        LogPlacementResult(result, artId, target, port, Elapsed(retryStarted), attempt: 2);
+    }
+
+    /// <summary>Logs one placement result. The attempt number is the STORE call that produced it.</summary>
+    private void LogPlacementResult(
+        ArticlePlacementResult result,
+        string artId,
+        StorageServerFleetEntry target,
+        int port,
+        long elapsedMs,
+        int attempt)
+    {
+        switch (result.Kind)
+        {
+            case ArticlePlacementKind.Accepted:
+                ArticlePlacementLogMessages.Accepted(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.Duplicate:
+                ArticlePlacementLogMessages.Duplicate(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.Conflict:
+                ArticlePlacementLogMessages.Conflict(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.RejectedCapacity:
+                ArticlePlacementLogMessages.RejectedCapacity(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.RejectedPressure:
+                ArticlePlacementLogMessages.RejectedPressure(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.RejectedInvalid:
+                ArticlePlacementLogMessages.RejectedInvalid(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.Cancelled:
+                ArticlePlacementLogMessages.Cancelled(_logger, artId, target.ServerId, port, target.Fqdn, elapsedMs, attempt);
+                break;
+            case ArticlePlacementKind.AcknowledgementNotObserved:
+                ArticlePlacementLogMessages.AcknowledgementNotObserved(
+                    _logger,
+                    artId,
+                    target.ServerId,
+                    port,
+                    target.Fqdn,
+                    elapsedMs,
+                    attempt);
+                break;
+            default:
+                ArticlePlacementLogMessages.TransportFailed(
+                    _logger,
+                    artId,
+                    target.ServerId,
+                    port,
+                    target.Fqdn,
+                    result.Failure ?? result.Kind.ToString(),
+                    elapsedMs,
+                    attempt);
+                break;
         }
     }
 

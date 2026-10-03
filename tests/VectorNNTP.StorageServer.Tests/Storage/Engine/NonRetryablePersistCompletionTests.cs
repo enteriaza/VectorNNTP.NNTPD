@@ -29,7 +29,6 @@ public sealed class NonRetryablePersistCompletionTests
         engine.TestFaultPoint = FileArticleStorageEngine.PersistFaultPoint.BeforeSataAppend;
 
         var record = CreateRecord("<blocked-park@seg.test>");
-        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
 
@@ -72,9 +71,8 @@ public sealed class NonRetryablePersistCompletionTests
 
         Assert.True(engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.PersistRetryScheduledCount);
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         Assert.Equal(ArticleStorageState.Present, meta.State);
@@ -133,9 +131,8 @@ public sealed class NonRetryablePersistCompletionTests
         await engineB.RecoverAsync(CancellationToken.None);
 
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engineB.ProcessLocalSegmentCopyCount);
         Assert.True(engineB.TryRead(record.ArtId, out var read));
         Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.Equal(ArticleStorageState.Present, read.Metadata.State);

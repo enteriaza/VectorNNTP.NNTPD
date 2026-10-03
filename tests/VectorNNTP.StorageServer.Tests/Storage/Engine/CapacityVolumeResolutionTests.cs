@@ -230,7 +230,7 @@ public sealed class CapacityVolumeResolutionTests
             record.ArtId,
             CancellationToken.None);
         Assert.Equal(ArticleRelocationOutcome.Relocated, relocated.Outcome);
-        Assert.True(articleDuring > 0);
+        Assert.Equal(0, articleDuring);
         Assert.True(journalDuring > 0);
         Assert.True(indexDuring > 0);
         Assert.True(compactionDuring > 0);
@@ -238,9 +238,8 @@ public sealed class CapacityVolumeResolutionTests
         Assert.Equal(
             articleDuring + journalDuring + indexDuring + compactionDuring + compactionJournalDuring + checkpointDuring,
             totalDuring);
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
     }
 

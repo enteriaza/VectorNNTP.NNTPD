@@ -46,9 +46,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// Compaction destination appends use that ceiling plus
 /// <see cref="ArticleCapacityOptions.CompactionHeadroom"/>.
 /// Each physical segment copy reserves <c>SegmentRecordCodec.RecordLengthForArtSize(ArtSize)</c>
-/// on the segment ledger before the append. After a durable write the reservation stays held and
-/// is bound to that segment. It is released when that segment is physically reclaimed. A
-/// retirement-seal retry reserves another copy before it appends.
+/// on the segment ledger before the append. After <c>Flush(true)</c> returns, that copy leaves
+/// admission and stays bound to the segment until physical reclaim. A
+/// retirement-seal retry reserves another unwritten copy before it appends.
 /// Each durable Accept also reserves <c>ArtSize + 132</c> on the control ledger for the journal
 /// sequence. That reservation is released only after a checkpoint replacement omits the sequence.
 /// The same Accept reserves <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes on the control
@@ -2862,7 +2862,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         FileArticleStorageEngineLogMessages.RecoveredIndexCommitted(
             _logger,
             accept.Sequence,
-            accept.ArtId.ToString() ?? string.Empty);
+            accept.ArtId.ToLowerHexString());
     }
 
     /// <summary>

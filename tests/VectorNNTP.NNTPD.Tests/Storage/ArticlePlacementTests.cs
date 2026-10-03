@@ -162,7 +162,6 @@ public sealed class ArticlePlacementTests
 
     [Theory]
     [InlineData(ArticlePlacementKind.RejectedCapacity, 2623)]
-    [InlineData(ArticlePlacementKind.RejectedPressure, 2624)]
     [InlineData(ArticlePlacementKind.RejectedInvalid, 2625)]
     public async Task BackFiller_Rejection_DoesNotTryAnotherServer(ArticlePlacementKind kind, int eventId)
     {
@@ -250,7 +249,6 @@ public sealed class ArticlePlacementTests
 
     [Theory]
     [InlineData(ArticlePlacementKind.Conflict, 2622)]
-    [InlineData(ArticlePlacementKind.RejectedPressure, 2624)]
     [InlineData(ArticlePlacementKind.RejectedCapacity, 2623)]
     [InlineData(ArticlePlacementKind.RejectedInvalid, 2625)]
     [InlineData(ArticlePlacementKind.TransportFailure, 2627)]
@@ -339,6 +337,157 @@ public sealed class ArticlePlacementTests
         Assert.DoesNotContain(logs.EventIds, static id => id >= 2630);
     }
 
+    [Theory]
+    [InlineData(InboundArticleProducer.TakeThis)]
+    [InlineData(InboundArticleProducer.IHave)]
+    [InlineData(InboundArticleProducer.Post)]
+    [InlineData(InboundArticleProducer.BackFiller)]
+    public async Task RejectedPressure_RetriesOnceOnTheSameTargetAndPayload(InboundArticleProducer producer)
+    {
+        var delay = new ImmediatePressureDelay();
+        var client = SequenceClient(
+            new ArticlePlacementResult(ArticlePlacementKind.RejectedPressure),
+            new ArticlePlacementResult(ArticlePlacementKind.Accepted));
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued($"<pressure-ok-{producer}@example.test>", producer);
+        await InvokePlacementAsync(article, client, delay.Delay, CancellationToken.None, logs);
+
+        Assert.Equal(TimeSpan.FromSeconds(5), delay.Requested);
+        Assert.Equal(1, delay.Calls);
+        AssertSamePlacement(article, client, producer);
+        Assert.Equal(ArticlePlacementKind.Accepted, client.Outcomes[1].Kind);
+        AssertAttempt(logs.Messages, 1, "outcome=RejectedPressure");
+        AssertAttempt(logs.Messages, 2, "outcome=Accepted");
+        Assert.Equal(2, logs.EventIds.Count(static id => id is 2624 or 2620));
+    }
+
+    [Theory]
+    [InlineData(InboundArticleProducer.TakeThis)]
+    [InlineData(InboundArticleProducer.BackFiller)]
+    public async Task RejectedPressure_SecondDuplicate_SettlesOnTheSameTarget(InboundArticleProducer producer)
+    {
+        var delay = new ImmediatePressureDelay();
+        var client = SequenceClient(
+            new ArticlePlacementResult(ArticlePlacementKind.RejectedPressure),
+            new ArticlePlacementResult(ArticlePlacementKind.Duplicate));
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued($"<pressure-dup-{producer}@example.test>", producer);
+        await InvokePlacementAsync(article, client, delay.Delay, CancellationToken.None, logs);
+
+        Assert.Equal(1, delay.Calls);
+        Assert.Equal(TimeSpan.FromSeconds(5), delay.Requested);
+        AssertSamePlacement(article, client, producer);
+        Assert.Equal(ArticlePlacementKind.Duplicate, client.Outcomes[1].Kind);
+        AssertAttempt(logs.Messages, 1, "outcome=RejectedPressure");
+        AssertAttempt(logs.Messages, 2, "outcome=Duplicate");
+        Assert.Contains(2621, logs.EventIds);
+    }
+
+    [Theory]
+    [InlineData(InboundArticleProducer.TakeThis)]
+    [InlineData(InboundArticleProducer.BackFiller)]
+    public async Task RejectedPressure_SecondPressure_IsTerminal(InboundArticleProducer producer)
+    {
+        var delay = new ImmediatePressureDelay();
+        var client = SequenceClient(
+            new ArticlePlacementResult(ArticlePlacementKind.RejectedPressure),
+            new ArticlePlacementResult(ArticlePlacementKind.RejectedPressure));
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued($"<pressure-stop-{producer}@example.test>", producer);
+        await InvokePlacementAsync(article, client, delay.Delay, CancellationToken.None, logs);
+
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(1, delay.Calls);
+        AssertSamePlacement(article, client, producer);
+        AssertAttempt(logs.Messages, 1, "outcome=RejectedPressure");
+        AssertAttempt(logs.Messages, 2, "outcome=RejectedPressure");
+        Assert.Equal(2, logs.Messages.Count(static message => message.Contains("outcome=RejectedPressure", StringComparison.Ordinal)));
+        Assert.DoesNotContain(logs.Messages, static message => message.Contains("attempt=3", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [MemberData(nameof(TerminalPlacementOutcomes))]
+    public async Task TerminalOutcomes_AreNotRetried(InboundArticleProducer producer, ArticlePlacementKind kind)
+    {
+        var delay = new ImmediatePressureDelay();
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(
+                kind,
+                kind == ArticlePlacementKind.TransportFailure ? "IOException" : null),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        var article = CanonicalArticleText.CreateQueued($"<terminal-{producer}-{kind}@example.test>", producer);
+        await InvokePlacementAsync(article, client, delay.Delay, CancellationToken.None, logs);
+
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(0, delay.Calls);
+        AssertOriginalTarget(producer, client.Targets[0]);
+        AssertSameArtData(article.Record, client.Records[0]);
+        Assert.Contains(logs.Messages, message => message.Contains("attempt=1", StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Messages, static message => message.Contains("attempt=2", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(InboundArticleProducer.TakeThis)]
+    [InlineData(InboundArticleProducer.BackFiller)]
+    public async Task CancellationDuringPressureDelay_DoesNotStartAttemptTwo(InboundArticleProducer producer)
+    {
+        var client = new RecordingPlacement
+        {
+            Result = new ArticlePlacementResult(ArticlePlacementKind.RejectedPressure),
+        };
+        var logs = new ListLogger<IncomingSpoolWriterService>();
+        using var cts = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var article = CanonicalArticleText.CreateQueued($"<pressure-cancel-{producer}@example.test>", producer);
+        var pending = InvokePlacementAsync(
+            article,
+            client,
+            async (delay, token) =>
+            {
+                Assert.Equal(TimeSpan.FromSeconds(5), delay);
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token).ConfigureAwait(false);
+            },
+            cts.Token,
+            logs);
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cts.CancelAsync();
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, client.Calls);
+        AssertOriginalTarget(producer, client.Targets[0]);
+        AssertSameArtData(article.Record, client.Records[0]);
+        AssertAttempt(logs.Messages, 1, "outcome=RejectedPressure");
+        Assert.Contains(
+            logs.Messages,
+            static message => message.Contains("placement cancelled", StringComparison.Ordinal)
+                && message.Contains("attempt=1", StringComparison.Ordinal));
+        Assert.DoesNotContain(logs.Messages, static message => message.Contains("attempt=2", StringComparison.Ordinal));
+    }
+
+    public static IEnumerable<object[]> TerminalPlacementOutcomes()
+    {
+        var producers = new[] { InboundArticleProducer.TakeThis, InboundArticleProducer.BackFiller };
+        var kinds = new[]
+        {
+            ArticlePlacementKind.RejectedCapacity,
+            ArticlePlacementKind.Conflict,
+            ArticlePlacementKind.RejectedInvalid,
+            ArticlePlacementKind.TransportFailure,
+            ArticlePlacementKind.AcknowledgementNotObserved,
+            ArticlePlacementKind.Cancelled,
+        };
+        foreach (var producer in producers)
+        {
+            foreach (var kind in kinds)
+            {
+                yield return [producer, kind];
+            }
+        }
+    }
 
     [Fact]
     public void Placement_DoesNotReferenceLookupOrReadPool()
@@ -588,6 +737,86 @@ public sealed class ArticlePlacementTests
         await writer.StopAsync(CancellationToken.None);
     }
 
+    private static async Task InvokePlacementAsync(
+        InboundArticle article,
+        RecordingPlacement client,
+        Func<TimeSpan, CancellationToken, Task> delay,
+        CancellationToken cancellationToken,
+        ListLogger<IncomingSpoolWriterService>? logs = null)
+    {
+        var writer = CreateWriter(
+            new OrderedPersister(),
+            client,
+            TargetsFor(article.Producer),
+            logs,
+            time: null);
+        writer.PressureRetryDelay = delay;
+        var methodName = article.Producer == InboundArticleProducer.BackFiller
+            ? "StoreBackFillerAsync"
+            : "PlaceAfterPersistAsync";
+        var place = typeof(IncomingSpoolWriterService).GetMethod(
+            methodName,
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(place);
+        try
+        {
+            var pending = (Task)place.Invoke(writer, [article, cancellationToken])!;
+            await pending;
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
+    private static RecordingPlacement SequenceClient(params ArticlePlacementResult[] sequence) =>
+        new()
+        {
+            Sequence = sequence,
+            ExpectedCalls = sequence.Length,
+        };
+
+    private static StorageServerRegistry TargetsFor(InboundArticleProducer producer) =>
+        producer == InboundArticleProducer.BackFiller ? DivergentTargets() : TwoTargets();
+
+    private static void AssertOriginalTarget(InboundArticleProducer producer, StorageServerFleetEntry target)
+    {
+        if (producer == InboundArticleProducer.BackFiller)
+        {
+            Assert.Equal(2, target.ServerId);
+            Assert.Equal("lowid.example", target.Fqdn);
+            return;
+        }
+
+        Assert.Equal(1, target.ServerId);
+        Assert.Equal("cache01.example", target.Fqdn);
+    }
+
+    private static void AssertSamePlacement(
+        InboundArticle article,
+        RecordingPlacement client,
+        InboundArticleProducer producer)
+    {
+        Assert.Equal(2, client.Calls);
+        Assert.Equal(2, client.Targets.Count);
+        Assert.Equal(2, client.Records.Count);
+        AssertOriginalTarget(producer, client.Targets[0]);
+        Assert.Equal(client.Targets[0].ServerId, client.Targets[1].ServerId);
+        Assert.Equal(client.Targets[0].Fqdn, client.Targets[1].Fqdn);
+        Assert.Equal(client.Targets[0].VatpPort, client.Targets[1].VatpPort);
+        Assert.Equal(article.Record.ArtId, client.Records[0].ArtId);
+        Assert.Equal(article.Record.ArtId, client.Records[1].ArtId);
+        AssertSameArtData(article.Record, client.Records[0]);
+        AssertSameArtData(article.Record, client.Records[1]);
+        AssertSameArtData(client.Records[0], client.Records[1]);
+    }
+
+    private static void AssertAttempt(IReadOnlyList<string> messages, int attempt, string outcome) =>
+        Assert.Contains(
+            messages,
+            message => message.Contains($"attempt={attempt}", StringComparison.Ordinal)
+                && message.Contains(outcome, StringComparison.Ordinal));
+
     private static void AssertSameArtData(ArticleRecord expected, ArticleRecord actual)
     {
         Assert.True(MemoryMarshal.TryGetArray(expected.ArtData, out var expectedArray));
@@ -798,9 +1027,26 @@ public sealed class ArticlePlacementTests
         }
     }
 
+    private sealed class ImmediatePressureDelay
+    {
+        public int Calls { get; private set; }
+
+        public TimeSpan Requested { get; private set; }
+
+        public Task Delay(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Requested = delay;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class ListLogger<T> : ILogger<T>
     {
         public List<int> EventIds { get; } = [];
+
+        public List<string> Messages { get; } = [];
 
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
@@ -815,6 +1061,7 @@ public sealed class ArticlePlacementTests
             Func<TState, Exception?, string> formatter)
         {
             EventIds.Add(eventId.Id);
+            Messages.Add(formatter(state, exception));
         }
     }
 

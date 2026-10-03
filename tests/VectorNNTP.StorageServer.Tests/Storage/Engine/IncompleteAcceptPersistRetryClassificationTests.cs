@@ -41,7 +41,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         await engine.DrainPendingAsync(cts.Token);
 
         Assert.Equal(1, engine.PersistRetryScheduledCount);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
     }
@@ -119,7 +120,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
             () => engine.RecoverAsync(CancellationToken.None));
         Assert.Contains("PhysicalWritten rejected", rejected.Message, StringComparison.Ordinal);
 
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal((1, 1), engine.ProcessLocalArticleCopyCounts(accept.Sequence));
         var incomplete = Assert.Single(engine.Journal.EnumerateIncomplete());
         Assert.Equal(accept.Sequence, incomplete.Accept.Sequence);
         Assert.Null(incomplete.PhysicalWritten);
@@ -156,7 +158,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
 
         await engine.RecoverAsync(CancellationToken.None);
 
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
         // One Accept-only SATA append; hook wrote PW for that same location (IdempotentNoOp).
@@ -220,9 +223,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         engineB.SuspendBackgroundPersist = true;
         await engineB.RecoverAsync(CancellationToken.None);
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engineB.ProcessLocalSegmentCopyCount);
         Assert.True(engineB.TryRead(record.ArtId, out _));
     }
 

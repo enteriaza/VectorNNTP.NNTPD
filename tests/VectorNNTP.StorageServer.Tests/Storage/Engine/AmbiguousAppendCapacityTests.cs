@@ -206,7 +206,7 @@ public sealed class AmbiguousAppendCapacityTests
         await engine.DrainPendingAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
 
         Assert.Equal(2, faults);
-        Assert.Equal(copyBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(copyBytes, ActiveSegmentLength(dir));
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
@@ -226,7 +226,7 @@ public sealed class AmbiguousAppendCapacityTests
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(first, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
 
-        Assert.Equal(copyBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.True(engine.Index.TryGet(first.ArtId, out var firstMeta));
         Assert.Equal(0, firstMeta.Location.Offset);
@@ -271,7 +271,7 @@ public sealed class AmbiguousAppendCapacityTests
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         Assert.Equal(0, meta.Location.Offset);
         Assert.Equal(1, engine.PhysicalAppendCount);
-        Assert.Equal(copyBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
     }
 
     [Fact]
@@ -288,7 +288,8 @@ public sealed class AmbiguousAppendCapacityTests
 
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
-        Assert.Equal(SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize), engine.ProcessLocalArticleReservedBytes);
+        reader.UsedBytes += SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
 
         var rejected = await engine.AcceptAsync(CreateRecord("<amb-s-cap2@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, rejected.Outcome);
@@ -311,13 +312,15 @@ public sealed class AmbiguousAppendCapacityTests
         var compact = await engine.CompactClosedSegmentAsync(source.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
         var copyBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(2, engine.PhysicalAppendCount);
         Assert.Equal(copyBytes, ActiveSegmentLength(dir));
 
         var again = await engine.CompactClosedSegmentAsync(source.Location.SegmentId, CancellationToken.None);
         Assert.Equal(2, engine.PhysicalAppendCount);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(copyBytes, ActiveSegmentLength(dir));
         Assert.NotEqual(ArticleCompactionOutcome.Failed, again.Outcome);
     }
@@ -442,7 +445,8 @@ public sealed class AmbiguousAppendCapacityTests
         Assert.Equal(copyBytes, (await engine.Segments.GetActiveAppenderAsync(CancellationToken.None)).SizeBytes);
         Assert.Equal(copyBytes, ActiveSegmentLength(dir));
         Assert.Equal(1, engine.PhysicalAppendCount);
-        Assert.Equal(copyBytes, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
@@ -508,7 +512,8 @@ public sealed class AmbiguousAppendCapacityTests
         engine.Segments.TestAfterWriteBeforeFlush = null;
         var compact = await engine.CompactClosedSegmentAsync(source.Location.SegmentId, CancellationToken.None);
         Assert.Equal(ArticleCompactionOutcome.Committed, compact.Outcome);
-        Assert.Equal(copyBytes, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
         Assert.Equal(2, engine.PhysicalAppendCount);
         Assert.Equal(copyBytes, ActiveSegmentLength(dir));
         Assert.True(engine.Index.TryGet(record.ArtId, out var moved));
@@ -1214,9 +1219,8 @@ public sealed class AmbiguousAppendCapacityTests
         Assert.Equal(
             ArticleCompactionOutcome.Committed,
             (await engine.CompactClosedSegmentAsync(source.Location.SegmentId, CancellationToken.None)).Outcome);
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalCompactionReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalCompactionReservationCount);
     }
 
     [Fact]

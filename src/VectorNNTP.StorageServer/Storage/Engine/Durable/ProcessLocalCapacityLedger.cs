@@ -39,8 +39,10 @@ internal readonly record struct CompactionJournalFrameKey(
 /// Not a kernel or cross-process reservation. Callers must serialize mutate methods with the
 /// owning <see cref="CapacityVolume"/> lock. Shared formula uses
 /// <c>Used + ArticleReserved + JournalReserved + IndexReserved + CompactionReserved + CompactionJournalReserved + CheckpointReserved + Required</c>
-/// against a policy ceiling. The ledger itself starts empty; the engine reconstructs journal and
-/// index reservations from durable files after open.
+/// against a policy ceiling. ArticleReserved and CompactionReserved in that formula are allocations
+/// whose durable flush has not yet returned. Written segment copies and bound compaction destinations
+/// stay tracked until reclaim and contribute zero. The ledger itself starts empty; the engine
+/// reconstructs journal and index reservations from durable files after open.
 /// </remarks>
 internal sealed class ProcessLocalCapacityLedger
 {
@@ -61,8 +63,9 @@ internal sealed class ProcessLocalCapacityLedger
     private readonly Dictionary<ulong, long> _checkpointById = new();
 
     /// <summary>
-    /// Bytes reserved for physical segment copies on this ledger.
-    /// One Accept may hold several copies when retirement-seal retries append again.
+    /// Bytes of segment copies whose durable flush has not yet returned.
+    /// A noted written copy stays tracked until reclaim and contributes zero.
+    /// One Accept may hold several unwritten copies when a later append is reserved again.
     /// </summary>
     public long ArticleReservedBytes => _articleReservedBytes;
 
@@ -87,7 +90,10 @@ internal sealed class ProcessLocalCapacityLedger
     /// <summary>Accept sequences that hold an index-frame reservation before their Present frame is appended.</summary>
     public int IndexUnboundCount => _indexUnboundBySequence.Count;
 
-    /// <summary>Bytes reserved for outstanding compaction destination appends.</summary>
+    /// <summary>
+    /// Bytes of compaction destinations that are not yet bound after a durable flush.
+    /// A bound destination stays tracked until reclaim and contributes zero.
+    /// </summary>
     public long CompactionReservedBytes => _compactionReservedBytes;
 
     /// <summary>
@@ -361,6 +367,15 @@ internal sealed class ProcessLocalCapacityLedger
         return ceilingPercent * (UtilizationScale / PercentScale);
     }
 
+    private void SubtractArticleAdmission(long bytes)
+    {
+        _articleReservedBytes -= bytes;
+        if (_articleReservedBytes < 0)
+        {
+            _articleReservedBytes = 0;
+        }
+    }
+
     /// <summary>
     /// Tentatively includes <paramref name="requiredBytes"/> in <see cref="ArticleReservedBytes"/>
     /// before durable Accept so concurrent admissions observe the claim.
@@ -439,7 +454,8 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Records that one reserved segment copy for <paramref name="sequence"/> was physically written
-    /// on <paramref name="segmentId"/>. The reservation stays held until that segment is reclaimed.
+    /// on <paramref name="segmentId"/>. Caller has observed <c>Flush(true)</c> return.
+    /// The copy leaves <see cref="ArticleReservedBytes"/> and stays tracked until reclaim.
     /// </summary>
     public void NoteSegmentCopyWritten(ulong sequence, SegmentId segmentId)
     {
@@ -463,11 +479,12 @@ internal sealed class ProcessLocalCapacityLedger
             current.WrittenCopies + 1,
             current.BytesPerCopy,
             written);
+        SubtractArticleAdmission(current.BytesPerCopy);
     }
 
     /// <summary>
     /// Releases one segment-copy reservation that was not physically written.
-    /// Written copies stay reserved.
+    /// Written copies stay tracked and already contribute zero to admission.
     /// </summary>
     public bool ReleaseUnwrittenSegmentCopy(ulong sequence)
     {
@@ -511,10 +528,10 @@ internal sealed class ProcessLocalCapacityLedger
             return false;
         }
 
-        _articleReservedBytes -= reservation.TotalBytes;
-        if (_articleReservedBytes < 0)
+        var unwrittenCopies = reservation.ReservedCopies - reservation.WrittenCopies;
+        if (unwrittenCopies > 0)
         {
-            _articleReservedBytes = 0;
+            SubtractArticleAdmission(checked((long)unwrittenCopies * reservation.BytesPerCopy));
         }
 
         return true;
@@ -851,15 +868,15 @@ internal sealed class ProcessLocalCapacityLedger
     }
 
     /// <summary>
-    /// Releases written article-copy reservations bound to <paramref name="segmentId"/>.
+    /// Drops written article-copy tracking bound to <paramref name="segmentId"/>.
+    /// Those copies already left <see cref="ArticleReservedBytes"/> when they were noted written.
     /// Unwritten copies stay reserved. Idempotent when that segment has no written copies.
     /// </summary>
-    /// <returns>Bytes removed from <see cref="ArticleReservedBytes"/>.</returns>
+    /// <returns>Always zero. Reclaim does not subtract admission bytes a second time.</returns>
     public long ReleaseWrittenArticleCopiesOnSegment(SegmentId segmentId)
     {
         List<(ulong Sequence, ArticleSegmentReservation Reservation)>? updates = null;
         List<ulong>? remove = null;
-        long released = 0;
         foreach (var pair in _articleBySequence)
         {
             var current = pair.Value;
@@ -877,8 +894,6 @@ internal sealed class ProcessLocalCapacityLedger
                 continue;
             }
 
-            var bytes = checked((long)removed * current.BytesPerCopy);
-            released = checked(released + bytes);
             var reservedCopies = current.ReservedCopies - removed;
             if (reservedCopies <= 0)
             {
@@ -923,13 +938,7 @@ internal sealed class ProcessLocalCapacityLedger
             }
         }
 
-        _articleReservedBytes -= released;
-        if (_articleReservedBytes < 0)
-        {
-            _articleReservedBytes = 0;
-        }
-
-        return released;
+        return 0;
     }
 
     /// <summary>Written article-copy bytes currently bound to <paramref name="segmentId"/>.</summary>
@@ -1038,7 +1047,7 @@ internal sealed class ProcessLocalCapacityLedger
 
     /// <summary>
     /// Records the segment that holds a destination whose <c>Flush(true)</c> has returned.
-    /// The reservation stays until that segment is reclaimed.
+    /// The destination leaves <see cref="CompactionReservedBytes"/> and stays tracked until reclaim.
     /// </summary>
     public void BindCompactionDestination(
         ulong compactionId,
@@ -1050,6 +1059,15 @@ internal sealed class ProcessLocalCapacityLedger
         {
             throw new InvalidOperationException(
                 $"Compaction capacity reservation does not exist for compaction {compactionId} relocation {relocationId}.");
+        }
+
+        if (hold.Location is null)
+        {
+            _compactionReservedBytes -= hold.Bytes;
+            if (_compactionReservedBytes < 0)
+            {
+                _compactionReservedBytes = 0;
+            }
         }
 
         _compactionByKey[key] = hold with { Location = location };
@@ -1115,10 +1133,13 @@ internal sealed class ProcessLocalCapacityLedger
             return false;
         }
 
-        _compactionReservedBytes -= hold.Bytes;
-        if (_compactionReservedBytes < 0)
+        if (hold.Location is null)
         {
-            _compactionReservedBytes = 0;
+            _compactionReservedBytes -= hold.Bytes;
+            if (_compactionReservedBytes < 0)
+            {
+                _compactionReservedBytes = 0;
+            }
         }
 
         return true;

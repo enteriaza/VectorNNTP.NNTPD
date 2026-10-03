@@ -85,7 +85,8 @@ public sealed class IncompleteAcceptPersistRetryTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await engine.DrainPendingAsync(cts.Token);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
     }
 
@@ -125,9 +126,8 @@ public sealed class IncompleteAcceptPersistRetryTests
         Assert.Empty(engineB.Journal.EnumerateIncomplete());
         Assert.Equal(1, engineB.PhysicalAppendCount);
         Assert.True(engineB.TryRead(record.ArtId, out _));
-        Assert.Equal(
-            SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize),
-            engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engineB.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engineB.ProcessLocalSegmentCopyCount);
     }
 
     [Fact]
@@ -178,12 +178,12 @@ public sealed class IncompleteAcceptPersistRetryTests
                   || engine.Journal.EnumerateIncomplete().Count == 0,
             TimeSpan.FromSeconds(5));
 
-        var required = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        // After durable PW, the written segment copy stays reserved even if index work failed once.
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        // After durable PhysicalWritten the flushed copy has left admission.
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
 
         await engine.DrainPendingAsync(CancellationToken.None);
-        Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
+        Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
         Assert.True(engine.TryRead(record.ArtId, out _));
     }

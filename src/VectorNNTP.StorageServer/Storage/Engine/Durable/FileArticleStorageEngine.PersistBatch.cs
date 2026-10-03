@@ -566,7 +566,7 @@ public sealed partial class FileArticleStorageEngine
                 ThrowIfTestFault(PersistFaultPoint.AfterIndexCommitted, item.Sequence);
                 var afterStart = IndexCommittedProbe.MarkArticle();
                 var toStringStart = IndexCommittedProbe.MarkArticle();
-                var artIdText = item.Accept.ArtId.ToString() ?? string.Empty;
+                var artIdText = item.Accept.ArtId.ToLowerHexString();
                 IndexCommittedProbe.AddToString(toStringStart);
                 var logStart = IndexCommittedProbe.MarkArticle();
                 FileArticleStorageEngineLogMessages.RecoveredIndexCommitted(

@@ -118,7 +118,7 @@ public sealed class CapacityUsagePressureTests
         var before = engine.ObserveCapacityAdmissionPressure();
         Assert.True(before.IsUnderUsagePressure);
         var reserved = engine.ProcessLocalArticleReservedBytes;
-        Assert.True(reserved > 0);
+        Assert.Equal(0, reserved);
 
         var evicted = engine.EvictLeastFrequentlyUsed(1);
         Assert.Equal(1, evicted);
