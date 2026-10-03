@@ -1,4 +1,5 @@
 using VectorNNTP.BackFiller.ArticleWork;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Nntp
 {
@@ -8,8 +9,16 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Retrieves the article identified by <paramref name="item"/>.</summary>
         /// <param name="item">Work item whose request backbone and message id select the provider and ARTICLE argument.</param>
         /// <param name="cancellationToken">Cancellation signal for acquisition and download.</param>
+        /// <param name="consumePayload">
+        /// Invoked synchronously with the destuffed payload before this method returns a retrieved article.
+        /// The memory is valid only until the delegate returns. The delegate must not store it and must not await.
+        /// Production calls it while the session still holds its busy lock. It is not called when no payload is retrieved.
+        /// </param>
         /// <returns>The retrieval outcome for <paramref name="item"/>.</returns>
-        Task<ArticleRetrievalResult> RetrieveAsync(ArticleWorkItem item, CancellationToken cancellationToken);
+        Task<ArticleRetrievalResult> RetrieveAsync(
+            ArticleWorkItem item,
+            CancellationToken cancellationToken,
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload);
     }
 
     /// <summary>Default retriever. Does not expose pooled session ownership to Article Work.</summary>
@@ -40,6 +49,9 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <param name="cancellationToken">
         /// When already canceled, acquisition is skipped. Otherwise it is passed to pool acquisition and download.
         /// </param>
+        /// <param name="consumePayload">
+        /// Passed to <see cref="NntpProviderSession.DownloadArticleAsync"/> and invoked there while the session busy lock is held.
+        /// </param>
         /// <returns>
         /// <see cref="ArticleRetrievalKind.Cancelled"/> when <paramref name="cancellationToken"/> is already canceled,
         /// or when acquisition throws <see cref="OperationCanceledException"/> because that token is canceled.
@@ -47,7 +59,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// The connect exception's kind, status, and message when acquisition throws <see cref="NntpProviderConnectException"/>.
         /// Otherwise the <see cref="NntpProviderSession.DownloadArticleAsync"/> result.
         /// </returns>
-        /// <exception cref="ArgumentNullException"><paramref name="item"/> is null.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="item"/> or <paramref name="consumePayload"/> is null.</exception>
         /// <exception cref="ArgumentException">
         /// The work-item backbone or message id is null or whitespace. Those checks are thrown by the pool lookup and download.
         /// </exception>
@@ -59,9 +71,13 @@ namespace VectorNNTP.BackFiller.Nntp
         /// Other acquisition exceptions, including a disposed pool and cancellation that is not
         /// <paramref name="cancellationToken"/>, propagate.
         /// </remarks>
-        public async Task<ArticleRetrievalResult> RetrieveAsync(ArticleWorkItem item, CancellationToken cancellationToken)
+        public async Task<ArticleRetrievalResult> RetrieveAsync(
+            ArticleWorkItem item,
+            CancellationToken cancellationToken,
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
         {
             ArgumentNullException.ThrowIfNull(item);
+            ArgumentNullException.ThrowIfNull(consumePayload);
             if (cancellationToken.IsCancellationRequested)
             {
                 return ArticleRetrievalResult.Failed(
@@ -101,7 +117,7 @@ namespace VectorNNTP.BackFiller.Nntp
             await using (lease)
             {
                 var result = await lease.Session
-                    .DownloadArticleAsync(item.Request.MessageId, cancellationToken)
+                    .DownloadArticleAsync(item.Request.MessageId, cancellationToken, consumePayload)
                     .ConfigureAwait(false);
                 if (!result.SessionReusable)
                 {

@@ -1,5 +1,7 @@
 using System.Buffers;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Nntp
 {
@@ -182,8 +184,18 @@ namespace VectorNNTP.BackFiller.Nntp
         /// Cancellation while waiting for <see cref="_busy"/> throws <see cref="OperationCanceledException"/> and leaves the session unchanged.
         /// After the lock is held, cancellation returns <see cref="ArticleRetrievalKind.Cancelled"/> and marks the session unhealthy.
         /// </param>
+        /// <param name="consumePayload">
+        /// When null, a successful article is copied into an owned <see cref="RetrievedArticle"/>.
+        /// When not null, it is invoked synchronously while this session still holds <see cref="_busy"/> and before
+        /// <see cref="State"/> returns to <see cref="NntpSessionState.Ready"/>, with the reader scratch prefix.
+        /// That memory is valid only until the delegate returns. The delegate must not store it and must not await.
+        /// It is called only after the terminator is recognized and the payload has a header/body separator.
+        /// An exception from the delegate is rethrown after <see cref="_busy"/> is released and does not mark the session unhealthy.
+        /// </param>
         /// <returns>
         /// Status <see cref="NntpStatusCode.ArticleFollows"/> returns the destuffed payload when <see cref="NntpProtocolIo.HasHeaderBodySeparator"/> is true.
+        /// With <paramref name="consumePayload"/> null, that payload is an owned <see cref="RetrievedArticle"/>.
+        /// With <paramref name="consumePayload"/> not null, the result's article is null because the delegate already consumed the scratch.
         /// Status <see cref="NntpStatusCode.NoArticleWithMessageId"/> is <see cref="ArticleRetrievalKind.ArticleNotFound"/> and the session stays reusable.
         /// A 220 payload with no header/body separator is <see cref="ArticleRetrievalKind.InvalidArticle"/> and stays reusable.
         /// A payload that reaches <see cref="NntpSessionOptions.MaxArticleBytes"/> is <see cref="ArticleRetrievalKind.InvalidArticle"/> and the session is marked unhealthy because the multiline response is no longer synchronized.
@@ -196,7 +208,10 @@ namespace VectorNNTP.BackFiller.Nntp
         /// A status-line timeout becomes <see cref="TimeoutException"/> inside <see cref="ReadStatusAsync"/> and is then classified as provider failure whose reason is that exception's type name.
         /// A payload timeout is classified as provider failure with the reason <c>ARTICLE timed out.</c>
         /// </remarks>
-        internal async Task<ArticleRetrievalResult> DownloadArticleAsync(string messageId, CancellationToken cancellationToken)
+        internal async Task<ArticleRetrievalResult> DownloadArticleAsync(
+            string messageId,
+            CancellationToken cancellationToken,
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult>? consumePayload = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
             if (_reader is null || _stream is null || State is NntpSessionState.Closed or NntpSessionState.Retiring)
@@ -220,6 +235,7 @@ namespace VectorNNTP.BackFiller.Nntp
             await _busy.WaitAsync(cancellationToken).ConfigureAwait(false);
             var previous = State;
             State = NntpSessionState.Busy;
+            ExceptionDispatchInfo? consumerError = null;
             try
             {
                 var commandLength = NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length + NntpProtocolIo.Crlf.Length;
@@ -253,13 +269,77 @@ namespace VectorNNTP.BackFiller.Nntp
 
                 if (code == NntpStatusCode.ArticleFollows)
                 {
-                    byte[] payload;
+                    if (consumePayload is null)
+                    {
+                        byte[] payload;
+                        try
+                        {
+                            payload = await _reader
+                                .ReadArticlePayloadAsync(_options.MaxArticleBytes, _options.ReceiveTimeout, cancellationToken)
+                                .ConfigureAwait(false);
+                            NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, payload.Length);
+                        }
+                        catch (EndOfStreamException)
+                        {
+                            return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "NNTP article ended before terminator.");
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            return MarkUnhealthy(ArticleRetrievalKind.Cancelled, code, "ARTICLE receive was cancelled.");
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "ARTICLE receive timed out.");
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("MaxArticleBytes", StringComparison.Ordinal))
+                        {
+                            // Destuffed size exceeded the hard ceiling: permanently unusable for Article Work.
+                            // Retire the session because the multiline response is no longer synchronized.
+                            return MarkUnhealthy(ArticleRetrievalKind.InvalidArticle, code, "NNTP article exceeded MaxArticleBytes.");
+                        }
+
+                        if (payload.Length == 0 || !NntpProtocolIo.HasHeaderBodySeparator(payload))
+                        {
+                            State = NntpSessionState.Ready;
+                            return ArticleRetrievalResult.Failed(
+                                ArticleRetrievalKind.InvalidArticle,
+                                code,
+                                "ARTICLE payload is missing a header/body separator.",
+                                sessionReusable: true);
+                        }
+
+                        State = NntpSessionState.Ready;
+                        return ArticleRetrievalResult.Retrieved(code, text, new RetrievedArticle(payload));
+                    }
+
+                    var accepted = false;
                     try
                     {
-                        payload = await _reader
-                            .ReadArticlePayloadAsync(_options.MaxArticleBytes, _options.ReceiveTimeout, cancellationToken)
+                        _ = await _reader.ReadArticlePayloadAsync(
+                                _options.MaxArticleBytes,
+                                _options.ReceiveTimeout,
+                                cancellationToken,
+                                memory =>
+                                {
+                                    NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, memory.Length);
+                                    if (memory.Length == 0 || !NntpProtocolIo.HasHeaderBodySeparator(memory.Span))
+                                    {
+                                        return default;
+                                    }
+
+                                    accepted = true;
+                                    try
+                                    {
+                                        return consumePayload(memory);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        // Leave the network-failure catches. The original exception is rethrown after _busy is released.
+                                        consumerError = ExceptionDispatchInfo.Capture(ex);
+                                        throw new PayloadConsumerException();
+                                    }
+                                })
                             .ConfigureAwait(false);
-                        NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, payload.Length);
                     }
                     catch (EndOfStreamException)
                     {
@@ -275,12 +355,10 @@ namespace VectorNNTP.BackFiller.Nntp
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("MaxArticleBytes", StringComparison.Ordinal))
                     {
-                        // Destuffed size exceeded the hard ceiling: permanently unusable for Article Work.
-                        // Retire the session because the multiline response is no longer synchronized.
                         return MarkUnhealthy(ArticleRetrievalKind.InvalidArticle, code, "NNTP article exceeded MaxArticleBytes.");
                     }
 
-                    if (payload.Length == 0 || !NntpProtocolIo.HasHeaderBodySeparator(payload))
+                    if (!accepted)
                     {
                         State = NntpSessionState.Ready;
                         return ArticleRetrievalResult.Failed(
@@ -291,7 +369,7 @@ namespace VectorNNTP.BackFiller.Nntp
                     }
 
                     State = NntpSessionState.Ready;
-                    return ArticleRetrievalResult.Retrieved(code, text, new RetrievedArticle(payload));
+                    return ArticleRetrievalResult.Retrieved(code, text);
                 }
 
                 if (code == NntpStatusCode.NoArticleWithMessageId)
@@ -319,6 +397,9 @@ namespace VectorNNTP.BackFiller.Nntp
 
                 return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, text);
             }
+            catch (PayloadConsumerException)
+            {
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return MarkUnhealthy(ArticleRetrievalKind.Cancelled, null, "ARTICLE was cancelled.");
@@ -340,6 +421,13 @@ namespace VectorNNTP.BackFiller.Nntp
 
                 _ = _busy.Release();
             }
+
+            if (consumerError is not null)
+            {
+                consumerError.Throw();
+            }
+
+            throw new InvalidOperationException("ARTICLE download ended without a result.");
         }
 
         /// <summary>
@@ -874,6 +962,14 @@ namespace VectorNNTP.BackFiller.Nntp
             ArgumentNullException.ThrowIfNull(provider);
             var account = string.IsNullOrWhiteSpace(provider.Username) ? "-" : provider.Username.Trim();
             return $"{provider.Backbone}/{account}[{connectionNumber:000}/{provider.MaxSessions}]";
+        }
+
+        /// <summary>
+        /// Signals that the article callback failed after the payload was complete.
+        /// Caught so the session is not marked unhealthy. The original exception is rethrown after <c>_busy</c> is released.
+        /// </summary>
+        private sealed class PayloadConsumerException : Exception
+        {
         }
     }
 }

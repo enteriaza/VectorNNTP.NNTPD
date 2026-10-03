@@ -225,8 +225,9 @@ namespace VectorNNTP.BackFiller.Nntp
         /// The measured corpus median is 740,474 bytes and p95 is 793,113, so the first
         /// allocation is 1 MiB when <c>maxBytes</c> allows it. A common article then needs
         /// no growth copy. Larger articles double until they fit, and growth stops at the
-        /// caller's max instead of allocating that max up front. Each article is then copied
-        /// into an exact <c>byte[]</c>.
+        /// caller's max instead of allocating that max up front.
+        /// The exact-array read copies the written prefix out. The callback read exposes that
+        /// prefix only until the callback returns, then the next article may overwrite it.
         /// </summary>
         private byte[] _payloadScratch = [];
 
@@ -328,15 +329,45 @@ namespace VectorNNTP.BackFiller.Nntp
         /// A line that begins with <c>..</c> stores one <c>.</c>. A line whose first byte is <c>.</c> and whose next byte is LF, or CR LF, ends the payload.
         /// A leading <c>.</c> followed by any other byte is stored, including the dot.
         /// When the buffer ends before a leading dot can be classified, the unread tail is kept and another read is issued.
-        /// Ordinary runs are copied in bulk into a reader-owned scratch. The returned array is an exact copy of the
-        /// written prefix, so unused scratch capacity is not visible to the caller.
+        /// Ordinary runs are copied in bulk into a reader-owned scratch. This overload copies the written prefix into an
+        /// exact array before the scratch length is cleared, so unused scratch capacity is not visible to the caller.
         /// Caller cancellation and the timeout both surface as <see cref="OperationCanceledException"/>.
         /// </remarks>
-        internal async Task<byte[]> ReadArticlePayloadAsync(
+        internal Task<byte[]> ReadArticlePayloadAsync(
             int maxBytes,
             TimeSpan timeout,
             CancellationToken cancellationToken)
+            => ReadArticlePayloadAsync(maxBytes, timeout, cancellationToken, _ => DetachExactPayload());
+
+        /// <summary>
+        /// Reads a multiline ARTICLE payload and passes the destuffed scratch prefix to <paramref name="consume"/>.
+        /// </summary>
+        /// <typeparam name="T">Value returned by <paramref name="consume"/>.</typeparam>
+        /// <param name="maxBytes">Maximum destuffed payload length. The byte that would exceed it is not stored.</param>
+        /// <param name="timeout">Budget for the whole payload. Linked with <paramref name="cancellationToken"/>.</param>
+        /// <param name="cancellationToken">Cancels the read.</param>
+        /// <param name="consume">
+        /// Invoked once the terminator is recognized, with <c>_payloadScratch</c> sliced to the written prefix.
+        /// The memory is valid only until this delegate returns. It must not be stored, and this delegate must not await.
+        /// </param>
+        /// <returns>The value returned by <paramref name="consume"/>.</returns>
+        /// <exception cref="EndOfStreamException">The stream ends before a terminator line is recognized.</exception>
+        /// <exception cref="InvalidOperationException">The destuffed payload reaches <paramref name="maxBytes"/>.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="consume"/> is null.</exception>
+        /// <remarks>
+        /// Destuffing matches <see cref="ReadArticlePayloadAsync(int, TimeSpan, CancellationToken)"/>.
+        /// This overload does not copy the prefix. The scratch length is cleared after <paramref name="consume"/> returns,
+        /// including when <paramref name="consume"/> throws. A later read on this reader may overwrite the same bytes.
+        /// <paramref name="consume"/> is not called when the read fails before a terminator.
+        /// Caller cancellation and the timeout both surface as <see cref="OperationCanceledException"/>.
+        /// </remarks>
+        internal async Task<T> ReadArticlePayloadAsync<T>(
+            int maxBytes,
+            TimeSpan timeout,
+            CancellationToken cancellationToken,
+            Func<ReadOnlyMemory<byte>, T> consume)
         {
+            ArgumentNullException.ThrowIfNull(consume);
             _payloadCount = 0;
             var atLineStart = true;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -382,7 +413,7 @@ namespace VectorNNTP.BackFiller.Nntp
                             if (next == (byte)'\n')
                             {
                                 Consume(index + 2);
-                                return DetachExactPayload();
+                                return consume(_payloadScratch.AsMemory(0, _payloadCount));
                             }
 
                             if (next == (byte)'\r')
@@ -390,7 +421,7 @@ namespace VectorNNTP.BackFiller.Nntp
                                 if (span[index + 2] == (byte)'\n')
                                 {
                                     Consume(index + 3);
-                                    return DetachExactPayload();
+                                    return consume(_payloadScratch.AsMemory(0, _payloadCount));
                                 }
 
                                 AppendPayload((byte)'.', maxBytes);

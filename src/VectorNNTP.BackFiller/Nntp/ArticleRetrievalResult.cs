@@ -1,6 +1,10 @@
 namespace VectorNNTP.BackFiller.Nntp
 {
-    /// <summary>Outcome of one ARTICLE retrieval. Payload is present only for <see cref="ArticleRetrievalKind.ArticleRetrieved"/>.</summary>
+    /// <summary>
+    /// Outcome of one ARTICLE retrieval.
+    /// An owned payload is present only for the exact-array <see cref="ArticleRetrievalKind.ArticleRetrieved"/> path.
+    /// The callback success path leaves <see cref="Article"/> null after the caller has already consumed the bytes.
+    /// </summary>
     /// <param name="Kind">Retrieval classification.</param>
     /// <param name="StatusCode">NNTP status when the server produced one.</param>
     /// <param name="Reason">Diagnostic text. Never a secret.</param>
@@ -29,6 +33,22 @@ namespace VectorNNTP.BackFiller.Nntp
         /// </returns>
         internal static ArticleRetrievalResult Retrieved(int statusCode, string reason, RetrievedArticle article) =>
             new(ArticleRetrievalKind.ArticleRetrieved, statusCode, reason, article, SessionReusable: true);
+
+        /// <summary>
+        /// Creates a successful retrieval whose payload was already consumed.
+        /// </summary>
+        /// <param name="statusCode">NNTP status stored on the result.</param>
+        /// <param name="reason">Diagnostic text stored on the result.</param>
+        /// <returns>
+        /// A result with <see cref="ArticleRetrievalKind.ArticleRetrieved"/>, a null <see cref="Article"/>,
+        /// and <see cref="SessionReusable"/> true.
+        /// </returns>
+        /// <remarks>
+        /// The production ARTICLE path uses this after the synchronous callback has built the canonical record.
+        /// The reader scratch is not attached to the result.
+        /// </remarks>
+        internal static ArticleRetrievalResult Retrieved(int statusCode, string reason) =>
+            new(ArticleRetrievalKind.ArticleRetrieved, statusCode, reason, Article: null, SessionReusable: true);
 
         /// <summary>Creates a non-payload result.</summary>
         /// <param name="kind">Retrieval classification stored on the result.</param>

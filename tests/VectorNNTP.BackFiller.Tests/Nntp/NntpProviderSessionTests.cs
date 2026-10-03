@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
+using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.BackFiller.Tests.Nntp
 {
@@ -201,6 +202,111 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
             using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
             Assert.Equal(ArticleRetrievalKind.InvalidArticle, result.Kind);
             Assert.True(result.SessionReusable);
+            await session.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Callback_RunsWhileBusy_AndSessionCanReadTheNextArticle()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.RespondBytes(static command =>
+            {
+                if (!command.StartsWith("ARTICLE ", StringComparison.Ordinal))
+                {
+                    return "500 unknown\r\n"u8.ToArray();
+                }
+
+                return "220 0 <AbC@Example.INVALID> article follows\r\nFrom: a@b\r\n\r\n..hidden\r\nbody\r\n.\r\n"u8.ToArray();
+            });
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+            using var result = await session.DownloadArticleAsync(
+                "<AbC@Example.INVALID>",
+                CancellationToken.None,
+                memory =>
+                {
+                    Assert.Equal(NntpSessionState.Busy, session.State);
+                    var keepAlive = session.SendDateKeepAliveAsync(CancellationToken.None);
+                    Assert.True(keepAlive.IsCompleted);
+                    Assert.True(keepAlive.GetAwaiter().GetResult());
+                    var text = Encoding.ASCII.GetString(memory.Span);
+                    Assert.Contains(".hidden", text, StringComparison.Ordinal);
+                    Assert.DoesNotContain("..hidden", text, StringComparison.Ordinal);
+                    return default;
+                });
+
+            Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
+            Assert.Null(result.Article);
+            Assert.Equal(NntpSessionState.Ready, session.State);
+            Assert.True(session.IsReusable);
+            Assert.DoesNotContain(server.Commands, static command => command.StartsWith("DATE", StringComparison.Ordinal));
+
+            using var second = await session.DownloadArticleAsync("<AbC@Example.INVALID>", CancellationToken.None);
+            Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, second.Kind);
+            Assert.Contains("body"u8, second.Article!.Memory.Span);
+            await session.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Callback_Exception_LeavesTheSessionReusable()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.RespondBytes(static command => command.StartsWith("ARTICLE ", StringComparison.Ordinal)
+                ? "220 follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n"u8.ToArray()
+                : "500 unknown\r\n"u8.ToArray());
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                session.DownloadArticleAsync(
+                    "<a@b>",
+                    CancellationToken.None,
+                    Fail));
+
+            static ArticleRecordCreateResult Fail(ReadOnlyMemory<byte> memory)
+            {
+                throw new InvalidOperationException("parse failed");
+            }
+
+            Assert.Equal("parse failed", error.Message);
+            Assert.Equal(NntpSessionState.Ready, session.State);
+            Assert.True(session.IsReusable);
+
+            using var second = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+            Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, second.Kind);
+            Assert.Contains("body"u8, second.Article!.Memory.Span);
+            await session.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Callback_MissingSeparator_DoesNotInvokeTheConsumer()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.Respond(static _ => "220 follows\r\njust-a-line\r\n.\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+            var called = false;
+
+            using var result = await session.DownloadArticleAsync(
+                "<a@b>",
+                CancellationToken.None,
+                _ =>
+                {
+                    called = true;
+                    return default;
+                });
+
+            Assert.False(called);
+            Assert.Equal(ArticleRetrievalKind.InvalidArticle, result.Kind);
+            Assert.True(result.SessionReusable);
+            Assert.True(session.IsReusable);
             await session.DisposeAsync();
         }
 

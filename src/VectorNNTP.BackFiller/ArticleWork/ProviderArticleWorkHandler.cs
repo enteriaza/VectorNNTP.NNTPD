@@ -90,10 +90,14 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <see cref="ArticleWorkOutcome.InvalidArticle"/>. A retrieved body that cannot be transferred or is not an
         /// owned contiguous buffer becomes <see cref="ArticleWorkOutcome.RetentionRejected"/>.
         /// Success routing fields are null unless retention made the article available.
-        /// <see cref="ArticleWorkHandlerResult.Article"/> is always null; the retrieval buffer is disposed before return.
+        /// <see cref="ArticleWorkHandlerResult.Article"/> is always null. The production success path does not allocate
+        /// a <see cref="RetrievedArticle"/>; the canonical array is the one produced by
+        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode)"/>.
         /// </returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="item"/> is null.</exception>
         /// <remarks>
+        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode)"/> runs
+        /// inside the retriever callback, before that call returns. The callback memory is not used after it returns.
         /// An <see cref="OperationCanceledException"/> whose token is not <paramref name="cancellationToken"/> propagates.
         /// Other exceptions from retrieval, parsing, or retention also propagate. The caller maps those to
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
@@ -115,9 +119,20 @@ namespace VectorNNTP.BackFiller.ArticleWork
             }
 
             ArticleRetrievalResult retrieval;
+            ArticleRecordCreateResult created = default;
+            var consumed = false;
             try
             {
-                retrieval = await _retriever.RetrieveAsync(item, cancellationToken).ConfigureAwait(false);
+                retrieval = await _retriever.RetrieveAsync(
+                        item,
+                        cancellationToken,
+                        memory =>
+                        {
+                            created = ArticleRecordFactory.TryCreate(_parser, memory, ArticlePathMode.Traverse);
+                            consumed = true;
+                            return created;
+                        })
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -133,7 +148,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     return MapRetrieval(retrieval);
                 }
 
-                if (retrieval.Article is null)
+                if (!consumed)
                 {
                     LastRetentionKind = ArticleRetentionKind.InvalidPayload;
                     return new ArticleWorkHandlerResult(
@@ -141,7 +156,6 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         "Retrieved article payload could not be transferred into retention.");
                 }
 
-                var created = ArticleRecordFactory.TryCreate(_parser, retrieval.Article.Memory, ArticlePathMode.Traverse);
                 if (!created.IsAccepted)
                 {
                     if (created.ParseFailure != NntpArticleParseFailureCode.None)
