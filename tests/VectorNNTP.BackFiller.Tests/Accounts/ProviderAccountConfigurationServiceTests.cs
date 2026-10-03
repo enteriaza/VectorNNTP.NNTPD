@@ -392,7 +392,6 @@ public sealed class ProviderAccountConfigurationServiceTests
             NullLogger<NntpProviderRegistry>.Instance);
         var service = new ProviderAccountConfigurationService(
             source,
-            catalog,
             registry,
             runtime,
             logger);
