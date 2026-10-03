@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
@@ -6,11 +5,9 @@ using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
-using VectorNNTP.BackFiller.Core;
 using VectorNNTP.BackFiller.Hosting.Systemd;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
-using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Hosting;

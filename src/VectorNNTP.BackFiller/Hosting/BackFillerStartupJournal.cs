@@ -34,8 +34,10 @@ namespace VectorNNTP.BackFiller.Hosting
         /// <summary>Stage names in <see cref="Record"/> call order.</summary>
         private readonly List<string> _stages = [];
 
-        /// <summary>Lock for <see cref="_stages"/>.</summary>
-        private readonly object _gate = new();
+        /// <summary>
+        /// Non-recursive lock for <see cref="_stages"/>. No caller enters it again on the same call stack.
+        /// </summary>
+        private readonly Lock _gate = new();
 
         /// <summary>Appends <paramref name="stage"/> under <see cref="_gate"/>.</summary>
         /// <param name="stage">Stage identifier. Must not be null or whitespace.</param>
