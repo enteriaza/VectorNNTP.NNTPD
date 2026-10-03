@@ -129,7 +129,7 @@ namespace VectorNNTP.Common.Networking.Certificates
         /// Serializes availability checks, <see cref="Acquire"/>, the publication swap, and retirement.
         /// PFX parsing and holder disposal run outside this lock.
         /// </summary>
-        private readonly object _gate = new();
+        private readonly Lock _gate = new();
 
         /// <summary>Currently published holder, or <see langword="null"/> when none is published.</summary>
         private TlsCertificateHolder? _current;

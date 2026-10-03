@@ -71,9 +71,12 @@ namespace VectorNNTP.Common.Networking
 
                 if (!IpAddressEligibility.IsEligibleForDns(explicitAddress))
                 {
-                    NetworkingLogMessages.BindAddressNotEligibleForDns(
-                        _logger,
-                        IpAddressEligibility.ToDnsContent(explicitAddress));
+                    if (_logger.IsEnabled(LogLevel.Information))
+                    {
+                        var addressText = IpAddressEligibility.ToDnsContent(explicitAddress);
+                        NetworkingLogMessages.BindAddressNotEligibleForDns(_logger, addressText);
+                    }
+
                     continue;
                 }
 
