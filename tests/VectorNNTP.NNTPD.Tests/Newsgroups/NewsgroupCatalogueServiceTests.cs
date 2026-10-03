@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Newsgroups;
 

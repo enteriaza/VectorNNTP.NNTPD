@@ -3,6 +3,7 @@ using System.Security.Authentication;
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPCancelMessage;
 

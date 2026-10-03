@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.RabbitMq.Management;
 using VectorNNTP.Common.Messaging.RabbitMq;
 

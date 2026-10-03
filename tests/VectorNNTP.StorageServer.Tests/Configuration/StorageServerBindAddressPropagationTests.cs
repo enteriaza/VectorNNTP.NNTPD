@@ -6,15 +6,15 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking;
-using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.StorageServer.Tests.Configuration;
 
@@ -288,7 +288,7 @@ public sealed class StorageServerBindAddressPropagationTests
 
         Assert.Equal(
             ["cache01.usenet.ninja"],
-            VectorNNTP.NNTPD.Acme.CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate));
+            VectorNNTP.Common.Acme.CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate));
     }
 
     private static string FindAppsettings(string fileName)

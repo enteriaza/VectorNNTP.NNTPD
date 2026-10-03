@@ -1,7 +1,7 @@
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Acme
 {

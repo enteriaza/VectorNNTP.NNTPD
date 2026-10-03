@@ -1,6 +1,6 @@
 using System.IO.Pipelines;
 using System.Net;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.SessionState.RateLimiting;
 

@@ -6,8 +6,9 @@ using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;
@@ -25,6 +26,7 @@ using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 

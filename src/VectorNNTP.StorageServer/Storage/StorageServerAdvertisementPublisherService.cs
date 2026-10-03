@@ -1,6 +1,6 @@
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 
 namespace VectorNNTP.StorageServer.Storage;

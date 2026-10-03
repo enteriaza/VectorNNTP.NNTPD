@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.NNTPD.Redis;
 

@@ -9,9 +9,9 @@ using Microsoft.Extensions.Logging.Debug;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Logging;
 

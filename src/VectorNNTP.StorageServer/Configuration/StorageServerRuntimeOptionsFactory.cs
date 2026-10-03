@@ -1,6 +1,6 @@
 using System.Net;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Configuration;
 

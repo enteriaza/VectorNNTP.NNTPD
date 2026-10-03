@@ -1,4 +1,4 @@
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 

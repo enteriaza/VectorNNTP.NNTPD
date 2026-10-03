@@ -1,10 +1,11 @@
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Cloudflare.Reconciliation;
 

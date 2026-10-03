@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Configuration;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Configuration;
 

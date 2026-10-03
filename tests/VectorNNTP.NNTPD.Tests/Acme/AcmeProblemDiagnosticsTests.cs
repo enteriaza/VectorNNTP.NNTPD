@@ -1,5 +1,5 @@
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Acme.Protocol;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Acme.Protocol;
 
 namespace VectorNNTP.NNTPD.Tests.Acme;
 

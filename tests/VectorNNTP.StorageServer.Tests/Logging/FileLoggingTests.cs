@@ -5,10 +5,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Core;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Logging;
 

@@ -12,7 +12,7 @@ using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.Common.Transport.ArticleTransfer;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 
 namespace VectorNNTP.BackFiller.Tests.Listener
 {

@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Configuration;
 

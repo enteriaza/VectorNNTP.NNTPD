@@ -9,16 +9,16 @@ using VectorNNTP.BackFiller.Acme;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Listener;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting
 {
@@ -165,7 +165,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             pairs["BackFiller:BindAddress:0"] = "*";
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(
+            builder.Services.AddSingleton<VectorNNTP.Common.Cloudflare.ICloudflareDnsReconciler>(
                 new NoOpCloudflareDnsReconciler());
             builder.Services.AddSingleton<IPhysicalMemoryProvider>(
                 new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));

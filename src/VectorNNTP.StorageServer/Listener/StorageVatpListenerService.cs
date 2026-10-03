@@ -4,13 +4,13 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking.Certificates;
-using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.StorageServer.Listener;
 

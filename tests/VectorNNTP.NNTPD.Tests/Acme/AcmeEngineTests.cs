@@ -2,12 +2,13 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Acme;
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Storage;
 

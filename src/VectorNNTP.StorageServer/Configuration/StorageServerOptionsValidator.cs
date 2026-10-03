@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Configuration;
 

@@ -1,4 +1,5 @@
 using System.Net;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Networking.Proxy;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;

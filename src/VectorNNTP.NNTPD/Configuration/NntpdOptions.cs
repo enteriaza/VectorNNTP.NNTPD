@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -99,7 +100,7 @@ public sealed class NntpdOptions : AcmeCloudflareOptions, IApplicationLifecycleO
     /// </summary>
     /// <remarks>
     /// This is a single wall-clock budget for the entire reverse-order stop sequence, not a fresh
-    /// timeout granted independently to each service. <see cref="Core.ApplicationServiceManager"/>
+    /// timeout granted independently to each service. <see cref="ApplicationServiceManager"/>
     /// awaits each service stop (no abandon). Services that ignore cancellation can block that await
     /// until they return; the host <c>ShutdownTimeout</c> (configured from this value) and external
     /// supervisors remain the process-level backstop.

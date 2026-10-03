@@ -8,7 +8,7 @@ using Serilog.Formatting.Display;
 using Serilog.Formatting.Json;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Logging
 {

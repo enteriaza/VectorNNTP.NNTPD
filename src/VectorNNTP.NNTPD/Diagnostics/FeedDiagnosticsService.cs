@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Diagnostics;

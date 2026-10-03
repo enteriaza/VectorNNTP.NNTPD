@@ -6,10 +6,9 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
@@ -17,6 +16,7 @@ using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Storage.Engine.Policy;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Hosting;
 
@@ -172,7 +172,7 @@ public static class StorageServerServiceCollectionExtensions
 
             return new StorageVatpListenerService(
                 runtime,
-                provider.GetRequiredService<VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider>(),
+                provider.GetRequiredService<VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider>(),
                 provider.GetRequiredService<IStorageArticleOpenBoundary>(),
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),

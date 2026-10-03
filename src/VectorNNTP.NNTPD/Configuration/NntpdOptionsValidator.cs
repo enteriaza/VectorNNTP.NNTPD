@@ -3,6 +3,8 @@ using System.Net;
 using System.Text;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -513,10 +515,10 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         {
             try
             {
-                var identities = Acme.CertificateIdentities.ForFqdn(options.Fqdn);
-                Acme.DnsZoneCoverage.RequireIdentitiesInDnsZone(identities, options.DnsSuffix);
+                var identities = CertificateIdentities.ForFqdn(options.Fqdn);
+                DnsZoneCoverage.RequireIdentitiesInDnsZone(identities, options.DnsSuffix);
             }
-            catch (Acme.AcmeConfigurationException ex)
+            catch (AcmeConfigurationException ex)
             {
                 failures.Add(ex.Message);
             }

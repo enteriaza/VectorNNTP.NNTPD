@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -19,6 +19,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Tests.Acme;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.NNTPD.Tests.Networking.Transport;
 

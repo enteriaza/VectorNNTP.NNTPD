@@ -1,79 +1,80 @@
-namespace VectorNNTP.NNTPD.Acme;
-
-/// <summary>Deterministic certificate SAN set for NNTPD TLS certificates.</summary>
-public static class CertificateIdentities
+namespace VectorNNTP.Common.Acme
 {
-    /// <summary>Shared public news hostname required on every server certificate.</summary>
-    public const string NewsHostname = "news.usenet.ninja";
-
-    /// <summary>
-    /// Normalizes the certificate FQDN used as the ACME filesystem partition key.
-    /// </summary>
-    /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
-    /// <returns>Trimmed, trailing-dot-stripped, lowercased FQDN.</returns>
-    /// <exception cref="ArgumentException">Thrown when the value is empty, a wildcard, or not a safe path segment.</exception>
-    public static string NormalizeFqdn(string fqdn)
+    /// <summary>Deterministic certificate SAN set for NNTPD TLS certificates.</summary>
+    public static class CertificateIdentities
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+        /// <summary>Shared public news hostname required on every server certificate.</summary>
+        public const string NewsHostname = "news.usenet.ninja";
 
-        var cleaned = fqdn.Trim().TrimEnd('.').ToLowerInvariant();
-        if (cleaned.Length == 0)
+        /// <summary>
+        /// Normalizes the certificate FQDN used as the ACME filesystem partition key.
+        /// </summary>
+        /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
+        /// <returns>Trimmed, trailing-dot-stripped, lowercased FQDN.</returns>
+        /// <exception cref="ArgumentException">Thrown when the value is empty, a wildcard, or not a safe path segment.</exception>
+        public static string NormalizeFqdn(string fqdn)
         {
-            throw new ArgumentException("fqdn must be a non-empty DNS name.", nameof(fqdn));
-        }
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
 
-        if (cleaned.Contains('*', StringComparison.Ordinal))
-        {
-            throw new ArgumentException("wildcard identities are not permitted.", nameof(fqdn));
-        }
-
-        if (cleaned.Contains("..", StringComparison.Ordinal)
-            || cleaned.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-        {
-            throw new ArgumentException("fqdn is not a valid filesystem partition key.", nameof(fqdn));
-        }
-
-        return cleaned;
-    }
-
-    /// <summary>
-    /// Returns the exact DNS SAN set for issuance.
-    /// </summary>
-    /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
-    /// <param name="includeNewsHostname">
-    /// When <see langword="true"/> (NNTPD), also include <see cref="NewsHostname"/>.
-    /// When <see langword="false"/> (BackFiller), request only <paramref name="fqdn"/>.
-    /// </param>
-    /// <returns>Lowercased, deduplicated identities.</returns>
-    public static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
-    {
-        var cleanedFqdn = NormalizeFqdn(fqdn);
-
-        var ordered = new List<string>(2);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        if (seen.Add(cleanedFqdn))
-        {
-            ordered.Add(cleanedFqdn);
-        }
-
-        if (includeNewsHostname)
-        {
-            var news = NewsHostname.ToLowerInvariant();
-            if (seen.Add(news))
+            var cleaned = fqdn.Trim().TrimEnd('.').ToLowerInvariant();
+            if (cleaned.Length == 0)
             {
-                ordered.Add(news);
+                throw new ArgumentException("fqdn must be a non-empty DNS name.", nameof(fqdn));
             }
 
-            if (!seen.Contains(cleanedFqdn) || !seen.Contains(news))
+            if (cleaned.Contains('*', StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("required certificate identities missing after normalization.");
+                throw new ArgumentException("wildcard identities are not permitted.", nameof(fqdn));
             }
-        }
-        else if (!seen.Contains(cleanedFqdn))
-        {
-            throw new InvalidOperationException("required certificate identity missing after normalization.");
+
+            if (cleaned.Contains("..", StringComparison.Ordinal)
+                || cleaned.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                throw new ArgumentException("fqdn is not a valid filesystem partition key.", nameof(fqdn));
+            }
+
+            return cleaned;
         }
 
-        return ordered;
+        /// <summary>
+        /// Returns the exact DNS SAN set for issuance.
+        /// </summary>
+        /// <param name="fqdn">Server FQDN (for example <c>nntpd01.usenet.ninja</c>).</param>
+        /// <param name="includeNewsHostname">
+        /// When <see langword="true"/> (NNTPD), also include <see cref="NewsHostname"/>.
+        /// When <see langword="false"/> (BackFiller), request only <paramref name="fqdn"/>.
+        /// </param>
+        /// <returns>Lowercased, deduplicated identities.</returns>
+        public static IReadOnlyList<string> ForFqdn(string fqdn, bool includeNewsHostname = true)
+        {
+            var cleanedFqdn = NormalizeFqdn(fqdn);
+
+            var ordered = new List<string>(2);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (seen.Add(cleanedFqdn))
+            {
+                ordered.Add(cleanedFqdn);
+            }
+
+            if (includeNewsHostname)
+            {
+                var news = NewsHostname.ToLowerInvariant();
+                if (seen.Add(news))
+                {
+                    ordered.Add(news);
+                }
+
+                if (!seen.Contains(cleanedFqdn) || !seen.Contains(news))
+                {
+                    throw new InvalidOperationException("required certificate identities missing after normalization.");
+                }
+            }
+            else if (!seen.Contains(cleanedFqdn))
+            {
+                throw new InvalidOperationException("required certificate identity missing after normalization.");
+            }
+
+            return ordered;
+        }
     }
 }

@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.NNTPD.Configuration;
 
@@ -27,7 +28,7 @@ public sealed class SystemdOptions
 
     /// <summary>
     /// Gets or sets a value indicating whether the application sends an explicit <c>READY=1</c>
-    /// when the application lifecycle reaches <see cref="Core.ApplicationState.Running"/>.
+    /// when the application lifecycle reaches <see cref="ApplicationState.Running"/>.
     /// </summary>
     /// <remarks>
     /// The built-in <c>SystemdLifetime</c> also notifies ready after all hosted services start.

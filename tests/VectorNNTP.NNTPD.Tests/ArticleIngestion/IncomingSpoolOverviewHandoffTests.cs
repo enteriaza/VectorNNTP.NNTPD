@@ -6,7 +6,7 @@ using VectorNNTP.Common.Articles.OverviewDb;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.ArticleIngestion.OverviewDb;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;

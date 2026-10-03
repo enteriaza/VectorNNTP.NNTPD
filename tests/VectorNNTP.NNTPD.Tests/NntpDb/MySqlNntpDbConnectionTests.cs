@@ -1,5 +1,6 @@
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.NNTPD.Tests.NntpDb;
 

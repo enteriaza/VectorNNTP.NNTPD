@@ -1,4 +1,4 @@
-using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.Common.Cloudflare;
 
 namespace VectorNNTP.StorageServer.Tests.TestDoubles;
 

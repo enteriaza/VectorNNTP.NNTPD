@@ -9,9 +9,8 @@ using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Listener;
@@ -20,6 +19,7 @@ using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Hosting;
 

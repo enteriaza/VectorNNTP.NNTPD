@@ -6,10 +6,10 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Acme;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration
 {
@@ -114,7 +114,7 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
             });
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTP.NNTPD.Cloudflare.ICloudflareDnsReconciler>(
+            builder.Services.AddSingleton<VectorNNTP.Common.Cloudflare.ICloudflareDnsReconciler>(
                 new NoOpCloudflareDnsReconciler());
             builder.Services.AddSingleton<IPhysicalMemoryProvider>(
                 new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));

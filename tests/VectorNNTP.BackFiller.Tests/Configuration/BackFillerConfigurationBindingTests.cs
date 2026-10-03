@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.Common.Hosting;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration
 {

@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Logging;
 
 namespace VectorNNTP.NNTPD.Hosting;

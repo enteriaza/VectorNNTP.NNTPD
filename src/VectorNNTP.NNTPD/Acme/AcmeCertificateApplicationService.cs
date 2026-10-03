@@ -1,4 +1,5 @@
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.NNTPD.Acme;
 

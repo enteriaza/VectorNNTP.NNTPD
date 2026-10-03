@@ -3,10 +3,11 @@ using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Cloudflare.Client;
 

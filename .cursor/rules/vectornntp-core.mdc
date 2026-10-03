@@ -29,6 +29,12 @@ All C# namespaces must be block-scoped; file-scoped namespaces are not permitted
 
 This applies to `src/VectorNNTP.BackFiller` and `tests/VectorNNTP.BackFiller.Tests`. Both projects set `csharp_style_namespace_declarations = block_scoped`.
 
+## Common code style
+
+All C# namespaces in `src/VectorNNTP.Common` and `tests/VectorNNTP.Common.Tests` must be block-scoped; file-scoped namespaces are not permitted. Both projects set `csharp_style_namespace_declarations = block_scoped`.
+
+The namespace must match the folder under the project directory. `src/VectorNNTP.Common/Messaging/RabbitMq/Foo.cs` is `VectorNNTP.Common.Messaging.RabbitMq`. `tests/VectorNNTP.Common.Tests/Configuration/Foo.cs` is `VectorNNTP.Common.Tests.Configuration`. A file directly under the project directory uses that project's root namespace. `GlobalUsings.cs` has no namespace.
+
 ## Evidence and honesty
 
 - Never claim builds, tests, format checks, benchmarks, or runtime verification succeeded unless they ran and succeeded here.

@@ -3,11 +3,11 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking;
+using VectorNNTP.Common.Networking.Certificates;
 
 namespace VectorNNTP.StorageServer.Tests.TestDoubles;
 

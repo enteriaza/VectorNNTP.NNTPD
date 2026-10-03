@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Tests.Fixtures;

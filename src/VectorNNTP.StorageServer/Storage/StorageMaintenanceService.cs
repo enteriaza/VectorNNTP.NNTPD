@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 

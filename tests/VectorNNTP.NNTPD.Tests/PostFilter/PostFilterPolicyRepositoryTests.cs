@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.PostFilter;
 

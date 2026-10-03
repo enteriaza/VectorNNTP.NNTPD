@@ -14,7 +14,7 @@ using Serilog.Events;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.Tests.Fixtures;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Logging
 {

@@ -1,126 +1,127 @@
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Configuration;
 
-namespace VectorNNTP.NNTPD.Acme;
-
-/// <summary>
-/// Creates ACME components only when TLS is enabled so non-TLS startups never touch ACME state.
-/// </summary>
-public class AcmeComponentFactory
+namespace VectorNNTP.Common.Acme
 {
-    private readonly IOptions<AcmeCloudflareOptions> _options;
-    private readonly ICloudflareDnsClient _cloudflareDnsClient;
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILoggerFactory _loggerFactory;
-    private readonly object _sync = new();
-    private CertificateManager? _manager;
-    private IServerCertificateProvider? _provider;
-
-    /// <summary>Initializes a new instance of the <see cref="AcmeComponentFactory"/> class.</summary>
-    public AcmeComponentFactory(
-        IOptions<AcmeCloudflareOptions> options,
-        ICloudflareDnsClient cloudflareDnsClient,
-        IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(cloudflareDnsClient);
-        ArgumentNullException.ThrowIfNull(httpClientFactory);
-        ArgumentNullException.ThrowIfNull(loggerFactory);
-        _options = options;
-        _cloudflareDnsClient = cloudflareDnsClient;
-        _httpClientFactory = httpClientFactory;
-        _loggerFactory = loggerFactory;
-    }
-
     /// <summary>
-    /// Returns a certificate manager when TLS is enabled; otherwise <see langword="null"/>.
+    /// Creates ACME components only when TLS is enabled so non-TLS startups never touch ACME state.
     /// </summary>
-    public virtual CertificateManager? GetOrCreateManager()
+    public class AcmeComponentFactory
     {
-        var options = _options.Value;
-        if (!options.IsTlsListenerEnabled)
+        private readonly IOptions<AcmeCloudflareOptions> _options;
+        private readonly ICloudflareDnsClient _cloudflareDnsClient;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly object _sync = new();
+        private CertificateManager? _manager;
+        private IServerCertificateProvider? _provider;
+
+        /// <summary>Initializes a new instance of the <see cref="AcmeComponentFactory"/> class.</summary>
+        public AcmeComponentFactory(
+            IOptions<AcmeCloudflareOptions> options,
+            ICloudflareDnsClient cloudflareDnsClient,
+            IHttpClientFactory httpClientFactory,
+            ILoggerFactory loggerFactory)
         {
-            return null;
+            ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(cloudflareDnsClient);
+            ArgumentNullException.ThrowIfNull(httpClientFactory);
+            ArgumentNullException.ThrowIfNull(loggerFactory);
+            _options = options;
+            _cloudflareDnsClient = cloudflareDnsClient;
+            _httpClientFactory = httpClientFactory;
+            _loggerFactory = loggerFactory;
         }
 
-        lock (_sync)
+        /// <summary>
+        /// Returns a certificate manager when TLS is enabled; otherwise <see langword="null"/>.
+        /// </summary>
+        public virtual CertificateManager? GetOrCreateManager()
         {
-            if (_manager is not null)
+            var options = _options.Value;
+            if (!options.IsTlsListenerEnabled)
             {
-                return _manager;
+                return null;
             }
 
-            var stateDir = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir(
-                options.AcmeStateDir,
-                AppContext.BaseDirectory);
-            var fqdn = CertificateIdentities.NormalizeFqdn(options.Fqdn);
-            var domains = CertificateIdentities.ForFqdn(fqdn, options.IncludeNewsHostnameInCertificate);
-            var renewalThreshold = TimeSpan.FromDays(options.AcmeRenewalThresholdDays);
-            var accountStore = new AccountStore(stateDir);
-            var certificateStore = new CertificateStore(
-                stateDir,
-                fqdn,
-                options.AcmeCertificatePassword,
-                domains,
-                renewalThreshold);
-            var resolver = new AuthoritativeTxtResolver(
-                options.DnsSuffix,
-                _loggerFactory.CreateLogger<AuthoritativeTxtResolver>());
-            var journal = new AcmeTransactionJournal(stateDir, fqdn);
-            var dnsSolver = new Dns01Solver(
-                _cloudflareDnsClient,
-                options.CloudFlareZoneId,
-                resolver,
-                fqdn,
-                stateDir,
-                historyJournal: journal);
-            var issuer = new AcmeIssuer(
-                _options,
-                accountStore,
-                dnsSolver,
-                _httpClientFactory,
-                _loggerFactory.CreateLogger<AcmeIssuer>(),
-                journal);
-            _manager = new CertificateManager(
-                fqdn,
-                stateDir,
-                options.AcmeDirectoryUrl,
-                certificateStore,
-                issuer,
-                options.AcmeCertificatePassword,
-                renewalThreshold,
-                _loggerFactory.CreateLogger<CertificateManager>(),
-                options.IncludeNewsHostnameInCertificate,
-                journal);
-            _provider = new ServerCertificateProvider(_manager);
-            return _manager;
-        }
-    }
+            lock (_sync)
+            {
+                if (_manager is not null)
+                {
+                    return _manager;
+                }
 
-    /// <summary>
-    /// Returns a certificate provider when TLS is enabled; otherwise an unavailable stub.
-    /// </summary>
-    public IServerCertificateProvider GetCertificateProvider()
-    {
-        if (!_options.Value.IsTlsListenerEnabled)
+                var stateDir = AcmeCloudflareOptionsValidator.ResolveAcmeStateDir(
+                    options.AcmeStateDir,
+                    AppContext.BaseDirectory);
+                var fqdn = CertificateIdentities.NormalizeFqdn(options.Fqdn);
+                var domains = CertificateIdentities.ForFqdn(fqdn, options.IncludeNewsHostnameInCertificate);
+                var renewalThreshold = TimeSpan.FromDays(options.AcmeRenewalThresholdDays);
+                var accountStore = new AccountStore(stateDir);
+                var certificateStore = new CertificateStore(
+                    stateDir,
+                    fqdn,
+                    options.AcmeCertificatePassword,
+                    domains,
+                    renewalThreshold);
+                var resolver = new AuthoritativeTxtResolver(
+                    options.DnsSuffix,
+                    _loggerFactory.CreateLogger<AuthoritativeTxtResolver>());
+                var journal = new AcmeTransactionJournal(stateDir, fqdn);
+                var dnsSolver = new Dns01Solver(
+                    _cloudflareDnsClient,
+                    options.CloudFlareZoneId,
+                    resolver,
+                    fqdn,
+                    stateDir,
+                    historyJournal: journal);
+                var issuer = new AcmeIssuer(
+                    _options,
+                    accountStore,
+                    dnsSolver,
+                    _httpClientFactory,
+                    _loggerFactory.CreateLogger<AcmeIssuer>(),
+                    journal);
+                _manager = new CertificateManager(
+                    fqdn,
+                    stateDir,
+                    options.AcmeDirectoryUrl,
+                    certificateStore,
+                    issuer,
+                    options.AcmeCertificatePassword,
+                    renewalThreshold,
+                    _loggerFactory.CreateLogger<CertificateManager>(),
+                    options.IncludeNewsHostnameInCertificate,
+                    journal);
+                _provider = new ServerCertificateProvider(_manager);
+                return _manager;
+            }
+        }
+
+        /// <summary>
+        /// Returns a certificate provider when TLS is enabled; otherwise an unavailable stub.
+        /// </summary>
+        public IServerCertificateProvider GetCertificateProvider()
         {
-            return DisabledServerCertificateProvider.Instance;
+            if (!_options.Value.IsTlsListenerEnabled)
+            {
+                return DisabledServerCertificateProvider.Instance;
+            }
+
+            _ = GetOrCreateManager();
+            return _provider ?? DisabledServerCertificateProvider.Instance;
         }
-
-        _ = GetOrCreateManager();
-        return _provider ?? DisabledServerCertificateProvider.Instance;
     }
-}
 
-/// <summary>Stub provider used when TLS / ACME is disabled.</summary>
-internal sealed class DisabledServerCertificateProvider : IServerCertificateProvider
-{
-    public static DisabledServerCertificateProvider Instance { get; } = new();
+    /// <summary>Stub provider used when TLS / ACME is disabled.</summary>
+    internal sealed class DisabledServerCertificateProvider : IServerCertificateProvider
+    {
+        public static DisabledServerCertificateProvider Instance { get; } = new();
 
-    public bool IsAvailable => false;
+        public bool IsAvailable => false;
 
-    public System.Security.Cryptography.X509Certificates.X509Certificate2 GetCertificate() =>
-        throw new InvalidOperationException("TLS is disabled; no server certificate is available.");
+        public System.Security.Cryptography.X509Certificates.X509Certificate2 GetCertificate() =>
+            throw new InvalidOperationException("TLS is disabled; no server certificate is available.");
+    }
 }

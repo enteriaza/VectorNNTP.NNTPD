@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.NNTPD.Tests.Core.Services;
 

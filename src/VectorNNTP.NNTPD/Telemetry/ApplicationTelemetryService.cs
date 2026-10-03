@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using VectorNNTP.NNTPD.ArticleIngestion;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session;

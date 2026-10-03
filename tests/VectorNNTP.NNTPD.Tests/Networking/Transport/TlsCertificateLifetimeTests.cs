@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Tests.Acme;
 
 namespace VectorNNTP.NNTPD.Tests.Networking.Transport;

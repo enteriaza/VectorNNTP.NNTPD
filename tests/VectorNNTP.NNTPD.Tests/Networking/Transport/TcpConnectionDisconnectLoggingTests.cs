@@ -1,7 +1,7 @@
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;

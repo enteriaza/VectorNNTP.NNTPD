@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine;

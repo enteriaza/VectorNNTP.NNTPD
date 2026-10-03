@@ -5,14 +5,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Cloudflare;
+using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.NNTPD.Redis;
 using VectorNNTP.NNTPD.RabbitMq;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 

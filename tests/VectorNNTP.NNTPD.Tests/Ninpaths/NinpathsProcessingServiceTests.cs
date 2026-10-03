@@ -223,7 +223,7 @@ public sealed class NinpathsProcessingServiceTests
 
         using var host = builder.Build();
         Assert.IsType<NinpathsCompletedFileHandler>(host.Services.GetRequiredService<ICompletedPathSurveyFileHandler>());
-        var services = host.Services.GetServices<VectorNNTP.NNTPD.Core.IApplicationService>().Select(static s => s.GetType()).ToArray();
+        var services = host.Services.GetServices<VectorNNTP.Common.Core.IApplicationService>().Select(static s => s.GetType()).ToArray();
         var email = Array.IndexOf(services, typeof(EmailDeliveryService));
         var ninpaths = Array.IndexOf(services, typeof(NinpathsProcessingService));
         Assert.True(email >= 0);

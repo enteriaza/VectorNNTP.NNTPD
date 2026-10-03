@@ -7,10 +7,10 @@ using System.Security.Cryptography.X509Certificates;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Retention;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking.Certificates;
-using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking.Certificates;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener
 {

@@ -1,5 +1,6 @@
 using MySqlConnector;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Fixtures;
 

@@ -1,4 +1,5 @@
 using MySqlConnector;
+using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 

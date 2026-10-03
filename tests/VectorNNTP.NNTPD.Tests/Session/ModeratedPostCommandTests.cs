@@ -7,7 +7,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Moderation;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Newsgroups;

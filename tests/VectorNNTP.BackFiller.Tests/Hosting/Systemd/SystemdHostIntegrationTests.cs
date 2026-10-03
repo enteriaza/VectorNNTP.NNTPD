@@ -11,13 +11,13 @@ using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Hosting.Systemd;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.RabbitMq;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting.Systemd
 {

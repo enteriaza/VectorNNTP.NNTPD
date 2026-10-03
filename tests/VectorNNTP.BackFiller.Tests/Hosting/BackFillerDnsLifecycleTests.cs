@@ -14,12 +14,12 @@ using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting
 {
@@ -34,7 +34,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                 typeof(CloudflareDnsReconciliationService).Assembly,
                 typeof(CloudflareDnsReconciliationApplicationService).Assembly);
             Assert.Equal(
-                "VectorNNTP.NNTPD.Cloudflare",
+                "VectorNNTP.Common.Cloudflare",
                 typeof(CloudflareDnsReconciliationApplicationService).Namespace);
             Assert.Null(
                 typeof(BackFillerServiceCollectionExtensions).Assembly

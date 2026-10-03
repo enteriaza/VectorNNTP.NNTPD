@@ -5,7 +5,7 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.Session;
@@ -378,7 +378,7 @@ public sealed class TransitPeerAuthorizationTests
         public Task PauseReadsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task UpgradeToTlsAsync(
-            VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider certificateProvider,
+            VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider certificateProvider,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

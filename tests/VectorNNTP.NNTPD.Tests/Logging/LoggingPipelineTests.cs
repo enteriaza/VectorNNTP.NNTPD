@@ -16,14 +16,16 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
-using VectorNNTP.NNTPD.Networking;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.Common.Logging;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Logging;
 

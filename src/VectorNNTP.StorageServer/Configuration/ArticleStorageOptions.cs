@@ -44,7 +44,7 @@ public sealed class ArticleStorageOptions
     /// </summary>
     /// <remarks>
     /// Relative paths resolve through
-    /// <see cref="VectorNNTP.NNTPD.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
+    /// <see cref="VectorNNTP.Common.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
     /// against <see cref="AppContext.BaseDirectory"/>. Absolute paths stay absolute.
     /// Distinct from <see cref="ControlDir"/> and <see cref="StorageServerOptions.LogDir"/>.
     /// Need not exist at validation time; validation must not create contents.
@@ -57,7 +57,7 @@ public sealed class ArticleStorageOptions
     /// </summary>
     /// <remarks>
     /// Relative paths resolve through
-    /// <see cref="VectorNNTP.NNTPD.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
+    /// <see cref="VectorNNTP.Common.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
     /// against <see cref="AppContext.BaseDirectory"/>. Distinct from
     /// <see cref="CacheDir"/> and <see cref="StorageServerOptions.LogDir"/>.
     /// Need not exist at validation time; validation must not create contents.

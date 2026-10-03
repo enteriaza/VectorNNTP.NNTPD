@@ -11,6 +11,7 @@ using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
 
@@ -258,7 +259,7 @@ public sealed class GroupCommandTests
             return Task.CompletedTask;
         }
 
-        public Task UpgradeToTlsAsync(VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider certificateProvider, CancellationToken cancellationToken = default) =>
+        public Task UpgradeToTlsAsync(VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider certificateProvider, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

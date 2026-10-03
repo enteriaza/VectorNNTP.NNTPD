@@ -2,212 +2,213 @@ using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
-namespace VectorNNTP.Common.Messaging.RabbitMq;
-
-/// <summary>Owns one RabbitMQ.Client <see cref="IConnection"/>.</summary>
-internal sealed class RabbitMqClientConnection : IRabbitMqConnection
+namespace VectorNNTP.Common.Messaging.RabbitMq
 {
-    private readonly IConnection _connection;
-    private readonly ILogger _logger;
-    private readonly AsyncEventHandler<ShutdownEventArgs> _shutdownHandler;
-    private readonly AsyncEventHandler<CallbackExceptionEventArgs> _callbackHandler;
-    private readonly AsyncEventHandler<ConnectionBlockedEventArgs> _blockedHandler;
-    private readonly AsyncEventHandler<AsyncEventArgs> _unblockedHandler;
-    private int _disposed;
-
-    /// <summary>Initializes a new wrapper around an opened broker connection.</summary>
-    internal RabbitMqClientConnection(IConnection connection, string virtualHost, ILogger logger)
+    /// <summary>Owns one RabbitMQ.Client <see cref="IConnection"/>.</summary>
+    internal sealed class RabbitMqClientConnection : IRabbitMqConnection
     {
-        ArgumentNullException.ThrowIfNull(connection);
-        ArgumentException.ThrowIfNullOrWhiteSpace(virtualHost);
-        ArgumentNullException.ThrowIfNull(logger);
+        private readonly IConnection _connection;
+        private readonly ILogger _logger;
+        private readonly AsyncEventHandler<ShutdownEventArgs> _shutdownHandler;
+        private readonly AsyncEventHandler<CallbackExceptionEventArgs> _callbackHandler;
+        private readonly AsyncEventHandler<ConnectionBlockedEventArgs> _blockedHandler;
+        private readonly AsyncEventHandler<AsyncEventArgs> _unblockedHandler;
+        private int _disposed;
 
-        _connection = connection;
-        _logger = logger;
-        VirtualHost = virtualHost;
-        ClientProvidedName = !string.IsNullOrWhiteSpace(connection.ClientProvidedName)
-            ? connection.ClientProvidedName
-            : throw new InvalidOperationException(
-                "RabbitMQ connection invariant violated: IConnection.ClientProvidedName must be non-null and non-whitespace.");
-
-        _shutdownHandler = OnShutdownAsync;
-        _callbackHandler = OnCallbackExceptionAsync;
-        _blockedHandler = OnBlockedAsync;
-        _unblockedHandler = OnUnblockedAsync;
-
-        _connection.ConnectionShutdownAsync += _shutdownHandler;
-        _connection.CallbackExceptionAsync += _callbackHandler;
-        _connection.ConnectionBlockedAsync += _blockedHandler;
-        _connection.ConnectionUnblockedAsync += _unblockedHandler;
-    }
-
-    /// <inheritdoc />
-    public bool IsOpen => _connection.IsOpen;
-
-    /// <inheritdoc />
-    public string Host => _connection.Endpoint.HostName;
-
-    /// <inheritdoc />
-    public int Port => _connection.Endpoint.Port;
-
-    /// <inheritdoc />
-    public string VirtualHost { get; }
-
-    /// <inheritdoc />
-    public string ClientProvidedName { get; }
-
-    /// <inheritdoc />
-    public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
-
-    /// <inheritdoc />
-    public async Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-        if (!_connection.IsOpen)
+        /// <summary>Initializes a new wrapper around an opened broker connection.</summary>
+        internal RabbitMqClientConnection(IConnection connection, string virtualHost, ILogger logger)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for topology declaration.");
+            ArgumentNullException.ThrowIfNull(connection);
+            ArgumentException.ThrowIfNullOrWhiteSpace(virtualHost);
+            ArgumentNullException.ThrowIfNull(logger);
+
+            _connection = connection;
+            _logger = logger;
+            VirtualHost = virtualHost;
+            ClientProvidedName = !string.IsNullOrWhiteSpace(connection.ClientProvidedName)
+                ? connection.ClientProvidedName
+                : throw new InvalidOperationException(
+                    "RabbitMQ connection invariant violated: IConnection.ClientProvidedName must be non-null and non-whitespace.");
+
+            _shutdownHandler = OnShutdownAsync;
+            _callbackHandler = OnCallbackExceptionAsync;
+            _blockedHandler = OnBlockedAsync;
+            _unblockedHandler = OnUnblockedAsync;
+
+            _connection.ConnectionShutdownAsync += _shutdownHandler;
+            _connection.CallbackExceptionAsync += _callbackHandler;
+            _connection.ConnectionBlockedAsync += _blockedHandler;
+            _connection.ConnectionUnblockedAsync += _unblockedHandler;
         }
 
-        var options = new CreateChannelOptions(
-            publisherConfirmationsEnabled: false,
-            publisherConfirmationTrackingEnabled: false);
-        var channel = await _connection
-            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        return new RabbitMqClientTopologyChannel(channel);
-    }
+        /// <inheritdoc />
+        public bool IsOpen => _connection.IsOpen;
 
-    /// <inheritdoc />
-    public async Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-        if (!_connection.IsOpen)
+        /// <inheritdoc />
+        public string Host => _connection.Endpoint.HostName;
+
+        /// <inheritdoc />
+        public int Port => _connection.Endpoint.Port;
+
+        /// <inheritdoc />
+        public string VirtualHost { get; }
+
+        /// <inheritdoc />
+        public string ClientProvidedName { get; }
+
+        /// <inheritdoc />
+        public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
+
+        /// <inheritdoc />
+        public async Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for article-work RPC.");
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            if (!_connection.IsOpen)
+            {
+                throw new InvalidOperationException("RabbitMQ connection is not open for topology declaration.");
+            }
+
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: false,
+                publisherConfirmationTrackingEnabled: false);
+            var channel = await _connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RabbitMqClientTopologyChannel(channel);
         }
 
-        var options = new CreateChannelOptions(
-            publisherConfirmationsEnabled: true,
-            publisherConfirmationTrackingEnabled: true);
-        var channel = await _connection
-            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        return new RabbitMqClientRpcChannel(channel, generation);
-    }
-
-    /// <inheritdoc />
-    public async Task<IRabbitMqManualAckChannel> CreateManualAckChannelAsync(
-        long generation,
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-        if (!_connection.IsOpen)
+        /// <inheritdoc />
+        public async Task<IRabbitMqRpcChannel> CreateRpcChannelAsync(long generation, CancellationToken cancellationToken)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for channel creation.");
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            if (!_connection.IsOpen)
+            {
+                throw new InvalidOperationException("RabbitMQ connection is not open for article-work RPC.");
+            }
+
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true);
+            var channel = await _connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RabbitMqClientRpcChannel(channel, generation);
         }
 
-        var options = new CreateChannelOptions(
-            publisherConfirmationsEnabled: false,
-            publisherConfirmationTrackingEnabled: false);
-        var channel = await _connection
-            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        return new RabbitMqClientManualAckChannel(channel, generation);
-    }
-
-    /// <inheritdoc />
-    public async Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(
-        long generation,
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-        if (!_connection.IsOpen)
+        /// <inheritdoc />
+        public async Task<IRabbitMqManualAckChannel> CreateManualAckChannelAsync(
+            long generation,
+            CancellationToken cancellationToken)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            if (!_connection.IsOpen)
+            {
+                throw new InvalidOperationException("RabbitMQ connection is not open for channel creation.");
+            }
+
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: false,
+                publisherConfirmationTrackingEnabled: false);
+            var channel = await _connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RabbitMqClientManualAckChannel(channel, generation);
         }
 
-        var options = new CreateChannelOptions(
-            publisherConfirmationsEnabled: true,
-            publisherConfirmationTrackingEnabled: true);
-        var channel = await _connection
-            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        return new RabbitMqClientPublishChannel(channel, generation);
-    }
-
-    /// <inheritdoc />
-    public async Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
-        long generation,
-        CancellationToken cancellationToken)
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-        if (!_connection.IsOpen)
+        /// <inheritdoc />
+        public async Task<IRabbitMqPublishChannel> CreatePublishChannelAsync(
+            long generation,
+            CancellationToken cancellationToken)
         {
-            throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            if (!_connection.IsOpen)
+            {
+                throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
+            }
+
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true);
+            var channel = await _connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RabbitMqClientPublishChannel(channel, generation);
         }
 
-        // Tracking disabled: BasicPublishAsync returns after the write; confirms arrive
-        // via BasicAcksAsync / BasicNacksAsync / BasicReturnAsync.
-        var options = new CreateChannelOptions(
-            publisherConfirmationsEnabled: true,
-            publisherConfirmationTrackingEnabled: false);
-        var channel = await _connection
-            .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        return new RabbitMqClientAsyncConfirmPublishChannel(channel, generation);
-    }
-
-    /// <inheritdoc />
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        /// <inheritdoc />
+        public async Task<IRabbitMqAsyncConfirmPublishChannel> CreateAsyncConfirmPublishChannelAsync(
+            long generation,
+            CancellationToken cancellationToken)
         {
-            return;
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            if (!_connection.IsOpen)
+            {
+                throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
+            }
+
+            // Tracking disabled: BasicPublishAsync returns after the write; confirms arrive
+            // via BasicAcksAsync / BasicNacksAsync / BasicReturnAsync.
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: false);
+            var channel = await _connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            return new RabbitMqClientAsyncConfirmPublishChannel(channel, generation);
         }
 
-        _connection.ConnectionShutdownAsync -= _shutdownHandler;
-        _connection.CallbackExceptionAsync -= _callbackHandler;
-        _connection.ConnectionBlockedAsync -= _blockedHandler;
-        _connection.ConnectionUnblockedAsync -= _unblockedHandler;
-
-        try
+        /// <inheritdoc />
+        public async ValueTask DisposeAsync()
         {
-            await _connection.CloseAsync().ConfigureAwait(false);
+            if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            {
+                return;
+            }
+
+            _connection.ConnectionShutdownAsync -= _shutdownHandler;
+            _connection.CallbackExceptionAsync -= _callbackHandler;
+            _connection.ConnectionBlockedAsync -= _blockedHandler;
+            _connection.ConnectionUnblockedAsync -= _unblockedHandler;
+
+            try
+            {
+                await _connection.CloseAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RabbitMqLogMessages.ConnectionCloseFailed(_logger, ex);
+            }
+
+            await _connection.DisposeAsync().ConfigureAwait(false);
         }
-        catch (Exception ex)
+
+        private Task OnShutdownAsync(object sender, ShutdownEventArgs eventArgs)
         {
-            RabbitMqLogMessages.ConnectionCloseFailed(_logger, ex);
+            ConnectionLost?.Invoke(
+                this,
+                new RabbitMqConnectionLostEventArgs(
+                    eventArgs.ReplyCode,
+                    eventArgs.ReplyText,
+                    eventArgs.Initiator.ToString()));
+            return Task.CompletedTask;
         }
 
-        await _connection.DisposeAsync().ConfigureAwait(false);
-    }
+        private Task OnCallbackExceptionAsync(object sender, CallbackExceptionEventArgs eventArgs)
+        {
+            RabbitMqLogMessages.CallbackException(_logger, eventArgs.Exception.Message);
+            return Task.CompletedTask;
+        }
 
-    private Task OnShutdownAsync(object sender, ShutdownEventArgs eventArgs)
-    {
-        ConnectionLost?.Invoke(
-            this,
-            new RabbitMqConnectionLostEventArgs(
-                eventArgs.ReplyCode,
-                eventArgs.ReplyText,
-                eventArgs.Initiator.ToString()));
-        return Task.CompletedTask;
-    }
+        private Task OnBlockedAsync(object sender, ConnectionBlockedEventArgs eventArgs)
+        {
+            RabbitMqLogMessages.ConnectionBlocked(_logger, eventArgs.Reason);
+            return Task.CompletedTask;
+        }
 
-    private Task OnCallbackExceptionAsync(object sender, CallbackExceptionEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.CallbackException(_logger, eventArgs.Exception.Message);
-        return Task.CompletedTask;
-    }
-
-    private Task OnBlockedAsync(object sender, ConnectionBlockedEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.ConnectionBlocked(_logger, eventArgs.Reason);
-        return Task.CompletedTask;
-    }
-
-    private Task OnUnblockedAsync(object sender, AsyncEventArgs eventArgs)
-    {
-        RabbitMqLogMessages.ConnectionUnblocked(_logger);
-        return Task.CompletedTask;
+        private Task OnUnblockedAsync(object sender, AsyncEventArgs eventArgs)
+        {
+            RabbitMqLogMessages.ConnectionUnblocked(_logger);
+            return Task.CompletedTask;
+        }
     }
 }

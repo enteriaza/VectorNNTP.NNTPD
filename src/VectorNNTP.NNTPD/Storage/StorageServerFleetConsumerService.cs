@@ -3,7 +3,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.RabbitMq;
 
 namespace VectorNNTP.NNTPD.Storage;

@@ -1,7 +1,7 @@
 using Serilog;
 using VectorNNTP.BackFiller.Hosting;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.BackFiller.Logging;
+using VectorNNTP.Common.Configuration;
 
 var loggingCommandLine = BackFillerLoggingCommandLine.FromArguments(args);
 if (loggingCommandLine.Console)

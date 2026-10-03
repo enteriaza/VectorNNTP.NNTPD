@@ -12,11 +12,11 @@ using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking.Certificates;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Hosting
 {

@@ -1,7 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Networking;
 
 namespace VectorNNTP.NNTPD.Tests.Networking;
 

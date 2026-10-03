@@ -1,6 +1,7 @@
 using System.Net;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 

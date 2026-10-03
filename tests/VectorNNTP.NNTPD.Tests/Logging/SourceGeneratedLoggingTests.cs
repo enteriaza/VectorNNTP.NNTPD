@@ -7,11 +7,12 @@ using Microsoft.Extensions.Logging;
 using Serilog.Events;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.Logging;
 
 namespace VectorNNTP.NNTPD.Tests.Logging;
 

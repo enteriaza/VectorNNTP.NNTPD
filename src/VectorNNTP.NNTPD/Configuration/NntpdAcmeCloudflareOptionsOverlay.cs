@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Configuration;
 

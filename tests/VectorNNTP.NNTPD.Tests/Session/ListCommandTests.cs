@@ -665,7 +665,7 @@ public sealed class ListCommandTests
             return Task.CompletedTask;
         }
 
-        public Task UpgradeToTlsAsync(VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider certificateProvider, CancellationToken cancellationToken = default) =>
+        public Task UpgradeToTlsAsync(VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider certificateProvider, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task UpgradeToDeflateAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

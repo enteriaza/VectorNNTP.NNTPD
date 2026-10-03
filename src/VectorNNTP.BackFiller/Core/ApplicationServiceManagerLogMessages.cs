@@ -8,7 +8,7 @@ namespace VectorNNTP.BackFiller.Core
     {
         /// <summary>
         /// Written immediately before <see cref="ApplicationServiceManager"/> calls
-        /// <see cref="VectorNNTP.NNTPD.Core.IApplicationService.StartAsync"/> on one registered service.
+        /// <see cref="VectorNNTP.Common.Core.IApplicationService.StartAsync"/> on one registered service.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="serviceName">Name of the service about to start.</param>

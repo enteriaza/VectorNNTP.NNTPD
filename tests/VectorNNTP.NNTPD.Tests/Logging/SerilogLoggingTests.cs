@@ -8,7 +8,7 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 

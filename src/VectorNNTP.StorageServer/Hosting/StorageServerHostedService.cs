@@ -1,12 +1,12 @@
 using System.Diagnostics;
 using System.Net;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
-using VectorNNTP.NNTPD.Networking;
-using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Networking;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Logging;
+using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.StorageServer.Hosting;
 

@@ -14,9 +14,8 @@ using Serilog.Extensions.Logging;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Logging;
@@ -28,6 +27,7 @@ using VectorNNTP.StorageServer.Storage.Engine.Policy;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.Logging;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Storage;
 

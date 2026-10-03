@@ -1,4 +1,4 @@
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Session;
 
 namespace VectorNNTP.NNTPD.Transit;

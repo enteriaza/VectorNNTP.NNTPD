@@ -1,4 +1,4 @@
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;

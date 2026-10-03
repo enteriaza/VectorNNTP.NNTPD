@@ -1,5 +1,5 @@
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Core;
 
 namespace VectorNNTP.StorageServer.Acme;
 

@@ -5,10 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.NNTPD.Acme;
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.Core;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting;
@@ -18,6 +17,7 @@ using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Hosting;
 

@@ -1,7 +1,7 @@
 using Serilog;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Logging;
+using VectorNNTP.Common.Configuration;
 
 StorageServerLoggingExtensions.UseAutoFlushConsoleOutput();
 Log.Logger = StorageServerLoggingExtensions.CreateBootstrapLogger();

@@ -1,3 +1,5 @@
+using VectorNNTP.Common.Configuration;
+
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>Filesystem outbound email spool settings nested under <see cref="EmailOptions"/>.</summary>

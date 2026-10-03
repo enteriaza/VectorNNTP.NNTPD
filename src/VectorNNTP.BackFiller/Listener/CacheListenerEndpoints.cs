@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
-using VectorNNTP.NNTPD.Networking.Listeners;
+using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.BackFiller.Listener
 {

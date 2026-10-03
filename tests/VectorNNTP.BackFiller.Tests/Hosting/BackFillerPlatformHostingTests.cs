@@ -9,9 +9,9 @@ using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
-using VectorNNTP.NNTPD.Configuration;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Hosting
 {

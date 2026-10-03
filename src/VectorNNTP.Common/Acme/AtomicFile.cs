@@ -1,64 +1,65 @@
-namespace VectorNNTP.NNTPD.Acme;
-
-/// <summary>Atomic filesystem helpers for ACME state (temp + replace).</summary>
-internal static class AtomicFile
+namespace VectorNNTP.Common.Acme
 {
-    public static void WriteBytes(string path, ReadOnlySpan<byte> data)
+    /// <summary>Atomic filesystem helpers for ACME state (temp + replace).</summary>
+    internal static class AtomicFile
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory))
+        public static void WriteBytes(string path, ReadOnlySpan<byte> data)
         {
-            Directory.CreateDirectory(directory);
-        }
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var tempPath = Path.Combine(
-            directory ?? ".",
-            $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-
-        try
-        {
-            using (var stream = new FileStream(
-                       tempPath,
-                       FileMode.CreateNew,
-                       FileAccess.Write,
-                       FileShare.None,
-                       bufferSize: 4096,
-                       FileOptions.WriteThrough))
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
             {
-                stream.Write(data);
-                stream.Flush(flushToDisk: true);
+                Directory.CreateDirectory(directory);
             }
 
-            File.Move(tempPath, path, overwrite: true);
-        }
-        catch
-        {
-            TryDelete(tempPath);
-            throw;
-        }
-    }
+            var tempPath = Path.Combine(
+                directory ?? ".",
+                $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
 
-    public static void WriteText(string path, string text) =>
-        WriteBytes(path, System.Text.Encoding.UTF8.GetBytes(text));
-
-    public static void TryDelete(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
+            try
             {
-                File.Delete(path);
+                using (var stream = new FileStream(
+                           tempPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           bufferSize: 4096,
+                           FileOptions.WriteThrough))
+                {
+                    stream.Write(data);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch
+            {
+                TryDelete(tempPath);
+                throw;
             }
         }
-        catch (IOException)
+
+        public static void WriteText(string path, string text) =>
+            WriteBytes(path, System.Text.Encoding.UTF8.GetBytes(text));
+
+        public static void TryDelete(string path)
         {
-            // Best-effort cleanup.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Best-effort cleanup.
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Best-effort cleanup.
+            }
         }
     }
 }

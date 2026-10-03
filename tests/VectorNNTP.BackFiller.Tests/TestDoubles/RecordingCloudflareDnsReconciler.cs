@@ -1,5 +1,5 @@
-using VectorNNTP.NNTPD.Cloudflare;
-using VectorNNTP.NNTPD.Networking;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Networking;
 
 namespace VectorNNTP.BackFiller.Tests.TestDoubles
 {

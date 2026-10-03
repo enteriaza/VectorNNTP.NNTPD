@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.NNTPD.Configuration;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Logging;
 

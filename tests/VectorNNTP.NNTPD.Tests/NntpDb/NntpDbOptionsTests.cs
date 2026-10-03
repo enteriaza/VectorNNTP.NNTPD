@@ -5,6 +5,8 @@ using VectorNNTP.Common.Hosting;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.NntpDb;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.NntpDb;
 

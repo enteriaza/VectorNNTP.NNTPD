@@ -5,7 +5,7 @@ using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.History;
-using VectorNNTP.NNTPD.Networking.Certificates;
+using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
 using VectorNNTP.NNTPD.SessionState.BytesAccounting;

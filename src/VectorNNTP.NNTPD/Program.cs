@@ -3,6 +3,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
+using VectorNNTP.Common.Configuration;
 
 NntpdLoggingExtensions.UseAutoFlushConsoleOutput();
 Log.Logger = NntpdLoggingExtensions.CreateBootstrapLogger();

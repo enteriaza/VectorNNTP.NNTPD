@@ -460,7 +460,7 @@ public sealed class FeedDiagnosticsTests
         public Task PauseReadsAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task UpgradeToTlsAsync(
-            VectorNNTP.NNTPD.Networking.Certificates.ITlsCertificateContextProvider certificateProvider,
+            VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider certificateProvider,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

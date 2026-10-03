@@ -1,6 +1,7 @@
-using VectorNNTP.NNTPD.Acme;
+using VectorNNTP.Common.Acme;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.NNTPD.Tests.Acme;
 

@@ -1,8 +1,8 @@
 using System.Net;
 using Microsoft.Extensions.Options;
-using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Tests.Fixtures;
+using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Configuration;
 
@@ -154,7 +154,7 @@ public sealed class StorageServerAcmeAdapterTests
         Assert.Equal(0, destination.BindPort);
         Assert.Equal(source.BindPortTls, destination.BindPortTls);
 
-        var names = VectorNNTP.NNTPD.Acme.CertificateIdentities.ForFqdn(
+        var names = VectorNNTP.Common.Acme.CertificateIdentities.ForFqdn(
             destination.Fqdn,
             destination.IncludeNewsHostnameInCertificate);
         Assert.Equal(["cache12.usenet.ninja"], names);
