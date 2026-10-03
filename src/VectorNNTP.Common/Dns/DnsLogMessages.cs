@@ -56,7 +56,7 @@ namespace VectorNNTP.Common.Dns
         /// <param name="RecordName">TXT owner name that was queried.</param>
         [LoggerMessage(
             EventId = 1953,
-            Level = LogLevel.Debug,
+            Level = LogLevel.Warning,
             Message = "Authoritative DNS UDP query timed out for {RecordName} at {Nameserver}")]
         internal static partial void AuthoritativeUdpTimeout(ILogger logger, string Nameserver, string RecordName);
 
@@ -69,7 +69,7 @@ namespace VectorNNTP.Common.Dns
         /// <param name="RecordName">TXT owner name that was queried.</param>
         [LoggerMessage(
             EventId = 1954,
-            Level = LogLevel.Debug,
+            Level = LogLevel.Warning,
             Message = "Authoritative DNS TCP query timed out for {RecordName} at {Nameserver}")]
         internal static partial void AuthoritativeTcpTimeout(ILogger logger, string Nameserver, string RecordName);
     }

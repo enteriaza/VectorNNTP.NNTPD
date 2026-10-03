@@ -192,7 +192,11 @@ namespace VectorNNTP.Common.Dns
             }
 
             Exception ex = s_recursiveResolverDiscoveryException;
-            DnsLogMessages.RecursiveResolverDiscoveryFallback(logger, ex.GetType().Name, ex);
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                string exceptionType = ex.GetType().Name;
+                DnsLogMessages.RecursiveResolverDiscoveryFallback(logger, exceptionType, ex);
+            }
         }
 
         /// <summary>Appends <paramref name="ip"/> when <paramref name="list"/> does not already contain an equal address.</summary>
@@ -357,9 +361,10 @@ namespace VectorNNTP.Common.Dns
             }
             catch (Exception ex)
             {
-                if (logger is not null)
+                if (logger is not null && logger.IsEnabled(LogLevel.Debug))
                 {
-                    DnsLogMessages.NsHostnameOsResolveFailed(logger, host, ex.GetType().Name, ex);
+                    string exceptionType = ex.GetType().Name;
+                    DnsLogMessages.NsHostnameOsResolveFailed(logger, host, exceptionType, ex);
                 }
 
                 return [];

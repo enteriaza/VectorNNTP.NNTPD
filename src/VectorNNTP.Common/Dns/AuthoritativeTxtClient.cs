@@ -93,9 +93,10 @@ namespace VectorNNTP.Common.Dns
                 .QueryAsync(nameserver, queryPacket, ReceiveTimeoutMs, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (exchange.TimedOut && logger is not null)
+            if (exchange.TimedOut && logger is not null && logger.IsEnabled(LogLevel.Debug))
             {
-                DnsLogMessages.AuthoritativeUdpTimeout(logger, nameserver.ToString(), recordName);
+                string nameserverText = nameserver.ToString();
+                DnsLogMessages.AuthoritativeUdpTimeout(logger, nameserverText, recordName);
             }
 
             return exchange.Buffer;
@@ -152,9 +153,10 @@ namespace VectorNNTP.Common.Dns
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                if (logger is not null)
+                if (logger is not null && logger.IsEnabled(LogLevel.Debug))
                 {
-                    DnsLogMessages.AuthoritativeTcpTimeout(logger, nameserver.ToString(), recordName);
+                    string nameserverText = nameserver.ToString();
+                    DnsLogMessages.AuthoritativeTcpTimeout(logger, nameserverText, recordName);
                 }
 
                 return null;
