@@ -20,7 +20,9 @@ public sealed class TransitPeerAuthenticator : ITransitPeerAuthenticator
         ArgumentNullException.ThrowIfNull(currentAuthorization);
         if (policy is not null && policy.CredentialsMatch(username, password))
         {
-            return NntpAuthenticationResult.Success(username, currentAuthorization);
+            return NntpAuthenticationResult.Success(
+                username,
+                currentAuthorization.With(authorizedTransit: true, streamingPermitted: true));
         }
 
         return NntpAuthenticationResult.Failed;

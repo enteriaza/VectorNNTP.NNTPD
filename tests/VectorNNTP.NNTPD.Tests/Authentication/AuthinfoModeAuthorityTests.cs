@@ -104,7 +104,9 @@ public sealed class AuthinfoModeAuthorityTests
 
         Assert.False(session.Authentication.IsAuthenticated);
         Assert.Equal("a", session.PendingAuthUsername);
-        Assert.True(session.Authorization.AuthorizedTransit);
+        Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.True(session.Authorization.StreamingPermitted);
+        Assert.Equal("usenet-ninja", session.Authorization.TransitPeerName);
         Assert.Equal(1, harness.Reader.AuthenticateCount);
         Assert.Equal(0, harness.Transit.AuthenticateCount);
 
@@ -170,7 +172,9 @@ public sealed class AuthinfoModeAuthorityTests
 
         Assert.False(session.Authentication.IsAuthenticated);
         Assert.Null(session.Authentication.Username);
-        Assert.True(session.Authorization.AuthorizedTransit);
+        Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.True(session.Authorization.StreamingPermitted);
+        Assert.Equal("usenet-ninja", session.Authorization.TransitPeerName);
         Assert.False(session.Authorization.AuthorizedReader);
         Assert.Equal("a", session.PendingAuthUsername);
         Assert.Equal(0, harness.Reader.AuthenticateCount);
@@ -204,7 +208,9 @@ public sealed class AuthinfoModeAuthorityTests
         Assert.Null(session.AccountPolicy);
         Assert.False(session.Authorization.AuthorizedReader);
         Assert.False(session.Authorization.PostingPermitted);
-        Assert.True(session.Authorization.AuthorizedTransit);
+        Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.True(session.Authorization.StreamingPermitted);
+        Assert.Equal("usenet-ninja", session.Authorization.TransitPeerName);
         Assert.Equal(0, harness.Reader.AuthenticateCount);
 
         await harness.QuitAsync(run);

@@ -114,10 +114,9 @@ public sealed class TransitPeerOptions
     /// Gets or sets the maximum allowed incoming article size for this peer, in bytes.
     /// </summary>
     /// <remarks>
-    /// Stored peer policy only; not wired into article ingestion. Default is
-    /// <see cref="DefaultMaxSize"/>. Valid range is <c>1–2147483647</c>.
-    /// Distinct from <c>Nntpd:ArticleIngestion:MaxArticleBytes</c> (current TAKETHIS
-    /// receive ceiling).
+    /// When this options object is compiled into a snapshot, this is the Receive ceiling.
+    /// Inbound acceptance uses the smaller of this value and the published global <c>maxartsize</c>.
+    /// Default is <see cref="DefaultMaxSize"/>. Valid range is <c>1–2147483647</c>.
     /// </remarks>
     public long MaxSize { get; set; } = DefaultMaxSize;
 

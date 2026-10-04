@@ -26,7 +26,8 @@ public sealed class TransitPeerIdentificationAndLimitTests
                         allowFrom: ["192.0.2.10"])),
             });
         var authz = TransitPeerAuthorization.CreateStatic(snapshot).Resolve(IPAddress.Parse("192.0.2.10"));
-        Assert.True(authz.AuthorizedTransit);
+        Assert.False(authz.AuthorizedTransit);
+        Assert.True(authz.StreamingPermitted);
         Assert.Equal(TransitTestPeers.DefaultPeerName, authz.TransitPeerName);
         Assert.NotNull(authz.TransitPeerPolicy);
         Assert.Equal(TransitTestPeers.DefaultPeerName, authz.TransitPeerPolicy.Identifier);

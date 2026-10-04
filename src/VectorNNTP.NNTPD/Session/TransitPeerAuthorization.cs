@@ -20,8 +20,10 @@ public interface ITransitPeerAuthorization
     /// <remarks>
     /// Matching uses the precomputed IP-only ACL (literal prefixes plus already-resolved
     /// AllowFrom addresses). This method never performs DNS, reverse DNS, or network I/O.
-    /// A unique match grants transit + streaming without authentication, reader, or posting,
-    /// and retains the named peer policy. Ambiguous multi-peer matches grant nothing.
+    /// A unique match retains the named peer policy and grants streaming.
+    /// Feed commands are granted immediately only when that peer has no receive credentials.
+    /// When both username and password are set, feed commands wait for AUTHINFO.
+    /// Ambiguous multi-peer matches grant nothing.
     /// Other addresses receive <see cref="NntpAuthorization.Unauthenticated"/>.
     /// </remarks>
     NntpAuthorization Resolve(IPAddress effectiveClientAddress);

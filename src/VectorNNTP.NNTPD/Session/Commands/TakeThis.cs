@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -28,7 +29,8 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// on the emit gate so publication remains command-ordered. Depth bounds how
 /// many owned articles stay in flight. TAKETHIS responses flush immediately
 /// (no coalesce batch). ArticleRecord construction failure is a permanent
-/// <c>439</c>.
+/// <c>439</c>. After CanonicalV1, the connection's Receive article-type mask and
+/// newsgroup expression are applied. CHECK does not use them.
 /// </para>
 /// <para>
 /// MODE READER fallback still destuffs via <see cref="NntpMultilineDataReader"/> and
@@ -364,24 +366,37 @@ internal static class TakeThis
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         canonicalSize = 0;
 
-        var created = siteNameUtf8 is null
-            ? stuffed
+        ArticleRecordCreateResult created;
+        if (stuffed)
+        {
+            created = siteNameUtf8 is null
                 ? ArticleRecordIngress.TryCreateFromStuffedWire(
                     session.ArticleParser,
                     payload,
-                    session.ArticleIngestion.MaxArticleBytes)
-                : ArticleRecordIngress.TryCreateFromDestuffed(session.ArticleParser, payload)
-            : stuffed
-                ? ArticleRecordIngress.TryCreateFromStuffedWire(
-                    session.ArticleParser,
-                    payload,
-                    maxArticleBytes,
-                    siteNameUtf8)
-                : ArticleRecordIngress.TryCreateFromDestuffed(
+                    maxArticleBytes)
+                : ArticleRecordIngress.TryCreateFromStuffedWire(
                     session.ArticleParser,
                     payload,
                     maxArticleBytes,
                     siteNameUtf8);
+        }
+        else if (siteNameUtf8 is null)
+        {
+            created = ArticleRecordIngress.TryCreateFromDestuffed(
+                session.ArticleParser,
+                payload,
+                maxArticleBytes,
+                ArticlePathCanonicalizer.OrganizationalTrackerHost);
+        }
+        else
+        {
+            created = ArticleRecordIngress.TryCreateFromDestuffed(
+                session.ArticleParser,
+                payload,
+                maxArticleBytes,
+                siteNameUtf8);
+        }
+
         if (!created.IsAccepted)
         {
             inbound = null!;
@@ -395,7 +410,13 @@ internal static class TakeThis
         if (!ArticleTypeAccessPolicy.CanPostArticleType(session, created.Record.ArtType))
         {
             inbound = null!;
-            rejectDetail = "rejected article type";
+            rejectDetail = TransitReceivePolicy.ArticleTypeRejectDetail;
+            return false;
+        }
+
+        if (TransitReceivePolicy.TryReject(session.Authorization.TransitPeerPolicy, created.Record, out rejectDetail))
+        {
+            inbound = null!;
             return false;
         }
 

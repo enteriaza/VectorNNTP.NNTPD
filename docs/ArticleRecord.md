@@ -164,7 +164,7 @@ It is **not** NNTP wire size. Dot-stuffing makes wire length transport-dependent
 Implementation: [`ArticleType.cs`](../src/VectorNNTP.Common/Articles/ArticleType.cs), [`ArticleTypeClassifier.cs`](../src/VectorNNTP.Common/Articles/ArticleTypeClassifier.cs).  
 Tests: [`ArticleTypeClassifierTests.cs`](../tests/VectorNNTP.Common.Tests/Articles/ArticleTypeClassifierTests.cs), NNTPD [`ArticleTypeClassifierTests.cs`](../tests/VectorNNTP.NNTPD.Tests/ArticleIngestion/ArticleTypeClassifierTests.cs).
 
-`ArticleType` is `[Flags]`. Bits match NNTPD `TransitMessageTypes` (`YEncoded` is the same bit as transit `Yenc`). Transit **policy matching** is not wired; the flags exist for classification and future policy.
+`ArticleType` is `[Flags]`. Bits match NNTPD `TransitMessageTypes` (`YEncoded` is the same bit as transit `Yenc`). Inbound Transit receive policy compares this classified value with the peer's receive mask. Send article-type matching is not wired.
 
 | Flag | Bit | Established meaning |
 |---|---|---|

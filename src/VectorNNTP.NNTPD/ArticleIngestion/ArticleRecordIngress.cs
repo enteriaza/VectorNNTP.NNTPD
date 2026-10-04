@@ -58,7 +58,7 @@ internal static class ArticleRecordIngress
     /// </summary>
     /// <param name="parser">Session-scoped Common parser (local identity for Path hops).</param>
     /// <param name="stuffedWire">Stuffed article bytes without the NNTP terminator.</param>
-    /// <param name="maxArticleBytes">Destuffed size ceiling.</param>
+    /// <param name="maxArticleBytes">Destuff and materialize ceiling.</param>
     /// <returns>
     /// Factory result, or parse-rejected <see cref="NntpArticleParseFailureCode.ArticleTooLarge"/>
     /// when destuff exceeds <paramref name="maxArticleBytes"/>.
@@ -75,7 +75,12 @@ internal static class ArticleRecordIngress
             return ArticleRecordCreateResult.RejectedParse(NntpArticleParseFailureCode.ArticleTooLarge);
         }
 
-        return ArticleRecordFactory.TryCreate(parser, destuffed, ArticlePathMode.Traverse);
+        return ArticleRecordFactory.TryCreate(
+            parser,
+            destuffed,
+            ArticlePathMode.Traverse,
+            maxArticleBytes,
+            ArticlePathCanonicalizer.OrganizationalTrackerHost);
     }
 
     /// <summary>

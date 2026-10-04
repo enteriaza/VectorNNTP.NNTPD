@@ -850,14 +850,14 @@ Example:
 
 Trusted feed peers are the published MySQL catalogue documented in [schema/nntptransit.sql](schema/nntptransit.sql). One publication names one receive revision, one send revision, and one global revision. Those revisions contain the same peer identifiers. A top-level JSON `Transit` object fails startup.
 
-This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy. Send endpoints and send article policy are loaded into that snapshot and do not open outbound connections.
+This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match retains the named peer policy and grants `StreamingPermitted` without `IsAuthenticated`, reader, or posting. `AuthorizedTransit` is included immediately only when the peer's receive username and password are not both non-empty. When both are non-empty, `CHECK`/`IHAVE`/`TAKETHIS` require a matching `MODE STREAM` AUTHINFO. Send endpoints and send article policy are loaded into that snapshot and do not open outbound connections or affect inbound acceptance.
 
 `AUTHINFO USER/PASS` is a **public** command (READER, STREAM, transit peers, and non-transit clients may issue it). Credential authority is the session MODE, not the source IP. `MODE STREAM` authenticates against that session's Transit peer credentials only (both configured `Username` and `Password` non-empty and ordinal match). `MODE READER` and an unspecified mode authenticate against the ordinary provider (newsmaster, then MySQL `nntpusers`) even when the client IP matches a Transit `AllowFrom`. There is no Transit ↔ MySQL fallback. AUTHINFO success is not Transit authorization: a READER authentication does not become a Transit peer.
 
 | Situation | Behavior |
 |-----------|----------|
 | Published catalogue has no peers | Deny-by-default. Sessions start with no transit/streaming privileges. |
-| Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE`. `MODE STREAM` AUTHINFO uses that peer's credentials only. `MODE READER` AUTHINFO uses MySQL/newsmaster. |
+| Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer and may `MODE STREAM`. When receive credentials are disabled, `CHECK`, `TAKETHIS`, and `IHAVE` are available immediately. When both receive username and password are set, those feed commands return `480` until `MODE STREAM` AUTHINFO matches. `MODE READER` AUTHINFO uses MySQL/newsmaster. |
 | Effective client matches no peer | Same as empty dictionary for that connection. AUTHINFO uses the ordinary authentication provider unless `MODE STREAM` was accepted (then Transit auth fails without MySQL). |
 | Effective client matches more than one peer | Transit is **denied**. A WARNING is logged on **every** such connection (`source IP` + matching peer names). Literal/CIDR and duplicate-hostname overlap is rejected at configuration validation; residual DNS-vs-literal overlap is still denied at identification time. |
 
@@ -900,11 +900,11 @@ Column definitions, checks, and keys are [schema/nntptransit.sql](schema/nntptra
 | Column | Plane | Meaning |
 |--------|-------|---------|
 | `max_inbound` | Receive | Cluster-wide inbound connection limit (`0–4096`). `0` closes receive. Redis counts admits after identification. A later READER AUTHINFO releases that slot. |
-| `username`, `password` | Receive and Send, separately | Both empty or both set. Receive is the AUTHINFO pair used by an identified peer. Send is stored and not used to open a connection. Never log either password. |
+| `username`, `password` | Receive and Send, separately | Both empty or both set. Receive authentication is enabled only when both are non-empty; either blank disables the gate and feed commands do not require AUTHINFO. When enabled, `MODE STREAM` AUTHINFO must match that pair before `CHECK`/`IHAVE`/`TAKETHIS`. Send credentials are stored and not used to open a connection. Never log either password. |
 | `defer_on_duplicate` | Receive | `Y`/`N`. Stored for later CHECK/IHAVE duplicate handling. |
-| `max_article_bytes` | Receive and Send, separately | Receive is `NOT NULL` and `1–2147483647`. Send `NULL` is unlimited and is not replaced with a numeric default. A non-NULL Send value is an explicit ceiling in that same range. `0` is not unlimited. Send revision 1 was seeded from `nntpsharedconfig.maxartsize` (`5242880`), not from each peer's receive size. |
-| `article_types` | Receive and Send, separately | Integer mask `0–65535`. `65535` is unrestricted, `1` is text only, `0` permits no classified article. |
-| `patterns` | Receive and Send, separately | One newsfeeds expression. `*` is every newsgroup. |
+| `max_article_bytes` | Receive and Send, separately | Receive is `NOT NULL` and `1–2147483647`. The inbound ceiling for a connection is `min(nntpsharedconfig.maxartsize, peer receive max)`. The global value always wins when it is smaller, including when a peer value is treated as unlimited. Send `NULL` is unlimited and is not replaced with a numeric default. A non-NULL Send value is an explicit ceiling in that same range and is not applied inbound. `0` is not unlimited. Send revision 1 was seeded from `nntpsharedconfig.maxartsize` (`5242880`), not from each peer's receive size. |
+| `article_types` | Receive and Send, separately | Integer mask `0–65535`. `65535` is unrestricted, `1` is text only, `0` permits no classified article. TAKETHIS and IHAVE compare the classified `ArticleRecord.ArtType` with the receive mask. The send mask is not applied inbound. |
+| `patterns` | Receive and Send, separately | One newsfeeds expression. `*` is every newsgroup. TAKETHIS and IHAVE evaluate the receive expression against the article Newsgroups. The send expression is not applied inbound. |
 | `allowfrom.entry` | Receive | Inbound source ACL, ordinal order. Zero rows means the peer never matches. |
 | `max_outbound` | Send | Outbound connection limit (`0–4096`). `0` closes send. No outbound socket is opened. |
 | `ssl_mode` | Send | `None`, `Tls`, or `StartTls`. |
@@ -962,7 +962,7 @@ Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source 
 
 Recognised names: `none`, `default`, `control`, `cancel`, `mime`, `binary`/`binaries`, `uuencode`, `base64`, `yenc`, `bommanews`, `unidata`, `multipart`, `html`, `ps`, `binhex`, `partial`, `pgp`, `all`.
 
-The catalogue stores `article_types` as that integer mask (`0`–`65535`) on each plane. Receive and Send masks are independent. Articles are not classified against the mask yet.
+The catalogue stores `article_types` as that integer mask (`0`–`65535`) on each plane. Receive and Send masks are independent. TAKETHIS and IHAVE classify the article first, then require every `ArticleRecord.ArtType` flag to be present in the receive mask (`65535` allows every combination). The send mask is not applied inbound.
 
 ### ConnectTo / Ssl
 
@@ -979,11 +979,11 @@ Each plane stores one `patterns` column. It is a newsfeeds(5) expression compile
 - `*` any sequence, `?` one character, `[...]` / `[^...]` sets, `\` escapes.
 - Empty or invalid expressions fail configuration validation.
 
-The matcher is stored on the peer policy. Article-ingestion routing does not apply Patterns yet.
+The matcher is stored on the peer policy. TAKETHIS and IHAVE accept an article only when the receive expression's `EvaluateArticle` result is a match (`*` allows, `!` rejects, `@` poisons, and the rightmost matching pattern wins). The send expression is not applied inbound. Group carry and `WantTrash` remain a separate catalogue decision.
 
 ### Catalogue refresh
 
-`TransitCatalogueService` loads `nntptransitcurrent` at startup and again every 60 seconds. Startup failure prevents `RUNNING`. A failed refresh keeps the last snapshot. The same `publication_id` does not replace it. New connections use the new snapshot. Existing connections are not disconnected solely because the publication changed.
+`TransitCatalogueService` loads `nntptransitcurrent` at startup and again every 60 seconds. Startup failure prevents `RUNNING`. A failed refresh keeps the last snapshot. The same `publication_id` does not replace it. New connections use the new snapshot. An accepted connection keeps the peer policy captured at identification for its lifetime, so a later publication does not mix that connection's receive fields with the new revision. Existing connections are not disconnected solely because the publication changed.
 
 An empty top-level `Transit` JSON section does not replace that snapshot. A non-empty section fails startup.
 
@@ -997,7 +997,7 @@ An empty top-level `Transit` JSON section does not replace that snapshot. A non-
 
 `WantTrash` / `LogTrash` are `nntptransitglobalrevision` (`Y`/`N`) and are copied onto the process options when the catalogue is published. Accepted `+`/`j` events are emitted after dequeue; rejected `-` events and moderated `m` events are emitted at the IHAVE/TAKETHIS/POST decision. See [logging.md](logging.md#inn-news-log).
 
-Receive and Send each have their own `article_types` mask, `max_article_bytes`, and `patterns`. `65535` is unrestricted, `1` is text only, and `0` permits no classified article type. `*` is every newsgroup. `max_inbound = 0` closes receive. `max_outbound = 0` closes send. Send `max_article_bytes` `NULL` is unlimited. Receive `max_article_bytes` remains an explicit ceiling. Receive `article_types` and `patterns` were seeded as `65535` and `*` because inbound acceptance does not filter on them yet.
+Receive and Send each have their own `article_types` mask, `max_article_bytes`, and `patterns`. `65535` is unrestricted, `1` is text only, and `0` permits no classified article type. `*` is every newsgroup. `max_inbound = 0` closes receive. `max_outbound = 0` closes send. Send `max_article_bytes` `NULL` is unlimited. Receive `max_article_bytes` remains an explicit ceiling. Receive `patterns` are enforced on incoming TAKETHIS and IHAVE articles. Receive `article_types` is enforced against the classified `ArticleRecord.ArtType`. CHECK has no article body and does not apply those article-content policies. Send `patterns` and `article_types` remain independent and do not affect inbound acceptance. Receive revision 1 was seeded as `65535` and `*`.
 
 ## TCP ports
 

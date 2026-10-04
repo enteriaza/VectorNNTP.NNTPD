@@ -1,3 +1,4 @@
+using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Transit;
@@ -119,16 +120,26 @@ public sealed class TransitPeerPolicy
     /// </summary>
     public string PathToken { get; }
 
-    /// <summary>Gets the Receive article size limit in bytes.</summary>
+    /// <summary>
+    /// Gets the Receive article size limit in bytes.
+    /// Inbound acceptance uses the smaller of this value and the published global <c>maxartsize</c>.
+    /// A non-positive value, or a value above <see cref="int.MaxValue"/>, adds no peer ceiling.
+    /// </summary>
     public long MaxSize { get; }
 
     /// <summary>Gets the Send article-type mask. Inbound acceptance does not apply it.</summary>
     public TransitMessageTypes MessageTypes { get; }
 
-    /// <summary>Gets the Receive newsfeeds expression.</summary>
+    /// <summary>
+    /// Gets the Receive newsfeeds expression.
+    /// TAKETHIS and IHAVE accept an article only when <see cref="NewsfeedsPattern.EvaluateArticle"/> returns match.
+    /// </summary>
     public NewsfeedsPattern ReceivePatterns { get; }
 
-    /// <summary>Gets the Receive article-type mask. <c>65535</c> is unrestricted.</summary>
+    /// <summary>
+    /// Gets the Receive article-type mask. <c>65535</c> is unrestricted.
+    /// TAKETHIS and IHAVE require every <see cref="ArticleRecord.ArtType"/> flag to be present, via <see cref="ArticleTypeCapabilities.Allows"/>.
+    /// </summary>
     public TransitMessageTypes ReceiveArticleTypes { get; }
 
     /// <summary>

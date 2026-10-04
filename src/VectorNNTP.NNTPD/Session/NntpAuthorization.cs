@@ -55,14 +55,23 @@ public sealed class NntpAuthorization
         ControlCancelPermitted = controlCancelPermitted;
     }
 
-    /// <summary>Creates transit/streaming privileges bound to a named peer policy.</summary>
+    /// <summary>
+    /// Creates streaming privileges bound to a named peer policy.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="StreamingPermitted"/> is always set so <c>MODE STREAM</c> can select Transit AUTHINFO.
+    /// <see cref="AuthorizedTransit"/> is set only when receive authentication is disabled
+    /// (<see cref="TransitPeerPolicy.HasPeerCredentials"/> is false: username or password empty).
+    /// When both are non-empty, feed commands stay unauthorized until AUTHINFO matches that pair.
+    /// The peer name and policy are retained either way, including for inbound connection limits.
+    /// </remarks>
     public static NntpAuthorization ForTransitPeer(TransitPeerPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
         return new(
             isAuthenticated: false,
             authorizedReader: false,
-            authorizedTransit: true,
+            authorizedTransit: !policy.HasPeerCredentials,
             postingPermitted: false,
             streamingPermitted: true,
             transitPeerName: policy.Identifier,

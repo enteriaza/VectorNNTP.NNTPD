@@ -1,3 +1,4 @@
+using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session.Authentication;
@@ -7,8 +8,10 @@ public interface ITransitPeerAuthenticator
 {
     /// <summary>
     /// Authenticates <paramref name="username"/> / <paramref name="password"/> against
-    /// <paramref name="policy"/>. On success, privileges remain
-    /// <paramref name="currentAuthorization"/> (Transit identity; no reader/posting grant).
+    /// <paramref name="policy"/>. On success, <paramref name="currentAuthorization"/> gains
+    /// <see cref="NntpAuthorization.AuthorizedTransit"/> and keeps its peer identity.
+    /// Reader and posting privileges are not granted. A blank username or password on the
+    /// peer disables this gate (<see cref="TransitPeerPolicy.HasPeerCredentials"/>); it is not a mismatch.
     /// </summary>
     NntpAuthenticationResult Authenticate(
         TransitPeerPolicy? policy,

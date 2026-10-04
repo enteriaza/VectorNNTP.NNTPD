@@ -3,6 +3,7 @@ using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Session.Commands;
 
@@ -16,7 +17,9 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// <see cref="IArticleIngestionQueue.TryAdmit"/> → 235/436/437. IHAVE never
 /// waits for queue memory. TAKETHIS is not used and is not modified. Common
 /// owns article parse/materialize. IHAVE-specific behaviour is History peek,
-/// non-blocking probe/admit, and 335/235/435/436/437 timing. The command
+/// non-blocking probe/admit, and 335/235/435/436/437 timing. After CanonicalV1,
+/// the connection's Receive article-type mask and newsgroup expression are applied.
+/// The command
 /// Message-ID is used for History and is not matched against the article
 /// Message-ID (RFC 3977 §6.3.2 permits a mismatch). Incomplete articles that
 /// cannot become CanonicalV1 are rejected with 437 after 335.
@@ -134,7 +137,7 @@ internal static class IHave
             ? ArticleRecordIngress.TryCreateFromStuffedWire(
                 context.Session.ArticleParser,
                 read.Payload,
-                queue.MaxArticleBytes)
+                maxArticleBytes)
             : ArticleRecordIngress.TryCreateFromStuffedWire(
                 context.Session.ArticleParser,
                 read.Payload,
@@ -159,6 +162,28 @@ internal static class IHave
                     cancellationToken)
                 .ConfigureAwait(false);
             context.CompletionDetail = recordReject;
+            return;
+        }
+
+        if (TransitReceivePolicy.TryReject(
+                context.Session.Authorization.TransitPeerPolicy,
+                created.Record,
+                out var policyReject))
+        {
+            IngressNewsEvents.TryWriteRejected(
+                context.Session,
+                CommandMessageId(messageId),
+                437,
+                IngressNewsReasons.ForExistingRejectDetail(policyReject),
+                created.Record.ArtSize);
+            await NntpCommandReply.WriteAsync(
+                    context,
+                    Logger,
+                    NntpResponses.IhaveRejected,
+                    NntpResponseStatus.IhaveRejected,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.CompletionDetail = policyReject;
             return;
         }
 

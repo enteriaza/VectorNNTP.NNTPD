@@ -29,6 +29,9 @@ internal static class IngressNewsReasons
     /// </summary>
     internal const string NewsgroupNotCarried = "newsgroup not carried";
 
+    /// <summary>Receive newsfeeds expression did not subscribe the article.</summary>
+    internal const string NewsgroupPatternRejected = "newsgroup pattern rejected";
+
     /// <summary>RFC 6048 <c>j</c> / <see cref="NewsgroupPostingStatus.PeerOnly"/> catalogue hit.</summary>
     internal const string PeerOnly = "peer-only";
 
@@ -155,6 +158,11 @@ internal static class IngressNewsReasons
         if (detail is "rejected article type")
         {
             return ArticleTypeNotPermitted;
+        }
+
+        if (detail is "rejected newsgroup pattern")
+        {
+            return NewsgroupPatternRejected;
         }
 
         if (detail is "rejected exceeds queue budget")

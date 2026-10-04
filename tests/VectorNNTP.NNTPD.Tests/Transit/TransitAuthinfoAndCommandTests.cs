@@ -65,7 +65,8 @@ public sealed class TransitAuthinfoAndCommandTests
         await duplex.WriteClientLineAsync("AUTHINFO PASS wrong");
         Assert.Equal("481 Authentication failed", await duplex.ReadClientLineAsync());
         Assert.False(session.Authentication.IsAuthenticated);
-        Assert.True(session.Authorization.AuthorizedTransit);
+        Assert.False(session.Authorization.AuthorizedTransit);
+        Assert.True(session.Authorization.StreamingPermitted);
         Assert.Equal(TransitTestPeers.DefaultPeerName, session.Authorization.TransitPeerName);
 
         await duplex.WriteClientLineAsync("QUIT");

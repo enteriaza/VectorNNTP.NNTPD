@@ -6,7 +6,8 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <remarks>
 /// Names follow Diablo <c>ArtTypeConv()</c>. <see cref="Binary"/> is the value for both
 /// <c>binary</c> and <c>binaries</c>. <see cref="All"/> is the union of every concrete flag.
-/// Bit values match Common <c>ArticleType</c>. Transit policy matching is not wired.
+/// Bit values match Common <c>ArticleType</c>. Receive matching uses
+/// <c>ArticleTypeCapabilities</c> against <c>ArticleRecord.ArtType</c>. Send matching is not wired.
 /// </remarks>
 [Flags]
 public enum TransitMessageTypes
