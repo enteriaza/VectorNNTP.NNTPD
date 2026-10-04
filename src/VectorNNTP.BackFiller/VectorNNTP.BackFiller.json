@@ -26,8 +26,8 @@
       "TlsHandshakeTimeoutSeconds": 30
     },
     "Logging": {
-      "LogLevel": "Debug",
-      "LogRetentionDays": 1,
+      "LogLevel": "Information",
+      "LogRetentionDays": 14,
       "Json": false,
       "File": {
         "Enabled": true,

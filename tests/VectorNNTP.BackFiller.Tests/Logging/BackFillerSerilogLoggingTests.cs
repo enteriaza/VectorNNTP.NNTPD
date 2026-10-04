@@ -36,14 +36,53 @@ namespace VectorNNTP.BackFiller.Tests.Logging
         }
 
         [Fact]
-        public void ConsoleSink_IsConfiguredAtDebug()
+        public void LogLevel_OmittedUsesInformation_ExplicitDebugEnablesDebug_ExplicitInformationDisablesDebug()
         {
-            using var host = CreateLoggingHost();
-            var factory = host.Services.GetRequiredService<ILoggerFactory>();
-            var logger = factory.CreateLogger("VectorNNTP.BackFiller.Hosting");
-
-            Assert.True(logger.IsEnabled(LogLevel.Debug));
             Assert.Equal(LogEventLevel.Debug, BackFillerFileLogging.SinkMinimumLevel);
+
+            var logDir = CreateTempLogDir();
+            IHost? host = null;
+            try
+            {
+                host = CreateLoggingHost(logDir);
+                var omitted = host.Services.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("VectorNNTP.BackFiller.Hosting");
+                Assert.True(omitted.IsEnabled(LogLevel.Information));
+                Assert.False(omitted.IsEnabled(LogLevel.Debug));
+                host.Dispose();
+                host = null;
+                Log.CloseAndFlush();
+
+                host = CreateLoggingHost(
+                    logDir,
+                    settings: new Dictionary<string, string?>
+                    {
+                        [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogLevel)}"] = "Debug",
+                    });
+                var debug = host.Services.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("VectorNNTP.BackFiller.Hosting");
+                Assert.True(debug.IsEnabled(LogLevel.Debug));
+                host.Dispose();
+                host = null;
+                Log.CloseAndFlush();
+
+                host = CreateLoggingHost(
+                    logDir,
+                    settings: new Dictionary<string, string?>
+                    {
+                        [$"{BackFillerOptions.SectionName}:{BackFillerLoggingOptions.SectionName}:{nameof(BackFillerLoggingOptions.LogLevel)}"] = "Information",
+                    });
+                var information = host.Services.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("VectorNNTP.BackFiller.Hosting");
+                Assert.True(information.IsEnabled(LogLevel.Information));
+                Assert.False(information.IsEnabled(LogLevel.Debug));
+            }
+            finally
+            {
+                host?.Dispose();
+                Log.CloseAndFlush();
+                TryDelete(logDir);
+            }
         }
 
         [Fact]

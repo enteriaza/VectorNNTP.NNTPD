@@ -544,8 +544,8 @@ Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `Logging:LogLevel` | string | `Debug` | Serilog minimum level for enabled targets: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`. |
-| `Logging:LogRetentionDays` | int | `1` | Daily file retention, range `1`–`3650`. Used when the file target is enabled. |
+| `Logging:LogLevel` | string | `Information` | Serilog minimum level for enabled targets: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`. |
+| `Logging:LogRetentionDays` | int | `14` | Daily file retention, range `1`–`3650`. Used when the file target is enabled. |
 | `Logging:Json` | bool | `false` | When `true`, compatible targets use Serilog's JSON formatter. There is no per-target formatter setting. |
 | `Logging:File:Enabled` | bool | `true` | Rolling file sink. Buffered, flushed about once per second, daily rolling, gzip archive hook. |
 | `Logging:File:LogDir` | string | `logs` | Directory for the file target. Required when file logging is enabled. Empty is accepted when file logging is disabled. Relative paths resolve through Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. |
