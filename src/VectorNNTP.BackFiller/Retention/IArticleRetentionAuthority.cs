@@ -28,6 +28,9 @@ namespace VectorNNTP.BackFiller.Retention
         /// <param name="requestId">ArticleWork Success RequestId to attach as an openable capability.</param>
         /// <param name="record">CanonicalV1 record. ArtData is referenced on first admission and is not copied.</param>
         /// <param name="selectedDateHeaderName">Date-family header name stored for VATP META on first admission.</param>
+        /// <param name="endpointFqdn">
+        /// FQDN captured with the rest of this article's shared snapshot. Null uses the authority's constructed FQDN.
+        /// </param>
         /// <returns>
         /// Admission classification, identity when one was resolved, the VATP endpoint when the article
         /// is available, and the payload-byte totals after the attempt.
@@ -46,7 +49,8 @@ namespace VectorNNTP.BackFiller.Retention
             string messageId,
             Guid requestId,
             VectorNNTP.Common.Articles.ArticleRecord record,
-            VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName);
+            VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+            string? endpointFqdn = null);
 
         /// <summary>
         /// Resolves a VATP OPEN: RequestId is primary; ArticleId is verified.

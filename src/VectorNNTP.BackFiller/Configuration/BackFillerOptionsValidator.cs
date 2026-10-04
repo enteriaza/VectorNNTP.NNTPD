@@ -92,12 +92,12 @@ namespace VectorNNTP.BackFiller.Configuration
             }
         }
 
-        /// <summary>Appends the first identity failure and then returns, until the final FQDN check.</summary>
-        /// <param name="options">Options whose server id, DNS suffix, zone id, and generated FQDN are checked.</param>
+        /// <summary>Appends the first identity failure and then returns.</summary>
+        /// <param name="options">Options whose server id and generated host label are checked.</param>
         /// <param name="failures">Failure list to append. Not cleared.</param>
         /// <remarks>
-        /// A missing or rejected server id, empty suffix, empty zone id, invalid suffix, or invalid host label
-        /// returns immediately. When those pass, either an over-long FQDN or a non-DNS hostname is recorded, not both.
+        /// DNS suffix, Cloudflare zone id, and the generated FQDN are validated from <c>nntpsharedconfig</c>
+        /// when that snapshot is published. A missing or rejected server id returns immediately.
         /// </remarks>
         private static void ValidateIdentity(BackFillerOptions options, List<string> failures)
         {
@@ -114,40 +114,10 @@ namespace VectorNNTP.BackFiller.Configuration
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(options.DnsSuffix))
-            {
-                failures.Add("BackFiller:DnsSuffix is required and cannot be empty.");
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
-            {
-                failures.Add("BackFiller:CloudFlareZoneId is required and cannot be empty.");
-                return;
-            }
-
-            var canonicalSuffix = ApplicationFqdn.CanonicalizeDnsSuffix(options.DnsSuffix);
-            if (!BackFillerIdentity.IsValidDnsSuffix(canonicalSuffix))
-            {
-                failures.Add("BackFiller:DnsSuffix is not a syntactically valid DNS name.");
-                return;
-            }
-
-            var fqdn = options.Fqdn;
             var hostLabel = ApplicationFqdn.FormatHostLabel(BackFillerOptions.ApplicationPrefix, serverId);
             if (!BackFillerIdentity.IsValidDnsLabel(hostLabel))
             {
                 failures.Add("BackFiller generated host label is not a valid DNS label.");
-                return;
-            }
-
-            if (fqdn.Length > ApplicationFqdn.MaximumLength)
-            {
-                failures.Add("BackFiller:DnsSuffix produces an FQDN longer than 253 characters.");
-            }
-            else if (Uri.CheckHostName(fqdn) != UriHostNameType.Dns)
-            {
-                failures.Add("BackFiller generated FQDN is not a valid DNS hostname.");
             }
         }
 
@@ -163,33 +133,15 @@ namespace VectorNNTP.BackFiller.Configuration
             }
         }
 
-        /// <summary>Appends failures for the ACME directory URL, renewal threshold, and state directory.</summary>
+        /// <summary>Appends a failure when the ACME state directory is missing. Directory URL and renewal days come from <c>nntpsharedconfig</c>.</summary>
         /// <param name="options">Options whose ACME fields are checked.</param>
         /// <param name="failures">Failure list to append. Not cleared.</param>
         /// <remarks>
-        /// The directory must be a non-empty absolute HTTPS URL. The renewal threshold must be 1–90.
         /// State fails only when both <see cref="BackFillerOptions.AcmeStateDir"/> and
         /// <see cref="BackFillerOptions.CertificateDirectory"/> are empty or white space.
-        /// These checks accumulate.
         /// </remarks>
         private static void ValidateAcme(BackFillerOptions options, List<string> failures)
         {
-            if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
-            {
-                failures.Add("BackFiller:AcmeDirectoryUrl must be a non-empty HTTPS ACME directory URL.");
-            }
-            else if (!Uri.TryCreate(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute, out var directoryUri)
-                     || directoryUri.Scheme != Uri.UriSchemeHttps)
-            {
-                failures.Add(
-                    "BackFiller:AcmeDirectoryUrl must be an absolute HTTPS URL (default is Let's Encrypt staging).");
-            }
-
-            if (options.AcmeRenewalThresholdDays is < 1 or > 90)
-            {
-                failures.Add("BackFiller:AcmeRenewalThresholdDays must be an integer in the range 1–90.");
-            }
-
             if (string.IsNullOrWhiteSpace(options.AcmeStateDir) && string.IsNullOrWhiteSpace(options.CertificateDirectory))
             {
                 failures.Add("BackFiller:AcmeStateDir must be a non-empty filesystem path.");

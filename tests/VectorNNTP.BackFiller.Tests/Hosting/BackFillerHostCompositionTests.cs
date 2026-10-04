@@ -42,9 +42,9 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             Assert.Equal(10, hosted.Length);
             Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
             Assert.IsType<SystemdWatchdogService>(hosted[1]);
-            Assert.IsType<RabbitMqServiceHostedAdapter>(hosted[2]);
-            Assert.IsType<NntpDbServiceHostedAdapter>(hosted[3]);
-            Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[4]);
+            Assert.IsType<NntpDbServiceHostedAdapter>(hosted[2]);
+            Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[3]);
+            Assert.IsType<RabbitMqServiceHostedAdapter>(hosted[4]);
             Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[5]);
             Assert.IsType<BackFillerApplicationHostedService>(hosted[6]);
             Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[7]);

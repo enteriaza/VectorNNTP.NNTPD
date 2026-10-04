@@ -2860,8 +2860,6 @@
     }
   },
   "Nntpd": {
-    "AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
-    "AcmeRenewalThresholdDays": 14,
     "AcmeStateDir": "certs/",
     "AllowCleartextAuth": true,
     "BindAddress": [
@@ -2870,8 +2868,6 @@
     ],
     "BindPort": 1199,
     "BindPortTls": 5633,
-    "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
-    "DnsSuffix": "usenet.ninja",
     "GracefulShutdownTimeout": "00:01:00",
     "HistoryTime": "02:00:00",
     "IdleTime": 300,

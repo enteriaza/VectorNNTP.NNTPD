@@ -1,5 +1,7 @@
 using System.Text;
+using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.Common.Configuration;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles;
@@ -31,6 +33,9 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <summary>Published shared configuration. Null in tests that do not load <c>nntpsharedconfig</c>.</summary>
         private readonly INntpSharedConfigurationCatalogue? _sharedConfiguration;
 
+        /// <summary>Server id used with <see cref="NntpSharedConfiguration.DnsSuffix"/> for this article's FQDN. Zero keeps the injected parser.</summary>
+        private readonly int _serverId;
+
         /// <summary>Initializes the handler with the test-host Path identity <c>backfiller.test</c>.</summary>
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
         /// <param name="retention">Canonical retention authority.</param>
@@ -58,13 +63,29 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <summary>Initializes the handler with an optional shared-configuration catalogue.</summary>
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
         /// <param name="retention">Canonical retention authority.</param>
-        /// <param name="parser">CanonicalV1 parser. Its local identity remains the application hop.</param>
+        /// <param name="parser">CanonicalV1 parser used when <paramref name="sharedConfiguration"/> is null.</param>
         /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
         public ProviderArticleWorkHandler(
             INntpArticleRetriever retriever,
             IArticleRetentionAuthority retention,
             NntpArticleParser parser,
             INntpSharedConfigurationCatalogue? sharedConfiguration)
+            : this(retriever, retention, parser, sharedConfiguration, serverId: 0)
+        {
+        }
+
+        /// <summary>Initializes the handler with the server id used to build the article FQDN from one shared snapshot.</summary>
+        /// <param name="retriever">NNTP ARTICLE retriever.</param>
+        /// <param name="retention">Canonical retention authority.</param>
+        /// <param name="parser">CanonicalV1 parser used when <paramref name="serverId"/> is outside the accepted range.</param>
+        /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
+        /// <param name="serverId">BackFiller server id combined with <c>dnssuffix</c> for the Path hop and retained endpoint.</param>
+        public ProviderArticleWorkHandler(
+            INntpArticleRetriever retriever,
+            IArticleRetentionAuthority retention,
+            NntpArticleParser parser,
+            INntpSharedConfigurationCatalogue? sharedConfiguration,
+            int serverId)
         {
             ArgumentNullException.ThrowIfNull(retriever);
             ArgumentNullException.ThrowIfNull(retention);
@@ -73,6 +94,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             _retention = retention;
             _parser = parser;
             _sharedConfiguration = sharedConfiguration;
+            _serverId = serverId;
         }
 
         /// <summary>Gets the last retrieval classification (tests).</summary>
@@ -146,11 +168,18 @@ namespace VectorNNTP.BackFiller.ArticleWork
             var consumed = false;
             var maxArticleBytes = 0;
             byte[]? siteNameUtf8 = null;
+            var parser = _parser;
+            string? endpointFqdn = null;
             if (_sharedConfiguration is not null)
             {
                 var shared = _sharedConfiguration.Current;
                 maxArticleBytes = shared.MaxArticleBytes;
                 siteNameUtf8 = Encoding.UTF8.GetBytes(shared.SiteName);
+                if (ServerIdRules.IsInRange(_serverId))
+                {
+                    endpointFqdn = ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, _serverId, shared.DnsSuffix);
+                    parser = new NntpArticleParser(endpointFqdn);
+                }
             }
 
             try
@@ -161,9 +190,9 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         memory =>
                         {
                             created = siteNameUtf8 is null
-                                ? ArticleRecordFactory.TryCreate(_parser, memory, ArticlePathMode.Traverse)
+                                ? ArticleRecordFactory.TryCreate(parser, memory, ArticlePathMode.Traverse)
                                 : ArticleRecordFactory.TryCreate(
-                                    _parser,
+                                    parser,
                                     memory,
                                     ArticlePathMode.Traverse,
                                     maxArticleBytes,
@@ -233,7 +262,8 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     item.Request.MessageId,
                     item.Request.RequestId,
                     record,
-                    created.SelectedDateHeaderName);
+                    created.SelectedDateHeaderName,
+                    endpointFqdn);
                 LastRetentionKind = retained.Kind;
                 LastFqdn = retained.Fqdn;
                 LastVatpPort = retained.VatpPort;

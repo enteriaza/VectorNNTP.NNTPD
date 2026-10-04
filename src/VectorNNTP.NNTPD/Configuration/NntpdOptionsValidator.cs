@@ -467,28 +467,11 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
 
     private static void ValidateAcme(NntpdOptions options, List<string> failures)
     {
-        // Directory URL and state directory are always validated when present so misconfiguration
-        // is caught early; email and zone-coverage rules apply only when TLS is enabled.
-        if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
-        {
-            failures.Add($"{nameof(NntpdOptions.AcmeDirectoryUrl)} must be a non-empty HTTPS ACME directory URL.");
-        }
-        else if (!Uri.TryCreate(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute, out var directoryUri)
-                 || directoryUri.Scheme != Uri.UriSchemeHttps)
-        {
-            failures.Add(
-                $"{nameof(NntpdOptions.AcmeDirectoryUrl)} must be an absolute HTTPS URL " +
-                "(default is Let's Encrypt staging).");
-        }
-
+        // Directory URL, renewal threshold, zone id, and DNS suffix come from nntpsharedconfig.
+        // State directory stays on this application. Email and certificate password apply when TLS is enabled.
         if (string.IsNullOrWhiteSpace(options.AcmeStateDir))
         {
             failures.Add($"{nameof(NntpdOptions.AcmeStateDir)} must be a non-empty filesystem path.");
-        }
-
-        if (options.AcmeRenewalThresholdDays is < 1 or > 90)
-        {
-            failures.Add($"{nameof(NntpdOptions.AcmeRenewalThresholdDays)} must be an integer in the range 1–90.");
         }
 
         if (!options.IsTlsListenerEnabled)
@@ -508,24 +491,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             failures.Add(
                 $"{NntpdOptions.AcmeCertificatePasswordConfigurationKey} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
                 $"(use environment variable {NntpdOptions.AcmeCertificatePasswordEnvironmentVariable} or secrets; never commit the value).");
-        }
-
-        // DNS-01 identities (FQDN + news.usenet.ninja) must fall under DnsSuffix / Cloudflare zone.
-        if (!string.IsNullOrWhiteSpace(options.Fqdn) && !string.IsNullOrWhiteSpace(options.DnsSuffix))
-        {
-            try
-            {
-                var identities = CertificateIdentities.ForFqdn(options.Fqdn);
-                DnsZoneCoverage.RequireIdentitiesInDnsZone(identities, options.DnsSuffix);
-            }
-            catch (AcmeConfigurationException ex)
-            {
-                failures.Add(ex.Message);
-            }
-            catch (ArgumentException ex)
-            {
-                failures.Add(ex.Message);
-            }
         }
     }
 
@@ -564,12 +529,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             failures.Add(
                 $"{NntpdOptions.CloudFlareApiKeyConfigurationKey} must be configured (use environment variable {NntpdOptions.CloudFlareApiKeyEnvironmentVariable}).");
         }
-
-        if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
-        {
-            failures.Add(
-                $"{NntpdOptions.SectionName}:{NntpdOptions.CloudFlareZoneIdConfigurationKey} must be configured.");
-        }
     }
 
     private static void ValidateDnsSuffixAndServerId(NntpdOptions options, List<string> failures)
@@ -584,25 +543,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
                 failures.Add(
                     $"{nameof(NntpdOptions.ServerId)} must be an integer in the range {ServerIdRules.MinimumInclusive}–{ServerIdRules.MaximumInclusive}.");
                 break;
-        }
-
-        if (string.IsNullOrWhiteSpace(options.DnsSuffix))
-        {
-            failures.Add($"{nameof(NntpdOptions.DnsSuffix)} must be a non-empty DNS suffix.");
-            return;
-        }
-
-        var suffix = options.DnsSuffix.Trim().TrimEnd('.');
-        if (!IsValidDnsSuffix(suffix))
-        {
-            failures.Add($"{nameof(NntpdOptions.DnsSuffix)} is not a syntactically valid DNS name.");
-            return;
-        }
-
-        // Ensure the generated FQDN stays within DNS length limits without allowing overrides.
-        if (!string.IsNullOrWhiteSpace(options.Fqdn) && options.Fqdn.Length > ApplicationFqdn.MaximumLength)
-        {
-            failures.Add($"{nameof(NntpdOptions.DnsSuffix)} produces an FQDN longer than 253 characters.");
         }
     }
 

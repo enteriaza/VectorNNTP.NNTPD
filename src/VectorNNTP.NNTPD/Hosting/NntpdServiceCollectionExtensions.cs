@@ -288,12 +288,13 @@ public static class NntpdServiceCollectionExtensions
         }
 
         // Startup order (sequential ApplicationServiceManager):
+        // NntpDB (hard dep; MySqlConnector pool) →
+        // nntpsharedconfig (initial snapshot before FQDN, ACME, and Cloudflare consumers) →
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
         // RabbitMQ topology (hard dep; cache.requests fanout + cache.broadcast + overviewdb.queue) →
         // StorageServer fleet consumer (hard dep; cache.<fqdn> + in-memory registry) →
         // StorageServer article lookup (hard dep; cache.requests publish + reply consumer) →
         // RabbitMQ article-work RPC (hard dep; reply consumer + request orchestration) →
-        // NntpDB (hard dep; MySqlConnector pool) →
         // newsgroup catalogue (initial snapshot before RUNNING) →
         // moderator catalogue (nntpmoderators snapshot before RUNNING) →
         // PostFilter policy → PostFilter rejection evidence →
@@ -303,6 +304,19 @@ public static class NntpdServiceCollectionExtensions
         // Transit inbound-ownership renewal →
         // plain NNTP listener → ACME → TLS NNTP listener →
         // optional feed-diagnostics reporter → always-on application telemetry.
+        services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
+        services.TryAddSingleton<NntpDbService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static sp =>
+                sp.GetRequiredService<NntpDbService>()));
+
+        services.TryAddSingleton<NntpSharedConfigurationService>();
+        services.TryAddSingleton<INntpArticlePolicySource>(static sp =>
+            sp.GetRequiredService<NntpSharedConfigurationService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpSharedConfigurationService>(static sp =>
+                sp.GetRequiredService<NntpSharedConfigurationService>()));
+
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
 
@@ -351,19 +365,6 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, ArticleWorkRpcService>(
                 static sp => sp.GetRequiredService<ArticleWorkRpcService>()));
-
-        services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
-        services.TryAddSingleton<NntpDbService>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static sp =>
-                sp.GetRequiredService<NntpDbService>()));
-
-        services.TryAddSingleton<NntpSharedConfigurationService>();
-        services.TryAddSingleton<INntpArticlePolicySource>(static sp =>
-            sp.GetRequiredService<NntpSharedConfigurationService>());
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, NntpSharedConfigurationService>(static sp =>
-                sp.GetRequiredService<NntpSharedConfigurationService>()));
 
         services.TryAddSingleton<NewsgroupCatalogueService>();
         services.TryAddSingleton<INewsgroupCatalogue>(static sp =>

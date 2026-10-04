@@ -898,7 +898,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void ProductionAppsettings_DeclaresZoneIdAndDnsSuffixUnderNntpdOnly()
+    public void ProductionAppsettings_DoesNotDeclareSharedConfigColumns()
     {
         var path = FindProductionAppsettings();
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
@@ -907,8 +907,12 @@ public sealed class NntpdConfigurationTests
 
         Assert.False(root.TryGetProperty("CloudFlareZoneId", out _));
         Assert.False(root.TryGetProperty("DnsSuffix", out _));
-        Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", nntpd.GetProperty("CloudFlareZoneId").GetString());
-        Assert.Equal("usenet.ninja", nntpd.GetProperty("DnsSuffix").GetString());
+        Assert.False(root.TryGetProperty("AcmeDirectoryUrl", out _));
+        Assert.False(root.TryGetProperty("AcmeRenewalThresholdDays", out _));
+        Assert.False(nntpd.TryGetProperty("CloudFlareZoneId", out _));
+        Assert.False(nntpd.TryGetProperty("DnsSuffix", out _));
+        Assert.False(nntpd.TryGetProperty("AcmeDirectoryUrl", out _));
+        Assert.False(nntpd.TryGetProperty("AcmeRenewalThresholdDays", out _));
     }
 
     [Fact]
@@ -1138,16 +1142,20 @@ public sealed class NntpdConfigurationTests
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("\t")]
-    public void CloudFlareZoneId_BlankOrMissing_FailsValidation(string? zoneId)
+    public void CloudFlareZoneId_BlankOrMissing_FailsSharedConfiguration(string? zoneId)
     {
-        var options = TestHostFactory.CreateValidOptions();
-        options.CloudFlareZoneId = zoneId!;
-        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
-            .Validate(null, options);
-        Assert.True(result.Failed);
-        var joined = NntpdOptionsValidator.JoinFailures(result);
-        Assert.Contains(NntpdOptions.CloudFlareZoneIdConfigurationKey, joined, StringComparison.Ordinal);
-        Assert.DoesNotContain("unit-test-cloudflare-api-key", joined, StringComparison.Ordinal);
+        var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "https://acme.example.test/directory",
+                14,
+                zoneId,
+                "usenet.ninja"),
+        ]));
+        Assert.Contains("cloudflarezoneid", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1175,17 +1183,20 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void MissingCloudFlareZoneId_FailsValidation()
+    public void MissingCloudFlareZoneId_FailsSharedConfiguration()
     {
-        var options = TestHostFactory.CreateValidOptions();
-        options.CloudFlareZoneId = string.Empty;
-        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
-            .Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(
-            NntpdOptions.CloudFlareZoneIdConfigurationKey,
-            NntpdOptionsValidator.JoinFailures(result),
-            StringComparison.Ordinal);
+        var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "https://acme.example.test/directory",
+                14,
+                string.Empty,
+                "usenet.ninja"),
+        ]));
+        Assert.Contains("cloudflarezoneid", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1536,13 +1547,20 @@ public sealed class NntpdConfigurationTests
     [InlineData("-bad.example")]
     [InlineData("bad..example")]
     [InlineData("bad_label.example")]
-    public void DnsSuffix_Invalid_Fails(string suffix)
+    public void DnsSuffix_Invalid_FailsSharedConfiguration(string suffix)
     {
-        var options = TestHostFactory.CreateValidOptions();
-        options.DnsSuffix = suffix;
-        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
-            .Validate(null, options);
-        Assert.True(result.Failed);
+        var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "https://acme.example.test/directory",
+                14,
+                "0123456789abcdef0123456789abcdef",
+                suffix),
+        ]));
+        Assert.Contains("dnssuffix", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1592,7 +1610,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public async Task HostStart_MissingCloudFlareZoneId_FailsBeforeRunning()
+    public void HostStart_MissingCloudFlareZoneId_DoesNotFailOptionsValidation()
     {
         var json = """
                    {
@@ -1606,9 +1624,8 @@ public sealed class NntpdConfigurationTests
                    """;
 
         using var host = CreateEmptyNntpdHost(json);
-        var ex = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
-        Assert.Contains(NntpdOptions.CloudFlareZoneIdConfigurationKey, ex.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(TestHostFactory.TestCloudFlareApiKey, ex.Message, StringComparison.Ordinal);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.Equal(" ", options.CloudFlareZoneId);
     }
 
     [Fact]
@@ -1673,7 +1690,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void CloudFlareZoneId_NullFromConfiguration_FailsStartup()
+    public void CloudFlareZoneId_NullFromConfiguration_DoesNotFailOptionsValidation()
     {
         var json = """
                    {
@@ -1687,10 +1704,8 @@ public sealed class NntpdConfigurationTests
                    """;
 
         using var host = CreateEmptyNntpdHost(json);
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => _ = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value);
-        Assert.Contains(NntpdOptions.CloudFlareZoneIdConfigurationKey, ex.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(TestHostFactory.TestCloudFlareApiKey, ex.Message, StringComparison.Ordinal);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.True(string.IsNullOrWhiteSpace(options.CloudFlareZoneId));
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Configuration;
 using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.BackFiller.ArticleWork;
 using VectorNNTP.BackFiller.Configuration;
@@ -125,6 +127,8 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
                 new FixedSharedConfigurationSource(),
                 registry,
                 runtime,
+                Options.Create(new BackFillerOptions()),
+                Options.Create(new AcmeCloudflareOptions()),
                 NullLogger<ProviderAccountConfigurationService>.Instance);
             var handler = new ProviderArticleWorkHandler(
                 new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
@@ -252,7 +256,14 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
         public ValueTask<NntpSharedConfiguration> ReadAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(new NntpSharedConfiguration(1024, "news.usenet.ninja", null));
+            return ValueTask.FromResult(new NntpSharedConfiguration(
+                1024,
+                "news.usenet.ninja",
+                null,
+                "https://acme-v02.api.letsencrypt.org/directory",
+                14,
+                "0123456789abcdef0123456789abcdef",
+                "usenet.ninja"));
         }
     }
 }

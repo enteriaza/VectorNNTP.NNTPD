@@ -65,8 +65,12 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
             Assert.Equal(1190, section.GetProperty("BindPortTls").GetInt32());
             Assert.False(root.TryGetProperty("CloudFlareZoneId", out _));
             Assert.False(root.TryGetProperty("DnsSuffix", out _));
-            Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", section.GetProperty("CloudFlareZoneId").GetString());
-            Assert.Equal("usenet.ninja", section.GetProperty("DnsSuffix").GetString());
+            Assert.False(root.TryGetProperty("AcmeDirectoryUrl", out _));
+            Assert.False(root.TryGetProperty("AcmeRenewalThresholdDays", out _));
+            Assert.False(section.TryGetProperty("CloudFlareZoneId", out _));
+            Assert.False(section.TryGetProperty("DnsSuffix", out _));
+            Assert.False(section.TryGetProperty("AcmeDirectoryUrl", out _));
+            Assert.False(section.TryGetProperty("AcmeRenewalThresholdDays", out _));
             Assert.False(root.TryGetProperty("ServerId", out _));
             Assert.Equal(1, section.GetProperty("ServerId").GetInt32());
             Assert.False(section.TryGetProperty("Name", out _));

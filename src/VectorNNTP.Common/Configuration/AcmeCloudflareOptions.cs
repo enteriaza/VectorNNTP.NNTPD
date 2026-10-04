@@ -126,8 +126,10 @@ namespace VectorNNTP.Common.Configuration
         [Required(AllowEmptyStrings = false)]
         public string CloudFlareApiKey { get; set; } = string.Empty;
 
-        /// <summary>Gets or sets the Cloudflare DNS zone identifier.</summary>
-        [Required(AllowEmptyStrings = false)]
+        /// <summary>
+        /// Gets or sets the Cloudflare DNS zone identifier.
+        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig</c>.
+        /// </summary>
         public string CloudFlareZoneId { get; set; } = string.Empty;
 
         /// <summary>Gets or sets the DNS suffix expected to match the Cloudflare zone.</summary>

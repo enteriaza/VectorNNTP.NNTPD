@@ -48,7 +48,8 @@ namespace VectorNNTP.BackFiller.Tests.Retention
                 string messageId,
                 Guid requestId,
                 VectorNNTP.Common.Articles.ArticleRecord record,
-                VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName) =>
+                VectorNNTP.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+                string? endpointFqdn = null) =>
                 new(ArticleRetentionKind.ShuttingDown, null, null, null, 0, 0);
 
             public VatpOpenResult TryOpenTransfer(

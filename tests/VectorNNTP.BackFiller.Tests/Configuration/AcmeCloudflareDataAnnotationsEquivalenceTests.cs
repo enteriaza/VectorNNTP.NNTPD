@@ -44,32 +44,27 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
         }
 
         [Fact]
-        public void Host_validate_on_start_fails_when_cloudflare_zone_id_is_missing()
+        public void Host_validate_on_start_does_not_require_the_shared_zone_id()
         {
             var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
             pairs["BackFiller:CloudFlareZoneId"] = " ";
 
-            var ex = Assert.Throws<OptionsValidationException>(() =>
-            {
-                using var host = CreateHost(pairs);
-            });
-            Assert.Contains(AcmeCloudflareOptions.CloudFlareZoneIdConfigurationKey, ex.Message, StringComparison.Ordinal);
+            using var host = CreateHost(pairs);
+            var options = host.Services.GetRequiredService<IOptions<BackFillerOptions>>().Value;
+            Assert.Equal(" ", options.CloudFlareZoneId);
         }
 
         [Theory]
         [InlineData(0)]
         [InlineData(91)]
-        public void Host_validate_on_start_fails_when_acme_renewal_threshold_days_out_of_range(int days)
+        public void Host_validate_on_start_does_not_reject_shared_renewal_days(int days)
         {
             var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
             pairs["BackFiller:AcmeRenewalThresholdDays"] = days.ToString();
 
-            var ex = Assert.Throws<OptionsValidationException>(() =>
-            {
-                using var host = CreateHost(pairs);
-            });
-            Assert.Contains(nameof(AcmeCloudflareOptions.AcmeRenewalThresholdDays), ex.Message, StringComparison.Ordinal);
-            Assert.Contains("1–90", ex.Message, StringComparison.Ordinal);
+            using var host = CreateHost(pairs);
+            var options = host.Services.GetRequiredService<IOptions<BackFillerOptions>>().Value;
+            Assert.Equal(days, options.AcmeRenewalThresholdDays);
         }
 
         [Theory]

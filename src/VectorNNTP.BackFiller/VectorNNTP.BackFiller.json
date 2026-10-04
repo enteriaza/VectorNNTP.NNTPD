@@ -1,7 +1,5 @@
 {
   "BackFiller": {
-    "AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
-    "AcmeRenewalThresholdDays": 14,
     "AcmeStateDir": "certs/",
       "ArticleRetention": {
       "MaximumRetainedPayloadGigabytes": 8,
@@ -15,8 +13,6 @@
       "2c0f:f030:1442:501:198:18:0:66"
     ],
     "BindPortTls": 1190,
-    "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
-    "DnsSuffix": "usenet.ninja",
     "Listener": {
       "AwaitingReceiptAckTimeoutSeconds": 30,
       "IoProgressTimeoutSeconds": 60,

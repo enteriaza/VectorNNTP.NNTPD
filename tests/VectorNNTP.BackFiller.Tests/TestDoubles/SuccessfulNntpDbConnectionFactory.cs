@@ -47,7 +47,14 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
                 cancellationToken.ThrowIfCancellationRequested();
                 IReadOnlyList<NntpSharedConfigurationCandidate> rows =
                 [
-                    new NntpSharedConfigurationCandidate(1024, "news.usenet.ninja", null),
+                    new NntpSharedConfigurationCandidate(
+                        1024,
+                        "news.usenet.ninja",
+                        null,
+                        "https://acme-v02.api.letsencrypt.org/directory",
+                        14,
+                        "0123456789abcdef0123456789abcdef",
+                        "usenet.ninja"),
                 ];
                 return ValueTask.FromResult(rows);
             }

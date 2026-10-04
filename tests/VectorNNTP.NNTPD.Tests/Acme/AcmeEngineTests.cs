@@ -83,16 +83,38 @@ public sealed class AcmeConfigurationTests
         Assert.DoesNotContain("   ", failures, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(91)]
-    public void InvalidRenewalThreshold_Fails(int days)
+    [Fact]
+    public void NonPositiveRenewalThreshold_FailsSharedConfiguration()
     {
-        var options = TestHostFactory.CreateValidOptions();
-        options.AcmeRenewalThresholdDays = days;
-        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
-            .Validate(null, options);
-        Assert.True(result.Failed);
+        var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "https://acme.example.test/directory",
+                0,
+                "0123456789abcdef0123456789abcdef",
+                "usenet.ninja"),
+        ]));
+        Assert.Contains("acmerenewalthresholddays", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenewalThresholdAboveNinety_IsAcceptedBySharedConfiguration()
+    {
+        var configuration = NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "https://acme.example.test/directory",
+                91,
+                "0123456789abcdef0123456789abcdef",
+                "usenet.ninja"),
+        ]);
+        Assert.Equal(91, configuration.AcmeRenewalThresholdDays);
     }
 
     [Fact]
@@ -108,13 +130,20 @@ public sealed class AcmeConfigurationTests
     }
 
     [Fact]
-    public void HttpDirectoryUrl_Rejected()
+    public void HttpDirectoryUrl_IsAcceptedBySharedConfiguration()
     {
-        var options = TestHostFactory.CreateValidOptions();
-        options.AcmeDirectoryUrl = "http://acme.example.test/directory";
-        var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
-            .Validate(null, options);
-        Assert.True(result.Failed);
+        var configuration = NntpSharedConfigurationReader.Validate(
+        [
+            new NntpSharedConfigurationCandidate(
+                1024,
+                "news.example",
+                null,
+                "http://acme.example.test/directory",
+                14,
+                "0123456789abcdef0123456789abcdef",
+                "usenet.ninja"),
+        ]);
+        Assert.Equal("http://acme.example.test/directory", configuration.AcmeDirectoryUrl);
     }
 
     [Fact]

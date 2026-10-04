@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Configuration;
 using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Configuration;
@@ -415,6 +417,8 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 shared,
                 registry,
                 runtime,
+                Options.Create(new BackFillerOptions()),
+                Options.Create(new AcmeCloudflareOptions()),
                 logger);
             return new ServiceHarness(service, catalog, registry, transport, logger, shared);
         }
@@ -468,7 +472,14 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
 
         private sealed class FixedSharedConfigurationSource : IBackFillerSharedConfigurationSource
         {
-            public NntpSharedConfiguration Value { get; set; } = new(1024, "news.usenet.ninja", null);
+            public NntpSharedConfiguration Value { get; set; } = new(
+                1024,
+                "news.usenet.ninja",
+                null,
+                "https://acme-v02.api.letsencrypt.org/directory",
+                14,
+                "0123456789abcdef0123456789abcdef",
+                "usenet.ninja");
 
             public int Reads { get; private set; }
 

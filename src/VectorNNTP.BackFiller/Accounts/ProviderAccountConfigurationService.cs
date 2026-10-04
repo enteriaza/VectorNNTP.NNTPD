@@ -1,5 +1,8 @@
+using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Configuration;
 using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.BackFiller.Accounts
@@ -28,6 +31,12 @@ namespace VectorNNTP.BackFiller.Accounts
 
         /// <summary>Supplies <see cref="BackFillerRuntimeOptions.ServerId"/> and <see cref="BackFillerRuntimeOptions.AccountRefreshInterval"/>.</summary>
         private readonly BackFillerRuntimeOptions _runtime;
+
+        /// <summary>Live BackFiller options. Shared ACME and DNS fields are replaced from each published snapshot.</summary>
+        private readonly IOptions<BackFillerOptions> _backFillerOptions;
+
+        /// <summary>Live ACME and Cloudflare options. Shared fields and FQDN are replaced from each published snapshot.</summary>
+        private readonly IOptions<AcmeCloudflareOptions> _acmeOptions;
 
         /// <summary>Control-plane logger. Events are written through <see cref="ProviderAccountLogMessages"/>.</summary>
         private readonly ILogger<ProviderAccountConfigurationService> _logger;
@@ -73,6 +82,8 @@ namespace VectorNNTP.BackFiller.Accounts
         /// <param name="sharedConfiguration">Shared-configuration read for the same refresh cycle.</param>
         /// <param name="registry">Registry that applies a changed snapshot.</param>
         /// <param name="runtime">Server id and poll interval.</param>
+        /// <param name="backFillerOptions">Live BackFiller options updated from each shared snapshot.</param>
+        /// <param name="acmeOptions">Live ACME options updated from each shared snapshot.</param>
         /// <param name="logger">Logger passed to <see cref="ProviderAccountLogMessages"/>.</param>
         /// <exception cref="ArgumentNullException">Any argument is null.</exception>
         /// <remarks>
@@ -84,17 +95,23 @@ namespace VectorNNTP.BackFiller.Accounts
             IBackFillerSharedConfigurationSource sharedConfiguration,
             NntpProviderRegistry registry,
             BackFillerRuntimeOptions runtime,
+            IOptions<BackFillerOptions> backFillerOptions,
+            IOptions<AcmeCloudflareOptions> acmeOptions,
             ILogger<ProviderAccountConfigurationService> logger)
         {
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(sharedConfiguration);
             ArgumentNullException.ThrowIfNull(registry);
             ArgumentNullException.ThrowIfNull(runtime);
+            ArgumentNullException.ThrowIfNull(backFillerOptions);
+            ArgumentNullException.ThrowIfNull(acmeOptions);
             ArgumentNullException.ThrowIfNull(logger);
             _source = source;
             _sharedConfiguration = sharedConfiguration;
             _registry = registry;
             _runtime = runtime;
+            _backFillerOptions = backFillerOptions;
+            _acmeOptions = acmeOptions;
             _logger = logger;
         }
 
@@ -249,6 +266,10 @@ namespace VectorNNTP.BackFiller.Accounts
                 var rows = await _source.QueryAsync(cancellationToken).ConfigureAwait(false);
                 var shared = await _sharedConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                var fqdn = shared.RequireApplicationFqdn(BackFillerOptions.ApplicationPrefix, _runtime.ServerId);
+                DnsZoneCoverage.RequireIdentitiesInDnsZone(
+                    CertificateIdentities.ForFqdn(fqdn, includeNewsHostname: false),
+                    shared.DnsSuffix);
                 var mapped = ProviderAccountMapper.Map(rows);
                 foreach (var rejected in mapped.Rejected)
                 {
@@ -265,6 +286,7 @@ namespace VectorNNTP.BackFiller.Accounts
                 {
                     lock (_gate)
                     {
+                        Project(shared, fqdn);
                         _shared = shared;
                     }
 
@@ -282,6 +304,7 @@ namespace VectorNNTP.BackFiller.Accounts
                 await _registry.ApplySnapshotAsync(mapped.Providers, cancellationToken).ConfigureAwait(false);
                 lock (_gate)
                 {
+                    Project(shared, fqdn);
                     _published = mapped.Providers;
                     _shared = shared;
                 }
@@ -320,6 +343,22 @@ namespace VectorNNTP.BackFiller.Accounts
             {
                 Volatile.Write(ref _refreshing, 0);
             }
+        }
+
+        /// <summary>Copies one shared snapshot onto the live BackFiller and ACME options.</summary>
+        /// <param name="shared">Snapshot captured for this refresh.</param>
+        /// <param name="fqdn">FQDN already checked for that same snapshot.</param>
+        private void Project(NntpSharedConfiguration shared, string fqdn)
+        {
+            var backFiller = _backFillerOptions.Value;
+            backFiller.AcmeDirectoryUrl = shared.AcmeDirectoryUrl;
+            backFiller.AcmeRenewalThresholdDays = shared.AcmeRenewalThresholdDays;
+            backFiller.CloudFlareZoneId = shared.CloudFlareZoneId;
+            backFiller.DnsSuffix = shared.DnsSuffix;
+
+            var acme = _acmeOptions.Value;
+            shared.CopyAcmeDnsTo(acme);
+            acme.Fqdn = fqdn;
         }
 
         /// <summary>Logs additions, record changes, and removals. Passwords are not written.</summary>

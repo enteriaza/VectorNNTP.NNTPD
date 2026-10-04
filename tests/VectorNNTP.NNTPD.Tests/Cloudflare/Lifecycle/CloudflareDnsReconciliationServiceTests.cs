@@ -130,18 +130,22 @@ public sealed class CloudflareDnsReconciliationServiceTests
 
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
-        // Cloudflare DNS must start first. Remaining checks are relative start-order
-        // dependencies, not frozen numeric indexes.
-        Assert.Equal(typeof(CloudflareDnsReconciliationApplicationService), services[0].GetType());
+        // Shared configuration is published before Cloudflare so the zone id and FQDN exist.
+        Assert.Equal(typeof(NntpDbService), services[0].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.NntpDb.NntpSharedConfigurationService), services[1].GetType());
+        AssertRegisteredBefore(services, typeof(NntpDbService), typeof(VectorNNTP.NNTPD.NntpDb.NntpSharedConfigurationService));
+        AssertRegisteredBefore(
+            services,
+            typeof(VectorNNTP.NNTPD.NntpDb.NntpSharedConfigurationService),
+            typeof(CloudflareDnsReconciliationApplicationService));
         Assert.Equal(
             typeof(CloudflareDnsReconciliationService).Assembly,
-            services[0].GetType().Assembly);
+            services.Single(static service => service.GetType() == typeof(CloudflareDnsReconciliationApplicationService)).GetType().Assembly);
 
         AssertRegisteredBefore(services, typeof(CloudflareDnsReconciliationApplicationService), typeof(VectorNNTP.NNTPD.Redis.RedisService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Redis.RedisService), typeof(VectorNNTP.Common.Messaging.RabbitMq.RabbitMqService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.Common.Messaging.RabbitMq.RabbitMqService), typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.RabbitMqTopologyService), typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService));
-        AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), typeof(NntpDbService));
         AssertRegisteredBefore(services, typeof(NntpDbService), typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Newsgroups.NewsgroupCatalogueService), typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService));
         AssertRegisteredBefore(services, typeof(VectorNNTP.NNTPD.Moderation.ModeratorCatalogueService), typeof(VectorNNTP.NNTPD.PostFilter.PostFilterPolicyService));

@@ -1,5 +1,9 @@
+using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Configuration;
 using VectorNNTP.Common.Core;
 using VectorNNTP.Common.NntpDb;
+using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
@@ -16,6 +20,7 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
     public static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
 
     private readonly NntpDbService _nntpDb;
+    private readonly IOptions<NntpdOptions> _options;
     private readonly ILogger<NntpSharedConfigurationService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _interval;
@@ -28,30 +33,36 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
 
     /// <summary>Initializes a new instance of the <see cref="NntpSharedConfigurationService"/> class.</summary>
     /// <param name="nntpDb">Started database service.</param>
+    /// <param name="options">Live NNTPD options. ACME and DNS fields are replaced from each published snapshot.</param>
     /// <param name="logger">Lifecycle logger.</param>
     public NntpSharedConfigurationService(
         NntpDbService nntpDb,
+        IOptions<NntpdOptions> options,
         ILogger<NntpSharedConfigurationService> logger)
-        : this(nntpDb, logger, TimeProvider.System, RefreshInterval)
+        : this(nntpDb, options, logger, TimeProvider.System, RefreshInterval)
     {
     }
 
     /// <summary>Initializes a new instance with an explicit clock and interval (tests).</summary>
     /// <param name="nntpDb">Started database service.</param>
+    /// <param name="options">Live NNTPD options. ACME and DNS fields are replaced from each published snapshot.</param>
     /// <param name="logger">Lifecycle logger.</param>
     /// <param name="timeProvider">Clock used by the refresh delay.</param>
     /// <param name="interval">Delay between refreshes.</param>
     internal NntpSharedConfigurationService(
         NntpDbService nntpDb,
+        IOptions<NntpdOptions> options,
         ILogger<NntpSharedConfigurationService> logger,
         TimeProvider timeProvider,
         TimeSpan interval)
     {
         ArgumentNullException.ThrowIfNull(nntpDb);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
         _nntpDb = nntpDb;
+        _options = options;
         _logger = logger;
         _timeProvider = timeProvider;
         _interval = interval;
@@ -217,6 +228,19 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
 
     private void Publish(NntpSharedConfiguration snapshot)
     {
+        var options = _options.Value;
+        if (options.ServerId is { } serverId && ServerIdRules.IsInRange(serverId))
+        {
+            var fqdn = snapshot.RequireApplicationFqdn(NntpdOptions.ApplicationPrefix, serverId);
+            if (options.IsTlsListenerEnabled)
+            {
+                DnsZoneCoverage.RequireIdentitiesInDnsZone(
+                    CertificateIdentities.ForFqdn(fqdn, options.IncludeNewsHostnameInCertificate),
+                    snapshot.DnsSuffix);
+            }
+        }
+
+        snapshot.CopyAcmeDnsTo(options);
         Volatile.Write(ref _current, new PublishedSnapshot(snapshot));
         NntpSharedConfigurationLogMessages.SnapshotPublished(_logger, snapshot.MaxArticleBytes, snapshot.SiteName);
     }

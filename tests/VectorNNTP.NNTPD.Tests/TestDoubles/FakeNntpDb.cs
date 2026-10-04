@@ -391,7 +391,14 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection, INntpSharedConfi
         }
 
         IReadOnlyList<NntpSharedConfigurationCandidate> rows = SharedConfigurationRows
-            ?? [new NntpSharedConfigurationCandidate(5 * 1024 * 1024, "news.usenet.ninja", null)];
+            ?? [new NntpSharedConfigurationCandidate(
+                5 * 1024 * 1024,
+                "news.usenet.ninja",
+                null,
+                "https://acme-v02.api.letsencrypt.org/directory",
+                14,
+                "5811a29d39a0732afb5f160c9b137c3d",
+                "usenet.ninja")];
         return ValueTask.FromResult(rows);
     }
 

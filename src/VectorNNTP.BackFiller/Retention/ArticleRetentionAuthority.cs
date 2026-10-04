@@ -246,6 +246,9 @@ namespace VectorNNTP.BackFiller.Retention
         /// Date-family header name stored on a new entry. An <see cref="ArticleRetentionKind.AlreadyPresent"/>
         /// result keeps the header name from the first admission.
         /// </param>
+        /// <param name="endpointFqdn">
+        /// FQDN captured with this article's shared snapshot. Null or white space uses the FQDN supplied at construction.
+        /// </param>
         /// <returns>
         /// The admission kind, the identity when one was computed, the VATP endpoint when the article
         /// remains available, the owned byte total, and bytes physically released during this attempt.
@@ -269,9 +272,11 @@ namespace VectorNNTP.BackFiller.Retention
             string messageId,
             Guid requestId,
             ArticleRecord record,
-            NntpArticleHeaderName selectedDateHeaderName)
+            NntpArticleHeaderName selectedDateHeaderName,
+            string? endpointFqdn = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+            var admittedFqdn = string.IsNullOrWhiteSpace(endpointFqdn) ? _fqdn : endpointFqdn;
             // ThrowIfEqual changes both the message and ActualValue, so replacing the existing ArgumentOutOfRangeException would be a
             // behavioral change for no functional benefit
 #pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper
@@ -384,7 +389,7 @@ namespace VectorNNTP.BackFiller.Retention
 
                 var entry = new RetainedEntry(
                     identity,
-                    _fqdn,
+                    admittedFqdn,
                     _bindPort,
                     record,
                     selectedDateHeaderName,

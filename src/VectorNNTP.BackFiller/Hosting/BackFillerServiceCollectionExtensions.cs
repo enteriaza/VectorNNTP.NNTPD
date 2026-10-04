@@ -35,10 +35,11 @@ namespace VectorNNTP.BackFiller.Hosting
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is <see langword="null"/>.</exception>
         /// <remarks>
         /// <para>
-        /// Registers Common <see cref="RabbitMqService"/> via <see cref="RabbitMqServiceHostedAdapter"/>
-        /// as an early <see cref="IHostedService"/>. Startup fails if the initial broker
-        /// connection cannot be established. Registers <see cref="ProviderAccountConfigurationService"/>
-        /// after the connection owner, then <see cref="NntpProviderRegistry"/>,
+        /// Registers <see cref="NntpDbServiceHostedAdapter"/> and then
+        /// <see cref="ProviderAccountConfigurationService"/> so <c>nntpsharedconfig</c> is published
+        /// before <see cref="RabbitMqServiceHostedAdapter"/> reads the generated FQDN.
+        /// Startup fails if the initial broker connection cannot be established.
+        /// Then <see cref="NntpProviderRegistry"/>,
         /// then <see cref="BackFillerApplicationHostedService"/> (starts
         /// <see cref="CloudflareDnsReconciliationApplicationService"/>, then
         /// <see cref="AcmeCertificateApplicationService"/>, then
@@ -55,8 +56,9 @@ namespace VectorNNTP.BackFiller.Hosting
         /// <c>TryAddSingleton</c> leaves an existing registration in place.
         /// <see cref="IHostedService"/> instances are registered in this order:
         /// <see cref="SystemdLifecycleNotifier"/>, <see cref="SystemdWatchdogService"/>,
-        /// <see cref="RabbitMqServiceHostedAdapter"/>, <see cref="ProviderAccountConfigurationService"/>,
-        /// <see cref="NntpProviderRegistry"/>, <see cref="BackFillerApplicationHostedService"/>,
+        /// <see cref="NntpDbServiceHostedAdapter"/>, <see cref="ProviderAccountConfigurationService"/>,
+        /// <see cref="RabbitMqServiceHostedAdapter"/>, <see cref="NntpProviderRegistry"/>,
+        /// <see cref="BackFillerApplicationHostedService"/>,
         /// <see cref="ArticleRetentionSweepService"/>, <see cref="ArticleWorkResponsePublisher"/>,
         /// then <see cref="ArticleWorkConsumerService"/>.
         /// The notifier is first so it is constructed before later hosted services and can observe
@@ -112,7 +114,10 @@ namespace VectorNNTP.BackFiller.Hosting
                         AppContext.BaseDirectory);
                     journal.Record(BackFillerStartupStages.Configuration);
                 });
-            builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, AcmeCloudflareOptionsValidator>();
+            builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>>(static provider =>
+                new AcmeCloudflareOptionsValidator(
+                    provider.GetRequiredService<ILocalIpAddressAssignee>(),
+                    validateSharedDatabaseFields: false));
             builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
             builder.Services.AddAcmeCloudflareInfrastructure();
             builder.Services.AddNntpDbOptions();
@@ -155,8 +160,6 @@ namespace VectorNNTP.BackFiller.Hosting
                         ApplicationJsonConfiguration.EntryAssemblyName,
                         sp.GetRequiredService<IOptions<BackFillerOptions>>().Value.Fqdn)));
             builder.Services.AddRabbitMqInfrastructure();
-            builder.Services.AddSingleton<IHostedService>(static sp =>
-                new RabbitMqServiceHostedAdapter(sp.GetRequiredService<RabbitMqService>()));
 
             builder.Services.AddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
             builder.Services.AddSingleton<NntpDbService>();
@@ -175,6 +178,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<IBackFillerSharedConfigurationSource>(),
                 provider.GetRequiredService<NntpProviderRegistry>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
+                provider.GetRequiredService<IOptions<BackFillerOptions>>(),
+                provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
                 provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>()));
             builder.Services.AddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
                 provider.GetRequiredService<ProviderAccountConfigurationService>());
@@ -193,6 +198,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider));
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<ProviderAccountConfigurationService>());
+            builder.Services.AddSingleton<IHostedService>(static sp =>
+                new RabbitMqServiceHostedAdapter(sp.GetRequiredService<RabbitMqService>()));
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<NntpProviderRegistry>());
             builder.Services.TryAddEnumerable(
@@ -229,7 +236,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<INntpArticleRetriever>(),
                 provider.GetRequiredService<IArticleRetentionAuthority>(),
                 provider.GetRequiredService<NntpArticleParser>(),
-                provider.GetRequiredService<INntpSharedConfigurationCatalogue>()));
+                provider.GetRequiredService<INntpSharedConfigurationCatalogue>(),
+                provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId));
             builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
                 provider.GetRequiredService<IRabbitMqService>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),

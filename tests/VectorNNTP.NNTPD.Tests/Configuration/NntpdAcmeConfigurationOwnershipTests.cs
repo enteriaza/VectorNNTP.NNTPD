@@ -37,11 +37,10 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
     private const string TestCertificatePassword = "unit-test-nntpd-pfx-password";
 
     [Fact]
-    public void Nntpd_acme_directory_url_survives_configuration_binding()
+    public void Nntpd_json_does_not_own_the_acme_directory_url()
     {
-        using var host = CreateHost();
-        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
-        Assert.Equal(NntpdDirectoryUrl, options.AcmeDirectoryUrl);
+        var json = File.ReadAllText(FindRepoFile(Path.Combine("src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json")));
+        Assert.DoesNotContain("\"AcmeDirectoryUrl\"", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -56,11 +55,10 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
     }
 
     [Fact]
-    public void Nntpd_acme_renewal_threshold_days_survives_configuration_binding()
+    public void Nntpd_json_does_not_own_the_acme_renewal_threshold()
     {
-        using var host = CreateHost();
-        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
-        Assert.Equal(NntpdRenewalDays, options.AcmeRenewalThresholdDays);
+        var json = File.ReadAllText(FindRepoFile(Path.Combine("src", "VectorNNTP.NNTPD", "VectorNNTP.NNTPD.json")));
+        Assert.DoesNotContain("\"AcmeRenewalThresholdDays\"", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -79,14 +77,10 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
         var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
         var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
 
-        Assert.Equal(NntpdDirectoryUrl, options.AcmeDirectoryUrl);
         Assert.Equal(SharedAcmeAccount, options.AcmeEmail);
-        Assert.Equal(NntpdRenewalDays, options.AcmeRenewalThresholdDays);
         Assert.Equal(ExpectedResolvedStateDir(AppContext.BaseDirectory), options.AcmeStateDir);
 
-        Assert.NotEqual(RootDirectoryUrl, options.AcmeDirectoryUrl);
         Assert.NotEqual(RootEmail, options.AcmeEmail);
-        Assert.NotEqual(30, options.AcmeRenewalThresholdDays);
         Assert.NotEqual(RootStateDir, options.AcmeStateDir);
 
         Assert.Same(options, acme);

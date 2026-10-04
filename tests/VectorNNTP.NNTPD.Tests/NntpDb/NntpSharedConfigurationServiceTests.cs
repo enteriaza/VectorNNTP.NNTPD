@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Configuration;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.Tests.NntpDb;
@@ -14,12 +15,20 @@ public sealed class NntpSharedConfigurationServiceTests
         {
             SharedConfigurationRows =
             [
-                new NntpSharedConfigurationCandidate(4096, "news.example", "http://prom.example"),
+                new NntpSharedConfigurationCandidate(
+                    4096,
+                    "news.example",
+                    "http://prom.example",
+                    "https://acme-v02.api.letsencrypt.org/directory",
+                    14,
+                    "0123456789abcdef0123456789abcdef",
+                    "usenet.ninja"),
             ],
         };
         await using var database = await StartDatabaseAsync(factory);
         var service = new NntpSharedConfigurationService(
             database,
+            Options.Create(new NntpdOptions { ServerId = 1, BindPortTls = 0 }),
             NullLogger<NntpSharedConfigurationService>.Instance,
             TimeProvider.System,
             TimeSpan.FromHours(1));
@@ -42,6 +51,7 @@ public sealed class NntpSharedConfigurationServiceTests
         await using var database = await StartDatabaseAsync(factory);
         var service = new NntpSharedConfigurationService(
             database,
+            Options.Create(new NntpdOptions { ServerId = 1, BindPortTls = 0 }),
             NullLogger<NntpSharedConfigurationService>.Instance,
             TimeProvider.System,
             TimeSpan.FromHours(1));
