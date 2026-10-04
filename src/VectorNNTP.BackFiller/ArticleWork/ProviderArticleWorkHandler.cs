@@ -121,6 +121,9 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// An <see cref="OperationCanceledException"/> whose token is not <paramref name="cancellationToken"/> propagates.
         /// Other exceptions from retrieval, parsing, or retention also propagate. The caller maps those to
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
+        /// When no shared-configuration catalogue was supplied, retrieval is called with a zero article limit so the
+        /// session's <c>NntpSessionOptions.MaxArticleBytes</c> remains in force. A supplied catalogue passes that
+        /// snapshot's <c>MaxArticleBytes</c>.
         /// </remarks>
         public async ValueTask<ArticleWorkHandlerResult> HandleAsync(
             ArticleWorkItem item,
@@ -141,7 +144,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             ArticleRetrievalResult retrieval;
             ArticleRecordCreateResult created = default;
             var consumed = false;
-            var maxArticleBytes = Nntp.ArticleResourceLimits.MaxArticleBytes;
+            var maxArticleBytes = 0;
             byte[]? siteNameUtf8 = null;
             if (_sharedConfiguration is not null)
             {

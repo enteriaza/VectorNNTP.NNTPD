@@ -95,6 +95,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting.Systemd
             builder.ConfigureBackFillerLogging();
             builder.ConfigureBackFillerPlatformHosting();
             builder.AddBackFillerHosting();
+            SuccessfulNntpDbConnectionFactory.Replace(builder.Services);
 
             builder.Services.RemoveAll<ISystemdNotifyBridge>();
             builder.Services.AddSingleton<ISystemdNotifyBridge>(notify);

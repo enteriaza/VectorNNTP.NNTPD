@@ -174,6 +174,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             builder.Services.AddSingleton<VectorNNTP.BackFiller.Accounts.IProviderAccountSource>(
                 new FakeProviderAccountSource());
             builder.AddBackFillerHosting();
+            SuccessfulNntpDbConnectionFactory.Replace(builder.Services);
             ReplaceAcme(builder.Services);
 
             using var host = builder.Build();

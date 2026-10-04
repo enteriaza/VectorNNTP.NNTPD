@@ -13,6 +13,7 @@ using VectorNNTP.BackFiller.Hosting.Systemd;
 using VectorNNTP.BackFiller.Logging;
 using VectorNNTP.BackFiller.Listener;
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.BackFiller.NntpDb;
 using VectorNNTP.BackFiller.RabbitMq;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Acme;
@@ -38,16 +39,17 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             var hosted = host.Services.GetServices<IHostedService>()
                 .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
                 .ToArray();
-            Assert.Equal(9, hosted.Length);
+            Assert.Equal(10, hosted.Length);
             Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
             Assert.IsType<SystemdWatchdogService>(hosted[1]);
             Assert.IsType<RabbitMqServiceHostedAdapter>(hosted[2]);
-            Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[3]);
-            Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[4]);
-            Assert.IsType<BackFillerApplicationHostedService>(hosted[5]);
-            Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[6]);
-            Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[7]);
-            Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[8]);
+            Assert.IsType<NntpDbServiceHostedAdapter>(hosted[3]);
+            Assert.Same(host.Services.GetRequiredService<ProviderAccountConfigurationService>(), hosted[4]);
+            Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[5]);
+            Assert.IsType<BackFillerApplicationHostedService>(hosted[6]);
+            Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[7]);
+            Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[8]);
+            Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[9]);
             Assert.Same(
                 host.Services.GetRequiredService<BackFillerApplicationHealth>(),
                 host.Services.GetRequiredService<IApplicationHealth>());
@@ -211,6 +213,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             builder.ConfigureBackFillerLogging();
             builder.ConfigureBackFillerPlatformHosting();
             builder.AddBackFillerHosting();
+            SuccessfulNntpDbConnectionFactory.Replace(builder.Services);
             if (replaceAcme)
             {
                 ReplaceAcmeApplicationServiceWithImmediateReady(builder.Services);
