@@ -117,9 +117,15 @@ public sealed class IhaveArticleInterpreterTests
 
     private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister
     {
+        private readonly object _persistGate = new();
+
         public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
         {
-            captured.Add(article);
+            lock (_persistGate)
+            {
+                captured.Add(article);
+            }
+
             return Task.CompletedTask;
         }
     }

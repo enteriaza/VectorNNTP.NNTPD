@@ -268,6 +268,17 @@ internal sealed class IngestionWorkerPool
         }
     }
 
+    /// <summary>
+    /// Processes queued articles until this worker is cancelled.
+    /// </summary>
+    /// <remarks>
+    /// Graceful shutdown completes the queue before cancelling workers. Cancellation
+    /// observed while blocked in <see cref="IArticleIngestionQueue.DequeueAsync"/>, or
+    /// between articles, drains leftovers without the worker token.
+    /// <see cref="IArticleIngestionQueue.Count"/> is approximate and is not proof the
+    /// channel is empty. Scale-down cancels one worker while the queue is still
+    /// accepting; that worker exits without draining.
+    /// </remarks>
     private async Task WorkerLoopAsync(Worker worker, CancellationToken cancellationToken)
     {
         try
@@ -284,15 +295,7 @@ internal sealed class IngestionWorkerPool
                 {
                     _pipeline?.AddIdleTicks(System.Diagnostics.Stopwatch.GetTimestamp() - idleStart);
                     _pipeline?.RecordDequeueWait(idleStart);
-
-                    // Shutdown Completes the queue then cancels workers. Drain leftovers
-                    // without cancellation so news/path/persist still run. Scale-down
-                    // cancel leaves the queue accepting, so exit without draining.
-                    if (!_queue.IsAccepting)
-                    {
-                        await DrainRemainingAsync().ConfigureAwait(false);
-                    }
-
+                    await DrainIfShuttingDownAsync().ConfigureAwait(false);
                     break;
                 }
 
@@ -306,10 +309,13 @@ internal sealed class IngestionWorkerPool
 
                 await ProcessOneAsync(article).ConfigureAwait(false);
 
-                if (cancellationToken.IsCancellationRequested && _queue.Count == 0)
+                if (!cancellationToken.IsCancellationRequested)
                 {
-                    break;
+                    continue;
                 }
+
+                await DrainIfShuttingDownAsync().ConfigureAwait(false);
+                break;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -321,6 +327,29 @@ internal sealed class IngestionWorkerPool
         }
     }
 
+    /// <summary>
+    /// Processes articles still queued after graceful shutdown has stopped admission.
+    /// </summary>
+    /// <remarks>
+    /// No-ops while the queue is accepting, so scale-down cancellation does not steal
+    /// work from the remaining workers. Concurrent callers are safe: each article is
+    /// dequeued by one caller, and a completed empty queue returns null.
+    /// </remarks>
+    private async Task DrainIfShuttingDownAsync()
+    {
+        if (!_queue.IsAccepting)
+        {
+            await DrainRemainingAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Dequeues and processes until the queue is completed and empty.
+    /// </summary>
+    /// <remarks>
+    /// Uses <see cref="CancellationToken.None"/> so worker cancellation cannot abandon
+    /// an article that was already accepted. Safe to run from more than one worker.
+    /// </remarks>
     private async Task DrainRemainingAsync()
     {
         while (true)

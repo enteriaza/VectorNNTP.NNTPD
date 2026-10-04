@@ -180,6 +180,58 @@ public sealed class IngestionWorkerPoolTests
     }
 
     [Fact]
+    public async Task GracefulShutdown_CancellationBetweenItems_PersistsArticlesWhenCountReadsEmpty()
+    {
+        var queue = new CountReportsEmptyQueue();
+        var processed = new ConcurrentBag<string>();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var options = new ArticleIngestionOptions
+        {
+            MinWorkers = 1,
+            MaxWorkers = 1,
+            ScaleIntervalSeconds = 3600,
+        };
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(
+                ArticleEnqueueResult.Accepted,
+                await queue.EnqueueAsync(
+                    CanonicalArticleText.CreateQueued(
+                        $"<{i}@shutdown.test>",
+                        InboundArticleProducer.IHave,
+                        "body\r\n"),
+                    CancellationToken.None));
+        }
+
+        var pool = new IngestionWorkerPool(
+            queue,
+            async (article, _, _) =>
+            {
+                if (entered.TrySetResult())
+                {
+                    await release.Task.ConfigureAwait(false);
+                }
+
+                processed.Add(article.MessageId);
+            },
+            options,
+            NullLogger.Instance);
+
+        using var cts = new CancellationTokenSource();
+        var run = pool.RunAsync(cts.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        queue.Complete();
+        await cts.CancelAsync();
+        release.TrySetResult();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(3, processed.Count);
+        Assert.Equal(3, processed.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void PressureSnapshot_UsesByteUtilisationAndWaitingProducers()
     {
         var fromBytes = new IngestionPressureSnapshot(0.5, 50, 100, 3, 0);
@@ -188,6 +240,80 @@ public sealed class IngestionWorkerPoolTests
         var waiting = IngestionPressureSnapshot.FromQueue(
             new ArticleIngestionQueue(new ArticleIngestionOptions(), transitQueueMemoryLimit: 100));
         Assert.Equal(0, waiting.Pressure);
+    }
+
+    /// <summary>
+    /// Queue whose <see cref="Count"/> stays 0 while accepted articles remain readable.
+    /// </summary>
+    /// <remarks>
+    /// Models the approximate count window: an article can already be in the channel
+    /// before <see cref="Count"/> advances. Shutdown must not treat 0 as empty.
+    /// </remarks>
+    private sealed class CountReportsEmptyQueue : IArticleIngestionQueue
+    {
+        private readonly ConcurrentQueue<InboundArticle> _items = new();
+        private int _accepting = 1;
+
+        public long MemoryLimitBytes => 1024 * 1024;
+
+        public long QueuedBytes => 0;
+
+        public long PeakQueuedBytes => 0;
+
+        public int MaxArticleBytes => 1024 * 1024;
+
+        public int Count => 0;
+
+        public int PeakCount => 0;
+
+        public bool IsAccepting => Volatile.Read(ref _accepting) != 0;
+
+        public ValueTask<ArticleEnqueueResult> EnqueueAsync(
+            InboundArticle article,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(article);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsAccepting)
+            {
+                return new ValueTask<ArticleEnqueueResult>(ArticleEnqueueResult.Unavailable);
+            }
+
+            _items.Enqueue(article);
+            return new ValueTask<ArticleEnqueueResult>(ArticleEnqueueResult.Accepted);
+        }
+
+        public bool TryProbeCapacity() => IsAccepting;
+
+        public ArticleEnqueueResult TryAdmit(InboundArticle article)
+        {
+            ArgumentNullException.ThrowIfNull(article);
+            if (!IsAccepting)
+            {
+                return ArticleEnqueueResult.Unavailable;
+            }
+
+            _items.Enqueue(article);
+            return ArticleEnqueueResult.Accepted;
+        }
+
+        public bool TryEnqueue(InboundArticle article) =>
+            TryAdmit(article) == ArticleEnqueueResult.Accepted;
+
+        public void Complete() => Interlocked.Exchange(ref _accepting, 0);
+
+        public ValueTask<InboundArticle?> DequeueAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_items.TryDequeue(out var article))
+            {
+                return new ValueTask<InboundArticle?>(article);
+            }
+
+            return IsAccepting
+                ? throw new InvalidOperationException("Test queue was read while empty and still accepting.")
+                : new ValueTask<InboundArticle?>((InboundArticle?)null);
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
