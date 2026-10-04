@@ -13,9 +13,43 @@ public sealed class PostArticleValidationTests
         new(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void MissingDate_IsRejected()
+    public void MissingDate_IsSynthesized()
     {
-        AssertRejected(Build(date: null), PostingFailureCategory.MissingRequiredHeader);
+        var parsed = Parse(Build(date: null));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _));
+        Assert.True(parsed.DateSynthesized);
+        Assert.Equal(Now, parsed.AuthorDate);
+    }
+
+    [Fact]
+    public void OmittedDate_NormalizeWritesGeneratedDateOnce()
+    {
+        var parsed = Parse(Build(date: null, extraHeaders: "Path: client.path\r\n"));
+        Assert.True(PostArticleValidator.TryValidate(
+            parsed,
+            Now,
+            SyntaxOnlyNewsgroupPostingPolicy.Instance,
+            out _));
+        var protector = AesGcmPostingTraceProtector.Create(
+            new NntpdOptions { XTraceKey = TestHostFactory.TestXTraceKey });
+        var normalized = PostHeaderNormalizer.Normalize(
+            parsed,
+            Now,
+            "nntpd01.usenet.ninja",
+            ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119)),
+            NntpdOptions.DefaultMailComplaintsTo,
+            protector);
+        var text = Encoding.ASCII.GetString(normalized.Span);
+        var generated = PostRfcDate.Format(Now);
+        Assert.Equal(1, CountHeader(text, "Date: "));
+        Assert.Contains("Date: " + generated + "\r\n", text, StringComparison.Ordinal);
+        Assert.Equal(1, CountHeader(text, "Path: "));
+        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("client.path", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -122,6 +156,7 @@ public sealed class PostArticleValidationTests
             SyntaxOnlyNewsgroupPostingPolicy.Instance,
             out _));
         Assert.Equal(Now, parsed.AuthorDate);
+        Assert.False(parsed.DateSynthesized);
     }
 
     [Fact]
@@ -337,6 +372,7 @@ public sealed class PostArticleValidationTests
         Assert.DoesNotContain("Xref:", text, StringComparison.Ordinal);
         Assert.DoesNotContain("forged", text, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(text, "Path:"));
+        Assert.Equal(1, CountHeader(text, "Date: "));
         Assert.Equal(1, CountOccurrences(text, "Injection-Date:"));
         Assert.Equal(1, CountOccurrences(text, "X-Trace:"));
     }
@@ -443,5 +479,11 @@ public sealed class PostArticleValidationTests
         }
 
         return count;
+    }
+
+    private static int CountHeader(string text, string header)
+    {
+        var count = text.StartsWith(header, StringComparison.Ordinal) ? 1 : 0;
+        return count + CountOccurrences(text, "\r\n" + header);
     }
 }

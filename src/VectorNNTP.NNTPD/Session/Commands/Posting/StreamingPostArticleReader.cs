@@ -334,7 +334,9 @@ internal static class StreamingPostArticleReader
                 PostHeaderNormalizer.WriteProtoArticleBoundary(
                     _output,
                     article.MessageIdSynthesized,
-                    article.MessageId!);
+                    article.MessageId!,
+                    article.DateSynthesized,
+                    _injectionUtc);
             }
             catch (Exception)
             {
@@ -362,6 +364,7 @@ internal static class StreamingPostArticleReader
                     _output,
                     article.MessageIdSynthesized,
                     article.MessageId!,
+                    article.DateSynthesized,
                     _injectionUtc,
                     options.InjectionIdentity,
                     options.ClientIdentity,

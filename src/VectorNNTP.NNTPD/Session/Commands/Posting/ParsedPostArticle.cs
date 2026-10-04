@@ -49,8 +49,11 @@ internal sealed class ParsedPostArticle
     /// <summary>Gets or sets syntax-validated newsgroup names.</summary>
     public string[] Newsgroups { get; set; } = [];
 
-    /// <summary>Gets or sets the parsed author <c>Date:</c>.</summary>
+    /// <summary>Gets or sets the parsed author <c>Date:</c>, or the injection time when synthesized.</summary>
     public DateTimeOffset AuthorDate { get; set; }
+
+    /// <summary>Gets or sets whether <see cref="AuthorDate"/> was generated because the client omitted <c>Date:</c>.</summary>
+    public bool DateSynthesized { get; set; }
 
     /// <summary>Gets or sets whether a structurally valid <c>Approved:</c> is present.</summary>
     public bool ApprovedPresent { get; set; }

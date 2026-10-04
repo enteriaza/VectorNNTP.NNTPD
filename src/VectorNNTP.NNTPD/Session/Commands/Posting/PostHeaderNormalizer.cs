@@ -13,7 +13,8 @@ internal static class PostHeaderNormalizer
 
     /// <summary>
     /// Builds the accepted article: client Path / injection metadata / Xref discarded,
-    /// server-owned values written once, client Date preserved.
+    /// server-owned values written once, a valid client Date preserved, and a Date
+    /// written from the injection time only when the client omitted Date.
     /// </summary>
     public static ReadOnlyMemory<byte> Normalize(
         ParsedPostArticle article,
@@ -46,6 +47,7 @@ internal static class PostHeaderNormalizer
             writer,
             article.MessageIdSynthesized,
             article.MessageId,
+            article.DateSynthesized,
             injectionUtc,
             injectionIdentity,
             clientIdentity,
@@ -77,13 +79,18 @@ internal static class PostHeaderNormalizer
         || PostFieldSyntax.EqualsFolded(name, "XREF"u8);
 
     /// <summary>
-    /// Writes synthesized Message-ID (when needed), Path, Injection-Date, Injection-Info,
+    /// Writes synthesized Message-ID and Date (when needed), Path, Injection-Date, Injection-Info,
     /// X-Trace, and the header/body separator into <paramref name="writer"/>.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="writeDate"/> writes <see cref="PostRfcDate.Format"/> of
+    /// <paramref name="injectionUtc"/>. A client Date already copied into the article is not rewritten.
+    /// </remarks>
     internal static void WriteServerOwnedHeaders(
         IBufferWriter<byte> writer,
         bool writeMessageId,
         string messageId,
+        bool writeDate,
         DateTimeOffset injectionUtc,
         string injectionIdentity,
         ConnectionClientIdentity clientIdentity,
@@ -103,6 +110,11 @@ internal static class PostHeaderNormalizer
             WriteHeader(writer, "Message-ID: "u8, messageId);
         }
 
+        if (writeDate)
+        {
+            WriteHeader(writer, "Date: "u8, PostRfcDate.Format(injectionUtc));
+        }
+
         WriteHeader(writer, "Path: "u8, PostedPath);
         WriteHeader(writer, "Injection-Date: "u8, PostRfcDate.Format(injectionUtc));
         WriteHeader(writer, "Injection-Info: "u8, BuildInjectionInfo(injectionIdentity, messageId, mailComplaintsTo));
@@ -120,19 +132,26 @@ internal static class PostHeaderNormalizer
     }
 
     /// <summary>
-    /// Writes a synthesized Message-ID when required and the header/body separator.
+    /// Writes a synthesized Message-ID and Date when required, then the header/body separator.
     /// Does not write Path, Injection-Date, Injection-Info, or X-Trace (RFC 5537 §3.5 step 7).
     /// </summary>
     internal static void WriteProtoArticleBoundary(
         IBufferWriter<byte> writer,
         bool writeMessageId,
-        string messageId)
+        string messageId,
+        bool writeDate,
+        DateTimeOffset injectionUtc)
     {
         ArgumentNullException.ThrowIfNull(writer);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         if (writeMessageId)
         {
             WriteHeader(writer, "Message-ID: "u8, messageId);
+        }
+
+        if (writeDate)
+        {
+            WriteHeader(writer, "Date: "u8, PostRfcDate.Format(injectionUtc));
         }
 
         writer.Write("\r\n"u8);

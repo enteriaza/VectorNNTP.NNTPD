@@ -55,6 +55,94 @@ public sealed class StreamingPostArticleReaderTests
         var result = await ReadStreamingAsync(stuffed);
         Assert.Equal(StreamingPostReadStatus.Rejected, result.Status);
         Assert.Equal(PostingFailureCategory.MissingRequiredHeader, result.Failure.Category);
+        Assert.Equal("Newsgroups", result.Failure.Detail);
+    }
+
+    [Theory]
+    [InlineData("From")]
+    [InlineData("Newsgroups")]
+    [InlineData("Subject")]
+    public async Task MissingMandatoryHeader_IsRejected(string header)
+    {
+        var stuffed = header switch
+        {
+            "From" => "Newsgroups: misc.test\r\nSubject: test\r\n\r\nbody\r\n.\r\n",
+            "Newsgroups" => "From: poster@example.com\r\nSubject: test\r\n\r\nbody\r\n.\r\n",
+            _ => "From: poster@example.com\r\nNewsgroups: misc.test\r\n\r\nbody\r\n.\r\n",
+        };
+        var result = await ReadStreamingAsync(stuffed);
+        Assert.Equal(StreamingPostReadStatus.Rejected, result.Status);
+        Assert.Equal(PostingFailureCategory.MissingRequiredHeader, result.Failure.Category);
+        Assert.Equal(header, result.Failure.Detail);
+    }
+
+    [Fact]
+    public async Task MissingDate_IsGeneratedOnce()
+    {
+        var result = await ReadStreamingAsync(ClientArticle(date: null));
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        var text = Encoding.ASCII.GetString(result.Wire.Span);
+        Assert.Equal(1, CountHeader(text, "Date: "));
+        Assert.Contains("Date: " + PostRfcDate.Format(Now) + "\r\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SuppliedDate_IsPreservedOnce()
+    {
+        const string date = "25 Sep 2026 11:00:00 +0000";
+        var result = await ReadStreamingAsync(ClientArticle(date: date));
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        var text = Encoding.ASCII.GetString(result.Wire.Span);
+        Assert.Equal(1, CountHeader(text, "Date: "));
+        Assert.Contains("Date: " + date + "\r\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MalformedDate_IsRejected()
+    {
+        var result = await ReadStreamingAsync(ClientArticle(date: "yesterday"));
+        Assert.Equal(StreamingPostReadStatus.Rejected, result.Status);
+        Assert.Equal(PostingFailureCategory.InvalidDate, result.Failure.Category);
+    }
+
+    [Theory]
+    [InlineData(25, 0)]
+    [InlineData(0, -15)]
+    public async Task DateOutsidePolicy_IsRejected(int hours, int days)
+    {
+        var date = PostRfcDate.Format(Now.AddHours(hours).AddDays(days));
+        var result = await ReadStreamingAsync(ClientArticle(date: date));
+        Assert.Equal(StreamingPostReadStatus.Rejected, result.Status);
+        Assert.Equal(PostingFailureCategory.InvalidDate, result.Failure.Category);
+    }
+
+    [Fact]
+    public async Task MalformedMessageId_IsRejected()
+    {
+        var result = await ReadStreamingAsync(ClientArticle(messageId: "not-an-id"));
+        Assert.Equal(StreamingPostReadStatus.Rejected, result.Status);
+        Assert.Equal(PostingFailureCategory.InvalidMessageId, result.Failure.Category);
+    }
+
+    [Fact]
+    public async Task AbsentPath_IsServerGeneratedOnce()
+    {
+        var result = await ReadStreamingAsync(ClientArticle());
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        var text = Encoding.ASCII.GetString(result.Wire.Span);
+        Assert.Equal(1, CountHeader(text, "Path: "));
+        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SuppliedPath_IsDiscardedAndReplacedOnce()
+    {
+        var result = await ReadStreamingAsync(ClientArticle(extraHeaders: "Path: evil.path\r\n"));
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        var text = Encoding.ASCII.GetString(result.Wire.Span);
+        Assert.Equal(1, CountHeader(text, "Path: "));
+        Assert.Contains("Path: .POSTED\r\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("evil.path", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -293,10 +381,15 @@ public sealed class StreamingPostArticleReaderTests
         string? messageId = "<ok@example.com>",
         string extraHeaders = "",
         string body = "body\r\n",
-        bool includeTerminator = true)
+        bool includeTerminator = true,
+        string? date = "")
     {
         var sb = new StringBuilder();
-        sb.Append("Date: ").Append(PostRfcDate.Format(Now)).Append("\r\n");
+        if (date is not null)
+        {
+            sb.Append("Date: ").Append(date.Length == 0 ? PostRfcDate.Format(Now) : date).Append("\r\n");
+        }
+
         sb.Append("From: poster@example.com\r\n");
         sb.Append("Newsgroups: misc.test\r\n");
         sb.Append("Subject: test\r\n");
@@ -335,6 +428,12 @@ public sealed class StreamingPostArticleReaderTests
         }
 
         return count;
+    }
+
+    private static int CountHeader(string text, string header)
+    {
+        var count = text.StartsWith(header, StringComparison.Ordinal) ? 1 : 0;
+        return count + CountOccurrences(text, "\r\n" + header);
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset utc) : TimeProvider

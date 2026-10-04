@@ -31,7 +31,7 @@ internal static class PostArticleValidator
         "IN-REPLY-TO"u8.ToArray(),
     ];
 
-    /// <summary>Validates parsed headers and fills Message-ID / Newsgroups / Date on <paramref name="article"/>.</summary>
+    /// <summary>Validates parsed headers and fills Message-ID, Newsgroups, and Date on <paramref name="article"/>.</summary>
     public static bool TryValidate(
         ParsedPostArticle article,
         DateTimeOffset injectionUtc,
@@ -47,8 +47,7 @@ internal static class PostArticleValidator
             return false;
         }
 
-        if (!TryRequire(article, "DATE"u8, "Date", out var dateHeader, out failure)
-            || !TryRequire(article, "FROM"u8, "From", out var fromHeader, out failure)
+        if (!TryRequire(article, "FROM"u8, "From", out var fromHeader, out failure)
             || !TryRequire(article, "NEWSGROUPS"u8, "Newsgroups", out var groupsHeader, out failure)
             || !TryRequire(article, "SUBJECT"u8, "Subject", out _, out failure))
         {
@@ -61,19 +60,28 @@ internal static class PostArticleValidator
             return false;
         }
 
-        if (!PostRfcDate.TryParse(dateHeader.UnfoldedValue.Span, out var authorDate))
+        if (article.TryGetHeader("DATE"u8, out var dateHeader))
         {
-            failure = new PostingFailure(PostingFailureCategory.InvalidDate, "malformed Date");
-            return false;
-        }
+            if (!PostRfcDate.TryParse(dateHeader.UnfoldedValue.Span, out var authorDate))
+            {
+                failure = new PostingFailure(PostingFailureCategory.InvalidDate, "malformed Date");
+                return false;
+            }
 
-        if (!PostRfcDate.IsWithinPolicy(authorDate, injectionUtc))
+            if (!PostRfcDate.IsWithinPolicy(authorDate, injectionUtc))
+            {
+                failure = new PostingFailure(PostingFailureCategory.InvalidDate, "Date outside policy window");
+                return false;
+            }
+
+            article.AuthorDate = authorDate;
+            article.DateSynthesized = false;
+        }
+        else
         {
-            failure = new PostingFailure(PostingFailureCategory.InvalidDate, "Date outside policy window");
-            return false;
+            article.AuthorDate = injectionUtc;
+            article.DateSynthesized = true;
         }
-
-        article.AuthorDate = authorDate;
 
         var groups = new List<string>(4);
         if (!PostFieldSyntax.TryParseNewsgroupList(

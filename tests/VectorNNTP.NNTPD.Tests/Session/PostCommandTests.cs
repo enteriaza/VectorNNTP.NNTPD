@@ -305,7 +305,7 @@ public sealed class PostCommandTests
 
         await duplex.WriteClientLineAsync("POST");
         Assert.Equal("340 Input article; end with <CR-LF>.<CR-LF>", await duplex.ReadClientLineAsync());
-        await duplex.WriteClientAsync(ValidArticle(includeDate: false) + ".\r\n");
+        await duplex.WriteClientAsync(ValidArticle(includeSubject: false) + ".\r\n");
         Assert.Equal("441 Posting failed", await duplex.ReadClientLineAsync());
         Assert.Equal(0, queue.Count);
 
@@ -989,7 +989,8 @@ public sealed class PostCommandTests
         string? messageId = "<ok@example.com>",
         string extraHeaders = "",
         string body = "body\r\n",
-        bool includeDate = true)
+        bool includeDate = true,
+        bool includeSubject = true)
     {
         date ??= PostRfcDate.Format(DateTimeOffset.UtcNow);
         var sb = new StringBuilder();
@@ -999,7 +1000,10 @@ public sealed class PostCommandTests
         }
         sb.Append("From: poster@example.com\r\n");
         sb.Append("Newsgroups: misc.test\r\n");
-        sb.Append("Subject: test\r\n");
+        if (includeSubject)
+        {
+            sb.Append("Subject: test\r\n");
+        }
         if (messageId is not null)
         {
             sb.Append("Message-ID: ").Append(messageId).Append("\r\n");
