@@ -24,6 +24,10 @@ A later **IHAVE** measurement is the real serialized IHAVE **command** benchmark
 production host, production HistoryDB/Redis, and the RFC 3977 two-stage exchange. It is **not**
 the IHAVE Pipe-reader microbenchmark documented separately below.
 
+A later **BackFiller** section records in-process article processing of the real
+`.artifacts/Articles` corpus. BackFiller articles/s is not a BENCHIT, TAKETHIS, or IHAVE figure
+and is not ranked against those workloads.
+
 ## Test Environment
 
 | Item | Value |
@@ -785,6 +789,181 @@ corpus and arrival:
   Pipe figures, not TCP ingest rates.
 - Do not treat these Pipe MB/s figures as Internet or TCP ingest rates.
 
+## BackFiller
+
+BackFiller article processing is an **in-process handler benchmark**. It calls
+`ProviderArticleWorkHandler.HandleAsync` on articles already in memory. It does not open NNTP
+sockets, RabbitMQ, or VATP storage. It is not a TCP ingest measurement and not a substitute for
+BENCHIT, TAKETHIS, or IHAVE.
+
+The successive rows below use one harness,
+`DestuffOptimizationMeasurementTests.MeasureDestuffOptimization_WhenEnabled`, Release, corpus
+`.artifacts/Articles`, concurrency 1,000 × 100,000 operations after 1,000 warmup operations.
+MiB/s counts framed wire bytes. The machine recorded in those audits has 24 logical processors.
+The test runtime does not enable server GC. An earlier audit,
+`.artifacts/backfiller-realworld-audit/REPORT.md`, measured 5,537 articles/s on
+`BackFillerRealWorldAuditTests`. That is a different harness and is not a step in the progression
+below.
+
+### Corpus
+
+Path: `.artifacts/Articles`. Distribution from
+`.artifacts/backfiller-realworld-audit/REPORT.md`. The files were not modified for the later runs.
+Every later harness run reported the same acceptance counts.
+
+| Metric | Value |
+|---|---:|
+| Files | 10,610 |
+| Bytes | 7,806,078,914 (7.27 GiB) |
+| Min | 647 |
+| Average | 735,728 |
+| Median | 740,474 |
+| p90 | 741,075 |
+| p95 | 793,113 |
+| p99 | 1,082,806 |
+| Max | 2,164,763 |
+
+Size buckets (count / bytes): 1–1 KiB 2 / 1,454; 1–4 KiB 25 / 55,930; 4–16 KiB 10 / 69,844;
+16–64 KiB 3 / 128,600; 64–256 KiB 93 / 22,706,528; 256 KiB–1 MiB 10,282 / 7,542,286,318;
+1–5 MiB 195 / 240,830,240; above 5 MiB 0.
+
+Full-corpus `ArticleRecordFactory.TryCreate` (Traverse): 10,596 accepted, 13
+`YEncDecodingFailed`, 1 `BodyLineTooLong`. 10,596 + 13 + 1 = 10,610.
+
+The audit describes the corpus as almost entirely ~740 KiB yEnc parts (`=ybegin`). The forensic
+classification already recorded above is 10,574 yEnc of 10,610 (99.66%). That is the retained
+real Usenet set used for this workload, not a synthetic mixed-content benchmark. The same audit
+notes that it is a poor mix for text articles, tiny control messages, and articles near the 5 MiB
+limit.
+
+The timed rows do not scan all 10,610 files on each operation. They recycle a 256-article accepted
+sample, 184,739,144 bytes (mean 721,637; median 740,407). The corpus scan still classifies all
+10,610 files once per harness run.
+
+### Optimization progression
+
+Each line is the 1,000 × 100,000 long run of the harness above. Comparability is the statement in
+the corresponding audit report, not a renormalized series.
+
+| Step | Articles/s | Report |
+|---|---:|---|
+| Before destuff buffering | 3,264.4 | `destuff-opt-before.txt` |
+| Destuff buffering | 4,707.7 | `destuff-opt-after.txt` |
+| Article payload ownership | 4,973.0 | `canonical-ownership-opt.txt` |
+| Uninitialized canonical allocation | 5,056.1 | `uninitialized-alloc-opt.txt` |
+| Hardware yEnc CRC (mean of three quiet runs) | 6,414.7 | `hardware-crc-opt-REPORT.md` |
+
+Rounded, that progression is about 3,264 → 4,708 → 4,973 → 5,056 → 6,415 articles/s. The raw
+one-decimal values above are the measurements.
+
+### Current steady state (hardware CRC)
+
+Baseline is the uninitialized-allocation long run: 5,056.1 articles/s. The hardware-CRC figure is
+the mean of three quiet runs with no tracer attached: 6,460.3, 6,266.8, and 6,517.1 articles/s.
+Mean 6,414.7 articles/s. That is +26.9% versus 5,056.1. The slowest run, 6,266.8 articles/s, is
++23.9% versus that baseline.
+
+| Metric | Uninitialized-allocation baseline | Hardware CRC mean |
+|---|---:|---:|
+| Articles/s | 5,056.1 | 6,414.7 |
+| MiB/s | 3,479.6 | 4,414.7 |
+| CPU cores busy | 22.59 | 20.63 |
+| CPU time per article | 4.47 ms | 3.22 ms |
+| Allocated bytes/article | 726,830 | 726,882 |
+| Allocated bytes/s | 3.67 GB/s | 4.66 GB/s |
+| p50 | 4.43 ms | 3.19 ms |
+| p95 | 36.68 ms | 25.68 ms (runs 30.16, 24.17, 22.70) |
+| p99 | 54.48 ms | 47.32 ms (runs 55.63, 44.31, 42.03) |
+| Gen2 collections | 151 | 153 (runs 152, 156, 150) |
+| Gen2/s | 7.63 | 9.79 |
+| GC pause | 313.2 ms (15.83 ms/s) | 347.7 ms (22.30 ms/s) |
+
+Allocated bytes/article changed by +52 bytes (+0.007%). The allocation rate rose with throughput.
+The gain is CPU time per article (4.47 ms → 3.22 ms), not a smaller article allocation. Gen2/s
+rose because about the same 150 collections finished in less wall time. Collections per article
+did not change. p50 fell on every run (3.17, 3.18, 3.21 versus 4.43). p95 and p99 improved on two
+of the three runs. Run 1's p99 was 55.63 ms, next to the baseline 54.48 ms, so the tail change is
+less stable than the throughput change. The harness does not record max latency.
+
+### CPU profile
+
+12-second `Microsoft-DotNETCore-SampleProfiler` trace of `testhost` during a hardware-CRC harness
+run (`cpu-hardware-crc.nettrace`, 78,132 samples). Collection started after that process stayed at
+or above 15 cores for 3 seconds. `dotnet-trace report topN` exclusive time for
+`YEncArticleValidator.TryComputeDecodedCrc32AndLength` is 20.53% (inclusive 21.24%). The ownership
+profile (`cpu-ownership-opt-REPORT.md`) recorded the same method at 32.84% exclusive. The
+uninitialized-allocation step was not profiled. The stack walk of this trace has that method as
+the deepest frame on 18.67% of samples.
+
+`System.IO.Hashing.Crc32.UpdateVectorized` is on the stacks: 501 samples (0.64%; 0.71% exclusive
+in `topN`). That method is the library's PCLMUL folding routine. `Pclmulqdq.IsSupported` was true
+on this runtime. `Pclmulqdq` / `CarrylessMultiply` is not a separate sampled frame; those calls are
+inlined into `UpdateVectorized`. The native instruction bytes were not disassembled.
+
+The remaining time inside `TryComputeDecodedCrc32AndLength` is the yEnc decode loop. After that
+method, the large costs in this trace are canonical `AllocateUninitializedArray` (15.2% deepest,
+caller `Materialize`; 8.83% exclusive in `topN`) and destuff `Memmove` (12.1% of samples called
+from `ReadArticlePayloadAsync`; `Memmove` overall 17.0% exclusive in `topN`).
+
+The traced process's own long row was 5,663 articles/s, CPU 18.18, 725,394 bytes/article, p50
+3.23 ms. The tracer was attached for most of that row. That row is not part of the 6,414.7
+articles/s mean.
+
+### Permanent yEnc CRC path
+
+`YEncArticleValidator` is the production trailer check. Each section uses one lazily created
+thread-local `System.IO.Hashing.Crc32`: `Reset` once per section, `Append` of each 512-byte
+decoded batch and the tail, then `GetCurrentHashAsUInt32`. `System.IO.Hashing.Crc32` selects
+hardware or its own scalar fallback. There is no CRC32C, SSE4.2, or custom PCLMUL implementation.
+`YEncCrc32` and `IeeeCrc32` remain the scalar reference and test oracle and are not called on this
+path.
+
+`YEncHardwareCrcEquivalenceTests` compares the validator with `YEncCrc32.Compute` for batch
+boundaries (including 0, 1, 15, 16, 511, 512, 513, and 4,096 bytes), ordinary and escaped bytes,
+multipart `pcrc32`, a CRC mismatch, and a trailing escape.
+`Yenc_validation_does_not_allocate_after_warmup` and
+`Parser_yenc_validation_path_does_not_allocate_after_warmup` remain the zero-allocation-after-warmup
+checks. The long-run +52 bytes/article is the full `HandleAsync` path, not a per-article `Crc32`.
+
+Verification of that permanent implementation (Release, no 1000 × 100,000 rerun):
+
+- yEnc CRC, equivalence, and allocation tests: 108 passed
+- full Common: 651 passed
+- BackFiller ownership / pipeline / article integration: 29 passed
+- full BackFiller: 707 passed, 3 failed, 710 total
+- `dotnet build VectorNNTP.NNTPD.sln -c Release`: 0 warnings, 0 errors
+- `dotnet format VectorNNTP.NNTPD.sln --verify-no-changes`: exit 0
+
+The three BackFiller failures are logging tests, not the CRC path.
+`ProductionJson_DeclaresLoggingSettings_AndOmitsSerilogSection` expected `Information` and observed
+`Debug`. `ConsoleSink_IsConfiguredAtDebug` failed `Assert.True`.
+`Console_IsAbsentUnlessTheConsoleSwitchIsPresent` failed in that full run because the sink walk
+saw a type whose name contains `Console`; the same test passed when run alone. The full BackFiller
+suite was not green.
+
+### Interpretation
+
+On this harness, corpus, and host, hardware CRC raised steady-state throughput from 5,056.1 to
+6,414.7 articles/s. Against the destuff-before long run, 6,414.7 / 3,264.4 = 1.965, approximately
+twice that measured baseline. That is an in-process article-processing improvement. It is not a
+universal BackFiller ceiling, not a product SLA, and not a server-only capacity. Network, RabbitMQ,
+and storage were not on the path.
+
+### Reproduction
+
+Raw files are under `.artifacts/backfiller-realworld-audit/`. The harness writes
+`destuff-opt-{phase}.txt` and will overwrite `destuff-opt-after.txt` unless that file is copied
+aside first. Preserved baselines include `destuff-opt-before.txt`, `destuff-opt-after.txt`,
+`canonical-ownership-opt.txt`, and `uninitialized-alloc-opt.txt`. Hardware-CRC rows are
+`hardware-crc-opt-run1.txt`, `hardware-crc-opt-run2.txt`, and `hardware-crc-opt-run3.txt`. The
+trace is `cpu-hardware-crc.nettrace`.
+
+```powershell
+$env:BACKFILLER_DESTUFF_OPT = "after"
+dotnet test tests\VectorNNTP.BackFiller.Tests\VectorNNTP.BackFiller.Tests.csproj -c Release `
+  --filter FullyQualifiedName~DestuffOptimizationMeasurementTests.MeasureDestuffOptimization_WhenEnabled
+```
+
 ## Workload comparison
 
 BENCHIT, TAKETHIS, CHECK, and IHAVE are different workloads. None replaces the others.
@@ -804,6 +983,10 @@ BENCHIT, TAKETHIS, CHECK, and IHAVE are different workloads. None replaces the o
 On this host, the existing BENCHIT plain 10-connection measurement is approximately 124.9 Gbit/s
 logical. The TAKETHIS 10-connection measurement is approximately 26.9 Gbit/s logical. Those numbers
 are not a ranking and not a statement that one path is “the” ceiling. They count different work.
+
+BackFiller articles/s is a fourth workload: in-process `HandleAsync` on the real corpus, with no
+TCP session. Do not rank 6,414.7 BackFiller articles/s against BENCHIT req/s, TAKETHIS/s, or
+IHAVE/s. Those NNTPD figures stay as published above.
 
 iperf3 remains a raw TCP reference (10 streams: 262 Gbit/s). It is not a TAKETHIS ceiling and not a
 BENCHIT efficiency score.
@@ -915,6 +1098,9 @@ dotnet run -c Release --project tools\VectorNNTP.NNTPD.Bench -- `
   does not reject later iterations.
 - The forensic IHAVE Pipe-reader MB/s figures are not TCP ingest rates and are not the
   `--benchmark IHAVE` command result.
+- BackFiller articles/s is not interchangeable with BENCHIT req/s, TAKETHIS/s, or IHAVE/s.
+  The BackFiller harness does not measure sockets, RabbitMQ, or storage, and it does not
+  establish a server-only capacity.
 
 ## Future Performance Work
 
@@ -962,3 +1148,9 @@ establish that the socket/transport architecture is fundamentally sound.
   `.artifacts/ihave-command-bench/results.txt`
 - Forensic IHAVE Pipe-reader measure remains at `.artifacts/ihave-corpus-bench/REPORT.md`
   and is not selected by `--benchmark IHAVE`
+- BackFiller hardware-CRC permanence check (Release, no 1000 × 100,000 rerun): yEnc CRC /
+  equivalence / allocation tests 108 passed; full Common 651 passed; BackFiller article /
+  ownership / pipeline tests 29 passed; full BackFiller 707 passed and 3 failed (the two
+  previously observed logging-level tests, plus `Console_IsAbsentUnlessTheConsoleSwitchIsPresent`,
+  which passed when run alone). Solution build 0 warnings, 0 errors. Format verify exit 0.
+  Raw steady-state rows remain under `.artifacts/backfiller-realworld-audit/`
