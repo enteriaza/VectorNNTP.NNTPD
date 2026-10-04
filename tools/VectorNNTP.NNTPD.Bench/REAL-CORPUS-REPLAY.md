@@ -35,7 +35,7 @@ Prototype code: `tools/VectorNNTP.NNTPD.MultilineFramerBench/Corpus/`
 **Shard layout:** `{Incoming}/{digest[0..2]}/{digest[2..4]}/{digest}`  
 Example: `00\02\00024a9fbd6824b3529c34dabdb6af28505b5be684936bdca64279279736e7ad`
 
-This matches **Vector.NNTP** `SpoolDirectoryUtilities.GetArticleFilePath`, **not** the current VectorNNTP `IncomingSpoolFilePersister` naming (`{sha256}_{ticks}.article` flat).
+This matches **Vector.NNTP** `SpoolDirectoryUtilities.GetArticleFilePath`. NNTPD does not write accepted article bodies to a local incoming directory.
 
 ---
 
@@ -53,7 +53,7 @@ This matches **Vector.NNTP** `SpoolDirectoryUtilities.GetArticleFilePath`, **not
 
 Verified: `<3810724$5fcf702$2a675b8@82ecaa5ff0.e67ff>` → `00024a9f…e7ad` matches on-disk file.
 
-Current VectorNNTP `BuildFileName` uses **SHA-256(ASCII(message-id))** + ticks + `.article` — **different layout**; not used by `C:\Temp\Incoming`.
+The on-disk names are 64 lowercase hex characters with no extension. NNTPD does not write this corpus layout.
 
 ---
 

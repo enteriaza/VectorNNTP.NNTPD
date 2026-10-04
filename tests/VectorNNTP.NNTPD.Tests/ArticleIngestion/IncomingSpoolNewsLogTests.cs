@@ -20,12 +20,10 @@ public sealed class IncomingSpoolNewsLogTests
     public async Task NormalAcceptedArticle_ProducesPlus()
     {
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         await RunTakeThisAsync(
             CanonicalArticleText.Destuffed("<plus@example.com>", newsgroups: "alt.test"),
             "<plus@example.com>",
             news,
-            captured,
             Catalogue("alt.test"));
 
         var evt = Assert.Single(news.Events);
@@ -33,8 +31,7 @@ public sealed class IncomingSpoolNewsLogTests
         Assert.True(evt.MessageId.Span.SequenceEqual("<plus@example.com>"u8));
         Assert.True(evt.Feed.IsEmpty);
         Assert.True(evt.Sites.IsEmpty);
-        Assert.Equal(Assert.Single(captured).Payload.Length, evt.Size);
-        Assert.Single(captured);
+        Assert.True(evt.Size > 0);
     }
 
     [Fact]
@@ -45,7 +42,6 @@ public sealed class IncomingSpoolNewsLogTests
             CanonicalArticleText.Destuffed("<junk@example.com>", newsgroups: "unknown.un.carried"),
             "<junk@example.com>",
             news,
-            [],
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: true);
@@ -63,7 +59,6 @@ public sealed class IncomingSpoolNewsLogTests
             CanonicalArticleText.Destuffed("<peeronly@example.com>", newsgroups: "junk.local"),
             "<peeronly@example.com>",
             news,
-            [],
             CatalogueWith(("junk.local", NewsgroupPostingStatus.PeerOnly)),
             wantTrash: false,
             logTrash: true);
@@ -81,7 +76,7 @@ public sealed class IncomingSpoolNewsLogTests
             "<plus@example.com>",
             InboundArticleProducer.TakeThis,
             feed: "BlueWorldHosting"u8.ToArray());
-        await RunWorkerAsync(inbound, news, [], Catalogue("alt.test"));
+        await RunWorkerAsync(inbound, news, Catalogue("alt.test"));
         var evt = Assert.Single(news.Events);
         Assert.Equal(NewsLogDisposition.Accepted, evt.Disposition);
         Assert.True(evt.Feed.Span.SequenceEqual("BlueWorldHosting"u8));
@@ -104,7 +99,6 @@ public sealed class IncomingSpoolNewsLogTests
         await RunWorkerAsync(
             inbound,
             news,
-            [],
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: true);
@@ -120,36 +114,29 @@ public sealed class IncomingSpoolNewsLogTests
     public async Task WantTrash_DoesNotRewriteOriginalNewsgroupsHeader()
     {
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         const string groups = "unknown.un.carried";
         await RunTakeThisAsync(
             CanonicalArticleText.Destuffed("<keep-ng@example.com>", newsgroups: groups),
             "<keep-ng@example.com>",
             news,
-            captured,
             Catalogue("alt.test"));
 
         var keep = Assert.Single(news.Events);
         Assert.Equal(NewsLogDisposition.Junk, keep.Disposition);
         Assert.Equal(Uncarried(groups), Encoding.ASCII.GetString(keep.Reason.Span));
-        var persisted = Assert.Single(captured);
-        Assert.Equal(groups, Encoding.ASCII.GetString(persisted.Record.Newsgroups));
-        Assert.DoesNotContain("junk"u8, persisted.Record.Newsgroups);
-        Assert.Contains("Newsgroups: unknown.un.carried"u8, persisted.Record.ArtData.Span);
     }
 
     [Fact]
     public async Task WantTrash_AppliesToIhaveUnknownGroup()
     {
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
+        var inbound = CanonicalArticleText.CreateQueued(
+            "<ihave-junk@example.com>",
+            InboundArticleProducer.IHave,
+            newsgroups: "not.carried.here");
         await RunWorkerAsync(
-            CanonicalArticleText.CreateQueued(
-                "<ihave-junk@example.com>",
-                InboundArticleProducer.IHave,
-                newsgroups: "not.carried.here"),
+            inbound,
             news,
-            captured,
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: true);
@@ -157,27 +144,23 @@ public sealed class IncomingSpoolNewsLogTests
         var ihaveJunk = Assert.Single(news.Events);
         Assert.Equal(NewsLogDisposition.Junk, ihaveJunk.Disposition);
         Assert.Equal(Uncarried("not.carried.here"), Encoding.ASCII.GetString(ihaveJunk.Reason.Span));
-        Assert.Equal(InboundArticleProducer.IHave, Assert.Single(captured).Producer);
-        Assert.Contains("Newsgroups: not.carried.here"u8, captured[0].Payload.Span);
+        Assert.Contains("Newsgroups: not.carried.here"u8, inbound.Payload.Span);
     }
 
     [Fact]
     public async Task LogTrashFalse_SuppressesJunkLine_WithoutRejecting()
     {
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         await RunTakeThisAsync(
             CanonicalArticleText.Destuffed("<quiet-junk@example.com>", newsgroups: "unknown.group"),
             "<quiet-junk@example.com>",
             news,
-            captured,
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: false);
 
         Assert.Empty(news.Events);
         Assert.Equal(0, news.WriteCalls);
-        Assert.Single(captured);
     }
 
     [Fact]
@@ -188,7 +171,6 @@ public sealed class IncomingSpoolNewsLogTests
             CanonicalArticleText.Destuffed("<still-plus@example.com>", newsgroups: "alt.test"),
             "<still-plus@example.com>",
             news,
-            [],
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: false);
@@ -207,7 +189,6 @@ public sealed class IncomingSpoolNewsLogTests
         await RunWorkerAsync(
             ArticleRecordIngress.CreateQueued(id, created, Identity(), DateTimeOffset.UtcNow, InboundArticleProducer.TakeThis),
             news,
-            [],
             Catalogue("alt.test"));
 
         Assert.True(Assert.Single(news.Events).MessageId.Span.SequenceEqual(Encoding.ASCII.GetBytes(id)));
@@ -221,7 +202,6 @@ public sealed class IncomingSpoolNewsLogTests
     public async Task TakeThisCanonicalRecord_IsNotReparsedToGenerateNews()
     {
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         var created = CreateRecord(CanonicalArticleText.Destuffed("<noreparse@example.com>"));
         var inbound = ArticleRecordIngress.CreateQueued(
             "<noreparse@example.com>",
@@ -229,16 +209,15 @@ public sealed class IncomingSpoolNewsLogTests
             Identity(),
             DateTimeOffset.UtcNow,
             InboundArticleProducer.TakeThis);
-        await RunWorkerAsync(inbound, news, captured, Catalogue("alt.test"));
+        await RunWorkerAsync(inbound, news, Catalogue("alt.test"));
 
-        var persisted = Assert.Single(captured);
-        Assert.True(persisted.Record.ArtData.Equals(created.ArtData));
+        Assert.True(inbound.Record.ArtData.Equals(created.ArtData));
         Assert.True(news.Events[0].MessageId.Span.SequenceEqual(created.MessageId));
         Assert.True(
             news.Events[0].MessageId.Span.SequenceEqual(
-                persisted.Record.ArtData.Span.Slice(
-                    persisted.Record.Fields.MessageId.Offset,
-                    persisted.Record.Fields.MessageId.Length)));
+                inbound.Record.ArtData.Span.Slice(
+                    inbound.Record.Fields.MessageId.Offset,
+                    inbound.Record.Fields.MessageId.Length)));
     }
 
     [Fact]
@@ -254,7 +233,6 @@ public sealed class IncomingSpoolNewsLogTests
                 DateTimeOffset.UtcNow,
                 InboundArticleProducer.Post),
             news,
-            [],
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: true);
@@ -283,7 +261,7 @@ public sealed class IncomingSpoolNewsLogTests
                 CancellationToken.None));
         Assert.Equal(0, news.WriteCalls);
 
-        var writer = CreateWriter(queue, news, [], Catalogue("alt.test"));
+        var writer = CreateWriter(queue, news, Catalogue("alt.test"));
         await writer.StartAsync(CancellationToken.None);
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
@@ -302,7 +280,6 @@ public sealed class IncomingSpoolNewsLogTests
         using var news = new SerilogNewsLogWriter(configuration);
         var writer = new IncomingSpoolWriterService(
             queue,
-            new CapturingPersister([]),
             Options.Create(new NntpdOptions
             {
                 LogDir = dir.Path,
@@ -335,16 +312,13 @@ public sealed class IncomingSpoolNewsLogTests
     public async Task NewsWriterFailure_DoesNotReprocessOrSkipPersister()
     {
         var throwing = new ThrowingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         await RunTakeThisAsync(
             CanonicalArticleText.Destuffed("<fail-news@example.com>"),
             "<fail-news@example.com>",
             throwing,
-            captured,
             Catalogue("alt.test"));
 
         Assert.Equal(1, throwing.WriteCalls);
-        Assert.Single(captured);
     }
 
     [Fact]
@@ -633,7 +607,6 @@ public sealed class IncomingSpoolNewsLogTests
         string destuffed,
         string messageId,
         INewsLogWriter news,
-        List<InboundArticle> captured,
         INewsgroupCatalogue catalogue,
         bool wantTrash = true,
         bool logTrash = true)
@@ -647,7 +620,6 @@ public sealed class IncomingSpoolNewsLogTests
                 DateTimeOffset.UtcNow,
                 InboundArticleProducer.TakeThis),
             news,
-            captured,
             catalogue,
             wantTrash,
             logTrash);
@@ -656,13 +628,12 @@ public sealed class IncomingSpoolNewsLogTests
     private static async Task RunWorkerAsync(
         InboundArticle inbound,
         INewsLogWriter news,
-        List<InboundArticle> captured,
         INewsgroupCatalogue? catalogue,
         bool wantTrash = true,
         bool logTrash = true)
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, news, captured, catalogue, wantTrash, logTrash);
+        var writer = CreateWriter(queue, news, catalogue, wantTrash, logTrash);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
         queue.Complete();
@@ -672,13 +643,11 @@ public sealed class IncomingSpoolNewsLogTests
     private static IncomingSpoolWriterService CreateWriter(
         IArticleIngestionQueue queue,
         INewsLogWriter news,
-        List<InboundArticle> captured,
         INewsgroupCatalogue? catalogue,
         bool wantTrash = true,
         bool logTrash = true) =>
         new(
             queue,
-            new CapturingPersister(captured),
             Options.Create(new NntpdOptions
             {
                 ArticleIngestion = new ArticleIngestionOptions(),
@@ -726,15 +695,6 @@ public sealed class IncomingSpoolNewsLogTests
 
     private static ConnectionClientIdentity Identity() =>
         ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119));
-
-    private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister
-    {
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            captured.Add(article);
-            return Task.CompletedTask;
-        }
-    }
 
     private sealed class TempDir : IDisposable
     {

@@ -20,8 +20,10 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// <remarks>
 /// <para>
 /// Article workers encode OverviewArticleV1, enqueue the owned bytes onto a bounded
-/// in-process <see cref="IOverviewDbWorkQueue"/>, then write news / Path-survey /
-/// persist. They do <b>not</b> await RabbitMQ publication or publisher confirmation.
+/// in-process <see cref="IOverviewDbWorkQueue"/>, then write the news log and Path
+/// survey. The article body is then discarded. StorageServer/VATP placement remains
+/// on this type and is temporarily not invoked.
+/// Workers do <b>not</b> await RabbitMQ publication or publisher confirmation.
 /// Successful enqueue is not durable RabbitMQ handoff; broker confirmation remains
 /// owned by <see cref="OverviewDbPublisherPool"/> via asynchronous outstanding
 /// confirms on <see cref="IOverviewDbHandoffPublisher"/>.
@@ -36,8 +38,16 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 {
     private static readonly TimeSpan RejectedPressureRetryDelay = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Gets whether StorageServer placement runs after Path survey.
+    /// </summary>
+    /// <remarks>
+    /// Temporarily <see langword="false"/>. Placement methods stay on this type so the
+    /// bypass is reversed by returning <see langword="true"/>.
+    /// </remarks>
+    private static bool ArticlePlacementEnabled => false;
+
     private readonly IArticleIngestionQueue _queue;
-    private readonly IIncomingArticlePersister _persister;
     private readonly INewsLogWriter _newsLog;
     private readonly IPathSurveyWriter _pathSurvey;
     private readonly INewsgroupCatalogue? _catalogue;
@@ -62,7 +72,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
     /// <summary>Initializes a new instance of the <see cref="IncomingSpoolWriterService"/> class.</summary>
     public IncomingSpoolWriterService(
         IArticleIngestionQueue queue,
-        IIncomingArticlePersister persister,
         IOptions<NntpdOptions> options,
         ILogger<IncomingSpoolWriterService> logger,
         IFeedDiagnostics? feedDiagnostics = null,
@@ -77,11 +86,9 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         IStorageServerRegistry? placementRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
-        ArgumentNullException.ThrowIfNull(persister);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
         _queue = queue;
-        _persister = persister;
         _options = options;
         _logger = logger;
         _feedDiagnostics = feedDiagnostics ?? NullFeedDiagnostics.Instance;
@@ -130,9 +137,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         SpoolLogMessages.WriterStarted(
             _logger,
             _queue.MemoryLimitBytes,
-            _queue.MaxArticleBytes,
-            ingestion.IncomingDirectory
-            ?? ArticleIngestionOptions.DefaultIncomingDirectory);
+            _queue.MaxArticleBytes);
 
         _overviewWorkQueue = new OverviewDbWorkQueue(ingestion.OverviewDbWorkQueueMemoryLimit);
         _overviewPublisherPool = new OverviewDbPublisherPool(
@@ -237,7 +242,6 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         long itemStart,
         CancellationToken cancellationToken)
     {
-        var persisted = false;
         var overviewAccepted = false;
         _feedDiagnostics.BeginSpoolWork();
         try
@@ -248,17 +252,20 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             WriteNewsLog(article);
             _pipeline?.RecordNews(newsStart);
             WritePathSurvey(article);
-            var persistStart = System.Diagnostics.Stopwatch.GetTimestamp();
-            await _persister.PersistAsync(article, CancellationToken.None).ConfigureAwait(false);
-            _pipeline?.RecordPersist(persistStart);
-            persisted = true;
-            if (article.Producer == InboundArticleProducer.BackFiller)
+            if (ArticlePlacementEnabled)
             {
-                await StoreBackFillerAsync(article, cancellationToken).ConfigureAwait(false);
+                if (article.Producer == InboundArticleProducer.BackFiller)
+                {
+                    await StoreBackFillerAsync(article, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await PlaceAfterPersistAsync(article, cancellationToken).ConfigureAwait(false);
+                }
             }
             else
             {
-                await PlaceAfterPersistAsync(article, cancellationToken).ConfigureAwait(false);
+                DiscardAcceptedArticle(article);
             }
         }
         catch (Exception ex)
@@ -274,7 +281,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
             }
             else
             {
-                SpoolLogMessages.PersistFailed(
+                SpoolLogMessages.FinishFailed(
                     _logger,
                     ex,
                     article.MessageId,
@@ -283,7 +290,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         }
         finally
         {
-            _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted);
+            _feedDiagnostics.EndSpoolWork(article.Payload.Length, persisted: false);
         }
     }
 
@@ -529,7 +536,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
     /// <summary>
     /// Writes the post-queue INN <c>news</c> event. Failures are logged and
-    /// swallowed so the already-accepted article still reaches the persister.
+    /// swallowed so the already-accepted article still reaches Path survey.
     /// </summary>
     private void WriteNewsLog(InboundArticle article)
     {
@@ -556,7 +563,7 @@ public sealed class IncomingSpoolWriterService : IApplicationService
 
     /// <summary>
     /// Writes the canonical Path-survey observation. Failures are logged and
-    /// swallowed so the already-accepted article still reaches the persister.
+    /// swallowed so the worker still discards the article and continues.
     /// </summary>
     private void WritePathSurvey(InboundArticle article)
     {
@@ -568,6 +575,15 @@ public sealed class IncomingSpoolWriterService : IApplicationService
         {
             SpoolLogMessages.PathSurveyFailed(_logger, ex, article.MessageId);
         }
+    }
+
+    /// <summary>
+    /// Drops <paramref name="article"/> after Path survey. The body is not copied,
+    /// written, or passed to StorageServer selection or VATP placement.
+    /// </summary>
+    private static void DiscardAcceptedArticle(InboundArticle article)
+    {
+        ArgumentNullException.ThrowIfNull(article);
     }
 
     /// <summary>

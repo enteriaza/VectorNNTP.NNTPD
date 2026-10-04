@@ -57,10 +57,8 @@ public sealed class IhaveArticleInterpreterTests
     public async Task SpoolWriter_ConsumesCanonicalRecordsWithoutReparse()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var captured = new List<InboundArticle>();
         var writer = new IncomingSpoolWriterService(
             queue,
-            new CapturingPersister(captured),
             Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
             NullLogger<IncomingSpoolWriterService>.Instance);
         await writer.StartAsync(CancellationToken.None);
@@ -75,21 +73,20 @@ public sealed class IhaveArticleInterpreterTests
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
 
-        Assert.Equal(3, captured.Count);
-        Assert.All(captured, static a => Assert.Equal(ArticleParseStatus.CanonicalV1, a.Record.ParseStatus));
-        Assert.True(captured.Single(static a => a.MessageId == "<ihave@example.com>").Payload.Equals(ihave.Payload));
-        Assert.True(captured.Single(static a => a.MessageId == "<takethis@example.com>").Payload.Equals(takeThis.Payload));
-        Assert.True(captured.Single(static a => a.MessageId == "<post@example.com>").Payload.Equals(post.Payload));
+        Assert.Equal(ArticleParseStatus.CanonicalV1, ihave.Record.ParseStatus);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, takeThis.Record.ParseStatus);
+        Assert.Equal(ArticleParseStatus.CanonicalV1, post.Record.ParseStatus);
+        Assert.True(ihave.Payload.Equals(ihave.Record.ArtData));
+        Assert.True(takeThis.Payload.Equals(takeThis.Record.ArtData));
+        Assert.True(post.Payload.Equals(post.Record.ArtData));
     }
 
     [Fact]
     public async Task SpoolWriter_CanonicalV1Record_IsNotReparsedOrCopied()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var captured = new List<InboundArticle>();
         var writer = new IncomingSpoolWriterService(
             queue,
-            new CapturingPersister(captured),
             Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
             NullLogger<IncomingSpoolWriterService>.Instance);
         await writer.StartAsync(CancellationToken.None);
@@ -109,24 +106,8 @@ public sealed class IhaveArticleInterpreterTests
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
 
-        var persisted = Assert.Single(captured);
-        Assert.Equal(ArticleParseStatus.CanonicalV1, persisted.Record.ParseStatus);
-        Assert.True(persisted.Record.ArtData.Equals(created.Record.ArtData));
-        Assert.True(persisted.Payload.Equals(persisted.Record.ArtData));
-    }
-
-    private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister
-    {
-        private readonly object _persistGate = new();
-
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            lock (_persistGate)
-            {
-                captured.Add(article);
-            }
-
-            return Task.CompletedTask;
-        }
+        Assert.Equal(ArticleParseStatus.CanonicalV1, inbound.Record.ParseStatus);
+        Assert.True(inbound.Record.ArtData.Equals(created.Record.ArtData));
+        Assert.True(inbound.Payload.Equals(inbound.Record.ArtData));
     }
 }

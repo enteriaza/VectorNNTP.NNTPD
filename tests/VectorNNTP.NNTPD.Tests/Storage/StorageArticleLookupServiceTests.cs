@@ -372,6 +372,63 @@ public sealed class StorageArticleLookupServiceTests
         await service.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task EmptyRegistry_DoesNotPublish_AndReturnsExistingMiss()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            storageServers: new StorageServerRegistry());
+
+        var result = await service.LookupAsync(ArticleX, CancellationToken.None);
+
+        Assert.Equal(StorageArticleLookupOutcome.NotFound, result.Outcome);
+        Assert.Equal("Storage article lookup timed out with no positive response.", result.Error);
+        Assert.Null(factory.LastConnection);
+        Assert.Null(service.CurrentReplyTo);
+    }
+
+    [Fact]
+    public async Task RegisteredStorageServer_StillPublishesFleetLookup()
+    {
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
+        var registry = new StorageServerRegistry();
+        var now = DateTimeOffset.Parse("2026-10-04T12:00:00Z");
+        registry.ApplyAdvertisement(
+            new StorageServerAdvertisement(1, 1, "cache01.usenet.ninja", 1000, 100, 900, now, 1191),
+            now);
+        var service = new StorageArticleLookupService(
+            rabbit,
+            Options.Create(CreateOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            time,
+            registry);
+
+        await rabbit.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+
+        var lookupTask = service.LookupAsync(ArticleX, CancellationToken.None);
+        var publication = await WaitForPublicationAsync(factory);
+        Assert.Equal(CacheFleetTopology.RequestsExchangeName, publication.Exchange);
+        Assert.Equal(string.Empty, publication.RoutingKey);
+
+        for (var attempt = 0; attempt < 3 && !lookupTask.IsCompleted; attempt++)
+        {
+            time.Advance(CacheFleetTopology.LookupTimeout);
+            await Task.Yield();
+        }
+
+        var result = await lookupTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(StorageArticleLookupOutcome.NotFound, result.Outcome);
+        Assert.Equal("Storage article lookup timed out with no positive response.", result.Error);
+        await service.StopAsync(CancellationToken.None);
+    }
+
     private static StorageArticleLookupResponse CreateResponse(
         StorageArticleLookupRequest request,
         int serverId,

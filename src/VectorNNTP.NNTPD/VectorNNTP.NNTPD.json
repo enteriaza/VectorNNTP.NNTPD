@@ -2895,7 +2895,6 @@
       "WatchdogIntervalFraction": 0.5
     },
     "ArticleIngestion": {
-      "IncomingDirectory": "spool/incoming",
       "MaxArticleBytes": 4194304,
       "MinWorkers": 2,
       "MaxWorkers": 32,

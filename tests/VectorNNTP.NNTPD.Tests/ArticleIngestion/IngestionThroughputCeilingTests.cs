@@ -32,11 +32,10 @@ public sealed class IngestionThroughputCeilingTests
             OutstandingWindow = 100,
         };
         var done = new CountdownEvent(articleCount);
-        var persister = new CountingPersister(done);
+        var paths = new CountingPathSurvey(done);
 
         var writer = new IncomingSpoolWriterService(
             queue,
-            persister,
             Options.Create(new NntpdOptions
             {
                 ArticleIngestion = new ArticleIngestionOptions
@@ -56,7 +55,8 @@ public sealed class IngestionThroughputCeilingTests
                 [
                     new NewsgroupDefinition("alt.test", string.Empty, 2, 1, NewsgroupPostingStatus.Allowed),
                 ])),
-            overviewHandoff: overview);
+            overviewHandoff: overview,
+            pathSurvey: paths);
 
         await writer.StartAsync(CancellationToken.None);
         for (var i = 0; i < articleCount; i++)
@@ -72,7 +72,7 @@ public sealed class IngestionThroughputCeilingTests
         }
 
         var sw = Stopwatch.StartNew();
-        Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "Timed out waiting for article persist.");
+        Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "Timed out waiting for Path survey.");
         sw.Stop();
 
         Assert.True(
@@ -89,7 +89,7 @@ public sealed class IngestionThroughputCeilingTests
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
         Assert.Equal(articleCount, overview.Payloads.Count);
-        Assert.Equal(articleCount, persister.Count);
+        Assert.Equal(articleCount, paths.WriteCalls);
     }
 
     [Fact]
@@ -142,17 +142,20 @@ public sealed class IngestionThroughputCeilingTests
         await run.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    private sealed class CountingPersister(CountdownEvent done) : IIncomingArticlePersister
+    private sealed class CountingPathSurvey(CountdownEvent done) : IPathSurveyWriter
     {
-        private int _count;
+        private int _writeCalls;
 
-        public int Count => Volatile.Read(ref _count);
+        public int WriteCalls => Volatile.Read(ref _writeCalls);
 
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
+        public void Write(ReadOnlySpan<byte> canonicalPath)
         {
-            Interlocked.Increment(ref _count);
+            Interlocked.Increment(ref _writeCalls);
             done.Signal();
-            return Task.CompletedTask;
+        }
+
+        public void Flush()
+        {
         }
     }
 }

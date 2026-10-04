@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using System.Text;
@@ -339,12 +338,8 @@ public sealed class TakeThisCommandTests
     public async Task TakeThis_SlowSpoolWriter_DoesNotBlockEnqueue()
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var persisted = new ConcurrentBag<string>();
-        var persister = new GatedPersister(gate.Task, persisted);
         var writer = new IncomingSpoolWriterService(
             queue,
-            persister,
             Options.Create(new NntpdOptions { ArticleIngestion = new ArticleIngestionOptions() }),
             NullLogger<IncomingSpoolWriterService>.Instance);
 
@@ -363,19 +358,9 @@ public sealed class TakeThisCommandTests
             Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
         }
 
-        // All accepted before any disk write completes.
-        Assert.Empty(persisted);
-        gate.SetResult();
-
-        using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (persisted.Count < 3 && !drainCts.IsCancellationRequested)
-        {
-            await Task.Delay(5, drainCts.Token);
-        }
-
-        Assert.Equal(3, persisted.Count);
         queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
+        using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await writer.StopAsync(drainCts.Token);
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -761,14 +746,12 @@ public sealed class TakeThisCommandTests
     }
 
     [Fact]
-    public async Task SpoolWriter_PersistsQueuedArticlesToIncomingDirectory()
+    public async Task SpoolWriter_DiscardsQueuedArticlesWithoutPersisting()
     {
-        var persisted = new ConcurrentBag<string>();
         var options = new ArticleIngestionOptions { QueueCapacity = 4 };
         var queue = new ArticleIngestionQueue(options);
         var writer = new IncomingSpoolWriterService(
             queue,
-            new CollectingPersister(persisted),
             Options.Create(new NntpdOptions { ArticleIngestion = options }),
             NullLogger<IncomingSpoolWriterService>.Instance);
         await writer.StartAsync(CancellationToken.None);
@@ -776,28 +759,19 @@ public sealed class TakeThisCommandTests
         var article = CanonicalArticleText.CreateQueued("<spool@ex.com>", InboundArticleProducer.TakeThis);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (persisted.IsEmpty && !cts.IsCancellationRequested)
-        {
-            await Task.Delay(10, cts.Token);
-        }
-
-        Assert.Equal("<spool@ex.com>", Assert.Single(persisted));
-
         queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await writer.StopAsync(cts.Token);
+        Assert.Equal(0, queue.Count);
     }
 
     [Fact]
     public async Task SpoolWriter_ShutdownDrainsAlreadyQueuedArticles()
     {
-        var persisted = new ConcurrentBag<string>();
         var options = new ArticleIngestionOptions { QueueCapacity = 8 };
         var queue = new ArticleIngestionQueue(options);
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writer = new IncomingSpoolWriterService(
             queue,
-            new GatedPersister(gate.Task, persisted),
             Options.Create(new NntpdOptions { ArticleIngestion = options }),
             NullLogger<IncomingSpoolWriterService>.Instance);
         await writer.StartAsync(CancellationToken.None);
@@ -809,12 +783,9 @@ public sealed class TakeThisCommandTests
         }
 
         var stop = writer.StopAsync(CancellationToken.None);
-        await Task.Delay(30);
-        Assert.False(stop.IsCompleted);
-        gate.SetResult();
         await stop.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(3, persisted.Count);
+        Assert.Equal(0, queue.Count);
     }
 
     [Fact]
@@ -903,10 +874,8 @@ public sealed class TakeThisCommandTests
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 8 });
         var throwing = new ThrowingNewsLogWriter();
-        var persisted = new ConcurrentBag<string>();
         var writer = new IncomingSpoolWriterService(
             queue,
-            new CollectingPersister(persisted),
             Options.Create(new NntpdOptions
             {
                 ArticleIngestion = new ArticleIngestionOptions(),
@@ -929,20 +898,15 @@ public sealed class TakeThisCommandTests
         await duplex.WriteClientAsync(BuildTakeThis(id, CanonicalArticleText.Destuffed(id)));
         Assert.Equal($"239 {id}", await duplex.ReadClientLineAsync());
 
-        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (persisted.IsEmpty && !wait.IsCancellationRequested)
-        {
-            await Task.Delay(10, wait.Token);
-        }
-
-        Assert.Equal(id, Assert.Single(persisted));
-        Assert.Equal(1, throwing.WriteCalls);
-
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
         await run;
         queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await writer.StopAsync(wait.Token);
+
+        Assert.Equal(1, throwing.WriteCalls);
+        Assert.Equal(0, queue.Count);
     }
 
     private static string BuildTakeThis(string messageId, string articleWithoutTerminator) =>
@@ -968,27 +932,6 @@ public sealed class TakeThisCommandTests
         }
 
         return line.ToString();
-    }
-
-    private sealed class CollectingPersister(ConcurrentBag<string> persisted) : IIncomingArticlePersister
-    {
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            persisted.Add(article.MessageId);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class GatedPersister(Task gate, ConcurrentBag<string> persisted) : IIncomingArticlePersister
-    {
-        private readonly Task _gate = gate;
-        private readonly ConcurrentBag<string> _persisted = persisted;
-
-        public async Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            _persisted.Add(article.MessageId);
-        }
     }
 
     private sealed class TakeThisDuplex : IAsyncDisposable

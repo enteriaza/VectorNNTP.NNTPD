@@ -55,4 +55,10 @@ internal static partial class StorageArticleLookupLogMessages
         Level = LogLevel.Information,
         Message = "Storage article lookup stopped")]
     public static partial void Stopped(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 2878,
+        Level = LogLevel.Debug,
+        Message = "Storage article lookup skipped because the registry has no StorageServers (articleId={ArticleId})")]
+    public static partial void SkippedEmptyRegistry(ILogger logger, string ArticleId);
 }

@@ -44,7 +44,6 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `NewsmasterUser` | string | _(none)_ | no | AUTHINFO username that may POST a well-formed `Control: cancel <message-id>` article. When set, `NewsmasterPassword` is required. |
 | `NewsmasterPassword` | string | _(none)_ | no (secret) | AUTHINFO password for `NewsmasterUser`. Supply via `NNTPD__NEWSMASTERPASSWORD` or secrets. Never commit. |
 | `TransitQueueMemoryLimit` | long | `1073741824` (1 GiB) | no | Transit article-queue payload memory budget in bytes (`1`–`9223372036854775807`) |
-| `ArticleIngestion:IncomingDirectory` | string | `spool/incoming` | no | Directory for accepted TAKETHIS articles |
 | `ArticleIngestion:QueueCapacity` | int | `256` | no | Unused leftover article-count setting (`1–100000`). Not an admission bound. |
 | `ArticleIngestion:MaxArticleBytes` | int | `4194304` (4 MiB) | no | Max destuffed IHAVE/TAKETHIS article size (`1–104857600`). Not the POST limit. |
 | `ArticleIngestion:MinWorkers` | int | `2` | no | Minimum concurrent article ingestion workers (`1–512`) |

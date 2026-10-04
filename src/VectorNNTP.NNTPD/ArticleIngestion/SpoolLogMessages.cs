@@ -18,14 +18,14 @@ internal static partial class SpoolLogMessages
     [LoggerMessage(
         EventId = 2002,
         Level = LogLevel.Information,
-        Message = "Incoming spool writer started (transit queue memory limit {MemoryLimit} bytes, max article {MaxBytes} bytes, dir {Dir})")]
-    public static partial void WriterStarted(ILogger logger, long MemoryLimit, int MaxBytes, string Dir);
+        Message = "Incoming spool writer started (transit queue memory limit {MemoryLimit} bytes, max article {MaxBytes} bytes)")]
+    public static partial void WriterStarted(ILogger logger, long MemoryLimit, int MaxBytes);
 
     [LoggerMessage(
         EventId = 2003,
         Level = LogLevel.Error,
-        Message = "Failed to persist incoming article {MessageId} ({Bytes} bytes)")]
-    public static partial void PersistFailed(ILogger logger, Exception exception, string MessageId, int Bytes);
+        Message = "Incoming article {MessageId} ({Bytes} bytes) failed after OverviewDB handoff and was not requeued")]
+    public static partial void FinishFailed(ILogger logger, Exception exception, string MessageId, int Bytes);
 
     [LoggerMessage(
         EventId = 2004,

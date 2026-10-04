@@ -26,7 +26,6 @@ public sealed class IngestionPipelineMetrics
     private readonly DurationHistogram _confirm = new();
     private readonly DurationHistogram _handoff = new();
     private readonly DurationHistogram _news = new();
-    private readonly DurationHistogram _persist = new();
     private readonly DurationHistogram _workerItem = new();
     private readonly DurationHistogram _emitGateWait = new();
     private readonly DurationHistogram _takeThisEnqueue = new();
@@ -87,10 +86,7 @@ public sealed class IngestionPipelineMetrics
     /// <summary>Records news-log <c>Write</c> duration.</summary>
     public void RecordNews(long startTimestamp) => _news.Record(startTimestamp);
 
-    /// <summary>Records <c>PersistAsync</c> duration.</summary>
-    public void RecordPersist(long startTimestamp) => _persist.Record(startTimestamp);
-
-    /// <summary>Records one worker item from dequeue return through persist/requeue.</summary>
+    /// <summary>Records one worker item from dequeue return through finish or requeue.</summary>
     public void RecordWorkerItem(long startTimestamp)
     {
         _workerItem.Record(startTimestamp);
@@ -262,7 +258,6 @@ public sealed class IngestionPipelineMetrics
             _confirm.CaptureAndReset(),
             _handoff.CaptureAndReset(),
             _news.CaptureAndReset(),
-            _persist.CaptureAndReset(),
             _workerItem.CaptureAndReset(),
             _emitGateWait.CaptureAndReset(),
             _takeThisEnqueue.CaptureAndReset(),
@@ -322,7 +317,6 @@ public readonly struct IngestionPipelineSnapshot
         DurationSnapshot confirm,
         DurationSnapshot handoff,
         DurationSnapshot news,
-        DurationSnapshot persist,
         DurationSnapshot workerItem,
         DurationSnapshot emitGateWait,
         DurationSnapshot takeThisEnqueue,
@@ -355,7 +349,6 @@ public readonly struct IngestionPipelineSnapshot
         Confirm = confirm;
         Handoff = handoff;
         News = news;
-        Persist = persist;
         WorkerItem = workerItem;
         EmitGateWait = emitGateWait;
         TakeThisEnqueue = takeThisEnqueue;
@@ -438,9 +431,6 @@ public readonly struct IngestionPipelineSnapshot
 
     /// <summary>Gets news-log write samples.</summary>
     public DurationSnapshot News { get; }
-
-    /// <summary>Gets persist samples.</summary>
-    public DurationSnapshot Persist { get; }
 
     /// <summary>Gets total worker-item samples.</summary>
     public DurationSnapshot WorkerItem { get; }

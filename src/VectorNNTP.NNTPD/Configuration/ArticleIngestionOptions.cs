@@ -3,20 +3,17 @@ using System.ComponentModel.DataAnnotations;
 namespace VectorNNTP.NNTPD.Configuration;
 
 /// <summary>
-/// Incoming-spool writer and per-article size settings for the Transit ingestion path.
+/// Article ingestion worker and per-article size settings for the Transit ingestion path.
 /// </summary>
 /// <remarks>
 /// Used by <c>TAKETHIS</c> and <c>IHAVE</c> as the
-/// <c>network → queue → background spool writer → spool/incoming</c> boundary.
-/// Disk persistence is never on the session receive critical path.
+/// <c>network → queue → background ingestion worker</c> boundary.
+/// The worker does not write the article body to local durable storage.
 /// Queue admission is bounded by <see cref="NntpdOptions.TransitQueueMemoryLimit"/>,
 /// not by <see cref="QueueCapacity"/>.
 /// </remarks>
 public sealed class ArticleIngestionOptions
 {
-    /// <summary>Default relative directory for accepted incoming articles.</summary>
-    public const string DefaultIncomingDirectory = "spool/incoming";
-
     /// <summary>
     /// Legacy default article-count setting. Not an admission bound.
     /// </summary>
@@ -24,18 +21,6 @@ public sealed class ArticleIngestionOptions
 
     /// <summary>Default maximum article payload size in bytes (4 MiB).</summary>
     public const int DefaultMaxArticleBytes = 4 * 1024 * 1024;
-
-    /// <summary>
-    /// Gets or sets the filesystem directory for accepted incoming articles.
-    /// </summary>
-    /// <remarks>
-    /// Default is <c>spool/incoming</c>. Created on demand by the spool writer when persist
-    /// writes are enabled. Persist writes are currently commented out; this path is not
-    /// resolved against <see cref="AppContext.BaseDirectory"/> in this implementation.
-    /// </remarks>
-    [Required(AllowEmptyStrings = false)]
-    [MaxLength(512)]
-    public string IncomingDirectory { get; set; } = DefaultIncomingDirectory;
 
     /// <summary>
     /// Gets or sets a leftover article-count setting retained for binding compatibility.

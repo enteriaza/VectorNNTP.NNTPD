@@ -114,15 +114,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
     private static void ValidateArticleIngestion(NntpdOptions options, List<string> failures)
     {
         var ingestion = options.ArticleIngestion ?? new ArticleIngestionOptions();
-        if (string.IsNullOrWhiteSpace(ingestion.IncomingDirectory))
-        {
-            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.IncomingDirectory)} must be a non-empty path.");
-        }
-        else if (ingestion.IncomingDirectory.Length > 512)
-        {
-            failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.IncomingDirectory)} must be 512 characters or fewer.");
-        }
-
         if (ingestion.QueueCapacity is < 1 or > 100_000)
         {
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.QueueCapacity)} must be between 1 and 100000.");

@@ -67,7 +67,7 @@ internal static partial class ApplicationTelemetryLogMessages
     [LoggerMessage(
         EventId = 2404,
         Level = LogLevel.Information,
-        Message = "IngestionWorker items={Items} arts_s={ArticlesPerSec:F2} busy_pct={BusyPct:F1} idle_ms={IdleMs} busy_ms={BusyMs} dq_p95_ms={DequeueP95Ms} to_pub_p95_ms={ToPublishP95Ms} encode_p95_ms={EncodeP95Ms} news_p95_ms={NewsP95Ms} persist_p95_ms={PersistP95Ms} item_avg_ms={ItemAvgMs} item_p95_ms={ItemP95Ms}")]
+        Message = "IngestionWorker items={Items} arts_s={ArticlesPerSec:F2} busy_pct={BusyPct:F1} idle_ms={IdleMs} busy_ms={BusyMs} dq_p95_ms={DequeueP95Ms} to_pub_p95_ms={ToPublishP95Ms} encode_p95_ms={EncodeP95Ms} news_p95_ms={NewsP95Ms} item_avg_ms={ItemAvgMs} item_p95_ms={ItemP95Ms}")]
     public static partial void IngestionWorker(
         ILogger logger,
         long Items,
@@ -79,7 +79,6 @@ internal static partial class ApplicationTelemetryLogMessages
         long ToPublishP95Ms,
         long EncodeP95Ms,
         long NewsP95Ms,
-        long PersistP95Ms,
         double ItemAvgMs,
         long ItemP95Ms);
 

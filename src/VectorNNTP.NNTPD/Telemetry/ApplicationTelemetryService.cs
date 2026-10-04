@@ -247,7 +247,6 @@ public sealed class ApplicationTelemetryService : IApplicationService, IAsyncDis
             snapshot.ToPublishStart.P95Ms,
             snapshot.Encode.P95Ms,
             snapshot.News.P95Ms,
-            snapshot.Persist.P95Ms,
             snapshot.WorkerItem.AvgMs,
             snapshot.WorkerItem.P95Ms);
         ApplicationTelemetryLogMessages.OverviewDbHandoff(

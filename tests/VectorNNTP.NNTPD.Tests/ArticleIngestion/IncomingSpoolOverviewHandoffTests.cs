@@ -58,10 +58,8 @@ public sealed class IncomingSpoolOverviewHandoffTests
     public async Task PublishSuccess_CompletesWorkerAndPersistsArticle()
     {
         var overview = new RecordingOverviewDbHandoffPublisher();
-        var captured = new List<InboundArticle>();
-        var persister = new CapturingPersister(captured);
         var inbound = CreateArticle();
-        await RunWorkerAsync(inbound, persister, overview);
+        await RunWorkerAsync(inbound, overview);
 
         Assert.Equal(1, overview.AttemptCount);
         var payload = Assert.Single(overview.Payloads);
@@ -70,25 +68,21 @@ public sealed class IncomingSpoolOverviewHandoffTests
         Assert.Equal(["alt.test", "rec.test"], decoded.Newsgroups);
         Assert.Equal((uint)inbound.Record.ArtSize, decoded.Bytes);
         Assert.Equal((uint)inbound.Record.ArtLines, decoded.Lines);
-        Assert.Same(inbound, Assert.Single(captured));
     }
 
     [Fact]
     public async Task Worker_RecordsOneItemOnPipelineMetrics()
     {
         var overview = new RecordingOverviewDbHandoffPublisher();
-        var captured = new List<InboundArticle>();
-        var persister = new CapturingPersister(captured);
         var pipeline = new IngestionPipelineMetrics();
         var inbound = CreateArticle();
-        await RunWorkerAsync(inbound, persister, overview, pipeline);
+        await RunWorkerAsync(inbound, overview, pipeline);
 
         var snapshot = pipeline.CaptureInterval();
         Assert.Equal(1, snapshot.WorkerItems);
         Assert.Equal(1, snapshot.ToPublishStart.Count);
         Assert.Equal(1, snapshot.Encode.Count);
         Assert.Equal(1, snapshot.News.Count);
-        Assert.Equal(1, snapshot.Persist.Count);
         Assert.True(snapshot.BusyTicks > 0);
     }
 
@@ -96,14 +90,11 @@ public sealed class IncomingSpoolOverviewHandoffTests
     public async Task PublishFailure_RequeuesUntilConfirm_ThenCompletes()
     {
         var overview = new RecordingOverviewDbHandoffPublisher { RemainingFailures = 1 };
-        var captured = new List<InboundArticle>();
-        var persister = new CapturingPersister(captured);
         var inbound = CreateArticle();
-        await RunWorkerAsync(inbound, persister, overview);
+        await RunWorkerAsync(inbound, overview);
 
         Assert.Equal(2, overview.AttemptCount);
         Assert.Single(overview.Payloads);
-        Assert.Same(inbound, Assert.Single(captured));
     }
 
     [Fact]
@@ -115,14 +106,11 @@ public sealed class IncomingSpoolOverviewHandoffTests
             TransientPublishException = new InvalidOperationException(
                 "RabbitMQ returned the OverviewDB handoff as unroutable."),
         };
-        var captured = new List<InboundArticle>();
-        var persister = new CapturingPersister(captured);
         var inbound = CreateArticle();
-        await RunWorkerAsync(inbound, persister, overview);
+        await RunWorkerAsync(inbound, overview);
 
         Assert.Equal(2, overview.AttemptCount);
         Assert.Single(overview.Payloads);
-        Assert.Same(inbound, Assert.Single(captured));
     }
 
     [Fact]
@@ -134,19 +122,18 @@ public sealed class IncomingSpoolOverviewHandoffTests
             RemainingFailures = 1,
             BlockOnFailure = block,
         };
-        var captured = new List<InboundArticle>();
-        var persister = new CapturingPersister(captured);
+        var diagnostics = new SignalingFeedDiagnostics();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, persister, overview);
+        var writer = CreateWriter(queue, overview, diagnostics);
         await writer.StartAsync(CancellationToken.None);
         var inbound = CreateArticle();
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await persister.Completed.Task.WaitAsync(cts.Token);
+        var end = await diagnostics.Ended.Task.WaitAsync(cts.Token);
 
         // Article path continues after OverviewDB work enqueue; Rabbit confirm is background.
-        Assert.Same(inbound, Assert.Single(captured));
+        Assert.False(end.Persisted);
         await overview.FirstAttempt.WaitAsync(cts.Token);
         Assert.Equal(1, overview.AttemptCount);
         Assert.Empty(overview.Payloads);
@@ -166,34 +153,12 @@ public sealed class IncomingSpoolOverviewHandoffTests
     }
 
     [Fact]
-    public async Task PersistFailure_AfterOverviewEnqueue_DoesNotRequeueArticle()
-    {
-        var overview = new RecordingOverviewDbHandoffPublisher();
-        var diagnostics = new SignalingFeedDiagnostics();
-        var persister = new ThrowingPersister();
-        var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, persister, overview, diagnostics);
-        await writer.StartAsync(CancellationToken.None);
-        Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(CreateArticle(), CancellationToken.None));
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var end = await diagnostics.Ended.Task.WaitAsync(cts.Token);
-
-        Assert.False(end.Persisted);
-        Assert.Equal(0, queue.Count);
-
-        queue.Complete();
-        await writer.StopAsync(CancellationToken.None);
-        Assert.Equal(1, overview.AttemptCount);
-        Assert.Single(overview.Payloads);
-    }
-
-    [Fact]
     public void Worker_HasNoOverviewDbRpcOrDatabaseDependency()
     {
         var ctor = typeof(IncomingSpoolWriterService).GetConstructors().Single();
         var types = ctor.GetParameters().Select(static p => p.ParameterType).ToArray();
         Assert.Contains(typeof(IOverviewDbHandoffPublisher), types);
+        Assert.DoesNotContain(types, static t => t.Name.Contains("Persister", StringComparison.Ordinal));
         Assert.DoesNotContain(types, static t => t == typeof(IRabbitMqRpcChannel));
         Assert.DoesNotContain(types, static t => t.Name.Contains("NntpDb", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(types, static t => t.Name.Contains("MySql", StringComparison.OrdinalIgnoreCase));
@@ -221,29 +186,26 @@ public sealed class IncomingSpoolOverviewHandoffTests
 
     private static async Task RunWorkerAsync(
         InboundArticle inbound,
-        CapturingPersister persister,
-        IOverviewDbHandoffPublisher overview,
+        RecordingOverviewDbHandoffPublisher overview,
         IngestionPipelineMetrics? pipelineMetrics = null)
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, persister, overview, pipelineMetrics: pipelineMetrics);
+        var writer = CreateWriter(queue, overview, pipelineMetrics: pipelineMetrics);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await persister.Completed.Task.WaitAsync(cts.Token);
+        await overview.Confirmed.WaitAsync(cts.Token);
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
     }
 
     private static IncomingSpoolWriterService CreateWriter(
         IArticleIngestionQueue queue,
-        IIncomingArticlePersister persister,
         IOverviewDbHandoffPublisher overview,
         IFeedDiagnostics? feedDiagnostics = null,
         IngestionPipelineMetrics? pipelineMetrics = null) =>
         new(
             queue,
-            persister,
             Options.Create(new NntpdOptions
             {
                 ArticleIngestion = new ArticleIngestionOptions
@@ -286,26 +248,6 @@ public sealed class IncomingSpoolOverviewHandoffTests
             Options.Create(options),
             new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
             NullLogger<RabbitMqService>.Instance);
-    }
-
-    private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister
-    {
-        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            captured.Add(article);
-            Completed.TrySetResult();
-            return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>Persister that fails after OverviewDB work enqueue to prove the worker does not requeue the article.</summary>
-    private sealed class ThrowingPersister : IIncomingArticlePersister
-    {
-        /// <inheritdoc />
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("Incoming spool persist failed after OverviewDB confirm.");
     }
 
     /// <summary>Signals <see cref="IncomingSpoolWriterService"/> spool-work completion for tests.</summary>

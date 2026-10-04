@@ -383,10 +383,10 @@ public sealed class NntpdOptions : AcmeCloudflareOptions, IApplicationLifecycleO
     public long TransitQueueMemoryLimit { get; set; } = DefaultTransitQueueMemoryLimit;
 
     /// <summary>
-    /// Gets or sets article ingestion / incoming spool options.
+    /// Gets or sets article ingestion worker options.
     /// </summary>
     /// <remarks>
-    /// Defaults: max article 4 MiB, directory <c>spool/incoming</c>.
+    /// Defaults: max article 4 MiB. The ingestion worker does not write article bodies to disk.
     /// Queue admission is bounded by <see cref="TransitQueueMemoryLimit"/>, not
     /// an article-count cap. Used by <c>TAKETHIS</c> and <c>IHAVE</c>.
     /// </remarks>

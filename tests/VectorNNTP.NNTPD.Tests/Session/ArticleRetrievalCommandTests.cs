@@ -1,6 +1,11 @@
 using System.IO.Pipelines;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.Messaging.Cache;
+using VectorNNTP.Common.Messaging.RabbitMq;
+using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Newsgroups;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Networking.Transport;
@@ -8,6 +13,8 @@ using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Storage;
+using VectorNNTP.NNTPD.Tests.Fixtures;
+using VectorNNTP.NNTPD.Tests.RabbitMq;
 using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Session;
@@ -300,6 +307,93 @@ public sealed class ArticleRetrievalCommandTests
             DefaultNntpCommandCatalog.GetAccess(parsed.Verb, parsed.Qualifier));
     }
 
+    [Theory]
+    [MemberData(nameof(RetrievalVerbs))]
+    public async Task EmptyRegistry_SkipsStorageRpc_AndStillCallsBackFiller(string verb)
+    {
+        var registry = new StorageServerRegistry();
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var lookup = CreateLookup(rabbit, registry);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new RecordingArticleWorkRpcClient();
+        var session = duplex.CreateSession(articleWorkRpc: rpc, storageLookup: lookup);
+
+        await DispatchLineAsync(duplex, session, $"{verb} <12345@example.invalid>");
+
+        Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+        Assert.Single(rpc.Lookups);
+        Assert.Null(factory.LastConnection);
+        Assert.Null(lookup.CurrentReplyTo);
+    }
+
+    [Theory]
+    [MemberData(nameof(RetrievalVerbs))]
+    public async Task EmptyRegistry_BackFillerMiss_Returns430(string verb)
+    {
+        var registry = new StorageServerRegistry();
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var lookup = CreateLookup(rabbit, registry);
+        await using var duplex = await ArticleDuplex.CreateAsync();
+        var rpc = new RecordingArticleWorkRpcClient(ArticleWorkOutcome.ArticleNotFound);
+        var session = duplex.CreateSession(articleWorkRpc: rpc, storageLookup: lookup);
+
+        await DispatchLineAsync(duplex, session, $"{verb} <missing@example.com>");
+
+        Assert.Equal("430 No article with that message-id", await duplex.ReadClientLineAsync());
+        Assert.False(session.HasSelectedGroup);
+        Assert.Single(rpc.Lookups);
+        Assert.Null(factory.LastConnection);
+    }
+
+    [Theory]
+    [MemberData(nameof(RetrievalVerbs))]
+    public async Task RegisteredStorageServer_PublishesFleetLookup_AndDoesNotCallBackFiller(string verb)
+    {
+        var registry = new StorageServerRegistry();
+        var now = DateTimeOffset.Parse("2026-10-04T12:00:00Z");
+        registry.ApplyAdvertisement(
+            new StorageServerAdvertisement(1, 1, "cache01.usenet.ninja", 1000, 100, 900, now, 1191),
+            now);
+        var factory = new FakeRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var time = new FakeTimeProvider();
+        var lookup = CreateLookup(rabbit, registry, time);
+        await rabbit.StartAsync(CancellationToken.None);
+        await lookup.StartAsync(CancellationToken.None);
+        try
+        {
+            await using var duplex = await ArticleDuplex.CreateAsync();
+            var rpc = new RecordingArticleWorkRpcClient();
+            var session = duplex.CreateSession(articleWorkRpc: rpc, storageLookup: lookup);
+            var dispatch = DispatchLineAsync(duplex, session, $"{verb} <12345@example.invalid>");
+            var publication = await WaitForFleetPublicationAsync(factory);
+            Assert.Equal(CacheFleetTopology.RequestsExchangeName, publication.Exchange);
+            Assert.True(StorageArticleLookupWireProtocol.TryParseRequestV1(publication.Body, out var request, out _));
+            Assert.NotNull(request);
+            var consume = factory.LastConnection!.RpcChannels.First(static channel => channel.ConsumedQueue is not null);
+            await consume.DeliverAsync(
+                publication.CorrelationId,
+                StorageArticleLookupWireProtocol.SerializeResponseV1(
+                    new StorageArticleLookupResponse(
+                        1,
+                        request!.RequestId,
+                        1,
+                        "cache01.usenet.ninja",
+                        request.ArticleId,
+                        1191)));
+
+            await dispatch.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("400 Service temporarily unavailable", await duplex.ReadClientLineAsync());
+            Assert.Empty(rpc.Lookups);
+        }
+        finally
+        {
+            await lookup.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static NewsgroupSnapshot SampleSnapshot() =>
         NewsgroupSnapshot.Create(
         [
@@ -332,6 +426,13 @@ public sealed class ArticleRetrievalCommandTests
 
     private sealed class RecordingArticleWorkRpcClient : IArticleWorkRpcClient
     {
+        private readonly ArticleWorkOutcome _outcome;
+
+        public RecordingArticleWorkRpcClient(ArticleWorkOutcome outcome = ArticleWorkOutcome.Success)
+        {
+            _outcome = outcome;
+        }
+
         public List<ReadOnlyMemory<byte>> Lookups { get; } = [];
 
         public Task<ArticleWorkRpcResult> LookupByMessageIdAsync(
@@ -340,7 +441,7 @@ public sealed class ArticleRetrievalCommandTests
         {
             Lookups.Add(messageId.ToArray());
             return Task.FromResult(new ArticleWorkRpcResult(
-                ArticleWorkOutcome.Success,
+                _outcome,
                 Guid.NewGuid(),
                 "<12345@example.invalid>",
                 "Storage",
@@ -348,7 +449,7 @@ public sealed class ArticleRetrievalCommandTests
                 119,
                 VectorNNTP.Common.Articles.ArticleId.ParseLowerHex(
                     "dcab316ba0e91c6abbad8d5759bff207932dbe9168c88954c6dd9240b4a6da14"),
-                Error: null,
+                Error: _outcome == ArticleWorkOutcome.Success ? null : "not found",
                 "cache.requests"));
         }
     }
@@ -471,5 +572,58 @@ public sealed class ArticleRetrievalCommandTests
             _cts.Dispose();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private static StorageArticleLookupService CreateLookup(
+        RabbitMqService rabbit,
+        IStorageServerRegistry registry,
+        TimeProvider? time = null) =>
+        new(
+            rabbit,
+            Options.Create(CreateLookupOptions()),
+            NullLogger<StorageArticleLookupService>.Instance,
+            time,
+            registry);
+
+    private static NntpdOptions CreateLookupOptions()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.ServerId = 1;
+        return options;
+    }
+
+    private static RabbitMqService CreateRabbitMq(FakeRabbitMqConnectionFactory factory)
+    {
+        var options = RabbitMqOptionsTests.CreateValid();
+        options.PoolReconnectBaseDelayMs = 50;
+        options.PoolReconnectMaxDelayMs = 50;
+        return new RabbitMqService(
+            factory,
+            Options.Create(options),
+            new DelegateRabbitMqConnectionNameProvider(() => "VectorNNTP.NNTPD:nntpd01.usenet.ninja"),
+            NullLogger<RabbitMqService>.Instance);
+    }
+
+    private static async Task<FakeRabbitMqRpcPublication> WaitForFleetPublicationAsync(FakeRabbitMqConnectionFactory factory)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var connection = factory.LastConnection;
+            if (connection is not null)
+            {
+                var publication = connection.RpcChannels
+                    .SelectMany(static channel => channel.Publications)
+                    .FirstOrDefault(static item => item.Exchange == CacheFleetTopology.RequestsExchangeName);
+                if (publication is not null)
+                {
+                    return publication;
+                }
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("Expected one cache.requests publication.");
     }
 }

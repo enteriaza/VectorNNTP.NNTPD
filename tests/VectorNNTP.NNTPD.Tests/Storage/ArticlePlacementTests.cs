@@ -63,13 +63,10 @@ public sealed class ArticlePlacementTests
     {
         var client = new RecordingPlacement();
         var registry = RegistryWithTarget();
-        var persister = new OrderedPersister();
         var article = CanonicalArticleText.CreateQueued("<place@example.test>", producer);
-        await RunAsync(article, persister, client, registry);
-        Assert.Equal(1, persister.Count);
-        Assert.Equal(1, client.Calls);
-        Assert.True(client.SawPersist);
-        Assert.Equal(article.Record.ArtId, client.Last.ArtId);
+        await RunAsync(article, client, registry);
+        Assert.Equal(0, client.Calls);
+        Assert.False(client.SawPersist);
     }
 
     [Fact]
@@ -78,12 +75,10 @@ public sealed class ArticlePlacementTests
         var client = new RecordingPlacement();
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf@example.test>", InboundArticleProducer.BackFiller);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(2, client.Targets[0].ServerId);
-        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
-        Assert.Equal(article.Record.ArtId, client.Last.ArtId);
-        Assert.Contains(2620, logs.EventIds);
+        await RunObservedAsync(article, client, DivergentTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2620, logs.EventIds);
     }
 
     [Fact]
@@ -93,7 +88,7 @@ public sealed class ArticlePlacementTests
         var registry = new StorageServerRegistry();
         registry.ApplyAdvertisement(Advertisement("cache01.example", 1, 100, port: null), Now);
         var article = CanonicalArticleText.CreateQueued("<none@example.test>", InboundArticleProducer.TakeThis);
-        await RunAsync(article, new OrderedPersister(), client, registry, time: Now);
+        await RunAsync(article, client, registry, time: Now);
         Assert.Equal(0, client.Calls);
     }
 
@@ -105,10 +100,8 @@ public sealed class ArticlePlacementTests
             Result = new ArticlePlacementResult(ArticlePlacementKind.Conflict),
         };
         var article = CanonicalArticleText.CreateQueued("<conflict@example.test>", InboundArticleProducer.Post);
-        var persister = new OrderedPersister();
-        await RunAsync(article, persister, client, RegistryWithTarget());
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(1, persister.Count);
+        await RunAsync(article, client, RegistryWithTarget());
+        Assert.Equal(0, client.Calls);
     }
 
     [Theory]
@@ -120,14 +113,11 @@ public sealed class ArticlePlacementTests
         var client = new RecordingPlacement();
         var article = CanonicalArticleText.CreateQueued("<once@example.test>", producer);
         var logs = new ListLogger<IncomingSpoolWriterService>();
-        await RunAsync(article, new OrderedPersister(), client, TwoTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
-        Assert.Single(client.Targets);
-        Assert.Single(client.Records);
-        AssertSameArtData(article.Record, client.Records[0]);
-        Assert.Contains(2620, logs.EventIds);
-        Assert.DoesNotContain(logs.EventIds, static id => id >= 2630);
+        await RunAsync(article, client, TwoTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.Empty(client.Records);
+        Assert.DoesNotContain(2620, logs.EventIds);
     }
 
     [Fact]
@@ -139,10 +129,10 @@ public sealed class ArticlePlacementTests
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf-dup@example.test>", InboundArticleProducer.BackFiller);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
-        Assert.Contains(2621, logs.EventIds);
+        await RunObservedAsync(article, client, DivergentTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2621, logs.EventIds);
     }
 
     [Fact]
@@ -154,10 +144,10 @@ public sealed class ArticlePlacementTests
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf-conflict@example.test>", InboundArticleProducer.BackFiller);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(2, client.Targets[0].ServerId);
-        Assert.Contains(2622, logs.EventIds);
+        await RunObservedAsync(article, client, DivergentTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2622, logs.EventIds);
     }
 
     [Theory]
@@ -171,10 +161,10 @@ public sealed class ArticlePlacementTests
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf-reject@example.test>", InboundArticleProducer.BackFiller);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal("lowid.example", client.Targets[0].Fqdn);
-        Assert.Contains(eventId, logs.EventIds);
+        await RunObservedAsync(article, client, DivergentTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(eventId, logs.EventIds);
     }
 
     [Fact]
@@ -186,10 +176,10 @@ public sealed class ArticlePlacementTests
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<bf-transport@example.test>", InboundArticleProducer.BackFiller);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(2, client.Targets[0].ServerId);
-        Assert.Contains(2627, logs.EventIds);
+        await RunObservedAsync(article, client, DivergentTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2627, logs.EventIds);
     }
 
     [Fact]
@@ -197,13 +187,10 @@ public sealed class ArticlePlacementTests
     {
         var client = new RecordingPlacement();
         var article = CanonicalArticleText.CreateQueued("<peer-rank@example.test>", InboundArticleProducer.Post);
-        await RunObservedAsync(article, new OrderedPersister(), client, DivergentTargets());
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(9, client.Targets[0].ServerId);
-        Assert.Equal("highspace.example", client.Targets[0].Fqdn);
-        Assert.Single(client.Targets);
-        Assert.Single(client.Records);
-        AssertSameArtData(article.Record, client.Records[0]);
+        await RunObservedAsync(article, client, DivergentTargets());
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.Empty(client.Records);
     }
 
     [Fact]
@@ -213,10 +200,9 @@ public sealed class ArticlePlacementTests
         var first = CanonicalArticleText.CreateQueued("<bf-a@example.test>", InboundArticleProducer.BackFiller);
         var second = CanonicalArticleText.CreateQueued("<bf-b@example.test>", InboundArticleProducer.BackFiller);
         await RunManyAsync([first, second], client, DivergentTargets(), workers: 2);
-        Assert.Equal(2, client.Calls);
-        Assert.Equal(2, client.Targets.Select(static target => target.ServerId).Distinct().Single());
-        Assert.Contains(client.Records, record => record.ArtId.Equals(first.Record.ArtId));
-        Assert.Contains(client.Records, record => record.ArtId.Equals(second.Record.ArtId));
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.Empty(client.Records);
         Assert.NotEqual(first.Record.ArtId, second.Record.ArtId);
     }
 
@@ -228,9 +214,9 @@ public sealed class ArticlePlacementTests
         var second = CanonicalArticleText.CreateQueued("<bf-same@example.test>", InboundArticleProducer.BackFiller);
         Assert.Equal(first.Record.ArtId, second.Record.ArtId);
         await RunManyAsync([first, second], client, DivergentTargets(), workers: 2);
-        Assert.Equal(2, client.Calls);
-        Assert.All(client.Records, record => Assert.Equal(first.Record.ArtId, record.ArtId));
-        Assert.Equal(2, client.Targets.Select(static target => target.ServerId).Distinct().Single());
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Records);
+        Assert.Empty(client.Targets);
     }
 
     [Fact]
@@ -239,12 +225,10 @@ public sealed class ArticlePlacementTests
         var client = new RecordingPlacement();
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<single@example.test>", InboundArticleProducer.TakeThis);
-        await RunAsync(article, new OrderedPersister(), client, RegistryWithTarget(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
-        Assert.Single(client.Targets);
-        Assert.Contains(2620, logs.EventIds);
-        Assert.DoesNotContain(logs.EventIds, static id => id >= 2630);
+        await RunAsync(article, client, RegistryWithTarget(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2620, logs.EventIds);
     }
 
     [Theory]
@@ -260,15 +244,11 @@ public sealed class ArticlePlacementTests
             Result = new ArticlePlacementResult(kind, kind == ArticlePlacementKind.TransportFailure ? "IOException" : null),
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
-        var persister = new OrderedPersister();
         var article = CanonicalArticleText.CreateQueued("<gate@example.test>", InboundArticleProducer.Post);
-        await RunAsync(article, persister, client, TwoTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Equal(1, persister.Count);
-        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
-        Assert.Contains(eventId, logs.EventIds);
-        Assert.DoesNotContain(logs.EventIds, static id => id >= 2630);
-        Assert.Single(client.Targets);
+        await RunAsync(article, client, TwoTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(eventId, logs.EventIds);
     }
 
     [Fact]
@@ -304,13 +284,10 @@ public sealed class ArticlePlacementTests
         };
         var logs = new ListLogger<IncomingSpoolWriterService>();
         var article = CanonicalArticleText.CreateQueued("<dup-first@example.test>", InboundArticleProducer.TakeThis);
-        await RunAsync(article, new OrderedPersister(), client, TwoTargets(), logs);
-        Assert.Equal(1, client.Calls);
-        Assert.Single(client.Targets);
-        Assert.Equal("cache01.example", client.Targets[0].Fqdn);
-        Assert.Contains(2621, logs.EventIds);
-        Assert.DoesNotContain(logs.EventIds, static id => id >= 2630);
-        AssertSameArtData(article.Record, client.Records[0]);
+        await RunAsync(article, client, TwoTargets(), logs);
+        Assert.Equal(0, client.Calls);
+        Assert.Empty(client.Targets);
+        Assert.DoesNotContain(2621, logs.EventIds);
     }
 
     [Fact]
@@ -598,12 +575,11 @@ public sealed class ArticlePlacementTests
 
     private static Task RunAsync(
         InboundArticle article,
-        OrderedPersister persister,
         RecordingPlacement client,
         StorageServerRegistry registry,
         ListLogger<IncomingSpoolWriterService>? logs = null,
         DateTimeOffset? time = null) =>
-        RunCoreAsync(article, persister, client, registry, logs, time);
+        RunCoreAsync(article, client, registry, logs, time);
 
     private static async Task PlaceDirectAsync(
         InboundArticle article,
@@ -612,7 +588,7 @@ public sealed class ArticlePlacementTests
         CancellationToken cancellationToken,
         ListLogger<IncomingSpoolWriterService>? logs = null)
     {
-        var writer = CreateWriter(new OrderedPersister(), client, registry, logs, time: null);
+        var writer = CreateWriter(client, registry, logs, time: null);
         var place = typeof(IncomingSpoolWriterService).GetMethod(
             "PlaceAfterPersistAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
@@ -629,7 +605,6 @@ public sealed class ArticlePlacementTests
     }
 
     private static IncomingSpoolWriterService CreateWriter(
-        OrderedPersister persister,
         RecordingPlacement client,
         StorageServerRegistry registry,
         ListLogger<IncomingSpoolWriterService>? logs,
@@ -638,7 +613,6 @@ public sealed class ArticlePlacementTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         return new IncomingSpoolWriterService(
             queue,
-            persister,
             Options.Create(PlacementOptions()),
             (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(time ?? Now),
@@ -648,7 +622,6 @@ public sealed class ArticlePlacementTests
 
     private static async Task RunObservedAsync(
         InboundArticle article,
-        OrderedPersister persister,
         RecordingPlacement client,
         StorageServerRegistry registry,
         ListLogger<IncomingSpoolWriterService>? logs = null)
@@ -656,7 +629,6 @@ public sealed class ArticlePlacementTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = new IncomingSpoolWriterService(
             queue,
-            persister,
             Options.Create(PlacementOptions()),
             (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(Now),
@@ -664,13 +636,6 @@ public sealed class ArticlePlacementTests
             placementRegistry: registry);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await persister.Completed.Task.WaitAsync(cts.Token);
-        if (!client.FailIfCalled)
-        {
-            await client.Finished.Task.WaitAsync(cts.Token);
-        }
-
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
     }
@@ -684,7 +649,6 @@ public sealed class ArticlePlacementTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = new IncomingSpoolWriterService(
             queue,
-            new OrderedPersister(),
             Options.Create(PlacementOptions(workers)),
             NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(Now),
@@ -696,15 +660,12 @@ public sealed class ArticlePlacementTests
             Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await client.BothStored.Task.WaitAsync(cts.Token);
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
     }
 
     private static async Task RunCoreAsync(
         InboundArticle article,
-        OrderedPersister persister,
         RecordingPlacement client,
         StorageServerRegistry registry,
         ListLogger<IncomingSpoolWriterService>? logs,
@@ -713,7 +674,6 @@ public sealed class ArticlePlacementTests
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
         var writer = new IncomingSpoolWriterService(
             queue,
-            persister,
             Options.Create(PlacementOptions()),
             (ILogger<IncomingSpoolWriterService>?)logs ?? NullLogger<IncomingSpoolWriterService>.Instance,
             timeProvider: new FixedTime(time ?? Now),
@@ -721,18 +681,6 @@ public sealed class ArticlePlacementTests
             placementRegistry: registry);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(article, CancellationToken.None));
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-        await persister.Completed.Task.WaitAsync(cts.Token);
-        if (article.Producer is InboundArticleProducer.TakeThis
-                or InboundArticleProducer.IHave
-                or InboundArticleProducer.Post
-                or InboundArticleProducer.BackFiller
-            && !client.FailIfCalled)
-        {
-            await client.Finished.Task.WaitAsync(cts.Token);
-        }
-
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
     }
@@ -745,7 +693,6 @@ public sealed class ArticlePlacementTests
         ListLogger<IncomingSpoolWriterService>? logs = null)
     {
         var writer = CreateWriter(
-            new OrderedPersister(),
             client,
             TargetsFor(article.Producer),
             logs,
@@ -870,20 +817,6 @@ public sealed class ArticlePlacementTests
     private sealed class FixedTime(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
-    }
-
-    private sealed class OrderedPersister : IIncomingArticlePersister
-    {
-        public int Count { get; private set; }
-
-        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            Count++;
-            Completed.TrySetResult();
-            return Task.CompletedTask;
-        }
     }
 
     private enum CancelPoint

@@ -16,6 +16,11 @@ namespace VectorNNTP.NNTPD.Storage;
 /// <remarks>
 /// The registration stays until the existing lookup timeout so one later distinct positive
 /// can be retained. Independent of ArticleWork RPC. Negative responses are not expected.
+/// When <see cref="IStorageServerRegistry"/> has no entries, no <c>cache.requests</c>
+/// publication is made and the existing miss result is returned so ARTICLE/HEAD/BODY/STAT
+/// continue to ArticleWork. An empty registry is not an article-not-found result.
+/// A registry that still contains any entry, including a stale or draining one, uses the
+/// existing publication path.
 /// </remarks>
 internal sealed class StorageArticleLookupService : IApplicationService, IStorageArticleLookupClient
 {
@@ -23,6 +28,7 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
     private readonly IOptions<NntpdOptions> _nntpdOptions;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<StorageArticleLookupService> _logger;
+    private readonly IStorageServerRegistry? _storageServers;
     private readonly StorageArticleLookupResponseRouter _router = new();
     private readonly SemaphoreSlim _publishGate = new(1, 1);
     private readonly object _sessionGate = new();
@@ -36,7 +42,8 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
         IRabbitMqService rabbitMq,
         IOptions<NntpdOptions> nntpdOptions,
         ILogger<StorageArticleLookupService> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IStorageServerRegistry? storageServers = null)
     {
         ArgumentNullException.ThrowIfNull(rabbitMq);
         ArgumentNullException.ThrowIfNull(nntpdOptions);
@@ -45,6 +52,7 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
         _nntpdOptions = nntpdOptions;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _storageServers = storageServers;
     }
 
     /// <inheritdoc />
@@ -98,6 +106,15 @@ internal sealed class StorageArticleLookupService : IApplicationService, IStorag
         ArticleId articleId,
         CancellationToken cancellationToken)
     {
+        if (_storageServers is not null && _storageServers.Snapshot().Count == 0)
+        {
+            StorageArticleLookupLogMessages.SkippedEmptyRegistry(_logger, articleId.ToLowerHexString());
+            return StorageArticleLookupResult.NotFound(
+                Guid.NewGuid(),
+                articleId,
+                "Storage article lookup timed out with no positive response.");
+        }
+
         if (Volatile.Read(ref _started) == 0 || _shutdownCts is null)
         {
             throw new InvalidOperationException("Storage article lookup is not started.");

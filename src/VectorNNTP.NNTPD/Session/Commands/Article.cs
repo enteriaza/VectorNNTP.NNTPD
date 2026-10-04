@@ -21,8 +21,10 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// Message-id form asks <see cref="IStorageArticleLookupClient"/> first. A positive
 /// StorageServer response is fetched with the existing VATP client
 /// (<see cref="IVatpArticleClient"/>). Only a completed lookup with no positive
-/// response calls ArticleWork. Transport, malformed, and invalid StorageServer
-/// results stay on that path. A validated CanonicalV1
+/// response calls ArticleWork. When <see cref="IStorageServerRegistry"/> has no
+/// entries, that client does not publish a StorageServer request and the same miss
+/// continues to ArticleWork. An empty registry is not an article-not-found result.
+/// Transport, malformed, and invalid StorageServer results stay on that path. A validated CanonicalV1
 /// <see cref="ArticleRecord"/> is required before any <c>220</c>/<c>221</c>/<c>222</c>/<c>223</c>
 /// reply. A StorageServer success is served without ingestion. A BackFiller success
 /// admits a Path traversal whose current hop is this NNTPD, and the reply sends

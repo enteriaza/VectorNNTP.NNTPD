@@ -24,7 +24,7 @@ public sealed class IncomingSpoolPathSurveyTests
         var inbound = CanonicalArticleText.CreateQueued(
             "<path@example.com>",
             InboundArticleProducer.TakeThis);
-        await RunWorkerAsync(inbound, news, paths, [], Catalogue("alt.test"));
+        await RunWorkerAsync(inbound, news, paths, Catalogue("alt.test"));
 
         var observed = Assert.Single(paths.Paths);
         Assert.True(observed.AsSpan().SequenceEqual(inbound.Record.Path));
@@ -43,7 +43,7 @@ public sealed class IncomingSpoolPathSurveyTests
         var first = CanonicalArticleText.CreateQueued("<one@example.com>", InboundArticleProducer.TakeThis);
         var second = CanonicalArticleText.CreateQueued("<two@example.com>", InboundArticleProducer.TakeThis);
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, [], Catalogue("alt.test"));
+        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, Catalogue("alt.test"));
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(first, CancellationToken.None));
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(second, CancellationToken.None));
@@ -69,7 +69,6 @@ public sealed class IncomingSpoolPathSurveyTests
             inbound,
             news,
             paths,
-            [],
             Catalogue("alt.test"),
             wantTrash: true,
             logTrash: false);
@@ -84,18 +83,15 @@ public sealed class IncomingSpoolPathSurveyTests
     {
         var throwing = new ThrowingPathSurveyWriter();
         var news = new RecordingNewsLogWriter();
-        var captured = new List<InboundArticle>();
         await RunTakeThisAsync(
             CanonicalArticleText.Destuffed("<fail-path@example.com>"),
             "<fail-path@example.com>",
             news,
             throwing,
-            captured,
             Catalogue("alt.test"));
 
         Assert.Equal(1, throwing.WriteCalls);
         Assert.Equal(1, news.WriteCalls);
-        Assert.Single(captured);
     }
 
     [Fact]
@@ -103,15 +99,13 @@ public sealed class IncomingSpoolPathSurveyTests
     {
         var throwingNews = new ThrowingNewsLogWriter();
         var paths = new RecordingPathSurveyWriter();
-        var captured = new List<InboundArticle>();
         var inbound = CanonicalArticleText.CreateQueued(
             "<fail-news-path@example.com>",
             InboundArticleProducer.TakeThis);
-        await RunWorkerAsync(inbound, throwingNews, paths, captured, Catalogue("alt.test"));
+        await RunWorkerAsync(inbound, throwingNews, paths, Catalogue("alt.test"));
 
         Assert.Equal(1, throwingNews.WriteCalls);
         Assert.True(Assert.Single(paths.Paths).AsSpan().SequenceEqual(inbound.Record.Path));
-        Assert.Single(captured);
     }
 
     [Fact]
@@ -134,7 +128,7 @@ public sealed class IncomingSpoolPathSurveyTests
         Assert.Equal(0, paths.WriteCalls);
         Assert.Equal(0, news.WriteCalls);
 
-        var writer = CreateWriter(queue, news, paths, [], Catalogue("alt.test"));
+        var writer = CreateWriter(queue, news, paths, Catalogue("alt.test"));
         await writer.StartAsync(CancellationToken.None);
         queue.Complete();
         await writer.StopAsync(CancellationToken.None);
@@ -148,7 +142,7 @@ public sealed class IncomingSpoolPathSurveyTests
     {
         var paths = new CountingPathSurveyWriter();
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 64 });
-        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, [], Catalogue("alt.test"));
+        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, Catalogue("alt.test"));
         await writer.StartAsync(CancellationToken.None);
         const int count = 32;
         long expectedBytes = 0;
@@ -183,7 +177,7 @@ public sealed class IncomingSpoolPathSurveyTests
             Identity(),
             DateTimeOffset.UtcNow,
             InboundArticleProducer.TakeThis);
-        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, [], Catalogue("alt.test"));
+        var writer = CreateWriter(queue, new RecordingNewsLogWriter(), paths, Catalogue("alt.test"));
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
         queue.Complete();
@@ -199,7 +193,6 @@ public sealed class IncomingSpoolPathSurveyTests
         string messageId,
         INewsLogWriter news,
         IPathSurveyWriter paths,
-        List<InboundArticle> captured,
         INewsgroupCatalogue catalogue,
         bool wantTrash = true,
         bool logTrash = true)
@@ -214,7 +207,6 @@ public sealed class IncomingSpoolPathSurveyTests
                 InboundArticleProducer.TakeThis),
             news,
             paths,
-            captured,
             catalogue,
             wantTrash,
             logTrash);
@@ -224,13 +216,12 @@ public sealed class IncomingSpoolPathSurveyTests
         InboundArticle inbound,
         INewsLogWriter news,
         IPathSurveyWriter paths,
-        List<InboundArticle> captured,
         INewsgroupCatalogue? catalogue,
         bool wantTrash = true,
         bool logTrash = true)
     {
         var queue = new ArticleIngestionQueue(new ArticleIngestionOptions { QueueCapacity = 4 });
-        var writer = CreateWriter(queue, news, paths, captured, catalogue, wantTrash, logTrash);
+        var writer = CreateWriter(queue, news, paths, catalogue, wantTrash, logTrash);
         await writer.StartAsync(CancellationToken.None);
         Assert.Equal(ArticleEnqueueResult.Accepted, await queue.EnqueueAsync(inbound, CancellationToken.None));
         queue.Complete();
@@ -241,13 +232,11 @@ public sealed class IncomingSpoolPathSurveyTests
         IArticleIngestionQueue queue,
         INewsLogWriter news,
         IPathSurveyWriter paths,
-        List<InboundArticle> captured,
         INewsgroupCatalogue? catalogue,
         bool wantTrash = true,
         bool logTrash = true) =>
         new(
             queue,
-            new CapturingPersister(captured),
             Options.Create(new NntpdOptions
             {
                 ArticleIngestion = new ArticleIngestionOptions(),
@@ -282,15 +271,6 @@ public sealed class IncomingSpoolPathSurveyTests
 
     private static ConnectionClientIdentity Identity() =>
         ConnectionClientIdentity.Direct(new IPEndPoint(IPAddress.Loopback, 119));
-
-    private sealed class CapturingPersister(List<InboundArticle> captured) : IIncomingArticlePersister
-    {
-        public Task PersistAsync(InboundArticle article, CancellationToken cancellationToken)
-        {
-            captured.Add(article);
-            return Task.CompletedTask;
-        }
-    }
 
     private sealed class TempDir : IDisposable
     {

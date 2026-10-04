@@ -11,6 +11,8 @@ internal sealed class RecordingOverviewDbHandoffPublisher : IOverviewDbHandoffPu
     private readonly Queue<OverviewDbWorkItem> _failures = new();
     private readonly TaskCompletionSource<int> _firstAttempt =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _confirmed =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Gets captured successfully confirmed payloads in publish order.</summary>
     public List<byte[]> Payloads { get; } = [];
@@ -20,6 +22,9 @@ internal sealed class RecordingOverviewDbHandoffPublisher : IOverviewDbHandoffPu
 
     /// <summary>Completes when the first publish attempt begins.</summary>
     public Task<int> FirstAttempt => _firstAttempt.Task;
+
+    /// <summary>Completes when the first payload is recorded as confirmed.</summary>
+    public Task Confirmed => _confirmed.Task;
 
     /// <summary>Remaining attempts that enqueue a failure instead of confirming.</summary>
     public int RemainingFailures { get; set; }
@@ -143,6 +148,8 @@ internal sealed class RecordingOverviewDbHandoffPublisher : IOverviewDbHandoffPu
             {
                 Payloads.Add(item.Payload.ToArray());
             }
+
+            _confirmed.TrySetResult();
         }
         finally
         {
