@@ -125,13 +125,13 @@ namespace VectorNNTP.BackFiller.ArticleWork
             {
                 retrieval = await _retriever.RetrieveAsync(
                         item,
-                        cancellationToken,
                         memory =>
                         {
                             created = ArticleRecordFactory.TryCreate(_parser, memory, ArticlePathMode.Traverse);
                             consumed = true;
                             return created;
-                        })
+                        },
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

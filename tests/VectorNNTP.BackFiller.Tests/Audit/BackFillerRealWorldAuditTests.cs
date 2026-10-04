@@ -593,8 +593,8 @@ namespace VectorNNTP.BackFiller.Tests.Audit
 
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
-                CancellationToken cancellationToken,
-                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
+                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+                CancellationToken cancellationToken)
             {
                 ArgumentNullException.ThrowIfNull(consumePayload);
                 if (cancellationToken.IsCancellationRequested)
@@ -622,8 +622,8 @@ namespace VectorNNTP.BackFiller.Tests.Audit
 
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
-                CancellationToken cancellationToken,
-                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
+                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+                CancellationToken cancellationToken)
             {
                 ArgumentNullException.ThrowIfNull(consumePayload);
                 if (Next.Article is not null)

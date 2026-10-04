@@ -337,7 +337,7 @@ namespace VectorNNTP.BackFiller.Nntp
             int maxBytes,
             TimeSpan timeout,
             CancellationToken cancellationToken)
-            => ReadArticlePayloadAsync(maxBytes, timeout, cancellationToken, _ => DetachExactPayload());
+            => ReadArticlePayloadAsync(maxBytes, timeout, _ => DetachExactPayload(), cancellationToken);
 
         /// <summary>
         /// Reads a multiline ARTICLE payload and passes the destuffed scratch prefix to <paramref name="consume"/>.
@@ -345,11 +345,11 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <typeparam name="T">Value returned by <paramref name="consume"/>.</typeparam>
         /// <param name="maxBytes">Maximum destuffed payload length. The byte that would exceed it is not stored.</param>
         /// <param name="timeout">Budget for the whole payload. Linked with <paramref name="cancellationToken"/>.</param>
-        /// <param name="cancellationToken">Cancels the read.</param>
         /// <param name="consume">
         /// Invoked once the terminator is recognized, with <c>_payloadScratch</c> sliced to the written prefix.
         /// The memory is valid only until this delegate returns. It must not be stored, and this delegate must not await.
         /// </param>
+        /// <param name="cancellationToken">Cancels the read.</param>
         /// <returns>The value returned by <paramref name="consume"/>.</returns>
         /// <exception cref="EndOfStreamException">The stream ends before a terminator line is recognized.</exception>
         /// <exception cref="InvalidOperationException">The destuffed payload reaches <paramref name="maxBytes"/>.</exception>
@@ -364,8 +364,8 @@ namespace VectorNNTP.BackFiller.Nntp
         internal async Task<T> ReadArticlePayloadAsync<T>(
             int maxBytes,
             TimeSpan timeout,
-            CancellationToken cancellationToken,
-            Func<ReadOnlyMemory<byte>, T> consume)
+            Func<ReadOnlyMemory<byte>, T> consume,
+            CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(consume);
             _payloadCount = 0;
@@ -444,7 +444,7 @@ namespace VectorNNTP.BackFiller.Nntp
                         }
                         while (index < span.Length && !(atLineStart && span[index] == (byte)'.'));
 
-                        AppendPayload(span.Slice(start, index - start), maxBytes);
+                        AppendPayload(span[start..index], maxBytes);
                     }
 
                     Consume(index);

@@ -425,16 +425,16 @@ namespace VectorNNTP.BackFiller.Tests.Audit
 
             public async Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
-                CancellationToken cancellationToken,
-                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
+                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+                CancellationToken cancellationToken)
             {
                 ArgumentNullException.ThrowIfNull(consumePayload);
                 stream.Begin(_frames[item.Request.MessageId]);
                 _ = await reader.ReadArticlePayloadAsync(
                         5 * 1024 * 1024,
                         TimeSpan.FromMinutes(1),
-                        cancellationToken,
-                        consumePayload)
+                        consumePayload,
+                        cancellationToken)
                     .ConfigureAwait(false);
                 return ArticleRetrievalResult.Retrieved(220, "article follows");
             }

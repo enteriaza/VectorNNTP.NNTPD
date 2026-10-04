@@ -8,17 +8,17 @@ namespace VectorNNTP.BackFiller.Nntp
     {
         /// <summary>Retrieves the article identified by <paramref name="item"/>.</summary>
         /// <param name="item">Work item whose request backbone and message id select the provider and ARTICLE argument.</param>
-        /// <param name="cancellationToken">Cancellation signal for acquisition and download.</param>
         /// <param name="consumePayload">
         /// Invoked synchronously with the destuffed payload before this method returns a retrieved article.
         /// The memory is valid only until the delegate returns. The delegate must not store it and must not await.
         /// Production calls it while the session still holds its busy lock. It is not called when no payload is retrieved.
         /// </param>
+        /// <param name="cancellationToken">Cancellation signal for acquisition and download.</param>
         /// <returns>The retrieval outcome for <paramref name="item"/>.</returns>
         Task<ArticleRetrievalResult> RetrieveAsync(
             ArticleWorkItem item,
-            CancellationToken cancellationToken,
-            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload);
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+            CancellationToken cancellationToken);
     }
 
     /// <summary>Default retriever. Does not expose pooled session ownership to Article Work.</summary>
@@ -46,11 +46,11 @@ namespace VectorNNTP.BackFiller.Nntp
         /// Acquires a session for the work-item backbone, downloads its message id, and disposes the lease.
         /// </summary>
         /// <param name="item">Work item. <see cref="ArticleWorkItem.Request"/> supplies the backbone and message id.</param>
-        /// <param name="cancellationToken">
-        /// When already canceled, acquisition is skipped. Otherwise it is passed to pool acquisition and download.
-        /// </param>
         /// <param name="consumePayload">
         /// Passed to <see cref="NntpProviderSession.DownloadArticleAsync"/> and invoked there while the session busy lock is held.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// When already canceled, acquisition is skipped. Otherwise it is passed to pool acquisition and download.
         /// </param>
         /// <returns>
         /// <see cref="ArticleRetrievalKind.Cancelled"/> when <paramref name="cancellationToken"/> is already canceled,
@@ -73,8 +73,8 @@ namespace VectorNNTP.BackFiller.Nntp
         /// </remarks>
         public async Task<ArticleRetrievalResult> RetrieveAsync(
             ArticleWorkItem item,
-            CancellationToken cancellationToken,
-            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+            CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(item);
             ArgumentNullException.ThrowIfNull(consumePayload);

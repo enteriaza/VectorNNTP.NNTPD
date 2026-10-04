@@ -221,14 +221,14 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
             var marker = await reader.ReadArticlePayloadAsync(
                 1024,
                 TimeSpan.FromSeconds(5),
-                CancellationToken.None,
                 memory =>
                 {
                     seen = true;
                     exposed = memory;
                     Assert.Equal("aaaa\r\n"u8.ToArray(), memory.ToArray());
                     return memory.Length;
-                });
+                },
+                CancellationToken.None);
 
             Assert.True(seen);
             Assert.Equal(6, marker);
@@ -251,8 +251,8 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 reader.ReadArticlePayloadAsync(
                     1024,
                     TimeSpan.FromSeconds(5),
-                    CancellationToken.None,
-                    Fail));
+                    Fail,
+                    CancellationToken.None));
 
             int Fail(ReadOnlyMemory<byte> memory)
             {
@@ -284,12 +284,12 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 new NntpStreamReader(new MemoryStream(framed, writable: false), 1024).ReadArticlePayloadAsync(
                     32,
                     TimeSpan.FromSeconds(5),
-                    CancellationToken.None,
                     _ =>
                     {
                         oversizeCalled = true;
                         return 0;
-                    }));
+                    },
+                    CancellationToken.None));
             Assert.Contains("MaxArticleBytes", oversize.Message, StringComparison.Ordinal);
             Assert.False(oversizeCalled);
 
@@ -301,12 +301,12 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                     .ReadArticlePayloadAsync(
                         1024,
                         TimeSpan.FromSeconds(5),
-                        cts.Token,
                         _ =>
                         {
                             cancelCalled = true;
                             return 0;
-                        }));
+                        },
+                        cts.Token));
             Assert.False(cancelCalled);
         }
 

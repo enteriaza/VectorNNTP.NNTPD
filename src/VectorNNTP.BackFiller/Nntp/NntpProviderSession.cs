@@ -318,7 +318,6 @@ namespace VectorNNTP.BackFiller.Nntp
                         _ = await _reader.ReadArticlePayloadAsync(
                                 _options.MaxArticleBytes,
                                 _options.ReceiveTimeout,
-                                cancellationToken,
                                 memory =>
                                 {
                                     NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, memory.Length);
@@ -338,7 +337,8 @@ namespace VectorNNTP.BackFiller.Nntp
                                         consumerError = ExceptionDispatchInfo.Capture(ex);
                                         throw new PayloadConsumerException();
                                     }
-                                })
+                                },
+                                cancellationToken)
                             .ConfigureAwait(false);
                     }
                     catch (EndOfStreamException)
@@ -422,10 +422,7 @@ namespace VectorNNTP.BackFiller.Nntp
                 _ = _busy.Release();
             }
 
-            if (consumerError is not null)
-            {
-                consumerError.Throw();
-            }
+            consumerError?.Throw();
 
             throw new InvalidOperationException("ARTICLE download ended without a result.");
         }

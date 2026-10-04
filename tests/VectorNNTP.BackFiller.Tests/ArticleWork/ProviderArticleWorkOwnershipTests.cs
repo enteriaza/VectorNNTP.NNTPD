@@ -125,8 +125,8 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
 
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
-                CancellationToken cancellationToken,
-                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload)
+                Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
+                CancellationToken cancellationToken)
             {
                 ArgumentNullException.ThrowIfNull(consumePayload);
                 if (_failure is not null)
