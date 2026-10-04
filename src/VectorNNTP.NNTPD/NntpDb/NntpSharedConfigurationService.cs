@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Configuration;
 using VectorNNTP.Common.Core;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.Configuration;
 
@@ -21,6 +22,7 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
 
     private readonly NntpDbService _nntpDb;
     private readonly IOptions<NntpdOptions> _options;
+    private readonly IOptions<RabbitMqOptions> _rabbitMq;
     private readonly ILogger<NntpSharedConfigurationService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _interval;
@@ -33,28 +35,32 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
 
     /// <summary>Initializes a new instance of the <see cref="NntpSharedConfigurationService"/> class.</summary>
     /// <param name="nntpDb">Started database service.</param>
-    /// <param name="options">Live NNTPD options. ACME and DNS fields are replaced from each published snapshot.</param>
+    /// <param name="options">Live NNTPD options. ACME, DNS, and Cloudflare credential fields are replaced from each published snapshot.</param>
+    /// <param name="rabbitMq">Live RabbitMQ options. Username and password are replaced from each published snapshot.</param>
     /// <param name="logger">Lifecycle logger.</param>
     public NntpSharedConfigurationService(
         NntpDbService nntpDb,
         IOptions<NntpdOptions> options,
+        IOptions<RabbitMqOptions> rabbitMq,
         ILogger<NntpSharedConfigurationService> logger)
-        : this(nntpDb, options, logger, TimeProvider.System, RefreshInterval)
+        : this(nntpDb, options, logger, TimeProvider.System, RefreshInterval, rabbitMq)
     {
     }
 
     /// <summary>Initializes a new instance with an explicit clock and interval (tests).</summary>
     /// <param name="nntpDb">Started database service.</param>
-    /// <param name="options">Live NNTPD options. ACME and DNS fields are replaced from each published snapshot.</param>
+    /// <param name="options">Live NNTPD options. ACME, DNS, and Cloudflare credential fields are replaced from each published snapshot.</param>
     /// <param name="logger">Lifecycle logger.</param>
     /// <param name="timeProvider">Clock used by the refresh delay.</param>
     /// <param name="interval">Delay between refreshes.</param>
+    /// <param name="rabbitMq">Live RabbitMQ options. Username and password are replaced from each published snapshot.</param>
     internal NntpSharedConfigurationService(
         NntpDbService nntpDb,
         IOptions<NntpdOptions> options,
         ILogger<NntpSharedConfigurationService> logger,
         TimeProvider timeProvider,
-        TimeSpan interval)
+        TimeSpan interval,
+        IOptions<RabbitMqOptions>? rabbitMq = null)
     {
         ArgumentNullException.ThrowIfNull(nntpDb);
         ArgumentNullException.ThrowIfNull(options);
@@ -63,6 +69,7 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(interval, TimeSpan.Zero);
         _nntpDb = nntpDb;
         _options = options;
+        _rabbitMq = rabbitMq ?? Options.Create(new RabbitMqOptions());
         _logger = logger;
         _timeProvider = timeProvider;
         _interval = interval;
@@ -241,6 +248,7 @@ internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationC
         }
 
         snapshot.CopyAcmeDnsTo(options);
+        snapshot.CopyRabbitMqCredentialsTo(_rabbitMq.Value);
         Volatile.Write(ref _current, new PublishedSnapshot(snapshot));
         NntpSharedConfigurationLogMessages.SnapshotPublished(_logger, snapshot.MaxArticleBytes, snapshot.SiteName);
     }

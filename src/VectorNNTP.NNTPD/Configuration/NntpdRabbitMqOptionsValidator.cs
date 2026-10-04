@@ -7,7 +7,8 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// NNTPD RabbitMQ options validator: Common connection rules plus required Management HTTP settings.
 /// </summary>
 /// <remarks>
-/// NNTPD ArticleWork availability discovery requires Management BaseUrl and broker credentials.
+/// NNTPD ArticleWork availability discovery requires Management BaseUrl.
+/// Broker username and password are published from <c>nntpsharedconfig</c> after this validator runs.
 /// Connectivity-only hosts should register <see cref="RabbitMqOptionsValidator"/> alone.
 /// </remarks>
 public sealed class NntpdRabbitMqOptionsValidator : IValidateOptions<RabbitMqOptions>
@@ -37,12 +38,5 @@ public sealed class NntpdRabbitMqOptionsValidator : IValidateOptions<RabbitMqOpt
         }
 
         RabbitMqOptionsValidator.ValidateManagementShape(management, failures);
-
-        if (string.IsNullOrWhiteSpace(rabbitMq.Username) || rabbitMq.Password is null)
-        {
-            failures.Add(
-                "RabbitMQ:Username and RabbitMQ:Password are required for Management API availability discovery "
-                + $"(supply via {RabbitMqOptions.UsernameEnvironmentVariable} / {RabbitMqOptions.PasswordEnvironmentVariable}).");
-        }
     }
 }

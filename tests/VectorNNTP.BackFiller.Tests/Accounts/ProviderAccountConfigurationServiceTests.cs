@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.BackFiller.Accounts;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Configuration;
@@ -188,6 +189,35 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
             Assert.False(await harness.Service.RefreshOnceAsync(CancellationToken.None));
             Assert.Same(knownGood, Assert.Single(harness.Service.PublishedProviders));
             Assert.Equal(shared, harness.Service.Current);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderRabbitMqPassword, harness.Rabbit.Value.Password);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey, harness.Acme.Value.CloudFlareApiKey);
+        }
+
+        [Fact]
+        public async Task Start_copies_shared_rabbitmq_acme_and_cloudflare_credentials()
+        {
+            var source = new FakeProviderAccountSource
+            {
+                Rows = [ProviderAccountTestRows.Create()],
+            };
+            await using var harness = CreateHarness(source);
+            await harness.Service.StartAsync(CancellationToken.None);
+
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderRabbitMqUsername, harness.Rabbit.Value.Username);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderRabbitMqPassword, harness.Rabbit.Value.Password);
+            Assert.Equal("/articles", harness.Rabbit.Value.VirtualHost);
+            Assert.NotEqual("from-env-user", harness.Rabbit.Value.Username);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderAcmeAccount, harness.Acme.Value.AcmeEmail);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderAcmeCertificatePassword, harness.Acme.Value.AcmeCertificatePassword);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey, harness.Acme.Value.CloudFlareApiKey);
+            var logged = string.Join('\n', harness.Logger.Messages);
+            Assert.DoesNotContain(NntpSharedConfigurationColumns.PlaceholderAcmeAccount, logged, StringComparison.Ordinal);
+            Assert.DoesNotContain(NntpSharedConfigurationColumns.PlaceholderAcmeCertificatePassword, logged, StringComparison.Ordinal);
+            Assert.DoesNotContain(NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey, logged, StringComparison.Ordinal);
+            Assert.DoesNotContain(NntpSharedConfigurationColumns.PlaceholderRabbitMqPassword, logged, StringComparison.Ordinal);
+            Assert.DoesNotContain(NntpSharedConfigurationColumns.PlaceholderRabbitMqUsername, logged, StringComparison.Ordinal);
+            Assert.DoesNotContain("from-env-pass", logged, StringComparison.Ordinal);
+            Assert.DoesNotContain("from-env-pfx", logged, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -412,15 +442,28 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 TimeSpan.FromSeconds(2),
                 NullLogger<NntpProviderRegistry>.Instance);
             var shared = new FixedSharedConfigurationSource();
+            var acme = Options.Create(new AcmeCloudflareOptions
+            {
+                AcmeEmail = "from-env@example.test",
+                AcmeCertificatePassword = "from-env-pfx",
+                CloudFlareApiKey = "from-env-key",
+            });
+            var rabbit = Options.Create(new RabbitMqOptions
+            {
+                Username = "from-env-user",
+                Password = "from-env-pass",
+                VirtualHost = "/articles",
+            });
             var service = new ProviderAccountConfigurationService(
                 source,
                 shared,
                 registry,
                 runtime,
                 Options.Create(new BackFillerOptions()),
-                Options.Create(new AcmeCloudflareOptions()),
-                logger);
-            return new ServiceHarness(service, catalog, registry, transport, logger, shared);
+                acme,
+                logger,
+                rabbit);
+            return new ServiceHarness(service, catalog, registry, transport, logger, shared, acme, rabbit);
         }
 
         private static async Task WaitUntilAsync(Func<bool> condition)
@@ -441,7 +484,9 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 NntpProviderRegistry registry,
                 ScriptedNntpTransportFactory transport,
                 CollectingLogger<ProviderAccountConfigurationService> logger,
-                FixedSharedConfigurationSource shared)
+                FixedSharedConfigurationSource shared,
+                IOptions<AcmeCloudflareOptions> acme,
+                IOptions<RabbitMqOptions> rabbit)
             {
                 Service = service;
                 Catalog = catalog;
@@ -449,6 +494,8 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 Transport = transport;
                 Logger = logger;
                 Shared = shared;
+                Acme = acme;
+                Rabbit = rabbit;
             }
 
             public ProviderAccountConfigurationService Service { get; }
@@ -462,6 +509,10 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
             public CollectingLogger<ProviderAccountConfigurationService> Logger { get; }
 
             public FixedSharedConfigurationSource Shared { get; }
+
+            public IOptions<AcmeCloudflareOptions> Acme { get; }
+
+            public IOptions<RabbitMqOptions> Rabbit { get; }
 
             public async ValueTask DisposeAsync()
             {

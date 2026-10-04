@@ -8,11 +8,12 @@ namespace VectorNNTP.Common.Configuration
     /// Shared bind, ACME, and Cloudflare settings owned by VectorNNTP.Common.
     /// </summary>
     /// <remarks>
-    /// Shared ACME/Cloudflare secrets overlay from the configuration root.
-    /// Bind addresses, ports, Cloudflare zone id, and DNS suffix are
-    /// application-section configuration (NNTPD: <c>Nntpd</c>; BackFiller:
-    /// <c>BackFiller</c>) and are not overlaid from the root. Environment
-    /// variables for shared secrets use <see cref="VectorEnvironment.Prefix"/>
+    /// NNTPD and BackFiller publish the ACME account, certificate password, and
+    /// Cloudflare API key from <c>nntpsharedconfig</c>. StorageServer still overlays
+    /// those secrets from the configuration root. Bind addresses, ports, Cloudflare
+    /// zone id, and DNS suffix are application-section configuration (NNTPD:
+    /// <c>Nntpd</c>; BackFiller: <c>BackFiller</c>) and are not overlaid from the root.
+    /// StorageServer environment variables for those secrets use <see cref="VectorEnvironment.Prefix"/>
     /// only (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
     /// <c>VECTOR__ACMEACCOUNT</c>).
     /// There is no application-specific prefix and no alias for those secrets.
@@ -107,8 +108,9 @@ namespace VectorNNTP.Common.Configuration
         /// Gets or sets the ACME account contact email.
         /// </summary>
         /// <remarks>
-        /// Populated from shared <see cref="AcmeAccountEnvironmentVariable"/> /
-        /// <see cref="AcmeAccountConfigurationKey"/>. Not application-section configuration.
+        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.acmeaccount</c>.
+        /// StorageServer still reads <see cref="AcmeAccountEnvironmentVariable"/>.
+        /// Not application-section configuration.
         /// </remarks>
         public string AcmeEmail { get; set; } = string.Empty;
 
@@ -119,11 +121,22 @@ namespace VectorNNTP.Common.Configuration
         [Range(1, 90)]
         public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
 
-        /// <summary>Gets or sets the PKCS#12 password. Secret. Never log.</summary>
+        /// <summary>
+        /// Gets or sets the PKCS#12 password. Secret. Never log.
+        /// </summary>
+        /// <remarks>
+        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.acmecertpass</c>.
+        /// StorageServer still reads <see cref="AcmeCertificatePasswordEnvironmentVariable"/>.
+        /// </remarks>
         public string AcmeCertificatePassword { get; set; } = string.Empty;
 
-        /// <summary>Gets or sets the Cloudflare API token/key. Secret. Never log.</summary>
-        [Required(AllowEmptyStrings = false)]
+        /// <summary>
+        /// Gets or sets the Cloudflare API token/key. Secret. Never log.
+        /// </summary>
+        /// <remarks>
+        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.cloudflareapikey</c>.
+        /// StorageServer still requires <see cref="CloudFlareApiKeyEnvironmentVariable"/>.
+        /// </remarks>
         public string CloudFlareApiKey { get; set; } = string.Empty;
 
         /// <summary>
@@ -172,26 +185,37 @@ namespace VectorNNTP.Common.Configuration
         }
 
         /// <summary>
-        /// Overwrites shared ACME/Cloudflare secrets and Cloudflare operation
+        /// Overwrites shared ACME/Cloudflare values and the Cloudflare operation
         /// timeout from the configuration root so application sections cannot
         /// alias those keys. Bind addresses, ports, zone id, and DNS suffix are
         /// left unchanged.
         /// </summary>
         /// <param name="options">The options instance to update.</param>
         /// <param name="configuration">The full configuration root.</param>
-        public static void OverlaySharedFromRoot(AcmeCloudflareOptions options, IConfiguration configuration)
+        /// <param name="includeSharedSecrets">
+        /// When <see langword="false"/>, the account email, certificate password, and API key are left unchanged.
+        /// NNTPD passes <see langword="false"/> because those values come from <c>nntpsharedconfig</c>.
+        /// StorageServer keeps the default <see langword="true"/>.
+        /// </param>
+        public static void OverlaySharedFromRoot(
+            AcmeCloudflareOptions options,
+            IConfiguration configuration,
+            bool includeSharedSecrets = true)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(configuration);
 
             options.AcmeDirectoryUrl = configuration[nameof(AcmeDirectoryUrl)] ?? DefaultAcmeDirectoryUrl;
-            OverlayAcmeAccountEmail(options, configuration);
             options.AcmeStateDir = configuration[nameof(AcmeStateDir)] ?? DefaultAcmeStateDir;
             options.AcmeRenewalThresholdDays = configuration.GetValue(
                 nameof(AcmeRenewalThresholdDays),
                 DefaultAcmeRenewalThresholdDays);
-            options.AcmeCertificatePassword = configuration[nameof(AcmeCertificatePassword)] ?? string.Empty;
-            options.CloudFlareApiKey = configuration[nameof(CloudFlareApiKey)] ?? string.Empty;
+            if (includeSharedSecrets)
+            {
+                OverlayAcmeAccountEmail(options, configuration);
+                options.AcmeCertificatePassword = configuration[nameof(AcmeCertificatePassword)] ?? string.Empty;
+                options.CloudFlareApiKey = configuration[nameof(CloudFlareApiKey)] ?? string.Empty;
+            }
 
             var timeout = configuration[nameof(CloudFlareOperationTimeout)];
             if (!string.IsNullOrWhiteSpace(timeout) && TimeSpan.TryParse(timeout, out var parsed))

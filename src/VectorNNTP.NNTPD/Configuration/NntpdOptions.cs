@@ -10,17 +10,14 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// <remarks>
 /// <para>
 /// NNTPD-specific settings bind from section <see cref="SectionName"/> and
-/// <c>NNTPD__*</c> environment variables. Bind addresses and ports, ACME
-/// directory URL, renewal threshold, and state directory are NNTPD-owned
-/// and bind from <c>Nntpd</c> only. Cloudflare zone id and DNS suffix also
-/// bind from <c>Nntpd</c> only. The ACME account email is shared Common
-/// configuration
-/// (<see cref="AcmeCloudflareOptions.AcmeAccountEnvironmentVariable"/>).
-/// <c>VECTOR__</c> secrets
-/// (<see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>,
-/// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>) overlay from the
-/// configuration root. RabbitMQ settings bind from the top-level
-/// <c>RabbitMQ</c> section.
+/// <c>NNTPD__*</c> environment variables. Bind addresses and ports and the
+/// ACME state directory bind from <c>Nntpd</c> only. ACME directory URL,
+/// renewal threshold, account email, certificate password, Cloudflare API key,
+/// zone id, and DNS suffix are published from <c>nntpsharedconfig</c>.
+/// RabbitMQ hosts and Management settings bind from the top-level
+/// <c>RabbitMQ</c> section. RabbitMQ username and password are published from
+/// <c>nntpsharedconfig</c> and are not read from <c>VECTOR__RABBITMQ__USERNAME</c>
+/// or <c>VECTOR__RABBITMQ__PASSWORD</c>.
 /// </para>
 /// <para>
 /// <see cref="Fqdn"/> is generated from <see cref="ServerId"/> and <see cref="AcmeCloudflareOptions.DnsSuffix"/> and cannot
@@ -28,6 +25,7 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// </para>
 /// <para>
 /// Never log complete <see cref="NntpdOptions"/> instances:
+/// <see cref="AcmeCloudflareOptions.AcmeEmail"/>,
 /// <see cref="AcmeCloudflareOptions.CloudFlareApiKey"/>, <see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>,
 /// <see cref="XTraceKey"/> / <see cref="XTracePreviousKey"/>, and
 /// <see cref="NewsmasterPassword"/> are secrets.

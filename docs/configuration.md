@@ -2,7 +2,7 @@
 
 Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `{entry assembly name}.json` (for this host, `VectorNNTP.NNTPD.json`), the optional environment overlay `{entry assembly name}.{environment}.json` (`VectorNNTP.NNTPD.Development.json`), the shared binary-directory file `RabbitMq.json` (the `RabbitMQ` section; not environment-specific), environment variables, and command-line arguments via the Generic Host. `RabbitMq.json` is loaded after the application JSON files. Environment variables and command-line arguments still override it. `appsettings.json` is not loaded.
 
-Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. The ACME account email is shared Common configuration (`VECTOR__ACMEACCOUNT` / `ACMEACCOUNT`) and is not application-section configuration. `VECTOR__` secrets (`VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`) overlay from the configuration root. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, ACME directory, DNS-suffix, and ServerId values under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; it does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses root `VECTOR__*` secrets for the Cloudflare API key, the ACME PKCS#12 password, and the ACME account email, plus `VECTOR__RABBITMQ__USERNAME` and the shared `ConnectionStrings__NntpDB` Generic Host mapping. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for those secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
+Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. NNTPD and BackFiller publish the ACME account email (`acmeaccount`), ACME certificate password (`acmecertpass`), Cloudflare API key (`cloudflareapikey`), and RabbitMQ username and password (`rabbitmqusername`, `rabbitmqpassword`) from the single `nntpsharedconfig` row. Those five values are not read from `VECTOR__ACMEACCOUNT`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__RABBITMQ__USERNAME`, or `VECTOR__RABBITMQ__PASSWORD`. StorageServer still supplies the same environment variables. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, DNS suffix, and ServerId under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; shared-configuration publication replaces the zone id and DNS suffix from `nntpsharedconfig`. It does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses the shared `ConnectionStrings__NntpDB` Generic Host mapping for the MySQL connection. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for StorageServer secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
 NNTPD-specific settings stay under section `Nntpd` and use `NNTPD__*` (`NNTPD__SERVERID`, `NNTPD__XTRACEKEY`, `NNTPD__XTRACEPREVIOUSKEY`, `NNTPD__NEWSMASTERUSER`, `NNTPD__NEWSMASTERPASSWORD`). BackFiller application settings stay under section `BackFiller`. StorageServer application settings stay under section `StorageServer` (`StorageServer:ServerId`, `StorageServer:BindAddress`, `StorageServer:BindPort`, `StorageServer:BindPortTls`, `StorageServer:DnsSuffix`, `StorageServer:CloudFlareZoneId`, `StorageServer:LogDir`, `StorageServer:Storage:CacheDir`, `StorageServer:Storage:ControlDir`). StorageServer is TLS-only VATP (`BindPortTls` required `1–65535`); `BindPort` defaults to `0` and is not listened on. `ServerId` binds from each application's section only (required integer `1–255` via shared `ServerIdRules`; no default). There is no `BackFiller:Name` / `StorageServer:Name`. The canonical BackFiller FQDN is `backfiller{ServerId:00}.{DnsSuffix}`; StorageServer is `cache{ServerId:00}.{DnsSuffix}`; prefixes are fixed application identity, not configuration. `BackFiller:BackFillerAccountRefreshIntervalSeconds` (default 60, range 5–3600) is how often BackFiller polls MySQL for provider/account rows. It is not the per-account NNTP DATE keepalive; that value is the MySQL `nntpbackfilleraccounts.keepalive` column. There is no `BackFiller:Accounts` section and no dedicated environment-variable mapping for the refresh interval.
 
@@ -22,12 +22,12 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `Nntpd:BindPortTls` | int | `0` | no | TLS NNTP TCP port; `0` / unset disables TLS (`1–65535` enables). When enabled, ACME is required. Root-level `BindPortTls` is not consumed. |
 | `AllowCleartextAuth` | bool | `true` | no | Permit `AUTHINFO USER/PASS` and AUTHINFO SASL when the connection is not TLS-protected (see below) |
 | `AcmeDirectoryUrl` | string | Let's Encrypt **staging** directory | no | Absolute HTTPS ACME directory URL (authoritative; never silently switched to production) |
-| `ACMEACCOUNT` / `VECTOR__ACMEACCOUNT` | string | _(none)_ | **yes when TLS enabled** | Shared ACME account contact email used by every Common ACME client. Not `Nntpd:AcmeEmail` or `BackFiller:AcmeEmail`. Ignored when `BindPortTls` is `0`. |
+| `nntpsharedconfig.acmeaccount` | string | _(none)_ | **yes** | ACME account contact email for NNTPD and BackFiller. Maximum 45 characters. Not `VECTOR__ACMEACCOUNT`, `Nntpd:AcmeEmail`, or `BackFiller:AcmeEmail`. |
 | `AcmeStateDir` | string | `certs/` | no | Filesystem directory for ACME account + certificate DER state. Relative paths resolve with Common `ResolveAcmeStateDir` (delegates to `ApplicationLocalPath.ResolveApplicationLocalPath`) against `AppContext.BaseDirectory` (the binary directory), not the process working directory, source tree, or IDE content root. |
 | `LogDir` | string | `logs/` | no | Filesystem directory for Serilog daily rolling application logs, the dedicated Serilog `news` file, and the dedicated Serilog Path-survey (`inpaths`) file. Relative paths resolve with Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Application File `path`, `Serilog:News:path`, and `Serilog:Inpaths:path` in `{entry assembly name}.json` are placeholders; startup overwrites them from this setting. The INN news line format and the Path-survey `Path: ` line format are not configurable. |
 | `AcmeRenewalThresholdDays` | int | `30` | no | Renew when `NotAfter - threshold` is reached (`1–90`) |
-| `AcmeCertificatePassword` | string | _(none)_ | **yes when TLS enabled** (secret) | Password protecting the TLS server PKCS#12/PFX |
-| `CloudFlareApiKey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for DNS integration |
+| `nntpsharedconfig.acmecertpass` | string | _(none)_ | **yes** (secret) | Password protecting the TLS server PKCS#12/PFX for NNTPD and BackFiller. Maximum 32 characters. Not `VECTOR__ACMECERTIFICATEPASSWORD`. |
+| `nntpsharedconfig.cloudflareapikey` | string | _(none)_ | **yes** (secret) | Cloudflare API key for NNTPD and BackFiller DNS integration. Maximum 45 characters. Not `VECTOR__CLOUDFLAREAPIKEY`. |
 | `Nntpd:CloudFlareZoneId` | string | _(none)_ | **yes** | Cloudflare zone identifier. Root-level `CloudFlareZoneId` is not consumed. |
 | `CloudFlareOperationTimeout` | duration | `00:02:00` | no | Wall-clock budget for one reconcile or cleanup operation (shared by HTTP 429 retries and reconciler attempt backoffs) |
 | `Nntpd:DnsSuffix` | string | `usenet.ninja` | no | DNS suffix used to generate the FQDN. Root-level `DnsSuffix` is not consumed. |
@@ -473,9 +473,9 @@ Do not commit credentials. Redis options have no password field; the unauthentic
 
 ## RabbitMQ
 
-Top-level `RabbitMQ` section (not nested under `Nntpd`, `BackFiller`, or `StorageServer`). Production deployments load it from the shared binary-directory file `RabbitMq.json` (`src/VectorNNTP.Common/RabbitMq.json`), not from `{entry assembly name}.json`. Options types and connection validation live in `VectorNNTP.Common.Messaging.RabbitMq`. Applications bind the section themselves and call `AddRabbitMqInfrastructure()`. Nested `Management` is validated only when `BaseUrl` is set; the shared file includes it. NNTPD requires `Management:BaseUrl` and broker credentials for ArticleWork availability discovery (`NntpdRabbitMqOptionsValidator`).
+Top-level `RabbitMQ` section (not nested under `Nntpd`, `BackFiller`, or `StorageServer`). Production deployments load it from the shared binary-directory file `RabbitMq.json` (`src/VectorNNTP.Common/RabbitMq.json`), not from `{entry assembly name}.json`. Options types and connection validation live in `VectorNNTP.Common.Messaging.RabbitMq`. Applications bind the section themselves and call `AddRabbitMqInfrastructure()`. Nested `Management` is validated only when `BaseUrl` is set; the shared file includes it. NNTPD requires `Management:BaseUrl` for ArticleWork availability discovery (`NntpdRabbitMqOptionsValidator`). NNTPD and BackFiller take `Username` and `Password` from `nntpsharedconfig` and discard values bound from `RabbitMq.json` or `VECTOR__RABBITMQ__USERNAME` / `VECTOR__RABBITMQ__PASSWORD`. StorageServer still binds those credentials from configuration.
 
-For NNTPD, RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`. After start, connectivity loss is recovered indefinitely; NNTPD does not expose a consecutive-failure abandon threshold. BackFiller and StorageServer use the same Common connectivity service. BackFiller registers `RabbitMqService` as an early `IHostedService` (before accounts) via a thin hosted adapter and does **not** place it in BackFiller `ApplicationServiceManager` (Cloudflare → ACME → Cache Listener). StorageServer uses start order Cloudflare → RabbitMQ → ACME → listener → StorageServerAdvertisementPublisher → StorageArticleLookupConsumer. It declares/publishes capacity advertisements and a transient Draining lifecycle announcement to `cache.broadcast` but does not own `cache.requests` consumers or Management HTTP. BackFiller connection settings bind only from the top-level `RabbitMQ` section / `VECTOR__RABBITMQ__*`; there is no nested `BackFiller:RabbitMQ` connectivity section.
+For NNTPD, RabbitMQ is a required application dependency: missing hosts, invalid settings, or an unsuccessful startup connect fail the host before `Running`. After start, connectivity loss is recovered indefinitely; NNTPD does not expose a consecutive-failure abandon threshold. BackFiller and StorageServer use the same Common connectivity service. BackFiller registers `RabbitMqService` as an early `IHostedService` (before accounts) via a thin hosted adapter and does **not** place it in BackFiller `ApplicationServiceManager` (Cloudflare → ACME → Cache Listener). StorageServer uses start order Cloudflare → RabbitMQ → ACME → listener → StorageServerAdvertisementPublisher → StorageArticleLookupConsumer. It declares/publishes capacity advertisements and a transient Draining lifecycle announcement to `cache.broadcast` but does not own `cache.requests` consumers or Management HTTP. BackFiller connection settings other than username and password bind only from the top-level `RabbitMQ` section; there is no nested `BackFiller:RabbitMQ` connectivity section. Username and password come from `nntpsharedconfig`.
 
 `RabbitMqService` (Common) is the dedicated application service that owns the broker connection lifecycle. It establishes one process-wide connection, verifies that the connection is open, and replaces it on connectivity loss while incrementing a monotonic connection generation. Client automatic recovery is disabled. The AMQP client-provided name comes from `IRabbitMqConnectionNameProvider`. After a successful start, reconnect continues indefinitely until the connection is restored or the host shuts down. Callers obtain the current connection with `TryGetCurrent`; they do not own or dispose it.
 
@@ -489,8 +489,8 @@ Each article ingestion worker encodes one Common `OverviewArticleV1` protobuf pe
 |-----|------|---------|-----------|-------------|
 | `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query) |
 | `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
-| `Username` | string | _(none)_ | **yes** (for Management) | Broker / Management Basic-auth username. Required with `Password` for Management API availability discovery. Supply via `VECTOR__RABBITMQ__USERNAME` |
-| `Password` | string | _(none)_ | **yes** (secret; for Management) | Broker / Management Basic-auth password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
+| `Username` | string | _(none)_ | **yes** for NNTPD and BackFiller, from `nntpsharedconfig.rabbitmqusername` | Broker / Management Basic-auth username. Maximum 45 characters. NNTPD and BackFiller do not read `VECTOR__RABBITMQ__USERNAME`. StorageServer still binds that variable. Never log |
+| `Password` | string | _(none)_ | **yes** (secret) for NNTPD and BackFiller, from `nntpsharedconfig.rabbitmqpassword` | Broker / Management Basic-auth password. Maximum 45 characters. NNTPD and BackFiller do not read `VECTOR__RABBITMQ__PASSWORD`. StorageServer still binds that variable. Never commit or log |
 | `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
 | `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS |
 | `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
@@ -536,7 +536,7 @@ Example (no secrets):
 }
 ```
 
-Do not commit credentials. Supply `RabbitMQ:Username` / `RabbitMQ:Password` via `VECTOR__RABBITMQ__USERNAME` and `VECTOR__RABBITMQ__PASSWORD`, or user secrets.
+Do not commit credentials. NNTPD and BackFiller read `RabbitMQ` username and password from `nntpsharedconfig`. StorageServer still supplies `VECTOR__RABBITMQ__USERNAME` and `VECTOR__RABBITMQ__PASSWORD`.
 
 ## BackFiller logging (`BackFiller:Logging`)
 
@@ -916,8 +916,8 @@ Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 | `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
 | `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
 | `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |
-| `Username` | string | _(none)_ | **yes** (for Management) | Broker / Management Basic-auth username. Required with `Password` for Management API availability discovery. Supply via `VECTOR__RABBITMQ__USERNAME` |
-| `Password` | string | _(none)_ | **yes** (secret; for Management) | Broker / Management Basic-auth password. Supply via `VECTOR__RABBITMQ__PASSWORD` or secrets. Never commit or log |
+| `Username` | string | `""` | no | Optional peer AUTHINFO username. Both username and password must be set or both blank |
+| `Password` | string | `""` | no | Optional peer AUTHINFO password. Never log. Authentication requires a matching non-empty username |
 | `Ssl` | string | `""` | no | Blank = no TLS; `TLS` = native TLS; `STARTTLS` = upgrade. Case-insensitive; invalid values fail validation. |
 | `Patterns` | string | `*` | no | One newsfeeds(5) / `uwildmat_poison` subscription expression (comma-separated string, not a JSON array, regex, or .NET glob). |
 | `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE in-flight duplicate handling (`431`/`436` vs `438`/`435`). CHECK HistoryDB itself is implemented separately. |
@@ -1071,16 +1071,16 @@ TLS is controlled exclusively by `BindPortTls`:
 
 ### ACME settings
 
-NNTPD-owned ACME directory URL, renewal threshold, and state directory bind from the `Nntpd` section. Root-level copies of those keys are not applied. The ACME account email is the shared `VECTOR__ACMEACCOUNT` environment variable; the PKCS#12 password remains the shared `VECTOR__ACMECERTIFICATEPASSWORD` environment variable. There is no NNTPD-specific email or password variable.
+NNTPD-owned ACME state directory binds from the `Nntpd` section. The ACME directory URL, renewal threshold, account email, and PKCS#12 password are published from `nntpsharedconfig` (`acmedirectoryurl`, `acmerenewalthresholddays`, `acmeaccount`, `acmecertpass`). NNTPD does not read `VECTOR__ACMEACCOUNT` or `VECTOR__ACMECERTIFICATEPASSWORD`. There is no NNTPD-specific email or password variable.
 
 | Setting | Default | Notes |
 |---------|---------|-------|
 | `AcmeDirectoryUrl` | `https://acme-staging-v02.api.letsencrypt.org/directory` | **Staging** by default. Production requires an explicit override such as `https://acme-v02.api.letsencrypt.org/directory`. |
-| `VECTOR__ACMEACCOUNT` | _(none)_ | Required only when TLS is enabled. Shared Common ACME account contact email. Must be a plausible contact email. |
+| `nntpsharedconfig.acmeaccount` | _(none)_ | Required. Plausible contact email, maximum 45 characters. Not `VECTOR__ACMEACCOUNT`. |
 | `AcmeStateDir` | `certs/` | Persistent ACME state root (relative or absolute path). NNTPD binds this from `Nntpd:AcmeStateDir`. Relative paths resolve against `AppContext.BaseDirectory`. Both applications may point at the same physical directory. |
 | `LogDir` | `logs/` | Serilog daily file-log root, dedicated Serilog `news` file directory, and dedicated Serilog Path-survey (`inpaths`) file directory (relative or absolute path). Created at logging startup if missing. |
 | `AcmeRenewalThresholdDays` | `30` | Certificate is due for renewal when `now >= NotAfter - threshold`. |
-| `AcmeCertificatePassword` | _(none)_ | Required only when TLS is enabled. Protects `certificate.pfx`. |
+| `nntpsharedconfig.acmecertpass` | _(none)_ | Required. Protects `certificate.pfx`. Maximum 32 characters. Not `VECTOR__ACMECERTIFICATEPASSWORD`. |
 
 Do **not** commit real emails, PFX passwords, production directory URLs tied to live accounts, or machine-specific absolute paths into tracked `{entry assembly name}.json`.
 
@@ -1096,10 +1096,7 @@ Example (TLS enabled against staging — values are illustrative; supply secrets
 }
 ```
 
-```text
-VECTOR__ACMEACCOUNT=ops@example.org
-VECTOR__ACMECERTIFICATEPASSWORD=<secret>
-```
+NNTPD and BackFiller do not accept `VECTOR__ACMEACCOUNT` or `VECTOR__ACMECERTIFICATEPASSWORD`. Store `acmeaccount` and `acmecertpass` in `nntpsharedconfig`. StorageServer still uses those environment variables.
 
 Production directory (explicit only, under `Nntpd`):
 
@@ -1162,13 +1159,13 @@ Background renewal checks run every 6 hours while the service is running (startu
 
 ## Cloudflare
 
-Cloudflare DNS integration is **mandatory** for this host. Startup fails when either credential is missing, null, empty, or whitespace:
+Cloudflare DNS integration is **mandatory** for this host. NNTPD and BackFiller load the API key, zone id, and DNS suffix from `nntpsharedconfig`. Startup fails when the shared row is missing or those columns are invalid:
 
-- `CloudFlareApiKey` — secret API token (**required**); sent as `Authorization: Bearer`
-- `CloudFlareZoneId` — zone id for the DNS zone (**required**)
-- `DnsSuffix` — DNS suffix expected for that zone (default `usenet.ninja`; syntax-validated locally)
+- `cloudflareapikey` — secret API token (**required**, maximum 45 characters); sent as `Authorization: Bearer`. Not `VECTOR__CLOUDFLAREAPIKEY`
+- `cloudflarezoneid` — zone id for the DNS zone (**required**)
+- `dnssuffix` — DNS suffix expected for that zone (syntax-validated)
 
-There is **no** silent disable path and **no** skip of DNS integration for missing credentials. Validation runs at host startup (`ValidateOnStart` + `NntpdOptionsValidator`) before the application enters `Running`. Configuration validation does **not** call the Cloudflare API.
+There is **no** silent disable path and **no** skip of DNS integration for a missing shared row. The shared-configuration load runs after NntpDB is open and before Cloudflare starts. Options validation does **not** require the API key and does **not** call the Cloudflare API.
 
 **Never commit API keys.** Do not put `CloudFlareApiKey` in `{entry assembly name}.json`, samples, docs, tracked files, logs, exception messages, or options dumps. Validation and API failure messages name the operation and HTTP/Cloudflare error details; they never include the secret value. Authenticated request headers are not logged. There is no restrictive API-token format validator.
 
@@ -1247,30 +1244,20 @@ NNTP listeners bind configured `BindAddress` entries on `BindPort` (plain) and, 
 
 ### Environment variables
 
-Use these exact names:
+NNTPD uses:
 
 ```text
-VECTOR__CLOUDFLAREAPIKEY
-VECTOR__CLOUDFLAREZONEID
-VECTOR__ACMECERTIFICATEPASSWORD
-VECTOR__ACMEACCOUNT
-VECTOR__RABBITMQ__USERNAME
-VECTOR__RABBITMQ__PASSWORD
 NNTPD__SERVERID
 ```
 
+NNTPD and BackFiller do not consume `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__ACMEACCOUNT`, `VECTOR__RABBITMQ__USERNAME`, or `VECTOR__RABBITMQ__PASSWORD`. Those five values are columns of `nntpsharedconfig`. StorageServer still uses those environment variable names. `VECTOR__CLOUDFLAREZONEID` is not an NNTPD or BackFiller source; the zone id is `nntpsharedconfig.cloudflarezoneid`.
+
 Names are uppercase on Windows and Linux. Values are case-sensitive and must be passed unchanged.
 
-Example (user scope, PowerShell — replace secret values locally; do not commit them):
+Example (user scope, PowerShell):
 
 ```powershell
-[Environment]::SetEnvironmentVariable("VECTOR__CLOUDFLAREAPIKEY", "<YOUR_API_KEY>", "User")
-[Environment]::SetEnvironmentVariable("VECTOR__CLOUDFLAREZONEID", "5811a29d39a0732afb5f160c9b137c3d", "User")
 [Environment]::SetEnvironmentVariable("NNTPD__SERVERID", "1", "User")
-[Environment]::SetEnvironmentVariable("VECTOR__ACMECERTIFICATEPASSWORD", "<YOUR_PFX_PASSWORD>", "User")
-[Environment]::SetEnvironmentVariable("VECTOR__ACMEACCOUNT", "ops@example.org", "User")
-[Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__USERNAME", "<YOUR_RABBITMQ_USERNAME>", "User")
-[Environment]::SetEnvironmentVariable("VECTOR__RABBITMQ__PASSWORD", "<YOUR_RABBITMQ_PASSWORD>", "User")
 ```
 
 `DnsSuffix` should correspond to the zone identified by `CloudFlareZoneId`. The host validates DNS suffix **syntax** only; it does not verify zone membership via the Cloudflare API.

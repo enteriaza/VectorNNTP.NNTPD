@@ -6,6 +6,7 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.BackFiller.Tests.Configuration
@@ -57,8 +58,10 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
             var acme = new AcmeCloudflareOptions();
             BackFillerAcmeCloudflareOptionsAdapter.Apply(acme, identity, configuration);
 
-            Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
-            Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.CloudFlareApiKey);
+            Assert.Equal(string.Empty, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.AcmeEmail);
+            Assert.NotEqual(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
             Assert.Equal("0123456789abcdef0123456789abcdef", acme.CloudFlareZoneId);
             Assert.Equal(1190, acme.BindPortTls);
             Assert.NotEqual(119, acme.BindPortTls);
@@ -84,8 +87,12 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
             var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
             Assert.False(acme.IncludeNewsHostnameInCertificate);
             Assert.Equal(1190, acme.BindPortTls);
-            Assert.Equal(BackFillerTestOptions.SecretToken, acme.CloudFlareApiKey);
-            Assert.Equal(BackFillerTestOptions.SecretPfx, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.CloudFlareApiKey);
+            Assert.Equal(string.Empty, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.AcmeEmail);
+            var rabbit = host.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+            Assert.Null(rabbit.Username);
+            Assert.Null(rabbit.Password);
             Assert.Equal("backfiller01.usenet.ninja", acme.Fqdn);
             Assert.Equal(
                 ["backfiller01.usenet.ninja"],

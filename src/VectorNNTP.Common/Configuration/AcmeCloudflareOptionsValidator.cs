@@ -20,6 +20,12 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         private readonly bool _validateSharedDatabaseFields;
 
+        /// <summary>
+        /// When <see langword="false"/>, the Cloudflare API key, ACME account email, and certificate password are not checked here.
+        /// NNTPD and BackFiller validate those columns from <c>nntpsharedconfig</c>.
+        /// </summary>
+        private readonly bool _validateSharedCredentials;
+
         /// <summary>Initializes a new validator that checks shared ACME and DNS fields.</summary>
         /// <param name="localIpAddressAssignee">Reports whether an explicit bind address is assigned to a local interface.</param>
         public AcmeCloudflareOptionsValidator(ILocalIpAddressAssignee localIpAddressAssignee)
@@ -32,13 +38,19 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="validateSharedDatabaseFields">
         /// <see langword="false"/> for NNTPD and BackFiller, which load directory URL, renewal days, zone id, and DNS suffix from <c>nntpsharedconfig</c>.
         /// </param>
+        /// <param name="validateSharedCredentials">
+        /// <see langword="false"/> for NNTPD and BackFiller, which load the API key, ACME account, and certificate password from <c>nntpsharedconfig</c>.
+        /// StorageServer keeps the default <see langword="true"/>.
+        /// </param>
         internal AcmeCloudflareOptionsValidator(
             ILocalIpAddressAssignee localIpAddressAssignee,
-            bool validateSharedDatabaseFields)
+            bool validateSharedDatabaseFields,
+            bool validateSharedCredentials = true)
         {
             ArgumentNullException.ThrowIfNull(localIpAddressAssignee);
             _localIpAddressAssignee = localIpAddressAssignee;
             _validateSharedDatabaseFields = validateSharedDatabaseFields;
+            _validateSharedCredentials = validateSharedCredentials;
         }
 
         /// <summary>
@@ -56,7 +68,8 @@ namespace VectorNNTP.Common.Configuration
                 _localIpAddressAssignee,
                 failures,
                 validateCertificateZoneCoverage: _validateSharedDatabaseFields,
-                validateSharedDatabaseFields: _validateSharedDatabaseFields);
+                validateSharedDatabaseFields: _validateSharedDatabaseFields,
+                validateSharedCredentials: _validateSharedCredentials);
             return failures.Count > 0
                 ? ValidateOptionsResult.Fail(failures)
                 : ValidateOptionsResult.Success;
@@ -74,12 +87,16 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="validateSharedDatabaseFields">
         /// When <see langword="false"/>, ACME directory, renewal days, zone id, and DNS suffix are left to <c>nntpsharedconfig</c>.
         /// </param>
+        /// <param name="validateSharedCredentials">
+        /// When <see langword="false"/>, the API key, ACME account email, and certificate password are left to <c>nntpsharedconfig</c>.
+        /// </param>
         private static void CollectFailures(
             AcmeCloudflareOptions options,
             ILocalIpAddressAssignee localIpAddressAssignee,
             List<string> failures,
             bool validateCertificateZoneCoverage,
-            bool validateSharedDatabaseFields = true)
+            bool validateSharedDatabaseFields = true,
+            bool validateSharedCredentials = true)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(localIpAddressAssignee);
@@ -88,13 +105,18 @@ namespace VectorNNTP.Common.Configuration
             ValidateCloudFlareTimeout(options, failures);
             CollectBindAddressFailures(options, localIpAddressAssignee, failures);
             ValidatePorts(options, failures);
-            ValidateCloudFlare(options, failures, validateSharedDatabaseFields);
+            ValidateCloudFlare(options, failures, validateSharedDatabaseFields, validateSharedCredentials);
             if (validateSharedDatabaseFields)
             {
                 ValidateDnsSuffix(options, failures);
             }
 
-            ValidateAcme(options, failures, validateCertificateZoneCoverage, validateSharedDatabaseFields);
+            ValidateAcme(
+                options,
+                failures,
+                validateCertificateZoneCoverage,
+                validateSharedDatabaseFields,
+                validateSharedCredentials);
         }
 
         /// <summary>Normalizes empty bind lists to a single wildcard and trims entries.</summary>
@@ -216,15 +238,20 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="validateSharedDatabaseFields">
         /// When <see langword="false"/>, the directory URL and renewal threshold are not checked.
         /// </param>
+        /// <param name="validateSharedCredentials">
+        /// When <see langword="false"/>, the account email and certificate password are not checked.
+        /// </param>
         /// <remarks>
-        /// Email and certificate password are not required when <see cref="AcmeCloudflareOptions.BindPortTls"/> is 0.
+        /// Email and certificate password are not required when <see cref="AcmeCloudflareOptions.BindPortTls"/> is 0,
+        /// or when <paramref name="validateSharedCredentials"/> is <see langword="false"/>.
         /// Zone-coverage failures are copied from the thrown configuration or argument message.
         /// </remarks>
         private static void ValidateAcme(
             AcmeCloudflareOptions options,
             List<string> failures,
             bool validateCertificateZoneCoverage,
-            bool validateSharedDatabaseFields = true)
+            bool validateSharedDatabaseFields = true,
+            bool validateSharedCredentials = true)
         {
             if (validateSharedDatabaseFields)
             {
@@ -256,18 +283,21 @@ namespace VectorNNTP.Common.Configuration
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(options.AcmeEmail) || !IsPlausibleEmail(options.AcmeEmail))
+            if (validateSharedCredentials)
             {
-                failures.Add(
-                    $"{nameof(AcmeCloudflareOptions.AcmeEmail)} is required when {nameof(AcmeCloudflareOptions.BindPortTls)} > 0 " +
-                    $"and must be a valid contact email address (use environment variable {AcmeCloudflareOptions.AcmeAccountEnvironmentVariable}).");
-            }
+                if (string.IsNullOrWhiteSpace(options.AcmeEmail) || !IsPlausibleEmail(options.AcmeEmail))
+                {
+                    failures.Add(
+                        $"{nameof(AcmeCloudflareOptions.AcmeEmail)} is required when {nameof(AcmeCloudflareOptions.BindPortTls)} > 0 " +
+                        $"and must be a valid contact email address (use environment variable {AcmeCloudflareOptions.AcmeAccountEnvironmentVariable}).");
+                }
 
-            if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))
-            {
-                failures.Add(
-                    $"{AcmeCloudflareOptions.AcmeCertificatePasswordConfigurationKey} is required when {nameof(AcmeCloudflareOptions.BindPortTls)} > 0 " +
-                    $"(use environment variable {AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable} or secrets; never commit the value).");
+                if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))
+                {
+                    failures.Add(
+                        $"{AcmeCloudflareOptions.AcmeCertificatePasswordConfigurationKey} is required when {nameof(AcmeCloudflareOptions.BindPortTls)} > 0 " +
+                        $"(use environment variable {AcmeCloudflareOptions.AcmeCertificatePasswordEnvironmentVariable} or secrets; never commit the value).");
+                }
             }
 
             if (!validateCertificateZoneCoverage || string.IsNullOrWhiteSpace(options.Fqdn) || string.IsNullOrWhiteSpace(options.DnsSuffix))
@@ -296,12 +326,14 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="options">Options instance to validate.</param>
         /// <param name="failures">Receives one message per missing Cloudflare setting.</param>
         /// <param name="validateSharedDatabaseFields">When <see langword="false"/>, the zone id is not checked.</param>
+        /// <param name="validateSharedCredentials">When <see langword="false"/>, the API key is not checked.</param>
         private static void ValidateCloudFlare(
             AcmeCloudflareOptions options,
             List<string> failures,
-            bool validateSharedDatabaseFields)
+            bool validateSharedDatabaseFields,
+            bool validateSharedCredentials)
         {
-            if (string.IsNullOrWhiteSpace(options.CloudFlareApiKey))
+            if (validateSharedCredentials && string.IsNullOrWhiteSpace(options.CloudFlareApiKey))
             {
                 failures.Add(
                     $"{AcmeCloudflareOptions.CloudFlareApiKeyConfigurationKey} must be configured (use environment variable {AcmeCloudflareOptions.CloudFlareApiKeyEnvironmentVariable}).");
@@ -339,7 +371,7 @@ namespace VectorNNTP.Common.Configuration
         /// </summary>
         /// <param name="email">Contact address. Leading and trailing whitespace is ignored.</param>
         /// <returns><see langword="false"/> for blank, too long, or structurally invalid addresses. Delivery is not checked.</returns>
-        private static bool IsPlausibleEmail(string email)
+        internal static bool IsPlausibleEmail(string email)
         {
             var trimmed = email.Trim();
             if (trimmed.Length is 0 or > 254)

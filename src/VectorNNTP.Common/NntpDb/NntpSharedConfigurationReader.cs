@@ -16,7 +16,7 @@ namespace VectorNNTP.Common.NntpDb
         /// Selects at most two rows so a second row is visible. A singleton table is still invalid when empty or duplicated.
         /// </summary>
         internal const string SelectSql =
-            "SELECT maxartsize, sitename, prometheusurl, acmedirectoryurl, acmerenewalthresholddays, cloudflarezoneid, dnssuffix FROM nntpsharedconfig LIMIT 2";
+            "SELECT maxartsize, sitename, prometheusurl, acmedirectoryurl, acmerenewalthresholddays, cloudflarezoneid, dnssuffix, acmeaccount, acmecertpass, cloudflareapikey, rabbitmqpassword, rabbitmqusername FROM nntpsharedconfig LIMIT 2";
 
         /// <summary>Reads <c>nntpsharedconfig</c> from <paramref name="session"/> and validates the row.</summary>
         /// <param name="session">Open logical session.</param>
@@ -46,6 +46,11 @@ namespace VectorNNTP.Common.NntpDb
                 var acmeRenewalThresholdDays = reader.IsDBNull(4) ? 0L : Convert.ToInt64(reader.GetValue(4));
                 var cloudFlareZoneId = reader.IsDBNull(5) ? null : reader.GetString(5);
                 var dnsSuffix = reader.IsDBNull(6) ? null : reader.GetString(6);
+                var acmeAccount = reader.IsDBNull(7) ? null : reader.GetString(7);
+                var acmeCertificatePassword = reader.IsDBNull(8) ? null : reader.GetString(8);
+                var cloudFlareApiKey = reader.IsDBNull(9) ? null : reader.GetString(9);
+                var rabbitMqPassword = reader.IsDBNull(10) ? null : reader.GetString(10);
+                var rabbitMqUsername = reader.IsDBNull(11) ? null : reader.GetString(11);
                 rows.Add(new NntpSharedConfigurationCandidate(
                     maxArticleBytes,
                     siteName,
@@ -53,7 +58,12 @@ namespace VectorNNTP.Common.NntpDb
                     acmeDirectoryUrl,
                     acmeRenewalThresholdDays,
                     cloudFlareZoneId,
-                    dnsSuffix));
+                    dnsSuffix,
+                    acmeAccount,
+                    acmeCertificatePassword,
+                    cloudFlareApiKey,
+                    rabbitMqPassword,
+                    rabbitMqUsername));
                 if (rows.Count > 1)
                 {
                     break;
@@ -126,6 +136,33 @@ namespace VectorNNTP.Common.NntpDb
                 throw new InvalidOperationException("nntpsharedconfig.dnssuffix is not a syntactically valid DNS name.");
             }
 
+            var acmeAccount = RequireTrimmedCredential(
+                row.AcmeAccount,
+                "acmeaccount",
+                NntpSharedConfigurationColumns.AcmeAccountMaximumLength);
+            if (!AcmeCloudflareOptionsValidator.IsPlausibleEmail(acmeAccount))
+            {
+                throw new InvalidOperationException(
+                    "nntpsharedconfig.acmeaccount must be a valid contact email address.");
+            }
+
+            var acmeCertificatePassword = RequireOpaqueCredential(
+                row.AcmeCertificatePassword,
+                "acmecertpass",
+                NntpSharedConfigurationColumns.AcmeCertificatePasswordMaximumLength);
+            var cloudFlareApiKey = RequireOpaqueCredential(
+                row.CloudFlareApiKey,
+                "cloudflareapikey",
+                NntpSharedConfigurationColumns.CloudFlareApiKeyMaximumLength);
+            var rabbitMqPassword = RequireOpaqueCredential(
+                row.RabbitMqPassword,
+                "rabbitmqpassword",
+                NntpSharedConfigurationColumns.RabbitMqPasswordMaximumLength);
+            var rabbitMqUsername = RequireTrimmedCredential(
+                row.RabbitMqUsername,
+                "rabbitmqusername",
+                NntpSharedConfigurationColumns.RabbitMqUsernameMaximumLength);
+
             return new NntpSharedConfiguration(
                 (int)row.MaxArticleBytes,
                 row.SiteName!,
@@ -133,7 +170,53 @@ namespace VectorNNTP.Common.NntpDb
                 row.AcmeDirectoryUrl.Trim(),
                 (int)row.AcmeRenewalThresholdDays,
                 row.CloudFlareZoneId.Trim(),
-                dnsSuffix);
+                dnsSuffix,
+                acmeAccount,
+                acmeCertificatePassword,
+                cloudFlareApiKey,
+                rabbitMqPassword,
+                rabbitMqUsername);
+        }
+
+        /// <summary>Rejects a blank credential and stores it without trimming.</summary>
+        /// <param name="value">Column value. Null and white space are rejected.</param>
+        /// <param name="column">Unqualified column name used in the exception. The value is never included.</param>
+        /// <param name="maximumLength">Schema maximum length, inclusive.</param>
+        /// <returns>The original value.</returns>
+        private static string RequireOpaqueCredential(string? value, string column, int maximumLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException($"nntpsharedconfig.{column} is required and cannot be empty.");
+            }
+
+            if (value.Length > maximumLength)
+            {
+                throw new InvalidOperationException($"nntpsharedconfig.{column} exceeds {maximumLength} characters.");
+            }
+
+            return value;
+        }
+
+        /// <summary>Rejects a blank credential and stores the trimmed value.</summary>
+        /// <param name="value">Column value. Null and white space are rejected.</param>
+        /// <param name="column">Unqualified column name used in the exception. The value is never included.</param>
+        /// <param name="maximumLength">Schema maximum length of the trimmed value, inclusive.</param>
+        /// <returns>The trimmed value.</returns>
+        private static string RequireTrimmedCredential(string? value, string column, int maximumLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException($"nntpsharedconfig.{column} is required and cannot be empty.");
+            }
+
+            var trimmed = value.Trim();
+            if (trimmed.Length > maximumLength)
+            {
+                throw new InvalidOperationException($"nntpsharedconfig.{column} exceeds {maximumLength} characters.");
+            }
+
+            return trimmed;
         }
     }
 }

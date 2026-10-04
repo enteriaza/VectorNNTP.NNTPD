@@ -89,9 +89,13 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                     process.StartInfo.ArgumentList.Add(argument);
                 }
 
+                process.StartInfo.ArgumentList.Add("--BackFiller:BindPortTls=0");
                 process.StartInfo.Environment["VECTOR__SERVERID"] = "";
-                process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "";
-                process.StartInfo.Environment["VECTOR__ACMECERTIFICATEPASSWORD"] = "";
+                process.StartInfo.Environment["VECTOR__CLOUDFLAREAPIKEY"] = "env-key-must-not-be-required";
+                process.StartInfo.Environment["VECTOR__ACMECERTIFICATEPASSWORD"] = "env-pfx-must-not-be-required";
+                process.StartInfo.Environment["VECTOR__ACMEACCOUNT"] = "env-account-must-not-be-required@example.test";
+                process.StartInfo.Environment["VECTOR__RABBITMQ__USERNAME"] = "env-user-must-not-be-required";
+                process.StartInfo.Environment["VECTOR__RABBITMQ__PASSWORD"] = "env-pass-must-not-be-required";
 
                 var applicationPath = arguments.Length > 0 ? arguments[0] : fileName;
                 var logBefore = SnapshotLogs(applicationPath);
@@ -111,10 +115,13 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
 
                 var output = string.Concat(await stdout, await stderr, ReadNewLogs(applicationPath, logBefore));
                 Assert.Equal(1, process.ExitCode);
-                Assert.True(
-                    output.Contains("ConnectionStrings:NntpDB", StringComparison.Ordinal)
-                    || output.Contains("CloudFlareApiKey", StringComparison.Ordinal),
-                    output);
+                Assert.Contains("BindPortTls", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("CloudFlareApiKey", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("env-key-must-not-be-required", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("env-pfx-must-not-be-required", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("env-account-must-not-be-required", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("env-user-must-not-be-required", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("env-pass-must-not-be-required", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Name is required", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("ServerId is required", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Hosts must contain", output, StringComparison.Ordinal);

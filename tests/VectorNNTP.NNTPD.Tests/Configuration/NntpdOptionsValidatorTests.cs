@@ -17,6 +17,7 @@ using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.NNTPD.Tests.Configuration;
 
@@ -666,7 +667,7 @@ public sealed class NntpdConfigurationTests
         Assert.Equal(0, options.BindPortTls);
         Assert.False(options.IsTlsListenerEnabled);
         Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", options.CloudFlareZoneId);
-        Assert.Equal(TestHostFactory.TestCloudFlareApiKey, options.CloudFlareApiKey);
+        Assert.Equal(string.Empty, options.CloudFlareApiKey);
         Assert.Equal("usenet.ninja", options.DnsSuffix);
         Assert.Equal(1, options.ServerId);
         Assert.Equal("nntpd01.usenet.ninja", options.Fqdn);
@@ -1070,7 +1071,13 @@ public sealed class NntpdConfigurationTests
                 .BindConfiguration(NntpdOptions.SectionName)
                 .Configure<IConfiguration>(static (options, config) =>
                 {
-                    AcmeCloudflareOptions.OverlaySharedFromRoot(options, config);
+                    NntpdAcmeCloudflareOptionsOverlay.OverlaySharedFromRootPreservingApplicationAcme(options, config);
+                })
+                .PostConfigure(static options =>
+                {
+                    options.AcmeEmail = string.Empty;
+                    options.AcmeCertificatePassword = string.Empty;
+                    options.CloudFlareApiKey = string.Empty;
                 })
                 .ValidateOnStart();
             services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
@@ -1078,7 +1085,9 @@ public sealed class NntpdConfigurationTests
             using var provider = services.BuildServiceProvider();
             var options = provider.GetRequiredService<IOptions<NntpdOptions>>().Value;
 
-            Assert.Equal(envKey, options.CloudFlareApiKey);
+            Assert.NotEqual(envKey, options.CloudFlareApiKey);
+            Assert.NotEqual("from-json-should-be-overridden", options.CloudFlareApiKey);
+            Assert.Equal(string.Empty, options.CloudFlareApiKey);
             Assert.Equal("5811a29d39a0732afb5f160c9b137c3d", options.CloudFlareZoneId);
             Assert.Equal(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, "VECTOR__CLOUDFLAREAPIKEY");
         }
@@ -1110,21 +1119,13 @@ public sealed class NntpdConfigurationTests
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("\t")]
-    public void CloudFlareApiKey_BlankOrMissing_FailsValidation(string? apiKey)
+    public void CloudFlareApiKey_BlankOrMissing_DoesNotFailOptionsValidation(string? apiKey)
     {
         var options = TestHostFactory.CreateValidOptions();
         options.CloudFlareApiKey = apiKey!;
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        var joined = NntpdOptionsValidator.JoinFailures(result);
-        Assert.Contains(NntpdOptions.CloudFlareApiKeyConfigurationKey, joined, StringComparison.Ordinal);
-        Assert.Contains(NntpdOptions.CloudFlareApiKeyEnvironmentVariable, joined, StringComparison.Ordinal);
-        // Only assert non-leak for non-whitespace secrets (whitespace appears naturally in messages).
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            Assert.DoesNotContain(apiKey, joined, StringComparison.Ordinal);
-        }
+        Assert.True(result.Succeeded, NntpdOptionsValidator.JoinFailures(result));
     }
 
     [Fact]
@@ -1169,17 +1170,13 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void MissingCloudFlareApiKey_FailsValidation()
+    public void MissingCloudFlareApiKey_DoesNotFailOptionsValidation()
     {
         var options = TestHostFactory.CreateValidOptions();
         options.CloudFlareApiKey = " ";
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains(
-            NntpdOptions.CloudFlareApiKeyEnvironmentVariable,
-            NntpdOptionsValidator.JoinFailures(result),
-            StringComparison.Ordinal);
+        Assert.True(result.Succeeded, NntpdOptionsValidator.JoinFailures(result));
     }
 
     [Fact]
@@ -1590,7 +1587,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public async Task HostStart_MissingCloudFlareApiKey_FailsBeforeRunning()
+    public async Task HostStart_MissingCloudFlareApiKey_PublishesTheSharedSnapshot()
     {
         var json = """
                    {
@@ -1604,9 +1601,11 @@ public sealed class NntpdConfigurationTests
                    """;
 
         using var host = CreateEmptyNntpdHost(json);
-        var ex = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync());
-        Assert.Contains(NntpdOptions.CloudFlareApiKeyConfigurationKey, ex.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(TestHostFactory.TestCloudFlareApiKey, ex.Message, StringComparison.Ordinal);
+        await host.StartAsync();
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.Equal(NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey, options.CloudFlareApiKey);
+        Assert.NotEqual(string.Empty, options.CloudFlareApiKey);
+        await host.StopAsync();
     }
 
     [Fact]
@@ -1670,7 +1669,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void CloudFlareApiKey_NullFromConfiguration_FailsStartup()
+    public void CloudFlareApiKey_NullFromConfiguration_DoesNotFailOptionsValidation()
     {
         var json = """
                    {
@@ -1684,9 +1683,8 @@ public sealed class NntpdConfigurationTests
                    """;
 
         using var host = CreateEmptyNntpdHost(json);
-        var ex = Assert.Throws<OptionsValidationException>(
-            () => _ = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value);
-        Assert.Contains(NntpdOptions.CloudFlareApiKeyConfigurationKey, ex.Message, StringComparison.Ordinal);
+        var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.Equal(string.Empty, options.CloudFlareApiKey);
     }
 
     [Fact]

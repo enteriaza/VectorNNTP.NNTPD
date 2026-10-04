@@ -42,7 +42,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
         AcmeCloudflareOptionsValidator.CollectBindAddressFailures(options, _localIpAddressAssignee, failures);
         ValidateProxyHosts(options, failures);
         ValidatePorts(options, failures);
-        ValidateCloudFlare(options, failures);
         ValidateDnsSuffixAndServerId(options, failures);
         ValidateAcme(options, failures);
         ValidateLogDir(options, failures);
@@ -467,30 +466,12 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
 
     private static void ValidateAcme(NntpdOptions options, List<string> failures)
     {
-        // Directory URL, renewal threshold, zone id, and DNS suffix come from nntpsharedconfig.
-        // State directory stays on this application. Email and certificate password apply when TLS is enabled.
+        // Directory URL, renewal threshold, zone id, DNS suffix, account email,
+        // certificate password, and Cloudflare API key come from nntpsharedconfig.
+        // State directory stays on this application.
         if (string.IsNullOrWhiteSpace(options.AcmeStateDir))
         {
             failures.Add($"{nameof(NntpdOptions.AcmeStateDir)} must be a non-empty filesystem path.");
-        }
-
-        if (!options.IsTlsListenerEnabled)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(options.AcmeEmail) || !IsPlausibleEmail(options.AcmeEmail))
-        {
-            failures.Add(
-                $"{nameof(NntpdOptions.AcmeEmail)} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
-                $"and must be a valid contact email address (use environment variable {AcmeCloudflareOptions.AcmeAccountEnvironmentVariable}).");
-        }
-
-        if (string.IsNullOrWhiteSpace(options.AcmeCertificatePassword))
-        {
-            failures.Add(
-                $"{NntpdOptions.AcmeCertificatePasswordConfigurationKey} is required when {nameof(NntpdOptions.BindPortTls)} > 0 " +
-                $"(use environment variable {NntpdOptions.AcmeCertificatePasswordEnvironmentVariable} or secrets; never commit the value).");
         }
     }
 
@@ -518,17 +499,6 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
 
         var domain = trimmed[(at + 1)..];
         return domain.Contains('.', StringComparison.Ordinal) && IsValidDnsSuffix(domain);
-    }
-
-    private static void ValidateCloudFlare(NntpdOptions options, List<string> failures)
-    {
-        // Cloudflare DNS integration settings are mandatory for this host configuration.
-        // Failure messages never include secret values.
-        if (string.IsNullOrWhiteSpace(options.CloudFlareApiKey))
-        {
-            failures.Add(
-                $"{NntpdOptions.CloudFlareApiKeyConfigurationKey} must be configured (use environment variable {NntpdOptions.CloudFlareApiKeyEnvironmentVariable}).");
-        }
     }
 
     private static void ValidateDnsSuffixAndServerId(NntpdOptions options, List<string> failures)

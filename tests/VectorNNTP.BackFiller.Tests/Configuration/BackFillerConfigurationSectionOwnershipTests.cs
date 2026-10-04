@@ -194,7 +194,10 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
             Assert.NotEqual(1191, acme.BindPort);
             Assert.NotEqual(2119, acme.BindPortTls);
             Assert.Equal("https://acme-staging-v02.api.letsencrypt.org/directory", acme.AcmeDirectoryUrl);
-            Assert.Equal("ops@example.test", acme.AcmeEmail);
+            Assert.Equal(string.Empty, acme.AcmeEmail);
+            Assert.NotEqual("ops@example.test", acme.AcmeEmail);
+            Assert.NotEqual("ignored-section@example.test", acme.AcmeEmail);
+            Assert.NotEqual("ignored@root.example", acme.AcmeEmail);
             Assert.Equal(14, acme.AcmeRenewalThresholdDays);
             Assert.Equal("nested-certs/", acme.AcmeStateDir);
             Assert.False(acme.IncludeNewsHostnameInCertificate);

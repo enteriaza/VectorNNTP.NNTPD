@@ -10,8 +10,9 @@ namespace VectorNNTP.BackFiller.Configuration
     /// Common does not decide where application configuration lives. BackFiller
     /// binds those values from section <see cref="BackFillerOptions.SectionName"/>
     /// and this adapter feeds the reusable ACME/Cloudflare/networking types.
-    /// Cloudflare API key, ACME PKCS#12, and ACME account-email secrets remain
-    /// root-level <c>VECTOR__*</c> values and are overlaid here. Root-level
+    /// The Cloudflare API key, ACME PKCS#12 password, and ACME account email are
+    /// published from <c>nntpsharedconfig</c> and are not copied from
+    /// <c>VECTOR__</c> variables. Root-level
     /// <c>BindAddress</c>, <c>BindPort</c>, <c>BindPortTls</c>,
     /// <c>CloudFlareZoneId</c>, <c>DnsSuffix</c>, and ACME directory keys are ignored.
     /// Cleartext <c>BindPort</c> is not a BackFiller setting and is not copied.
@@ -24,7 +25,7 @@ namespace VectorNNTP.BackFiller.Configuration
         /// </summary>
         /// <param name="destination">Common options instance to populate.</param>
         /// <param name="source">Validated BackFiller application options.</param>
-        /// <param name="configuration">Full configuration root (secrets only).</param>
+        /// <param name="configuration">Full configuration root. The Cloudflare operation timeout is the only root value copied.</param>
         /// <exception cref="ArgumentNullException">Any argument is null.</exception>
         internal static void Apply(
             AcmeCloudflareOptions destination,
@@ -47,33 +48,26 @@ namespace VectorNNTP.BackFiller.Configuration
             destination.Fqdn = source.Fqdn;
             destination.IncludeNewsHostnameInCertificate = false;
 
-            OverlaySecretsFromRoot(destination, configuration);
+            OverlayCloudFlareOperationTimeout(destination, configuration);
         }
 
         /// <summary>
-        /// Copies Cloudflare API key, ACME PKCS#12, and ACME account-email secrets
-        /// from the configuration root. Does not copy bind, zone id, DNS suffix, or
-        /// ACME directory settings.
+        /// Copies a parseable Cloudflare operation timeout from the configuration root.
+        /// Does not copy the API key, ACME account email, certificate password, bind
+        /// settings, zone id, DNS suffix, or ACME directory.
         /// </summary>
         /// <param name="destination">Common options instance to update.</param>
         /// <param name="configuration">Full configuration root.</param>
         /// <exception cref="ArgumentNullException">Either argument is null.</exception>
         /// <remarks>
-        /// Missing secret keys are stored as empty strings. <see cref="AcmeCloudflareOptions.OverlayAcmeAccountEmail"/>
-        /// applies the account email. A non-empty <see cref="AcmeCloudflareOptions.CloudFlareOperationTimeout"/>
-        /// value that <see cref="TimeSpan.TryParse(string, out TimeSpan)"/> accepts replaces the destination timeout;
-        /// a blank or unparseable value leaves it unchanged.
+        /// A non-empty <see cref="AcmeCloudflareOptions.CloudFlareOperationTimeout"/>
+        /// value that <see cref="TimeSpan.TryParse(string, out TimeSpan)"/> accepts replaces the destination timeout.
+        /// A blank or unparseable value leaves it unchanged.
         /// </remarks>
-        private static void OverlaySecretsFromRoot(AcmeCloudflareOptions destination, IConfiguration configuration)
+        private static void OverlayCloudFlareOperationTimeout(AcmeCloudflareOptions destination, IConfiguration configuration)
         {
             ArgumentNullException.ThrowIfNull(destination);
             ArgumentNullException.ThrowIfNull(configuration);
-
-            destination.AcmeCertificatePassword =
-                configuration[nameof(AcmeCloudflareOptions.AcmeCertificatePassword)] ?? string.Empty;
-            destination.CloudFlareApiKey =
-                configuration[nameof(AcmeCloudflareOptions.CloudFlareApiKey)] ?? string.Empty;
-            AcmeCloudflareOptions.OverlayAcmeAccountEmail(destination, configuration);
 
             var timeout = configuration[nameof(AcmeCloudflareOptions.CloudFlareOperationTimeout)];
             if (!string.IsNullOrWhiteSpace(timeout) && TimeSpan.TryParse(timeout, out var parsed))

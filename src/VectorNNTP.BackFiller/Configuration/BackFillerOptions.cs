@@ -10,9 +10,8 @@ namespace VectorNNTP.BackFiller.Configuration
     /// <para>
     /// Property names are PascalCase. Generated <see cref="Fqdn"/> cannot be bound.
     /// Never log a complete instance: ACME/NntpDB secrets may appear on related options.
-    /// Cloudflare and ACME PKCS#12 secrets stay on root <c>VECTOR__*</c> keys and
-    /// are copied onto <see cref="AcmeCloudflareOptions"/> by
-    /// <see cref="BackFillerAcmeCloudflareOptionsAdapter"/>.
+    /// The Cloudflare API key, ACME account email, and ACME PKCS#12 password are
+    /// published from <c>nntpsharedconfig</c> onto <see cref="AcmeCloudflareOptions"/>.
     /// </para>
     /// <para>
     /// Bind, ACME directory, and DNS-suffix values are BackFiller-owned and bind
@@ -23,14 +22,11 @@ namespace VectorNNTP.BackFiller.Configuration
     /// <see cref="BindPortTls"/> only. <see cref="ServerId"/> binds from
     /// <c>BackFiller:ServerId</c> only. The FQDN is
     /// <c>backfiller{ServerId:00}.{DnsSuffix}</c>; there is no configurable Name.
-    /// RabbitMQ connectivity binds from the top-level <c>RabbitMQ</c> section /
-    /// <c>VECTOR__RABBITMQ__*</c> via Common <c>RabbitMqOptions</c> (not nested under
-    /// <c>BackFiller</c>). NntpDB uses the existing
+    /// RabbitMQ connectivity other than username and password binds from the
+    /// top-level <c>RabbitMQ</c> section via Common <c>RabbitMqOptions</c> (not nested under
+    /// <c>BackFiller</c>). Username and password are published from
+    /// <c>nntpsharedconfig</c>. NntpDB uses the existing
     /// <c>ConnectionStrings__NntpDB</c> Generic Host mapping (same key as NNTPD).
-    /// Cloudflare secrets use
-    /// <c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__CLOUDFLAREZONEID</c>,
-    /// <c>VECTOR__ACMECERTIFICATEPASSWORD</c>, and
-    /// <c>VECTOR__ACMEACCOUNT</c>.
     /// </para>
     /// <para>
     /// Intentional key rename from the old worker: <c>BackFiller:Id</c> is now

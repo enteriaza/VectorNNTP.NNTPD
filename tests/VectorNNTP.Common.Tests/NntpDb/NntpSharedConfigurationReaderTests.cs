@@ -19,6 +19,161 @@ namespace VectorNNTP.Common.Tests.NntpDb
             Assert.Equal(14, configuration.AcmeRenewalThresholdDays);
             Assert.Equal("0123456789abcdef0123456789abcdef", configuration.CloudFlareZoneId);
             Assert.Equal("usenet.ninja", configuration.DnsSuffix);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderAcmeAccount, configuration.AcmeAccount);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderAcmeCertificatePassword, configuration.AcmeCertificatePassword);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey, configuration.CloudFlareApiKey);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderRabbitMqPassword, configuration.RabbitMqPassword);
+            Assert.Equal(NntpSharedConfigurationColumns.PlaceholderRabbitMqUsername, configuration.RabbitMqUsername);
+        }
+
+        [Fact]
+        public void Validate_loads_all_twelve_columns()
+        {
+            Assert.Equal(
+                "SELECT maxartsize, sitename, prometheusurl, acmedirectoryurl, acmerenewalthresholddays, cloudflarezoneid, dnssuffix, acmeaccount, acmecertpass, cloudflareapikey, rabbitmqpassword, rabbitmqusername FROM nntpsharedconfig LIMIT 2",
+                NntpSharedConfigurationReader.SelectSql);
+
+            var configuration = NntpSharedConfigurationReader.Validate(
+            [
+                new NntpSharedConfigurationCandidate(
+                    4096,
+                    "news.example",
+                    "http://prom.example",
+                    " http://acme.example.test/directory ",
+                    9,
+                    " zone ",
+                    "USENET.Ninja.",
+                    " ops@example.test ",
+                    "pfx-secret-placeholder",
+                    "cf-key-placeholder",
+                    "rmq-pass-placeholder",
+                    " rmq-user "),
+            ]);
+
+            Assert.Equal(4096, configuration.MaxArticleBytes);
+            Assert.Equal("news.example", configuration.SiteName);
+            Assert.Equal("http://prom.example", configuration.PrometheusUrl);
+            Assert.Equal("http://acme.example.test/directory", configuration.AcmeDirectoryUrl);
+            Assert.Equal(9, configuration.AcmeRenewalThresholdDays);
+            Assert.Equal("zone", configuration.CloudFlareZoneId);
+            Assert.Equal("usenet.ninja", configuration.DnsSuffix);
+            Assert.Equal("ops@example.test", configuration.AcmeAccount);
+            Assert.Equal("pfx-secret-placeholder", configuration.AcmeCertificatePassword);
+            Assert.Equal("cf-key-placeholder", configuration.CloudFlareApiKey);
+            Assert.Equal("rmq-pass-placeholder", configuration.RabbitMqPassword);
+            Assert.Equal("rmq-user", configuration.RabbitMqUsername);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData(" ")]
+        [InlineData("not-an-email")]
+        public void Validate_rejects_an_invalid_acme_account_without_echoing_it(string? account)
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", account: account),
+            ]));
+            Assert.Contains("acmeaccount", ex.Message, StringComparison.Ordinal);
+            if (!string.IsNullOrWhiteSpace(account))
+            {
+                Assert.DoesNotContain(account, ex.Message, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public void Validate_accepts_an_acme_account_at_the_schema_limit_and_rejects_one_past_it()
+        {
+            var accepted = new string('a', 32) + "@example.test";
+            Assert.Equal(45, accepted.Length);
+            var configuration = NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", account: accepted),
+            ]);
+            Assert.Equal(accepted, configuration.AcmeAccount);
+
+            var rejected = new string('a', 33) + "@example.test";
+            var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", account: rejected),
+            ]));
+            Assert.Contains("acmeaccount", ex.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(rejected, ex.Message, StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("acmecertpass", 32)]
+        [InlineData("cloudflareapikey", 45)]
+        [InlineData("rabbitmqpassword", 45)]
+        public void Validate_rejects_empty_and_overlong_opaque_credentials_without_echoing_them(
+            string column,
+            int maximumLength)
+        {
+            foreach (var value in new string?[] { null, "", " ", new string('k', maximumLength + 1) })
+            {
+                var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+                [
+                    CredentialRow(column, value),
+                ]));
+                Assert.Contains(column, ex.Message, StringComparison.Ordinal);
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    Assert.DoesNotContain(value, ex.Message, StringComparison.Ordinal);
+                }
+            }
+
+            var accepted = new string('k', maximumLength);
+            var configuration = NntpSharedConfigurationReader.Validate(
+            [
+                CredentialRow(column, accepted),
+            ]);
+            Assert.Equal(accepted, Credential(configuration, column));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData(" ")]
+        public void Validate_rejects_an_empty_rabbitmq_username_without_echoing_it(string? username)
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", username: username),
+            ]));
+            Assert.Contains("rabbitmqusername", ex.Message, StringComparison.Ordinal);
+            if (!string.IsNullOrWhiteSpace(username))
+            {
+                Assert.DoesNotContain(username, ex.Message, StringComparison.Ordinal);
+            }
+        }
+
+        [Fact]
+        public void Validate_trims_the_rabbitmq_username_and_rejects_one_past_the_schema_limit()
+        {
+            var configuration = NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", username: " rmq-user "),
+            ]);
+            Assert.Equal("rmq-user", configuration.RabbitMqUsername);
+
+            var rejected = new string('u', 46);
+            var ex = Assert.Throws<InvalidOperationException>(() => NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", username: rejected),
+            ]));
+            Assert.Contains("rabbitmqusername", ex.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(rejected, ex.Message, StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void Validate_keeps_opaque_credential_whitespace()
+        {
+            var configuration = NntpSharedConfigurationReader.Validate(
+            [
+                Row(1, "news.example", certificatePassword: " pfx "),
+            ]);
+            Assert.Equal(" pfx ", configuration.AcmeCertificatePassword);
         }
 
         [Fact]
@@ -170,7 +325,30 @@ namespace VectorNNTP.Common.Tests.NntpDb
             string? directory = "https://acme-v02.api.letsencrypt.org/directory",
             long days = 14,
             string? zone = "0123456789abcdef0123456789abcdef",
-            string? suffix = "usenet.ninja") =>
-            new(size, site, prometheus, directory, days, zone, suffix);
+            string? suffix = "usenet.ninja",
+            string? account = NntpSharedConfigurationColumns.PlaceholderAcmeAccount,
+            string? certificatePassword = NntpSharedConfigurationColumns.PlaceholderAcmeCertificatePassword,
+            string? apiKey = NntpSharedConfigurationColumns.PlaceholderCloudFlareApiKey,
+            string? rabbitPassword = NntpSharedConfigurationColumns.PlaceholderRabbitMqPassword,
+            string? username = NntpSharedConfigurationColumns.PlaceholderRabbitMqUsername) =>
+            new(size, site, prometheus, directory, days, zone, suffix, account, certificatePassword, apiKey, rabbitPassword, username);
+
+        private static NntpSharedConfigurationCandidate CredentialRow(string column, string? value) =>
+            column switch
+            {
+                "acmecertpass" => Row(1, "news.example", certificatePassword: value),
+                "cloudflareapikey" => Row(1, "news.example", apiKey: value),
+                "rabbitmqpassword" => Row(1, "news.example", rabbitPassword: value),
+                _ => throw new ArgumentOutOfRangeException(nameof(column), column, "Unexpected credential column."),
+            };
+
+        private static string Credential(NntpSharedConfiguration configuration, string column) =>
+            column switch
+            {
+                "acmecertpass" => configuration.AcmeCertificatePassword,
+                "cloudflareapikey" => configuration.CloudFlareApiKey,
+                "rabbitmqpassword" => configuration.RabbitMqPassword,
+                _ => throw new ArgumentOutOfRangeException(nameof(column), column, "Unexpected credential column."),
+            };
     }
 }

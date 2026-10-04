@@ -24,23 +24,30 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
         {
             using var host = CreateHost(BackFillerTestOptions.CreateValidConfigurationPairs());
             var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
-            Assert.False(string.IsNullOrWhiteSpace(acme.CloudFlareApiKey));
+            Assert.Equal(string.Empty, acme.CloudFlareApiKey);
+            Assert.Equal(string.Empty, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.AcmeEmail);
             Assert.False(string.IsNullOrWhiteSpace(acme.CloudFlareZoneId));
             Assert.InRange(acme.AcmeRenewalThresholdDays, 1, 90);
             Assert.InRange(acme.BindPortTls, 1, 65535);
         }
 
         [Fact]
-        public void Host_validate_on_start_fails_when_cloudflare_api_key_is_missing()
+        public void Host_validate_on_start_does_not_require_the_shared_api_key()
         {
             var pairs = BackFillerTestOptions.CreateValidConfigurationPairs();
             pairs["CloudFlareApiKey"] = "";
+            pairs["AcmeCertificatePassword"] = "";
+            pairs[AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "";
 
-            var ex = Assert.Throws<OptionsValidationException>(() =>
-            {
-                using var host = CreateHost(pairs);
-            });
-            Assert.Contains(AcmeCloudflareOptions.CloudFlareApiKeyConfigurationKey, ex.Message, StringComparison.Ordinal);
+            using var host = CreateHost(pairs);
+            var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
+            var rabbit = host.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+            Assert.Equal(string.Empty, acme.CloudFlareApiKey);
+            Assert.Equal(string.Empty, acme.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, acme.AcmeEmail);
+            Assert.Null(rabbit.Username);
+            Assert.Null(rabbit.Password);
         }
 
         [Fact]

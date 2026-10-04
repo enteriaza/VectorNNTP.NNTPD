@@ -170,6 +170,9 @@ public static class NntpdServiceCollectionExtensions
                 options.AcmeStateDir = ApplicationLocalPath.ResolveApplicationLocalPath(
                     options.AcmeStateDir,
                     AppContext.BaseDirectory);
+                options.AcmeEmail = string.Empty;
+                options.AcmeCertificatePassword = string.Empty;
+                options.CloudFlareApiKey = string.Empty;
             });
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
@@ -187,7 +190,12 @@ public static class NntpdServiceCollectionExtensions
         services
             .AddOptions<RabbitMqOptions>()
             .BindConfiguration(RabbitMqOptions.SectionName)
-            .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
+            .PostConfigure(static options =>
+            {
+                options.Management ??= new RabbitMqManagementOptions();
+                options.Username = null;
+                options.Password = null;
+            })
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<RabbitMqOptions>, NntpdRabbitMqOptionsValidator>();
 
@@ -289,7 +297,7 @@ public static class NntpdServiceCollectionExtensions
 
         // Startup order (sequential ApplicationServiceManager):
         // NntpDB (hard dep; MySqlConnector pool) →
-        // nntpsharedconfig (initial snapshot before FQDN, ACME, and Cloudflare consumers) →
+        // nntpsharedconfig (initial snapshot, including RabbitMQ, ACME, and Cloudflare credentials, before those consumers) →
         // Cloudflare DNS → Redis → RabbitMQ (hard dep; connection lifecycle only) →
         // RabbitMQ topology (hard dep; cache.requests fanout + cache.broadcast + overviewdb.queue) →
         // StorageServer fleet consumer (hard dep; cache.<fqdn> + in-memory registry) →

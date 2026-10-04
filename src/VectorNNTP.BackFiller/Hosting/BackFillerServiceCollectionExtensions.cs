@@ -36,8 +36,9 @@ namespace VectorNNTP.BackFiller.Hosting
         /// <remarks>
         /// <para>
         /// Registers <see cref="NntpDbServiceHostedAdapter"/> and then
-        /// <see cref="ProviderAccountConfigurationService"/> so <c>nntpsharedconfig</c> is published
-        /// before <see cref="RabbitMqServiceHostedAdapter"/> reads the generated FQDN.
+        /// <see cref="ProviderAccountConfigurationService"/> so <c>nntpsharedconfig</c>, including
+        /// RabbitMQ, ACME, and Cloudflare credentials, is published before
+        /// <see cref="RabbitMqServiceHostedAdapter"/> and before Cloudflare and ACME start.
         /// Startup fails if the initial broker connection cannot be established.
         /// Then <see cref="NntpProviderRegistry"/>,
         /// then <see cref="BackFillerApplicationHostedService"/> (starts
@@ -83,7 +84,12 @@ namespace VectorNNTP.BackFiller.Hosting
             builder.Services
                 .AddOptions<RabbitMqOptions>()
                 .BindConfiguration(RabbitMqOptions.SectionName)
-                .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
+                .PostConfigure(static options =>
+                {
+                    options.Management ??= new RabbitMqManagementOptions();
+                    options.Username = null;
+                    options.Password = null;
+                })
                 .ValidateOnStart();
             builder.Services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
 
@@ -112,12 +118,16 @@ namespace VectorNNTP.BackFiller.Hosting
                     acme.AcmeStateDir = ApplicationLocalPath.ResolveApplicationLocalPath(
                         acme.AcmeStateDir,
                         AppContext.BaseDirectory);
+                    acme.AcmeEmail = string.Empty;
+                    acme.AcmeCertificatePassword = string.Empty;
+                    acme.CloudFlareApiKey = string.Empty;
                     journal.Record(BackFillerStartupStages.Configuration);
                 });
             builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>>(static provider =>
                 new AcmeCloudflareOptionsValidator(
                     provider.GetRequiredService<ILocalIpAddressAssignee>(),
-                    validateSharedDatabaseFields: false));
+                    validateSharedDatabaseFields: false,
+                    validateSharedCredentials: false));
             builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
             builder.Services.AddAcmeCloudflareInfrastructure();
             builder.Services.AddNntpDbOptions();
@@ -180,7 +190,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
                 provider.GetRequiredService<IOptions<BackFillerOptions>>(),
                 provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
-                provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>()));
+                provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>(),
+                provider.GetRequiredService<IOptions<RabbitMqOptions>>()));
             builder.Services.AddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
                 provider.GetRequiredService<ProviderAccountConfigurationService>());
             builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();

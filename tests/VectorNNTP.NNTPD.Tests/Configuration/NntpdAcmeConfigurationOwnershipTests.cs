@@ -18,9 +18,9 @@ using VectorNNTP.Common.Configuration;
 namespace VectorNNTP.NNTPD.Tests.Configuration;
 
 /// <summary>
-/// Proves NNTPD-owned ACME directory/state/renewal bind from <c>Nntpd</c>,
-/// that the ACME account email comes from shared
-/// <c>VECTOR__ACMEACCOUNT</c>, and that relative <c>AcmeStateDir</c> resolves
+/// Proves NNTPD-owned ACME state binds from <c>Nntpd</c>, that the ACME account
+/// email and certificate password are not supplied by <c>VECTOR__ACMEACCOUNT</c> or
+/// <c>VECTOR__ACMECERTIFICATEPASSWORD</c>, and that relative <c>AcmeStateDir</c> resolves
 /// through Common <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/>
 /// against <see cref="AppContext.BaseDirectory"/>.
 /// </summary>
@@ -44,11 +44,12 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
     }
 
     [Fact]
-    public void Shared_acme_account_email_binds_from_common_configuration()
+    public void Shared_acme_account_email_is_not_supplied_by_vector_environment()
     {
         using var host = CreateHost();
         var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
-        Assert.Equal(SharedAcmeAccount, options.AcmeEmail);
+        Assert.Equal(string.Empty, options.AcmeEmail);
+        Assert.NotEqual(SharedAcmeAccount, options.AcmeEmail);
         Assert.Equal(
             AcmeCloudflareOptions.AcmeAccountEnvironmentVariable,
             "VECTOR__ACMEACCOUNT");
@@ -77,17 +78,18 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
         var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
         var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
 
-        Assert.Equal(SharedAcmeAccount, options.AcmeEmail);
+        Assert.Equal(string.Empty, options.AcmeEmail);
         Assert.Equal(ExpectedResolvedStateDir(AppContext.BaseDirectory), options.AcmeStateDir);
 
         Assert.NotEqual(RootEmail, options.AcmeEmail);
+        Assert.NotEqual(SharedAcmeAccount, options.AcmeEmail);
         Assert.NotEqual(RootStateDir, options.AcmeStateDir);
 
         Assert.Same(options, acme);
     }
 
     [Fact]
-    public void Vector_acme_certificate_password_overlays_from_the_shared_environment_variable()
+    public void Vector_acme_certificate_password_is_not_supplied_by_the_environment_variable()
     {
         var previous = Environment.GetEnvironmentVariable(NntpdOptions.AcmeCertificatePasswordEnvironmentVariable);
         try
@@ -98,7 +100,8 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
 
             using var host = CreateHost();
             var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
-            Assert.Equal(TestCertificatePassword, options.AcmeCertificatePassword);
+            Assert.Equal(string.Empty, options.AcmeCertificatePassword);
+            Assert.NotEqual(TestCertificatePassword, options.AcmeCertificatePassword);
         }
         finally
         {
@@ -137,8 +140,12 @@ public sealed class NntpdAcmeConfigurationOwnershipTests
 
             using var host = CreateHost();
             var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
-            Assert.Equal(TestCertificatePassword, options.AcmeCertificatePassword);
+            var rabbit = host.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+            Assert.Equal(string.Empty, options.AcmeCertificatePassword);
+            Assert.NotEqual(TestCertificatePassword, options.AcmeCertificatePassword);
             Assert.NotEqual("nntpd-specific-must-not-be-required", options.AcmeCertificatePassword);
+            Assert.Null(rabbit.Username);
+            Assert.Null(rabbit.Password);
         }
         finally
         {

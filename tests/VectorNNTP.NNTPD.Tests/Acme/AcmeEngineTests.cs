@@ -41,7 +41,7 @@ public sealed class AcmeConfigurationTests
     }
 
     [Fact]
-    public void MissingEmail_WithTlsEnabled_Fails()
+    public void MissingEmail_WithTlsEnabled_DoesNotFailOptionsValidation()
     {
         var options = TestHostFactory.CreateValidOptions();
         options.BindPortTls = 563;
@@ -49,12 +49,11 @@ public sealed class AcmeConfigurationTests
         options.AcmeCertificatePassword = TestPfxPassword;
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        Assert.Contains("AcmeEmail", NntpdOptionsValidator.JoinFailures(result), StringComparison.Ordinal);
+        Assert.True(result.Succeeded, NntpdOptionsValidator.JoinFailures(result));
     }
 
     [Fact]
-    public void MissingPassword_WithTlsEnabled_Fails()
+    public void MissingPassword_WithTlsEnabled_DoesNotFailOptionsValidation()
     {
         var options = TestHostFactory.CreateValidOptions();
         options.BindPortTls = 563;
@@ -62,14 +61,11 @@ public sealed class AcmeConfigurationTests
         options.AcmeCertificatePassword = string.Empty;
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        var failures = NntpdOptionsValidator.JoinFailures(result);
-        Assert.Contains("AcmeCertificatePassword", failures, StringComparison.Ordinal);
-        Assert.False(NntpdOptionsValidator.ContainsSecret(failures, TestPfxPassword));
+        Assert.True(result.Succeeded, NntpdOptionsValidator.JoinFailures(result));
     }
 
     [Fact]
-    public void WhitespaceOnlyPassword_WithTlsEnabled_Fails()
+    public void WhitespaceOnlyPassword_WithTlsEnabled_DoesNotFailOptionsValidation()
     {
         var options = TestHostFactory.CreateValidOptions();
         options.BindPortTls = 563;
@@ -77,10 +73,7 @@ public sealed class AcmeConfigurationTests
         options.AcmeCertificatePassword = "   ";
         var result = new NntpdOptionsValidator(new FakeLocalIpAddressAssignee(assignAll: true))
             .Validate(null, options);
-        Assert.True(result.Failed);
-        var failures = NntpdOptionsValidator.JoinFailures(result);
-        Assert.Contains("AcmeCertificatePassword", failures, StringComparison.Ordinal);
-        Assert.DoesNotContain("   ", failures, StringComparison.Ordinal);
+        Assert.True(result.Succeeded, NntpdOptionsValidator.JoinFailures(result));
     }
 
     [Fact]

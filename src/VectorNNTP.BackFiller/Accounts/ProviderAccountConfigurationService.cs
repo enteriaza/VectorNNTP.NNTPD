@@ -3,6 +3,7 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.BackFiller.Accounts
@@ -37,6 +38,9 @@ namespace VectorNNTP.BackFiller.Accounts
 
         /// <summary>Live ACME and Cloudflare options. Shared fields and FQDN are replaced from each published snapshot.</summary>
         private readonly IOptions<AcmeCloudflareOptions> _acmeOptions;
+
+        /// <summary>Live RabbitMQ options. Username and password are replaced from each published snapshot.</summary>
+        private readonly IOptions<RabbitMqOptions> _rabbitMq;
 
         /// <summary>Control-plane logger. Events are written through <see cref="ProviderAccountLogMessages"/>.</summary>
         private readonly ILogger<ProviderAccountConfigurationService> _logger;
@@ -85,6 +89,7 @@ namespace VectorNNTP.BackFiller.Accounts
         /// <param name="backFillerOptions">Live BackFiller options updated from each shared snapshot.</param>
         /// <param name="acmeOptions">Live ACME options updated from each shared snapshot.</param>
         /// <param name="logger">Logger passed to <see cref="ProviderAccountLogMessages"/>.</param>
+        /// <param name="rabbitMqOptions">Live RabbitMQ options. Username and password are replaced from each shared snapshot.</param>
         /// <exception cref="ArgumentNullException">Any argument is null.</exception>
         /// <remarks>
         /// The live <see cref="ProviderConfigurationCatalog"/> is owned by <see cref="NntpProviderRegistry"/>.
@@ -97,7 +102,8 @@ namespace VectorNNTP.BackFiller.Accounts
             BackFillerRuntimeOptions runtime,
             IOptions<BackFillerOptions> backFillerOptions,
             IOptions<AcmeCloudflareOptions> acmeOptions,
-            ILogger<ProviderAccountConfigurationService> logger)
+            ILogger<ProviderAccountConfigurationService> logger,
+            IOptions<RabbitMqOptions>? rabbitMqOptions = null)
         {
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(sharedConfiguration);
@@ -112,6 +118,7 @@ namespace VectorNNTP.BackFiller.Accounts
             _runtime = runtime;
             _backFillerOptions = backFillerOptions;
             _acmeOptions = acmeOptions;
+            _rabbitMq = rabbitMqOptions ?? Options.Create(new RabbitMqOptions());
             _logger = logger;
         }
 
@@ -359,6 +366,7 @@ namespace VectorNNTP.BackFiller.Accounts
             var acme = _acmeOptions.Value;
             shared.CopyAcmeDnsTo(acme);
             acme.Fqdn = fqdn;
+            shared.CopyRabbitMqCredentialsTo(_rabbitMq.Value);
         }
 
         /// <summary>Logs additions, record changes, and removals. Passwords are not written.</summary>

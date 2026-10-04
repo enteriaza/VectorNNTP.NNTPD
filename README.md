@@ -156,7 +156,7 @@ Section: `Nntpd` (`VectorNNTP.NNTPD.json` / environment variables / command line
 | `Nntpd:BindAddress` | `["*"]` when omitted | Listen addresses / wildcards; explicit IPs must be local NIC addresses |
 | `Nntpd:BindPort` | `119` | Cleartext TCP port (`1–65535`) |
 | `Nntpd:BindPortTls` | `0` | TLS TCP port; `0`/unset disables TLS; `1–65535` enables |
-| `CloudFlareApiKey` | _(env only)_ | **Required** secret; set `nntpd__cloudflareapikey` — missing/blank fails startup; never commit |
+| `nntpsharedconfig.cloudflareapikey` | _(MySQL)_ | **Required** secret for NNTPD; not `nntpd__cloudflareapikey` or `VECTOR__CLOUDFLAREAPIKEY`; never commit or log |
 | `CloudFlareZoneId` | _(configured)_ | **Required**; `nntpd__CloudFlareZoneId` may supply it — missing/blank fails startup |
 | `DnsSuffix` | `usenet.ninja` | DNS suffix for generated FQDN |
 | `ServerId` | _(required; no default)_ | **Required** integer `1–99` (`nntpd__ServerId`); no silent default |
