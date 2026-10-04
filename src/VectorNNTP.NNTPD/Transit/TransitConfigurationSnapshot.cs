@@ -12,21 +12,47 @@ namespace VectorNNTP.NNTPD.Transit;
 /// </remarks>
 public sealed class TransitConfigurationSnapshot
 {
-    /// <summary>Empty snapshot (no peers).</summary>
+    /// <summary>Empty snapshot (no peers). Global junk flags stay at their process defaults.</summary>
     public static TransitConfigurationSnapshot Empty { get; } = new(new Dictionary<string, TransitPeerPolicy>(StringComparer.Ordinal));
 
-    internal TransitConfigurationSnapshot(IReadOnlyDictionary<string, TransitPeerPolicy> peers)
+    private static readonly NewsfeedsPattern OptionsReceivePatterns = ParseOptionsReceivePatterns();
+
+    internal TransitConfigurationSnapshot(
+        IReadOnlyDictionary<string, TransitPeerPolicy> peers,
+        bool wantTrash = true,
+        bool logTrash = true,
+        long publicationId = 0)
     {
         Peers = peers;
+        WantTrash = wantTrash;
+        LogTrash = logTrash;
+        PublicationId = publicationId;
     }
 
     /// <summary>Gets peers keyed by configured identifier (ordinal, case-sensitive).</summary>
     public IReadOnlyDictionary<string, TransitPeerPolicy> Peers { get; }
 
+    /// <summary>Gets the published <c>nntptransitpublication.publication_id</c>, or <c>0</c> for an in-memory snapshot.</summary>
+    public long PublicationId { get; }
+
+    /// <summary>Gets the site-wide want-trash flag from the published global revision.</summary>
+    public bool WantTrash { get; }
+
+    /// <summary>Gets the site-wide log-trash flag from the published global revision.</summary>
+    public bool LogTrash { get; }
+
     /// <summary>Gets whether any peers are configured.</summary>
     public bool IsEmpty => Peers.Count == 0;
 
-    /// <summary>Builds a snapshot from already-validated options.</summary>
+    /// <summary>
+    /// Builds a snapshot from already-validated in-memory options.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TransitPeerOptions"/> has one size, one pattern, and one message-type list.
+    /// Those map to Receive size, Send patterns, and Send article types. Receive patterns
+    /// are <c>*</c> and Receive article types are unrestricted. The MySQL catalogue compiler
+    /// sets the two planes independently.
+    /// </remarks>
     public static TransitConfigurationSnapshot Create(TransitPeersOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -112,6 +138,22 @@ public sealed class TransitConfigurationSnapshot
             options.DeferOnDuplicate,
             options.PathToken ?? string.Empty,
             options.MaxSize,
-            messageTypes);
+            messageTypes,
+            OptionsReceivePatterns,
+            TransitMessageTypes.All,
+            options.MaxSize,
+            string.Empty,
+            string.Empty,
+            []);
+    }
+
+    private static NewsfeedsPattern ParseOptionsReceivePatterns()
+    {
+        if (!NewsfeedsPattern.TryParse("*", out var pattern, out _) || pattern is null)
+        {
+            throw new InvalidOperationException("Receive pattern '*' must parse.");
+        }
+
+        return pattern;
     }
 }

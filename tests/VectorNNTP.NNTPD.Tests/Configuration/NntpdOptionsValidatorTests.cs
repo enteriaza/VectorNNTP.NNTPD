@@ -699,7 +699,7 @@ public sealed class NntpdConfigurationTests
     }
 
     [Fact]
-    public void Bind_NntpdTransit_WantTrashAndLogTrash()
+    public void Bind_NntpdTransit_RejectsDatabaseOwnedWantTrashAndLogTrash()
     {
         var json = """
                    {
@@ -716,9 +716,32 @@ public sealed class NntpdConfigurationTests
                    """;
 
         using var host = CreateEmptyNntpdHost(json);
+        var ex = Assert.Throws<OptionsValidationException>(
+            () => _ = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value);
+        Assert.Contains("nntptransitglobalrevision", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bind_NntpdTransit_KeepsStreamOutstandingArticleDepth()
+    {
+        var json = """
+                   {
+                     "Nntpd": {
+                       "CloudFlareApiKey": "unit-test-cloudflare-api-key",
+                       "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
+                       "ServerId": 1,
+                       "Transit": {
+                         "StreamOutstandingArticleDepth": 12
+                       }
+                     }
+                   }
+                   """;
+
+        using var host = CreateEmptyNntpdHost(json);
         var options = host.Services.GetRequiredService<IOptions<NntpdOptions>>().Value;
+        Assert.Equal(12, options.Transit.StreamOutstandingArticleDepth);
         Assert.True(options.Transit.WantTrash);
-        Assert.False(options.Transit.LogTrash);
+        Assert.True(options.Transit.LogTrash);
     }
 
     [Fact]

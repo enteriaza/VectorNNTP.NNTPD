@@ -72,6 +72,12 @@ public static class NntpdLoggingExtensions
     /// systemd. Microsoft console formatter options that <c>AddSystemd()</c> may register are
     /// stripped by <c>ConfigureNntpdPlatformHosting</c> and are not part of this logging pipeline.
     /// </para>
+    /// <para>
+    /// Console, File, and Async File sinks are registered with direct Serilog calls from the
+    /// <c>Serilog:WriteTo</c> argument values. <c>ReadFrom.Configuration</c> still applies
+    /// minimum level, enrichment, and any sink entry those direct calls do not represent.
+    /// Native AOT does not retain the reflection metadata sink discovery requires.
+    /// </para>
     /// </remarks>
     public static HostApplicationBuilder ConfigureNntpdLogging(
         this HostApplicationBuilder builder,
@@ -92,20 +98,12 @@ public static class NntpdLoggingExtensions
             (services, loggerConfiguration) =>
             {
                 loggerConfiguration
-                    .ReadFrom.Configuration(builder.Configuration)
+                    .ReadFrom.Configuration(NntpdConfiguredSinks.WithoutWriteTo(builder.Configuration))
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext()
                     .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
 
-                // Ensure a console sink exists even if configuration omits WriteTo,
-                // so interactive and systemd journal collection always have an output path.
-                if (!builder.Configuration.GetSection("Serilog:WriteTo").GetChildren().Any())
-                {
-                    loggerConfiguration.WriteTo.Console(
-                        restrictedToMinimumLevel: NntpdFileLogging.ConsoleMinimumLevel,
-                        outputTemplate: ConsoleOutputTemplate);
-                }
-
+                NntpdConfiguredSinks.Apply(loggerConfiguration, builder.Configuration);
                 configure?.Invoke(loggerConfiguration);
             },
             preserveStaticLogger: false,

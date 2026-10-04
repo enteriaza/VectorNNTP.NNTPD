@@ -28,8 +28,18 @@ public sealed class TransitPeerPolicy
         bool deferOnDuplicate,
         string pathToken,
         long maxSize,
-        TransitMessageTypes messageTypes)
+        TransitMessageTypes messageTypes,
+        NewsfeedsPattern receivePatterns,
+        TransitMessageTypes receiveArticleTypes,
+        long? sendMaxArticleBytes,
+        string sendUsername,
+        string sendPassword,
+        IReadOnlyList<string> pathExclusions)
     {
+        ArgumentNullException.ThrowIfNull(receivePatterns);
+        ArgumentNullException.ThrowIfNull(sendUsername);
+        ArgumentNullException.ThrowIfNull(sendPassword);
+        ArgumentNullException.ThrowIfNull(pathExclusions);
         Identifier = identifier;
         PeerName = peerName;
         MaxIncomingConnections = maxIncomingConnections;
@@ -45,6 +55,12 @@ public sealed class TransitPeerPolicy
         PathToken = pathToken;
         MaxSize = maxSize;
         MessageTypes = messageTypes;
+        ReceivePatterns = receivePatterns;
+        ReceiveArticleTypes = receiveArticleTypes;
+        SendMaxArticleBytes = sendMaxArticleBytes;
+        SendUsername = sendUsername;
+        SendPassword = sendPassword;
+        PathExclusions = pathExclusions;
     }
 
     /// <summary>
@@ -62,7 +78,10 @@ public sealed class TransitPeerPolicy
     /// <summary>Gets the inbound connection limit for this peer.</summary>
     public int MaxIncomingConnections { get; }
 
-    /// <summary>Gets the future outbound connection limit for this peer.</summary>
+    /// <summary>
+    /// Gets the outbound connection limit for this peer.
+    /// <c>0</c> closes send. Outbound feeding is not executed from this value.
+    /// </summary>
     public int MaxOutgoingConnections { get; }
 
     /// <summary>Gets literal AllowFrom prefixes (addresses and CIDRs).</summary>
@@ -74,7 +93,7 @@ public sealed class TransitPeerPolicy
     /// <summary>Gets parsed ConnectTo endpoints (not connected).</summary>
     public IReadOnlyList<TransitConnectEndpoint> ConnectTo { get; }
 
-    /// <summary>Gets the peer AUTHINFO username, or empty when credentials are not configured.</summary>
+    /// <summary>Gets the Receive AUTHINFO username, or empty when receive credentials are not configured.</summary>
     public string Username { get; }
 
     /// <summary>
@@ -89,7 +108,7 @@ public sealed class TransitPeerPolicy
     /// <summary>Gets the canonical TLS mode.</summary>
     public TransitSslMode Ssl { get; }
 
-    /// <summary>Gets the compiled newsfeeds-style Patterns expression.</summary>
+    /// <summary>Gets the Send newsfeeds expression. Inbound acceptance does not apply it.</summary>
     public NewsfeedsPattern Patterns { get; }
 
     /// <summary>Gets whether duplicate offers should later be deferred.</summary>
@@ -100,11 +119,38 @@ public sealed class TransitPeerPolicy
     /// </summary>
     public string PathToken { get; }
 
-    /// <summary>Gets the peer incoming-article size policy in bytes (not enforced yet).</summary>
+    /// <summary>Gets the Receive article size limit in bytes.</summary>
     public long MaxSize { get; }
 
-    /// <summary>Gets the configured message-type flags (classification not implemented).</summary>
+    /// <summary>Gets the Send article-type mask. Inbound acceptance does not apply it.</summary>
     public TransitMessageTypes MessageTypes { get; }
+
+    /// <summary>Gets the Receive newsfeeds expression.</summary>
+    public NewsfeedsPattern ReceivePatterns { get; }
+
+    /// <summary>Gets the Receive article-type mask. <c>65535</c> is unrestricted.</summary>
+    public TransitMessageTypes ReceiveArticleTypes { get; }
+
+    /// <summary>
+    /// Gets the Send article size limit in bytes. Independent of <see cref="MaxSize"/>.
+    /// <see langword="null"/> is unlimited. A value is an explicit ceiling. Outbound feeding does not apply it.
+    /// </summary>
+    public long? SendMaxArticleBytes { get; }
+
+    /// <summary>Gets the Send username, or empty when send credentials are not configured.</summary>
+    public string SendUsername { get; }
+
+    /// <summary>
+    /// Gets the Send password, or empty when send credentials are not configured.
+    /// Never write this value to logs.
+    /// </summary>
+    public string SendPassword { get; }
+
+    /// <summary>Gets a value indicating whether both send username and password are configured.</summary>
+    public bool HasSendCredentials => SendUsername.Length > 0 && SendPassword.Length > 0;
+
+    /// <summary>Gets additional Path hops that suppress sending to this peer.</summary>
+    public IReadOnlyList<string> PathExclusions { get; }
 
     /// <inheritdoc />
     public override string ToString() => Identifier;

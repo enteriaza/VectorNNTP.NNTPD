@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using VectorNNTP.Common.Articles.Validation;
 
 namespace VectorNNTP.Common.Tests.Articles.Validation
@@ -96,6 +97,57 @@ namespace VectorNNTP.Common.Tests.Articles.Validation
             Assert.True(NntpMessageIdValidation.IsValidMessageId(vector));
             vector[4] = (byte)'@';
             Assert.False(NntpMessageIdValidation.IsValidMessageId(vector));
+        }
+
+        [Fact]
+        public void Vector_scan_terminates_when_the_first_lane_does_not_match()
+        {
+            // Sixteen or more bytes remain, and lane 0 is not a match. A zero mask is the
+            // all-invalid window. A non-zero mask whose first lane is clear is the dot/@ case.
+            byte[][] tokens =
+            [
+                "<a.bbbbbbbbbbbbbbbb@c>"u8.ToArray(),
+                "<.bbbbbbbbbbbbbbbb@c>"u8.ToArray(),
+                "<                @b>"u8.ToArray(),
+                "<a@[ bbbbbbbbbbbbbbb]>"u8.ToArray(),
+                "<a@[                ]>"u8.ToArray(),
+                RepeatLiteral((byte)':', 20),
+            ];
+            bool[] expected = [true, false, false, false, false, true];
+
+            Exception? error = null;
+            using var done = new ManualResetEventSlim(false);
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    for (var i = 0; i < tokens.Length; i++)
+                    {
+                        Assert.Equal(expected[i], NntpMessageIdValidation.IsValidMessageId(tokens[i]));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                }
+                finally
+                {
+                    done.Set();
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "message-id-vector-termination",
+            };
+
+            thread.Start();
+            Assert.True(
+                done.Wait(TimeSpan.FromSeconds(2)),
+                "Message-ID vector scan did not finish; the lane-0 mask returned without advancing.");
+            if (error is not null)
+            {
+                ExceptionDispatchInfo.Capture(error).Throw();
+            }
         }
 
         [Fact]

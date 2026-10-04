@@ -1,7 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Transit;
@@ -404,60 +403,24 @@ public sealed class TransitPeersOptionsTests
     }
 
     [Fact]
-    public async Task ProductionAppsettings_BindsAndValidatesNamedTransitPeers()
+    public void ProductionAppsettings_DoesNotOwnTransitPeers()
     {
         var path = FindProductionAppsettings();
         var config = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
-        var options = new TransitPeersOptions();
-        config.GetSection("Transit").Bind(options);
 
-        Assert.True(options.ContainsKey("giganews"));
-        Assert.True(options.ContainsKey("blueworld-hosting"));
-        Assert.True(options.ContainsKey("usenet-ninja"));
-        Assert.False(options.ContainsKey("Giganews, Inc."));
-        Assert.False(options.ContainsKey("Blueworld Hosting"));
-        Assert.False(options.ContainsKey("Usenet Ninja"));
+        Assert.False(config.GetSection("Transit").Exists());
+        Assert.Null(config["Nntpd:Transit:WantTrash"]);
+        Assert.Null(config["Nntpd:Transit:LogTrash"]);
+        Assert.Equal("8", config["Nntpd:Transit:StreamOutstandingArticleDepth"]);
+        Assert.Equal("4294967296", config["Nntpd:TransitQueueMemoryLimit"]);
 
-        var result = new TransitPeersOptionsValidator().Validate(null, options);
-        Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+        var peers = new TransitPeersOptions();
+        config.GetSection("Transit").Bind(peers);
+        Assert.Empty(peers);
+        Assert.True(new TransitPeersOptionsValidator().Validate(null, peers).Succeeded);
 
-        var snapshot = TransitConfigurationSnapshot.Create(options);
-        Assert.Equal("Giganews, Inc.", snapshot.Peers["giganews"].PeerName);
-        Assert.Equal("Blueworld Hosting", snapshot.Peers["blueworld-hosting"].PeerName);
-        Assert.Equal("Usenet Ninja", snapshot.Peers["usenet-ninja"].PeerName);
-        Assert.Equal("giganews", snapshot.Peers["giganews"].Identifier);
-        Assert.Equal("nntp.giganews.com", snapshot.Peers["giganews"].PathToken);
-        Assert.Equal("usenet.blueworldhosting.com", snapshot.Peers["blueworld-hosting"].PathToken);
-        Assert.Equal(5_242_880, snapshot.Peers["giganews"].MaxSize);
-        Assert.Equal(1_048_576, snapshot.Peers["blueworld-hosting"].MaxSize);
-        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["giganews"].MessageTypes);
-        Assert.Equal(TransitMessageTypes.All, snapshot.Peers["blueworld-hosting"].MessageTypes);
-        Assert.False(snapshot.Peers["giganews"].HasPeerCredentials);
-        Assert.False(snapshot.Peers["blueworld-hosting"].HasPeerCredentials);
-
-        var builder = Host.CreateEmptyApplicationBuilder(
-            new HostApplicationBuilderSettings
-            {
-                ContentRootPath = Path.GetDirectoryName(path),
-            });
-        builder.Configuration.AddJsonFile(path, optional: false);
-        builder.Services.AddOptions<TransitPeersOptions>()
-            .Bind(builder.Configuration.GetSection("Transit"))
-            .ValidateOnStart();
-        builder.Services.AddSingleton<IValidateOptions<TransitPeersOptions>, TransitPeersOptionsValidator>();
-        using var host = builder.Build();
-        await host.StartAsync();
-        try
-        {
-            var bound = host.Services.GetRequiredService<IOptions<TransitPeersOptions>>().Value;
-            Assert.True(bound.ContainsKey("giganews"));
-            Assert.True(bound.ContainsKey("blueworld-hosting"));
-            Assert.True(bound.ContainsKey("usenet-ninja"));
-        }
-        finally
-        {
-            await host.StopAsync();
-        }
+        var leftover = new TransitLeftoverConfigurationValidator(config).Validate(null, new NntpdOptions());
+        Assert.True(leftover.Succeeded);
     }
 
     private static string FindProductionAppsettings()

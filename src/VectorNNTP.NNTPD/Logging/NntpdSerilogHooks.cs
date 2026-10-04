@@ -5,12 +5,13 @@ using Serilog.Sinks.File.Archive;
 namespace VectorNNTP.NNTPD.Logging;
 
 /// <summary>
-/// Public static hook factory for <c>Serilog.Settings.Configuration</c> File <c>hooks</c>.
+/// Public static hook factory for the File <c>hooks</c> argument.
 /// </summary>
 /// <remarks>
 /// <see cref="ArchiveHooks"/> cannot be constructed from JSON value types. The File sink
-/// <c>hooks</c> argument is a type/member string:
+/// <c>hooks</c> argument remains the type/member string
 /// <c>VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD</c>.
+/// The host logger maps that string to <see cref="DailyGzipFastest"/> directly.
 /// Compression is <see cref="CompressionLevel.Fastest"/> with no archive count limit so
 /// historical <c>.gz</c> files are not deleted by this hook.
 /// </remarks>

@@ -137,6 +137,12 @@ namespace VectorNNTP.Common.Articles.Validation
         /// <param name="end">Index of the closing <c>&gt;</c>.</param>
         /// <param name="index">Current index. Advanced by the consumed prefix.</param>
         /// <returns><see langword="false"/> when the current octet is not <c>atext</c>.</returns>
+        /// <remarks>
+        /// A zero lane mask, and any mask whose first lane is clear, is a zero leading count.
+        /// That case returns before <see cref="BitOperations.TrailingZeroCount(uint)"/>.
+        /// Native AOT lowers that count through a zero-extended NOT and BSF, which returns
+        /// success without advancing <paramref name="index"/>.
+        /// </remarks>
         private static bool TryConsumeAtext(ReadOnlySpan<byte> messageId, int end, ref int index)
         {
             if ((uint)index >= (uint)end)
@@ -147,13 +153,13 @@ namespace VectorNNTP.Common.Articles.Validation
             if (Vector128.IsHardwareAccelerated && index <= end - Vector128ByteCount)
             {
                 ref var origin = ref MemoryMarshal.GetReference(messageId);
-                var count = LeadingMaskCount(AtextLaneBits(Vector128.LoadUnsafe(ref origin, (nuint)index)));
-                if (count == 0)
+                var laneBits = AtextLaneBits(Vector128.LoadUnsafe(ref origin, (nuint)index));
+                if (laneBits == 0 || (laneBits & 1u) == 0)
                 {
                     return false;
                 }
 
-                index += count;
+                index += LeadingMaskCount(laneBits);
                 return true;
             }
 
@@ -171,6 +177,10 @@ namespace VectorNNTP.Common.Articles.Validation
         /// <param name="end">Index of the closing <c>&gt;</c>.</param>
         /// <param name="index">Current index. Advanced by the consumed prefix.</param>
         /// <returns><see langword="false"/> when the current octet is not <c>mdtext</c>.</returns>
+        /// <remarks>
+        /// A zero lane mask, and any mask whose first lane is clear, returns before
+        /// <see cref="BitOperations.TrailingZeroCount(uint)"/>. See <see cref="TryConsumeAtext"/>.
+        /// </remarks>
         private static bool TryConsumeMdtext(ReadOnlySpan<byte> messageId, int end, ref int index)
         {
             if ((uint)index >= (uint)end)
@@ -181,13 +191,13 @@ namespace VectorNNTP.Common.Articles.Validation
             if (Vector128.IsHardwareAccelerated && index <= end - Vector128ByteCount)
             {
                 ref var origin = ref MemoryMarshal.GetReference(messageId);
-                var count = LeadingMaskCount(MdtextLaneBits(Vector128.LoadUnsafe(ref origin, (nuint)index)));
-                if (count == 0)
+                var laneBits = MdtextLaneBits(Vector128.LoadUnsafe(ref origin, (nuint)index));
+                if (laneBits == 0 || (laneBits & 1u) == 0)
                 {
                     return false;
                 }
 
-                index += count;
+                index += LeadingMaskCount(laneBits);
                 return true;
             }
 

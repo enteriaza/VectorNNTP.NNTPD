@@ -5,6 +5,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.Tests.TestDoubles;
 
@@ -64,6 +65,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
     public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
 
     public IReadOnlyList<NntpSharedConfigurationCandidate>? SharedConfigurationRows { get; set; }
+
+    public TransitCatalogueRecord? TransitCatalogue { get; set; } = TransitCatalogueRecord.Empty;
 
     public Exception? SharedConfigurationException { get; set; }
 
@@ -139,6 +142,7 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
             SharedConfigurationRows = SharedConfigurationRows,
             SharedConfigurationException = SharedConfigurationException,
+            TransitCatalogue = TransitCatalogue,
         };
         lock (_sync)
         {
@@ -342,6 +346,21 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection, INntpSharedConfi
         }
 
         return ValueTask.FromResult(PostFilterPolicy);
+    }
+
+    public TransitCatalogueRecord? TransitCatalogue { get; set; }
+
+    public Exception? QueryTransitCatalogueException { get; set; }
+
+    public ValueTask<TransitCatalogueRecord?> QueryTransitCatalogueAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (QueryTransitCatalogueException is not null)
+        {
+            throw QueryTransitCatalogueException;
+        }
+
+        return ValueTask.FromResult(TransitCatalogue);
     }
 
     public List<PostFilterRejectionEvidence> Rejections { get; } = [];

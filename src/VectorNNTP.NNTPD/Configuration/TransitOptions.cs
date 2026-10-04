@@ -6,11 +6,10 @@ namespace VectorNNTP.NNTPD.Configuration;
 /// NNTPD-local transit/streaming runtime options under <c>Nntpd:Transit</c>.
 /// </summary>
 /// <remarks>
-/// Peer authorization lives in the top-level <c>Transit</c> section
-/// (<see cref="TransitPeersOptions"/>). This type holds STREAM TX depth and
-/// site-wide INN-style junk-file settings (<see cref="WantTrash"/> /
-/// <see cref="LogTrash"/>), corresponding to inn.conf <c>wanttrash</c> /
-/// <c>logtrash</c>.
+/// Peer authorization is the published MySQL Transit catalogue. This type holds
+/// the process-local STREAM TX depth. <see cref="WantTrash"/> and
+/// <see cref="LogTrash"/> are copied from <c>nntptransitglobalrevision</c> when
+/// that catalogue is published. JSON must not set those two flags.
 /// </remarks>
 public sealed class TransitOptions
 {

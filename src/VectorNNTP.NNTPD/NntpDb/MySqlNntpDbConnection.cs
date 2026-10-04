@@ -8,6 +8,7 @@ using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.SessionState;
+using VectorNNTP.NNTPD.Transit;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
@@ -772,5 +773,20 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         }
 
         return parsed;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<TransitCatalogueRecord?> QueryTransitCatalogueAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await NntpTransitCatalogueLoader.LoadAsync(_session, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+                                   and not NntpDbUnavailableException
+                                   and not InvalidOperationException)
+        {
+            throw new NntpDbUnavailableException("MySQL Transit catalogue query failed.", ex);
+        }
     }
 }

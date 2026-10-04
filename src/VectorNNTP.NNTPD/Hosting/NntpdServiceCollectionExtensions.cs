@@ -177,6 +177,7 @@ public static class NntpdServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<NntpdOptions>, NntpdOptionsValidator>();
         services.AddSingleton<IValidateOptions<NntpdOptions>, PostFilterLeftoverConfigurationValidator>();
+        services.AddSingleton<IValidateOptions<NntpdOptions>, TransitLeftoverConfigurationValidator>();
         services.AddSingleton<IOptions<AcmeCloudflareOptions>>(static sp =>
             Options.Create<AcmeCloudflareOptions>(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
         services.AddAcmeCloudflareInfrastructure();
@@ -453,6 +454,11 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NinpathsProcessingService>(static sp =>
                 sp.GetRequiredService<NinpathsProcessingService>()));
+
+        services.TryAddSingleton<TransitCatalogueService>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, TransitCatalogueService>(static sp =>
+                sp.GetRequiredService<TransitCatalogueService>()));
 
         services.TryAddSingleton<TransitDnsRefreshService>();
         services.TryAddEnumerable(

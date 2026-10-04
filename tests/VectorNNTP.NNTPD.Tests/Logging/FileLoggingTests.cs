@@ -148,6 +148,115 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
+    public void DirectRegistration_MatchesProductionAsyncGzipFileSink()
+    {
+        var logDir = CreateTempLogDir();
+        try
+        {
+            var configuration = new ConfigurationManager();
+            configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
+            configuration.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    [$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.LogDir)}"] = logDir,
+                    [$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.ApplicationName)}"] = "VectorNNTP.NNTPD",
+                });
+            NntpdFileLogging.BindResolvedFilePath(configuration);
+
+            var levels = NntpdConfiguredSinks.WithoutWriteTo(configuration);
+            Assert.Empty(levels.GetSection("Serilog:WriteTo").GetChildren());
+            Assert.Equal("Information", levels["Serilog:MinimumLevel:Default"]);
+            Assert.Equal("Debug", levels["Serilog:MinimumLevel:Override:VectorNNTP.NNTPD"]);
+
+            var loggerConfiguration = new LoggerConfiguration()
+                .ReadFrom.Configuration(levels);
+            NntpdConfiguredSinks.Apply(loggerConfiguration, configuration);
+            using var logger = loggerConfiguration.CreateLogger();
+
+            var sinks = WalkLogEventSinks(logger).ToArray();
+            var fileSink = Assert.Single(
+                sinks,
+                static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+            Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
+            Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
+            Assert.Equal(14, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
+            Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
+            Assert.Same(NntpdSerilogHooks.DailyGzipFastest, ReadInstanceField(fileSink, "_hooks"));
+
+            var asyncSink = Assert.Single(
+                sinks,
+                static n => n.GetType().Name.Equals("BackgroundWorkerSink", StringComparison.Ordinal));
+            Assert.True(Assert.IsType<bool>(ReadInstanceField(asyncSink, "_blockWhenFull")!));
+            var queue = ReadInstanceField(asyncSink, "_queue")
+                        ?? throw new InvalidOperationException("BackgroundWorkerSink._queue was not found.");
+            var boundedCapacity = queue.GetType().GetProperty("BoundedCapacity")?.GetValue(queue)
+                                  ?? throw new InvalidOperationException("BoundedCapacity was not found.");
+            Assert.Equal(50000, Convert.ToInt32(boundedCapacity, CultureInfo.InvariantCulture));
+            AssertFlushesOncePerSecond(sinks);
+            Assert.Single(sinks, static n => n.GetType().Name.Equals("ConsoleSink", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+            TryDelete(logDir);
+        }
+    }
+
+    [Fact]
+    public void DirectRegistration_OmitsFileWhenOnlyConsoleIsConfigured()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Serilog:WriteTo:0:Name"] = "Console",
+                ["Serilog:WriteTo:0:Args:restrictedToMinimumLevel"] = "Warning",
+                ["Serilog:WriteTo:0:Args:outputTemplate"] = NntpdLoggingExtensions.ConsoleOutputTemplate,
+            })
+            .Build();
+
+        var loggerConfiguration = new LoggerConfiguration();
+        NntpdConfiguredSinks.Apply(loggerConfiguration, configuration);
+        using var logger = loggerConfiguration.CreateLogger();
+        var sinks = WalkLogEventSinks(logger).ToArray();
+        Assert.Single(sinks, static n => n.GetType().Name.Equals("ConsoleSink", StringComparison.Ordinal));
+        Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+        Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("BackgroundWorkerSink", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DirectRegistration_LeavesUnsupportedFileArgumentsOnConfigurationBinding()
+    {
+        var logDir = CreateTempLogDir();
+        try
+        {
+            var path = NntpdFileLogging.RollingFilePath(logDir, "VectorNNTP.NNTPD");
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Serilog:Using:0"] = "Serilog.Sinks.File",
+                    ["Serilog:WriteTo:0:Name"] = "File",
+                    ["Serilog:WriteTo:0:Args:path"] = path,
+                    ["Serilog:WriteTo:0:Args:shared"] = "true",
+                    ["Serilog:WriteTo:0:Args:rollingInterval"] = "Day",
+                })
+                .Build();
+
+            var loggerConfiguration = new LoggerConfiguration();
+            NntpdConfiguredSinks.Apply(loggerConfiguration, configuration);
+            using var logger = loggerConfiguration.CreateLogger();
+            var fileSink = Assert.Single(
+                WalkLogEventSinks(logger),
+                static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+            Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_shared")!));
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+            TryDelete(logDir);
+        }
+    }
+
+    [Fact]
     public void ProductionNewsAndInpaths_FlushCurrentFileOncePerSecond()
     {
         var logDir = CreateTempLogDir();

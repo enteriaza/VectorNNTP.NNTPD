@@ -37,4 +37,22 @@ internal static partial class TransitLogMessages
         Level = LogLevel.Error,
         Message = "Transit AllowFrom DNS refresh loop terminated unexpectedly")]
     public static partial void RefreshLoopTerminated(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2270,
+        Level = LogLevel.Error,
+        Message = "Transit catalogue initial load failed")]
+    public static partial void CatalogueInitialLoadFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2271,
+        Level = LogLevel.Warning,
+        Message = "Transit catalogue refresh failed; last published snapshot remains active")]
+    public static partial void CatalogueRefreshFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2272,
+        Level = LogLevel.Information,
+        Message = "Transit catalogue published {PublicationId} ({PeerCount} peer(s))")]
+    public static partial void CataloguePublished(ILogger logger, long PublicationId, int PeerCount);
 }

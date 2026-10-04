@@ -2883,9 +2883,7 @@
       "cknipe@opticnetworks.net"
     ],
     "Transit": {
-      "LogTrash": true,
-      "StreamOutstandingArticleDepth": 8,
-      "WantTrash": true
+      "StreamOutstandingArticleDepth": 8
     },
     "Systemd": {
       "EnableWatchdog": true,
@@ -2987,53 +2985,6 @@
       "retainedFileCountLimit": 1,
       "rollOnFileSizeLimit": false,
       "rollingInterval": "Day"
-    }
-  },
-  "Transit": {
-    "blueworld-hosting": {
-      "AllowFrom": [ "usenet.blueworldhosting.com" ],
-      "ConnectTo": [ "usenet.blueworldhosting.com:119" ],
-      "DeferOnDuplicate": true,
-      "MaxIncomingConnections": 10,
-      "MaxOutgoingConnections": 10,
-      "MaxSize": 1048576,
-      "MessageTypes": [ "all" ],
-      "Password": "",
-      "PathToken": "usenet.blueworldhosting.com",
-      "Patterns": "*,!unidata.*,!control.*,!junk",
-      "PeerName": "Blueworld Hosting",
-      "Ssl": "",
-      "Username": ""
-    },
-    "giganews": {
-      "AllowFrom": [ "news-out.nntp.giganews.com" ],
-      "ConnectTo": [ "opticnetworks-in.nntp.ord.giganews.com:119" ],
-      "DeferOnDuplicate": true,
-      "MaxIncomingConnections": 80,
-      "MaxOutgoingConnections": 80,
-      "MaxSize": 5242880,
-      "MessageTypes": [ "all" ],
-      "Password": "",
-      "PathToken": "nntp.giganews.com",
-      "Patterns": "*,!unidata.*",
-      "PeerName": "Giganews, Inc.",
-      "Ssl": "",
-      "Username": ""
-    },
-    "usenet-ninja": {
-      "AllowFrom": [ "198.18.0.0/15" ],
-      "ConnectTo": [],
-      "DeferOnDuplicate": true,
-      "MaxIncomingConnections": 10,
-      "MaxOutgoingConnections": 10,
-      "MaxSize": 5242880,
-      "MessageTypes": [ "all" ],
-      "Password": "",
-      "PathToken": "nntp.usenet.ninja",
-      "Patterns": "*",
-      "PeerName": "Usenet Ninja",
-      "Ssl": "",
-      "Username": ""
     }
   }
 }

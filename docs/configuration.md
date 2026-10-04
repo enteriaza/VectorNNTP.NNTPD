@@ -1,6 +1,6 @@
 # VectorNNTP.NNTPD — Configuration
 
-Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the top-level `Transit` peer dictionary, the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `{entry assembly name}.json` (for this host, `VectorNNTP.NNTPD.json`), the optional environment overlay `{entry assembly name}.{environment}.json` (`VectorNNTP.NNTPD.Development.json`), the shared binary-directory file `RabbitMq.json` (the `RabbitMQ` section; not environment-specific), environment variables, and command-line arguments via the Generic Host. `RabbitMq.json` is loaded after the application JSON files. Environment variables and command-line arguments still override it. `appsettings.json` is not loaded.
+Configuration binds from the application-neutral root (shared Cloudflare secrets and the shared ACME account email), the `Nntpd` section (NNTPD-specific settings including bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory, renewal threshold, and state directory), the top-level `Redis` section, the top-level `RabbitMQ` section, `ConnectionStrings:NntpDB`, the top-level `NntpDb` application options, the MySQL Transit catalogue (`nntptransitcurrent`), the top-level `Control` PGP-authority catalogue, the top-level `Moderation` moderator catalogue, and the top-level `Email` outbound-mail options. Sources include `{entry assembly name}.json` (for this host, `VectorNNTP.NNTPD.json`), the optional environment overlay `{entry assembly name}.{environment}.json` (`VectorNNTP.NNTPD.Development.json`), the shared binary-directory file `RabbitMq.json` (the `RabbitMQ` section; not environment-specific), environment variables, and command-line arguments via the Generic Host. `RabbitMq.json` is loaded after the application JSON files. Environment variables and command-line arguments still override it. `appsettings.json` is not loaded.
 
 Shared ACME, Cloudflare, and bind-address **implementations** are owned by `VectorNNTP.Common`. Shared implementation does not imply shared/global configuration. VectorNNTP.NNTPD binds bind addresses and ports, Cloudflare zone id, DNS suffix, ACME directory URL, renewal threshold, and state directory from the `Nntpd` section; root-level copies of those keys are not applied. NNTPD and BackFiller publish the ACME account email (`acmeaccount`), ACME certificate password (`acmecertpass`), Cloudflare API key (`cloudflareapikey`), and RabbitMQ username and password (`rabbitmqusername`, `rabbitmqpassword`) from the single `nntpsharedconfig` row. Those five values are not read from `VECTOR__ACMEACCOUNT`, `VECTOR__ACMECERTIFICATEPASSWORD`, `VECTOR__CLOUDFLAREAPIKEY`, `VECTOR__RABBITMQ__USERNAME`, or `VECTOR__RABBITMQ__PASSWORD`. StorageServer still supplies the same environment variables. VectorNNTP.BackFiller owns bind addresses, TLS listen port, Cloudflare zone id, DNS suffix, and ServerId under the `BackFiller` section (`BackFiller:BindAddress`, `BackFiller:BindPortTls`, `BackFiller:CloudFlareZoneId`, `BackFiller:DnsSuffix`, `BackFiller:ServerId`) and adapts them into Common; shared-configuration publication replaces the zone id and DNS suffix from `nntpsharedconfig`. It does not read those keys from the root. There is no `BackFiller:BindPort`. BackFiller still uses the shared `ConnectionStrings__NntpDB` Generic Host mapping for the MySQL connection. Values are case-sensitive and are not transformed. There is no `nntpd__`, `backfiller__`, or unprefixed `__` alias for StorageServer secrets. There is no NNTPD-specific or BackFiller-specific ACME email or password variable.
 
@@ -60,8 +60,8 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `ArticleIngestion:ScaleUpConsecutiveIntervals` | int | `2` | no | Consecutive high-pressure samples before +1 worker (`1–100`) |
 | `ArticleIngestion:ScaleDownConsecutiveIntervals` | int | `3` | no | Consecutive low-pressure samples before −1 worker (`1–100`) |
 | `Nntpd:Transit:StreamOutstandingArticleDepth` | int | `8` | no | Max concurrent outstanding STREAM article TX operations (`4–16`, rejected outside range). Depth gate above shared `WriteArticleAsync`; independent of TX Channel / Pipe / ingestion queue. Not peer authorization. |
-| `Nntpd:Transit:WantTrash` | bool | `true` | no | INN `wanttrash`. TAKETHIS/IHAVE only. When `true`, articles whose `Newsgroups:` names are all unknown or RFC 6048 `j` are accepted and treated as junk internally after dequeue. When `false`, unknown/non-carried groups are rejected before enqueue (`437`/`439`) and write a `-` news line. The original `Newsgroups:` header is not rewritten. POST is not subject to this policy. |
-| `Nntpd:Transit:LogTrash` | bool | `true` | no | INN `logtrash`. When `true`, accepted-junk events write a `j` line to `{LogDir}/news`. When `false`, junk articles are still accepted; only the junk news line is omitted. Accepted (`+`), rejected (`-`), and moderated (`m`) events are still written. Path-survey (`inpaths`) observations are independent of this setting and are still written for CanonicalV1 queued articles. |
+| `Nntpd:Transit:WantTrash` | _(removed)_ | n/a | **must be absent** | Published from `nntptransitglobalrevision.want_trash` onto the process options after the catalogue loads. INN `wanttrash`. TAKETHIS/IHAVE only. When `Y`, articles whose `Newsgroups:` names are all unknown or RFC 6048 `j` are accepted and treated as junk internally after dequeue. When `N`, unknown/non-carried groups are rejected before enqueue (`437`/`439`) and write a `-` news line. The original `Newsgroups:` header is not rewritten. POST is not subject to this policy. |
+| `Nntpd:Transit:LogTrash` | _(removed)_ | n/a | **must be absent** | Published from `nntptransitglobalrevision.log_trash`. INN `logtrash`. When `Y`, accepted-junk events write a `j` line to `{LogDir}/news`. When `N`, junk articles are still accepted; only the junk news line is omitted. Accepted (`+`), rejected (`-`), and moderated (`m`) events are still written. Path-survey (`inpaths`) observations are independent of this setting and are still written for CanonicalV1 queued articles. |
 | `Nntpd:PostFilter` | _(removed)_ | n/a | **must be absent** | Leftover section fails startup. Cluster PostFilter policy is MySQL `nntppostfiltercurrent`. See [postfilter.md](postfilter.md). |
 | `SpeedTest:MaxBytes` | long | `67108864` (64 MiB) | no | Maximum SPEEDTEST synthetic payload bytes (`1024–1073741824`) |
 | `SpeedTest:MaxConcurrent` | int | `2` | no | Maximum concurrent SPEEDTEST operations on this host (`1–8`) |
@@ -69,7 +69,7 @@ Validation runs at startup through `IValidateOptions<NntpdOptions>` and data ann
 | `FeedDiagnostics:Enabled` | bool | `false` | no | Temporary real-feed snapshot reporter. Also enabled by `VECTORNNTP_FEED_DIAGNOSTICS=1`. Off by default; not per-article logging. |
 | `FeedDiagnostics:IntervalSeconds` | int | `5` | no | Snapshot interval (`1–60`) |
 | `FeedDiagnostics:IncludeSessions` | bool | `true` | no | Include compact per-session lines (remote IP/port only; no Message-IDs) |
-| `Transit:{identifier}` | object | _(none)_ | no | Named Transit peer (top-level `Transit` dictionary; key is the protocol identifier). |
+| `Transit` | _(removed)_ | n/a | **must be absent** | Leftover peer dictionary fails startup. The catalogue is MySQL `nntptransitcurrent`. See [schema/nntptransit.sql](schema/nntptransit.sql). |
 | `Control:PgpAuthorities` | object | empty catalogue | no | Authoritative Usenet PGP control-authority catalogue (data only; see below). Not a moderator list. |
 | `Moderation:Source` | object | _(none)_ | no | Provenance for the imported INN `samples/moderators` URL. Not a runtime authorization source. |
 | `Moderation:Moderators` | array | `[]` | no | Leftover static list. Must be empty. Runtime authorization is `nntpmoderators`. |
@@ -846,26 +846,26 @@ Example:
 "ProxyHosts": [ "198.51.100.10", "2001:db8::proxy" ]
 ```
 
-## Transit named peers (top-level `Transit`)
+## Transit named peers (MySQL `nntptransitcurrent`)
 
-Trusted feed peers are configured in a **top-level** `Transit` dictionary. Dictionary keys are protocol-safe **identifiers**. There is no nested `Transit:Peers` layer.
+Trusted feed peers are the published MySQL catalogue documented in [schema/nntptransit.sql](schema/nntptransit.sql). One publication names one receive revision, one send revision, and one global revision. Those revisions contain the same peer identifiers. A top-level JSON `Transit` object fails startup.
 
-This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy.
+This is **peer authorization**, not ordinary user authentication. A unique IP-ACL match grants `AuthorizedTransit` + `StreamingPermitted` without `IsAuthenticated`, reader, or posting, and retains the named peer policy. Send endpoints and send article policy are loaded into that snapshot and do not open outbound connections.
 
 `AUTHINFO USER/PASS` is a **public** command (READER, STREAM, transit peers, and non-transit clients may issue it). Credential authority is the session MODE, not the source IP. `MODE STREAM` authenticates against that session's Transit peer credentials only (both configured `Username` and `Password` non-empty and ordinal match). `MODE READER` and an unspecified mode authenticate against the ordinary provider (newsmaster, then MySQL `nntpusers`) even when the client IP matches a Transit `AllowFrom`. There is no Transit ↔ MySQL fallback. AUTHINFO success is not Transit authorization: a READER authentication does not become a Transit peer.
 
 | Situation | Behavior |
 |-----------|----------|
-| `Transit` omitted / `{}` | Deny-by-default. Sessions start with no transit/streaming privileges. |
+| Published catalogue has no peers | Deny-by-default. Sessions start with no transit/streaming privileges. |
 | Effective client uniquely matches one peer's IP ACL | Session is that named Transit peer. Enables `MODE STREAM`, `CHECK`, `TAKETHIS`, `IHAVE`. `MODE STREAM` AUTHINFO uses that peer's credentials only. `MODE READER` AUTHINFO uses MySQL/newsmaster. |
 | Effective client matches no peer | Same as empty dictionary for that connection. AUTHINFO uses the ordinary authentication provider unless `MODE STREAM` was accepted (then Transit auth fails without MySQL). |
 | Effective client matches more than one peer | Transit is **denied**. A WARNING is logged on **every** such connection (`source IP` + matching peer names). Literal/CIDR and duplicate-hostname overlap is rejected at configuration validation; residual DNS-vs-literal overlap is still denied at identification time. |
 
-`Nntpd:Transit:StreamOutstandingArticleDepth` is unrelated peer policy: it only bounds concurrent outbound STREAM article TX operations (valid `4–16`).
+`Nntpd:Transit:StreamOutstandingArticleDepth` stays in JSON. It only bounds concurrent outbound STREAM article TX operations (valid `4–16`). `Nntpd:TransitQueueMemoryLimit` also stays process-local. `WantTrash` and `LogTrash` are the global revision, not JSON.
 
 ## SPEEDTEST diagnostic (`Nntpd:SpeedTest`)
 
-`SPEEDTEST <identifier>` is a VectorNNTP extension. `<identifier>` is the configured Transit dictionary key, never `PeerName` and never a client-supplied host or port. Limits apply only to this diagnostic and do not change TAKETHIS/IHAVE/CHECK/STREAM.
+`SPEEDTEST <identifier>` is a VectorNNTP extension. `<identifier>` is the Transit peer identifier, never `PeerName` and never a client-supplied host or port. Limits apply only to this diagnostic and do not change TAKETHIS/IHAVE/CHECK/STREAM.
 
 Example:
 
@@ -884,45 +884,34 @@ Outbound peer connections from `ConnectTo` are not opened by SPEEDTEST. See `doc
 
 ### Identifier and PeerName
 
-The JSON key is the **identifier**: a stable protocol/machine identity used by `SPEEDTEST <identifier>` and authorization. Identifiers are **not** normalized (no case-folding, hyphenation, or lowercasing). Two identifiers that differ only by case remain distinct.
+`nntptransitpeer.identifier` is the stable protocol/machine identity used by `SPEEDTEST <identifier>` and authorization. Identifiers are **not** normalized (no case-folding, hyphenation, or lowercasing). Two identifiers that differ only by case remain distinct.
 
-Identifier grammar: **1–256 visible ASCII characters** (`0x21–0x7E`). No space, TAB, other whitespace, or control characters. No Unicode. The exact configured string is the identity.
+Identifier grammar: **1–256 visible ASCII characters** (`0x21–0x7E`). No space, TAB, other whitespace, or control characters. No Unicode. The exact stored string is the identity.
 
-`PeerName` is the required human-readable administrative name. It is **not** derived from the identifier and is **not** a SPEEDTEST command argument. Spaces, commas, punctuation, and printable Unicode are allowed (`Giganews, Inc.`, `Blueworld Hosting`). A PeerName must be non-empty, not whitespace-only, at most 256 characters, and must not contain control characters. The configured string is preserved exactly.
-
-Example:
-
-```json
-"Transit": {
-  "usenet-ninja": {
-    "PeerName": "Usenet Ninja",
-    "MaxIncomingConnections": 10,
-    "MaxOutgoingConnections": 10,
-    "AllowFrom": [ "198.18.0.0/15" ]
-  }
-}
-```
+`peer_name` is the required human-readable administrative name. It is **not** derived from the identifier and is **not** a SPEEDTEST command argument. Spaces, commas, punctuation, and printable Unicode are allowed (`Giganews, Inc.`, `Blueworld Hosting`). A name must be non-empty, not whitespace-only, at most 256 characters, and must not contain control characters. The stored string is preserved exactly.
 
 Command: `SPEEDTEST usenet-ninja`  
 Result fields: `PEER=usenet-ninja` and `PEERNAME=Usenet Ninja`.
 
-### Peer fields
+### Catalogue columns
 
-| Field | Type | Default | Required? | Description |
-|-------|------|---------|-----------|-------------|
-| `PeerName` | string | _(none)_ | **yes** | Human-readable administrative display name. Preserved exactly. Not a protocol identifier. |
-| `MaxIncomingConnections` | int | _(none)_ | **yes** | Cluster-wide max simultaneous inbound connections for this peer's `Identifier` (`0–4096`). Redis is authoritative. Source IP is ACL identity only; it is not the limit key. Counted only after peer identification. A later READER AUTHINFO releases that slot. `0` means closed (reject all new inbound connections), not unlimited. Lowering the limit does not disconnect existing sessions; new admits are rejected until cluster usage falls below the new limit. |
-| `MaxOutgoingConnections` | int | _(none)_ | **yes** | Future outbound connection limit (`0–4096`). Stored and validated only; this host does not open outbound sockets from `ConnectTo`. |
-| `AllowFrom` | string array | `[]` | no | Inbound source ACL. Empty means the peer cannot match inbound clients (outbound-only policy). |
-| `ConnectTo` | string array | `[]` | no | Outbound endpoints with an **explicit** port (`host:port` or `[IPv6]:port`). Parsed only. |
-| `Username` | string | `""` | no | Optional peer AUTHINFO username. Both username and password must be set or both blank |
-| `Password` | string | `""` | no | Optional peer AUTHINFO password. Never log. Authentication requires a matching non-empty username |
-| `Ssl` | string | `""` | no | Blank = no TLS; `TLS` = native TLS; `STARTTLS` = upgrade. Case-insensitive; invalid values fail validation. |
-| `Patterns` | string | `*` | no | One newsfeeds(5) / `uwildmat_poison` subscription expression (comma-separated string, not a JSON array, regex, or .NET glob). |
-| `DeferOnDuplicate` | bool | `true` | no | Stored for later CHECK/IHAVE in-flight duplicate handling (`431`/`436` vs `438`/`435`). CHECK HistoryDB itself is implemented separately. |
-| `PathToken` | string | `""` | no | Exact token reserved for outbound Path-header loop prevention. Not a DNS name or IP; not case-folded. Empty is allowed. **Not consumed** by article-routing code yet. Max 255 characters; no control characters. |
-| `MaxSize` | long | `10485760` | no | Peer incoming-article size policy in bytes (`1–2147483647`). Stored only; not wired into TAKETHIS ingestion. Distinct from `Nntpd:ArticleIngestion:MaxArticleBytes`. |
-| `MessageTypes` | string array | `["default"]` (when omitted or empty) | no | Diablo article-type names (see below). Not regex, MIME types, or newsgroup Patterns. Classification is not implemented. |
+Column definitions, checks, and keys are [schema/nntptransit.sql](schema/nntptransit.sql). Receive and Send are separate rows. There is no JSON field for these values.
+
+| Column | Plane | Meaning |
+|--------|-------|---------|
+| `max_inbound` | Receive | Cluster-wide inbound connection limit (`0–4096`). `0` closes receive. Redis counts admits after identification. A later READER AUTHINFO releases that slot. |
+| `username`, `password` | Receive and Send, separately | Both empty or both set. Receive is the AUTHINFO pair used by an identified peer. Send is stored and not used to open a connection. Never log either password. |
+| `defer_on_duplicate` | Receive | `Y`/`N`. Stored for later CHECK/IHAVE duplicate handling. |
+| `max_article_bytes` | Receive and Send, separately | Receive is `NOT NULL` and `1–2147483647`. Send `NULL` is unlimited and is not replaced with a numeric default. A non-NULL Send value is an explicit ceiling in that same range. `0` is not unlimited. Send revision 1 was seeded from `nntpsharedconfig.maxartsize` (`5242880`), not from each peer's receive size. |
+| `article_types` | Receive and Send, separately | Integer mask `0–65535`. `65535` is unrestricted, `1` is text only, `0` permits no classified article. |
+| `patterns` | Receive and Send, separately | One newsfeeds expression. `*` is every newsgroup. |
+| `allowfrom.entry` | Receive | Inbound source ACL, ordinal order. Zero rows means the peer never matches. |
+| `max_outbound` | Send | Outbound connection limit (`0–4096`). `0` closes send. No outbound socket is opened. |
+| `ssl_mode` | Send | `None`, `Tls`, or `StartTls`. |
+| `endpoint.host`, `endpoint.port` | Send | Unbracketed host and explicit port. Duplicate host/port pairs are rejected. Zero rows is allowed. |
+| `path_token` | Send | Path hop for this peer. Empty is allowed. Not consumed by routing yet. |
+| `pathexclude.path_token` | Send | Extra Path hops that suppress sending. Zero rows in the current publication. |
+| `want_trash`, `log_trash` | Global | `Y`/`N` on the one global revision named by the publication. |
 
 ### AllowFrom
 
@@ -973,7 +962,7 @@ Matched against `ConnectionClientIdentity.ClientAddress` (PROXY-reported source 
 
 Recognised names: `none`, `default`, `control`, `cancel`, `mime`, `binary`/`binaries`, `uuencode`, `base64`, `yenc`, `bommanews`, `unidata`, `multipart`, `html`, `ps`, `binhex`, `partial`, `pgp`, `all`.
 
-This is stored peer policy only. Articles are not classified yet.
+The catalogue stores `article_types` as that integer mask (`0`–`65535`) on each plane. Receive and Send masks are independent. Articles are not classified against the mask yet.
 
 ### ConnectTo / Ssl
 
@@ -981,7 +970,7 @@ This is stored peer policy only. Articles are not classified yet.
 
 ### Patterns
 
-`Patterns` is a newsfeeds(5) expression compiled with INN `uwildmat_poison` semantics (see [libinn-uwildmat](https://www.eyrie.org/~eagle/software/inn/docs/libinn-uwildmat.html) and [newsfeeds(5)](https://www.eyrie.org/~eagle/software/inn/docs/newsfeeds.html)):
+Each plane stores one `patterns` column. It is a newsfeeds(5) expression compiled with INN `uwildmat_poison` semantics (see [libinn-uwildmat](https://www.eyrie.org/~eagle/software/inn/docs/libinn-uwildmat.html) and [newsfeeds(5)](https://www.eyrie.org/~eagle/software/inn/docs/newsfeeds.html)):
 
 - The complete newsgroup name is matched (anchored).
 - Comma separates patterns; `\,` is a literal comma.
@@ -992,46 +981,23 @@ This is stored peer policy only. Articles are not classified yet.
 
 The matcher is stored on the peer policy. Article-ingestion routing does not apply Patterns yet.
 
-### Hot reload
+### Catalogue refresh
 
-The entire top-level `Transit` section reloads through `IOptionsMonitor` when `{entry assembly name}.json` changes (Generic Host change tokens; no custom file poll). Adding, removing, or modifying a peer replaces the active immutable snapshot atomically. New connections use the new snapshot. Existing connections are not disconnected solely because configuration changed. Invalid reloads are ignored; the last valid snapshot remains.
+`TransitCatalogueService` loads `nntptransitcurrent` at startup and again every 60 seconds. Startup failure prevents `RUNNING`. A failed refresh keeps the last snapshot. The same `publication_id` does not replace it. New connections use the new snapshot. Existing connections are not disconnected solely because the publication changed.
 
-Example:
-
-```json
-"Transit": {
-  "news-example": {
-    "MaxIncomingConnections": 10,
-    "MaxOutgoingConnections": 2,
-    "AllowFrom": [
-      "news.example.net",
-      "192.0.2.0/24",
-      "2001:db8:1234::/48"
-    ],
-    "ConnectTo": [ "news.example.net:563" ],
-    "Username": "",
-    "Password": "",
-    "Ssl": "TLS",
-    "Patterns": "*",
-    "DeferOnDuplicate": true,
-    "PathToken": "peer.example",
-    "MaxSize": 10485760,
-    "MessageTypes": [ "default" ]
-  }
-}
-```
+An empty top-level `Transit` JSON section does not replace that snapshot. A non-empty section fails startup.
 
 ```json
 "Nntpd": {
   "Transit": {
-    "LogTrash": true,
-    "StreamOutstandingArticleDepth": 8,
-    "WantTrash": true
+    "StreamOutstandingArticleDepth": 8
   }
 }
 ```
 
-`WantTrash` / `LogTrash` are site-wide `Nntpd:Transit` settings (inn.conf-style), not per-peer keys in the top-level `Transit` dictionary. Accepted `+`/`j` events are emitted after dequeue; rejected `-` events and moderated `m` events are emitted at the IHAVE/TAKETHIS/POST decision. See [logging.md](logging.md#inn-news-log).
+`WantTrash` / `LogTrash` are `nntptransitglobalrevision` (`Y`/`N`) and are copied onto the process options when the catalogue is published. Accepted `+`/`j` events are emitted after dequeue; rejected `-` events and moderated `m` events are emitted at the IHAVE/TAKETHIS/POST decision. See [logging.md](logging.md#inn-news-log).
+
+Receive and Send each have their own `article_types` mask, `max_article_bytes`, and `patterns`. `65535` is unrestricted, `1` is text only, and `0` permits no classified article type. `*` is every newsgroup. `max_inbound = 0` closes receive. `max_outbound = 0` closes send. Send `max_article_bytes` `NULL` is unlimited. Receive `max_article_bytes` remains an explicit ceiling. Receive `article_types` and `patterns` were seeded as `65535` and `*` because inbound acceptance does not filter on them yet.
 
 ## TCP ports
 

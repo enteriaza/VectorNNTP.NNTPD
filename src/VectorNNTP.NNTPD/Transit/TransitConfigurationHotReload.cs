@@ -7,8 +7,10 @@ namespace VectorNNTP.NNTPD.Transit;
 /// Applies <see cref="IOptionsMonitor{TOptions}"/> updates to <see cref="TransitConfigurationStore"/>.
 /// </summary>
 /// <remarks>
-/// Host.CreateApplicationBuilder reloads <c>VectorNNTP.NNTPD.json</c> via change tokens
-/// (not a custom poll loop). Invalid reloads are ignored so the last valid snapshot remains.
+/// An empty top-level <c>Transit</c> section does not replace the store. The published
+/// MySQL catalogue is authoritative, and a JSON reload must not wipe it. Non-empty
+/// in-memory sections still replace the snapshot so tests can exercise admission.
+/// Invalid non-empty reloads are ignored so the last valid snapshot remains.
 /// </remarks>
 public sealed class TransitConfigurationHotReload : IDisposable
 {
@@ -37,6 +39,11 @@ public sealed class TransitConfigurationHotReload : IDisposable
         ILogger logger,
         bool isReload)
     {
+        if (options.Count == 0)
+        {
+            return;
+        }
+
         var result = new TransitPeersOptionsValidator().Validate(Options.DefaultName, options);
         if (result.Failed)
         {

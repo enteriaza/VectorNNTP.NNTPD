@@ -46,6 +46,17 @@ public interface INntpDbConnection : INntpDbSession
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Loads the singleton published Transit catalogue.
+    /// </summary>
+    /// <param name="cancellationToken">Token used to cancel the queries.</param>
+    /// <returns>
+    /// The mapped catalogue, or <see langword="null"/> when
+    /// <c>nntptransitcurrent.policy_id = 1</c> is missing.
+    /// </returns>
+    ValueTask<Transit.TransitCatalogueRecord?> QueryTransitCatalogueAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Inserts one PostFilter rejection evidence row. Not used on the accept path.
     /// </summary>
     ValueTask InsertPostFilterRejectionAsync(
