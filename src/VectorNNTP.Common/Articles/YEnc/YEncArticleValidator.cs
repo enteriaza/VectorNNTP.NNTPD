@@ -1,3 +1,4 @@
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 
 namespace VectorNNTP.Common.Articles.YEnc
@@ -22,6 +23,10 @@ namespace VectorNNTP.Common.Articles.YEnc
     /// Corrupt or malformed remote article data is reported through <see cref="YEncArticleValidationResult"/>
     /// instead of exceptions.
     /// </para>
+    /// <para>
+    /// Each section folds decoded bytes with a thread-local <see cref="Crc32"/>. That value is the same IEEE CRC-32
+    /// as <see cref="YEncCrc32.Compute"/>. <see cref="YEncCrc32"/> remains the scalar reference and is not used here.
+    /// </para>
     /// </remarks>
     internal static class YEncArticleValidator
     {
@@ -33,8 +38,20 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// </summary>
         private const int YEncEscapedByteDelta = 64;
 
-        /// <summary>Decoded-byte stack buffer flushed to <see cref="YEncCrc32.Update"/> when full.</summary>
+        /// <summary>Decoded-byte stack buffer flushed to the section CRC when full.</summary>
         private const int CrcBatchSize = 512;
+
+        /// <summary>
+        /// Production IEEE CRC-32 for the section being validated on this thread.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Crc32"/> selects its hardware path or its own scalar fallback. One instance cannot be shared:
+        /// validation is synchronous and concurrent callers would race the accumulator.
+        /// The instance is created on first use. A <c>[ThreadStatic]</c> field initializer runs once for the type, not once per thread.
+        /// Every section calls <see cref="Crc32.Reset"/>, which does not allocate.
+        /// </remarks>
+        [ThreadStatic]
+        private static Crc32? t_sectionCrc;
 
         /// <summary>yEnc escape byte <c>0x3D</c>. It consumes the following payload byte and is not itself decoded.</summary>
         private const byte EscapeChar = (byte)'=';
@@ -341,7 +358,7 @@ namespace VectorNNTP.Common.Articles.YEnc
         /// Decodes yEnc payload lines into a streaming CRC and a decoded-byte count. Line endings are not decoded.
         /// </summary>
         /// <param name="encodedPayload">Bytes from after <c>=ybegin</c>/<c>=ypart</c> up to, but not including, the <c>=yend</c> line.</param>
-        /// <param name="crc32">Finalized <see cref="YEncCrc32"/> of the decoded bytes on success; 0 after an invalid escape.</param>
+        /// <param name="crc32">Finalized IEEE CRC-32 of the decoded bytes on success, the same value as <see cref="YEncCrc32.Compute"/>; 0 after an invalid escape.</param>
         /// <param name="decodedByteCount">Number of decoded bytes on success; 0 after an invalid escape.</param>
         /// <returns>
         /// <see cref="YEncArticleValidationStatus.ValidSinglePart"/> when every line decodes, including multipart sections.
@@ -353,7 +370,7 @@ namespace VectorNNTP.Common.Articles.YEnc
             out uint crc32,
             out long decodedByteCount)
         {
-            var crcAccumulator = YEncCrc32.InitialAccumulator;
+            var sectionCrc = GetSectionCrc();
             Span<byte> decodedBatch = stackalloc byte[CrcBatchSize];
             var batchWriteIndex = 0;
             long decodedCount = 0;
@@ -393,7 +410,7 @@ namespace VectorNNTP.Common.Articles.YEnc
 
                     if (batchWriteIndex == CrcBatchSize)
                     {
-                        crcAccumulator = YEncCrc32.Update(crcAccumulator, decodedBatch);
+                        sectionCrc.Append(decodedBatch);
                         batchWriteIndex = 0;
                     }
                 }
@@ -405,12 +422,30 @@ namespace VectorNNTP.Common.Articles.YEnc
 
             if (batchWriteIndex > 0)
             {
-                crcAccumulator = YEncCrc32.Update(crcAccumulator, decodedBatch[..batchWriteIndex]);
+                sectionCrc.Append(decodedBatch[..batchWriteIndex]);
             }
 
-            crc32 = YEncCrc32.Finalize(crcAccumulator);
+            crc32 = sectionCrc.GetCurrentHashAsUInt32();
             decodedByteCount = decodedCount;
             return YEncArticleValidationStatus.ValidSinglePart;
+        }
+
+        /// <summary>
+        /// Returns this thread's <see cref="Crc32"/>, reset so the section starts at <c>0xFFFFFFFF</c>.
+        /// </summary>
+        /// <returns>The calling thread's accumulator. Later sections on this thread reuse it.</returns>
+        /// <remarks>Called once per yEnc section. Batches within a section append without another reset.</remarks>
+        private static Crc32 GetSectionCrc()
+        {
+            var crc = t_sectionCrc;
+            if (crc is null)
+            {
+                crc = new Crc32();
+                t_sectionCrc = crc;
+            }
+
+            crc.Reset();
+            return crc;
         }
 
         /// <summary>

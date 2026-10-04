@@ -145,7 +145,7 @@ ArtId remains separate: BLAKE3 of the Message-ID **value** only. Date/Path rewri
 
 Do not hash destuffed input, the Message-ID alone, or only the body. Hash the materialized ArtData.
 
-`YEncCrc32` / `IeeeCrc32` remain IEEE CRC-32 of **decoded yEnc payload** for trailer checks. That is a different coverage and algorithm from ArtHash.
+yEnc trailer checks are IEEE CRC-32 of **decoded yEnc payload**, computed by `YEncArticleValidator` with `System.IO.Hashing.Crc32`. `YEncCrc32` / `IeeeCrc32` remain the scalar reference for that same value. That is a different coverage and algorithm from ArtHash.
 
 ArtHash is not folded into the materializer. The path is: materialize one `byte[]` → `HashToUInt64` → store on the record.
 
