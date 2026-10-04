@@ -187,14 +187,15 @@ internal sealed class FakeRedisDatabase : IRedisDatabase
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        SetCount++;
         if (SetException is not null)
         {
+            SetCount++;
             throw SetException;
         }
 
         LastSetExpiry = expiry;
         _keys[ToKey(key)] = (value.ToArray(), DateTimeOffset.UtcNow.Add(expiry));
+        SetCount++;
     }
 
     public async ValueTask<long> ScriptEvaluateAsync(

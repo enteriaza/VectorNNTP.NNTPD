@@ -31,6 +31,11 @@ internal sealed class InMemoryTransitPeerStateStore : ITransitPeerStateStore
     public string? FaultRenewIdentifier { get; set; }
 
     /// <summary>Gets how many membership renew operations were attempted.</summary>
+    /// <remarks>
+    /// After <see cref="RenewAsync"/> reaches the engine, this increments only once that
+    /// renew has returned, so a non-zero count means the renewed expiry is already visible.
+    /// The unavailable path increments without an engine write.
+    /// </remarks>
     public int RenewCalls { get; private set; }
 
     /// <summary>Gets how many admit operations reached the engine.</summary>
@@ -145,18 +150,20 @@ internal sealed class InMemoryTransitPeerStateStore : ITransitPeerStateStore
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        RenewCalls++;
         if (Unavailable)
         {
+            RenewCalls++;
             return TransitPeerStateRenewStatus.Unavailable;
         }
 
-        return _engine.Renew(
+        var renewed = _engine.Renew(
             ConnectionKey(identifier),
             ownerId,
             generation,
             now.ToUnixTimeMilliseconds(),
-            (long)leaseTtl.TotalMilliseconds) == 1
+            (long)leaseTtl.TotalMilliseconds) == 1;
+        RenewCalls++;
+        return renewed
             ? TransitPeerStateRenewStatus.Renewed
             : TransitPeerStateRenewStatus.Lost;
     }

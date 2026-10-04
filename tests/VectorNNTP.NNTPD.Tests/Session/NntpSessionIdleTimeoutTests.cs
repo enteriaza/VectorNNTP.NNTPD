@@ -354,6 +354,7 @@ public sealed class NntpSessionIdleTimeoutTests
         Assert.Equal(TcpDisconnectReason.Unspecified, session.CloseReasonForTests);
         Assert.False(session.IdleCloseCommittedForTests);
 
+        await WaitUntilAsync(() => clock.HasScheduledTimers, Safety);
         clock.Advance(Idle);
         await run.WaitAsync(Safety);
         Assert.Equal(TcpDisconnectReason.IdleTimeout, session.CloseReasonForTests);

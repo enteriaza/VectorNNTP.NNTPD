@@ -409,6 +409,12 @@ public sealed class CheckPipelineTests
             Assert.StartsWith("238 <n", line, StringComparison.Ordinal);
         }
 
+        while (session.Pipeline.InFlightCompletions != 0)
+        {
+            safety.Token.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
+
         Assert.Equal(0, session.Pipeline.Occupied);
         Assert.Equal(0, session.Pipeline.InFlightCompletions);
         Assert.True(session.Pipeline.PeakOccupied <= CheckPipeline.Depth);
